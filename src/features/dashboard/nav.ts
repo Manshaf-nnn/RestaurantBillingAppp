@@ -1,0 +1,125 @@
+import {
+  BarChart3,
+  Boxes,
+  ChefHat,
+  ClipboardList,
+  CreditCard,
+  FileText,
+  LayoutDashboard,
+  ListOrdered,
+  Package,
+  QrCode,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Star,
+  Ticket,
+  Truck,
+  UsersRound,
+  Utensils,
+} from 'lucide-react'
+
+import { PERMISSIONS, type Permission } from '@/lib/rbac'
+
+export interface NavItem {
+  href: string
+  label: string
+  icon: typeof LayoutDashboard
+  permission: Permission
+  exact?: boolean
+}
+
+export interface NavSection {
+  title: string
+  items: NavItem[]
+}
+
+/** The dashboard sidebar. Items are filtered by the viewer's permissions. */
+export const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'Overview',
+    items: [
+      {
+        href: '/dashboard',
+        label: 'Dashboard',
+        icon: LayoutDashboard,
+        permission: PERMISSIONS.DASHBOARD_VIEW,
+        exact: true,
+      },
+      {
+        href: '/dashboard/analytics',
+        label: 'Analytics',
+        icon: BarChart3,
+        permission: PERMISSIONS.ANALYTICS_VIEW,
+      },
+    ],
+  },
+  {
+    title: 'Operations',
+    items: [
+      { href: '/dashboard/orders', label: 'Orders', icon: ListOrdered, permission: PERMISSIONS.ORDER_VIEW },
+      { href: '/dashboard/tables', label: 'Tables', icon: ClipboardList, permission: PERMISSIONS.TABLE_VIEW },
+      {
+        href: '/dashboard/reservations',
+        label: 'Reservations',
+        icon: FileText,
+        permission: PERMISSIONS.RESERVATION_MANAGE,
+      },
+      { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
+      { href: '/cashier', label: 'Cashier', icon: CreditCard, permission: PERMISSIONS.PAYMENT_COLLECT },
+    ],
+  },
+  {
+    title: 'Menu',
+    items: [
+      { href: '/dashboard/menu', label: 'Menu items', icon: Utensils, permission: PERMISSIONS.MENU_VIEW },
+      {
+        href: '/dashboard/categories',
+        label: 'Categories',
+        icon: Boxes,
+        permission: PERMISSIONS.CATEGORY_MANAGE,
+      },
+      { href: '/dashboard/coupons', label: 'Coupons', icon: Ticket, permission: PERMISSIONS.COUPON_MANAGE },
+    ],
+  },
+  {
+    title: 'Inventory',
+    items: [
+      { href: '/dashboard/inventory', label: 'Stock', icon: Package, permission: PERMISSIONS.INVENTORY_VIEW },
+      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_MANAGE },
+      {
+        href: '/dashboard/purchases',
+        label: 'Purchases',
+        icon: ScrollText,
+        permission: PERMISSIONS.PURCHASE_MANAGE,
+      },
+    ],
+  },
+  {
+    title: 'People',
+    items: [
+      {
+        href: '/dashboard/customers',
+        label: 'Customers',
+        icon: UsersRound,
+        permission: PERMISSIONS.CUSTOMER_VIEW,
+      },
+      { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
+      { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
+    ],
+  },
+  {
+    title: 'Back office',
+    items: [
+      { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, permission: PERMISSIONS.REPORT_VIEW },
+      { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.SETTINGS_VIEW },
+      {
+        href: '/dashboard/audit-logs',
+        label: 'Audit log',
+        icon: ScrollText,
+        permission: PERMISSIONS.AUDIT_VIEW,
+      },
+      { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: PERMISSIONS.SETTINGS_VIEW },
+    ],
+  },
+]

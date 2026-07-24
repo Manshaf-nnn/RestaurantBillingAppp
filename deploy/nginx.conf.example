@@ -1,0 +1,37 @@
+# ============================================================================
+# Nginx reverse proxy for RestaurantOS
+# ----------------------------------------------------------------------------
+# Put this at:  /etc/nginx/sites-available/restaurantos
+# Then:         ln -s /etc/nginx/sites-available/restaurantos /etc/nginx/sites-enabled/
+#               nginx -t && systemctl reload nginx
+#
+# Replace  yourdomain.com  with your real domain (2 places below).
+# HTTPS is added automatically by Certbot (see DEPLOYMENT.md).
+# ============================================================================
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # Max upload size (menu photos, logos). Matches the app's 5 MB limit.
+    client_max_body_size 8m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # Required for Socket.IO / WebSocket realtime updates.
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 60s;
+    }
+}

@@ -1,0 +1,30 @@
+# ============================================================================
+# systemd unit for RestaurantOS — an alternative to PM2.
+# ----------------------------------------------------------------------------
+# Put this at:  /etc/systemd/system/restaurantos.service
+# Edit User, WorkingDirectory and the node path to match your server, then:
+#   systemctl daemon-reload
+#   systemctl enable --now restaurantos
+#   systemctl status restaurantos
+# ============================================================================
+[Unit]
+Description=RestaurantOS (Next.js + Socket.IO)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=restaurantos
+WorkingDirectory=/home/restaurantos/app
+# Loads DATABASE_URL, secrets, etc. from the project's .env
+EnvironmentFile=/home/restaurantos/app/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Use `which node` on your server to confirm this path (nvm users differ).
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/restaurantos/app/logs/app.log
+StandardError=append:/home/restaurantos/app/logs/app.err.log
+
+[Install]
+WantedBy=multi-user.target

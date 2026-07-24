@@ -1,0 +1,45 @@
+# ============================================================================
+# Render Blueprint — deploy RestaurantOS (app + PostgreSQL) almost one-click.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# In Render:  New +  →  Blueprint  →  connect this GitHub repo.
+# Render reads this file, creates the database and the web service, and asks you
+# for SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD. That's it.
+# ============================================================================
+databases:
+  - name: restaurantos-db
+    databaseName: restaurantos
+    user: restaurantos
+    plan: basic-256mb          # smallest paid DB; change to "free" to trial
+    region: singapore          # closest Render region to India
+
+services:
+  - type: web
+    name: restaurantos
+    runtime: node
+    plan: starter              # always-on; use "free" only to trial (it sleeps)
+    region: singapore
+    branch: main
+    healthCheckPath: /api/health
+    autoDeploy: true
+    # Installs deps, creates DB tables, ensures your admin account, then builds.
+    buildCommand: npm ci && npx prisma generate && npx prisma db push && npm run db:seed:prod && npx next build
+    startCommand: node server.mjs
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: restaurantos-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true    # Render generates a strong secret
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      # You are prompted for these two when you create the Blueprint:
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      # NEXT_PUBLIC_APP_URL / NEXT_PUBLIC_SOCKET_URL are detected automatically
+      # from Render's RENDER_EXTERNAL_URL at startup — nothing to set.
