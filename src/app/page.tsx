@@ -18,7 +18,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { getCurrentUser } from '@/server/auth/session'
+import { getAdminUser, getCurrentUser } from '@/server/auth/session'
 import { ROLE_HOME } from '@/lib/rbac'
 
 const FEATURES = [
@@ -62,7 +62,7 @@ const SURFACES = [
 ]
 
 export default async function LandingPage() {
-  const user = await getCurrentUser()
+  const [user, admin] = await Promise.all([getCurrentUser(), getAdminUser()])
   const dashboardHref = user ? ROLE_HOME[user.role] : '/login'
 
   return (
@@ -81,10 +81,13 @@ export default async function LandingPage() {
 
           <nav className="flex items-center gap-1.5">
             <ThemeToggle />
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/order">Guest menu</Link>
-            </Button>
-            {user ? (
+            {admin ? (
+              <Button size="sm" asChild>
+                <Link href="/admin">
+                  Admin console <ArrowRight />
+                </Link>
+              </Button>
+            ) : user ? (
               <Button size="sm" asChild>
                 <Link href={dashboardHref}>
                   Open dashboard <ArrowRight />
@@ -135,11 +138,11 @@ export default async function LandingPage() {
               </Link>
             </Button>
           </div>
-          {!user ? (
+          {!user && !admin ? (
             <p className="mt-3 text-sm text-muted-foreground">
               No card required · or{' '}
               <Link href="/register?mode=request" className="font-medium text-primary hover:underline">
-                request approval instead
+                buy a plan (admin approves)
               </Link>
             </p>
           ) : null}
@@ -225,13 +228,13 @@ export default async function LandingPage() {
                   <ShieldCheck className="size-5" />
                 </span>
                 <div>
-                  <h3 className="text-lg font-bold">Request approval</h3>
+                  <h3 className="text-lg font-bold">Buy a plan</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Prefer a reviewed onboarding? Send a request and an admin approves your account.
+                    Ready to commit? Send a request — an admin reviews it and activates your account.
                   </p>
                 </div>
                 <ul className="space-y-2 text-sm">
-                  {['Reviewed by our team', 'Go live once approved', 'Same full platform'].map((line) => (
+                  {['Reviewed & approved by us', 'Go live once approved', 'Same full platform'].map((line) => (
                     <li key={line} className="flex items-center gap-2">
                       <Check className="size-4 shrink-0 text-success" /> {line}
                     </li>
@@ -239,7 +242,7 @@ export default async function LandingPage() {
                 </ul>
                 <Button size="lg" variant="outline" className="mt-auto w-full" asChild>
                   <Link href={user ? dashboardHref : '/register?mode=request'}>
-                    Request access <ArrowRight />
+                    Buy now <ArrowRight />
                   </Link>
                 </Button>
               </CardContent>

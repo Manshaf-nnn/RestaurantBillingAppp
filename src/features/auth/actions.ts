@@ -20,6 +20,7 @@ import {
 import {
   createSession,
   destroySession,
+  getAdminUser,
   getCurrentUser,
   revokeAllSessions,
 } from '@/server/auth/session'
@@ -233,6 +234,7 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
 
 // ── logout ───────────────────────────────────────────────────────────────────
 
+/** Sign out of the staff/restaurant session only (leaves any admin session). */
 export async function logout(): Promise<never> {
   const user = await getCurrentUser()
   if (user) {
@@ -245,8 +247,24 @@ export async function logout(): Promise<never> {
       entityId: user.id,
     })
   }
-  await destroySession()
+  await destroySession('staff')
   redirect('/login')
+}
+
+/** Sign out of the platform-admin session only (leaves any staff session). */
+export async function logoutAdmin(): Promise<never> {
+  const admin = await getAdminUser()
+  if (admin) {
+    await audit({
+      userId: admin.id,
+      actorName: admin.name,
+      action: AUDIT_ACTIONS.LOGOUT,
+      entity: 'User',
+      entityId: admin.id,
+    })
+  }
+  await destroySession('admin')
+  redirect('/admin/login')
 }
 
 // ── password reset ───────────────────────────────────────────────────────────

@@ -15,11 +15,12 @@ import { Input } from '@/components/ui/input'
 import { login } from '../actions'
 import { loginSchema, type LoginInput } from '../schema'
 
-export function LoginForm() {
+export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }) {
   const params = useSearchParams()
   const nextPath = params.get('next')
   const [showPassword, setShowPassword] = React.useState(false)
   const [formError, setFormError] = React.useState<string | null>(null)
+  const isAdmin = variant === 'admin'
 
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -42,12 +43,11 @@ export function LoginForm() {
 
     toast.success('Welcome back')
 
-    // The server computes the correct landing from role + approval status.
-    // A deep-link `next` only overrides when the server sends us to /dashboard.
-    const dest = result.data.redirectTo
+    // Honor a safe deep-link `next`; otherwise use the server-computed home for
+    // this role + approval status. The destination page re-guards regardless.
     const safeNext =
       nextPath && nextPath.startsWith('/') && !nextPath.startsWith('//') ? nextPath : null
-    const target = dest === '/dashboard' && safeNext ? safeNext : dest
+    const target = safeNext ?? result.data.redirectTo
 
     // Hard navigation guarantees the freshly-set session cookie is sent with the
     // next request (a soft router.push can race cookie propagation).
@@ -57,9 +57,13 @@ export function LoginForm() {
   return (
     <div className="space-y-7">
       <header className="space-y-1.5">
-        <h1 className="text-2xl font-bold tracking-tight">Sign in</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          {isAdmin ? 'Platform admin' : 'Sign in'}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Welcome back. Enter your details to reach your dashboard.
+          {isAdmin
+            ? 'Sign in to review and manage restaurants on your platform.'
+            : 'Welcome back. Enter your details to reach your dashboard.'}
         </p>
       </header>
 
@@ -125,12 +129,21 @@ export function LoginForm() {
         </Button>
       </form>
 
-      <p className="text-center text-sm text-muted-foreground">
-        New to RestaurantOS?{' '}
-        <Link href="/register" className="font-medium text-primary hover:underline">
-          Create your restaurant
-        </Link>
-      </p>
+      {isAdmin ? (
+        <p className="text-center text-sm text-muted-foreground">
+          Not the platform admin?{' '}
+          <Link href="/login" className="font-medium text-primary hover:underline">
+            Restaurant staff sign in
+          </Link>
+        </p>
+      ) : (
+        <p className="text-center text-sm text-muted-foreground">
+          New to RestaurantOS?{' '}
+          <Link href="/register" className="font-medium text-primary hover:underline">
+            Create your restaurant
+          </Link>
+        </p>
+      )}
     </div>
   )
 }

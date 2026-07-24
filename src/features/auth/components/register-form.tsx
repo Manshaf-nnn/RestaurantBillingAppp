@@ -100,12 +100,12 @@ export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' })
     <div className="space-y-7">
       <header className="space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">
-          {isTrial ? 'Start your free trial' : 'Request access'}
+          {isTrial ? 'Start your free trial' : 'Buy a plan'}
         </h1>
         <p className="text-sm text-muted-foreground">
           {isTrial
             ? 'Full access for 30 days. No card needed — you’ll be signed in straight away.'
-            : 'Tell us about your restaurant. A platform admin will review and approve your request.'}
+            : 'Tell us about your restaurant. An admin reviews your request and activates your account — you get full access once approved.'}
         </p>
       </header>
 
@@ -244,7 +244,7 @@ export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' })
         </label>
 
         <Button type="submit" size="lg" className="w-full" loading={form.formState.isSubmitting}>
-          {isTrial ? 'Start free trial' : 'Send request'}
+          {isTrial ? 'Start free trial' : 'Send purchase request'}
         </Button>
       </form>
 

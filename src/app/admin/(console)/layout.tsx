@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/primitives'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { logout } from '@/features/auth/actions'
+import { logoutAdmin } from '@/features/auth/actions'
 import { requirePageSuperAdmin } from '@/server/auth/guard'
 import { initials } from '@/lib/utils'
 import { LogOut } from 'lucide-react'
@@ -56,7 +56,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                   <p className="truncate text-xs font-normal">{user.email}</p>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onClick={() => void logout()}>
+                <DropdownMenuItem destructive onClick={() => void logoutAdmin()}>
                   <LogOut /> Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>

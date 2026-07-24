@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
-import { ACCESS_COOKIE, REFRESH_COOKIE, verifyAccessToken } from '@/server/auth/jwt'
+import {
+  ACCESS_COOKIE,
+  ADMIN_ACCESS_COOKIE,
+  ADMIN_REFRESH_COOKIE,
+  REFRESH_COOKIE,
+  verifyAccessToken,
+} from '@/server/auth/jwt'
 
 /**
  * Edge middleware.
@@ -12,19 +18,19 @@ import { ACCESS_COOKIE, REFRESH_COOKIE, verifyAccessToken } from '@/server/auth/
  *  3. Role gating for the operational dashboards.
  */
 
+// Staff / restaurant routes (guarded by the STAFF session). The /admin area has
+// its own separate session and is handled explicitly below.
 const PROTECTED_PREFIXES = [
   '/dashboard',
   '/kitchen',
   '/waiter',
   '/cashier',
   '/onboarding',
-  '/admin',
   '/pending-approval',
   '/trial-ended',
 ] as const
 
 const ROLE_ALLOWED: Record<string, string[]> = {
-  '/admin': ['SUPER_ADMIN'],
   '/kitchen': ['OWNER', 'MANAGER', 'KITCHEN'],
   '/waiter': ['OWNER', 'MANAGER', 'WAITER'],
   '/cashier': ['OWNER', 'MANAGER', 'CASHIER'],
@@ -106,21 +112,52 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  const accessToken = request.cookies.get(ACCESS_COOKIE)?.value
-  const claims = accessToken ? await verifyAccessToken(accessToken) : null
+  // Read BOTH possible sessions — admin and staff live in separate cookies, so
+  // a platform admin and a restaurant owner can be signed in at the same time.
+  const staffToken = request.cookies.get(ACCESS_COOKIE)?.value
+  const staffClaims = staffToken ? await verifyAccessToken(staffToken) : null
+  const adminToken = request.cookies.get(ADMIN_ACCESS_COOKIE)?.value
+  const adminClaims = adminToken ? await verifyAccessToken(adminToken) : null
 
-  // ── 2. signed-in users skip the auth screens ──────────────────────────────
-  if (claims && AUTH_PAGES.includes(pathname)) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+  const isAdminLogin = pathname === '/admin/login'
+  const isAdminArea = pathname === '/admin' || pathname.startsWith('/admin/')
+
+  // ── 2. admin login page ───────────────────────────────────────────────────
+  if (isAdminLogin) {
+    if (adminClaims) return NextResponse.redirect(new URL('/admin', request.url))
+    return NextResponse.next()
+  }
+
+  // ── 3. admin area (separate admin session) ────────────────────────────────
+  if (isAdminArea) {
+    if (!adminClaims) {
+      if (request.cookies.has(ADMIN_REFRESH_COOKIE)) {
+        const refreshUrl = new URL('/api/auth/refresh', request.url)
+        refreshUrl.searchParams.set('scope', 'admin')
+        refreshUrl.searchParams.set('next', `${pathname}${search}`)
+        return NextResponse.redirect(refreshUrl)
+      }
+      const loginUrl = new URL('/admin/login', request.url)
+      loginUrl.searchParams.set('next', `${pathname}${search}`)
+      return NextResponse.redirect(loginUrl)
+    }
+    if (adminClaims.role !== 'SUPER_ADMIN') {
+      return NextResponse.redirect(new URL('/admin/login', request.url))
+    }
+    return NextResponse.next()
+  }
+
+  // ── 4. staff auth screens: signed-in staff skip them ──────────────────────
+  if (AUTH_PAGES.includes(pathname)) {
+    if (staffClaims) return NextResponse.redirect(new URL('/dashboard', request.url))
+    return NextResponse.next()
   }
 
   if (!isProtected(pathname)) return NextResponse.next()
 
-  // ── 3. protected routes ───────────────────────────────────────────────────
-  if (!claims) {
-    const hasRefresh = request.cookies.has(REFRESH_COOKIE)
-    if (hasRefresh) {
-      // Silent refresh, then return to the original destination.
+  // ── 5. staff protected routes ─────────────────────────────────────────────
+  if (!staffClaims) {
+    if (request.cookies.has(REFRESH_COOKIE)) {
       const refreshUrl = new URL('/api/auth/refresh', request.url)
       refreshUrl.searchParams.set('next', `${pathname}${search}`)
       return NextResponse.redirect(refreshUrl)
@@ -130,7 +167,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  if (!roleAllowed(pathname, String(claims.role))) {
+  if (!roleAllowed(pathname, String(staffClaims.role))) {
     return NextResponse.redirect(new URL('/forbidden', request.url))
   }
 

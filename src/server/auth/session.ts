@@ -5,17 +5,23 @@ import type { UserRole } from '@prisma/client'
 import { prisma } from '@/server/db/prisma'
 import { generateToken, hashToken } from './password'
 import {
-  ACCESS_COOKIE,
   ACCESS_COOKIE_MAX_AGE,
   GUEST_COOKIE,
   GUEST_COOKIE_MAX_AGE,
-  REFRESH_COOKIE,
   REFRESH_COOKIE_MAX_AGE,
+  accessCookieName,
   cookieOptions,
+  refreshCookieName,
   refreshTokenTtlDays,
   signAccessToken,
   verifyAccessToken,
+  type SessionScope,
 } from './jwt'
+
+/** Platform admins get an isolated session; everyone else is 'staff'. */
+export function scopeForRole(role: UserRole): SessionScope {
+  return role === 'SUPER_ADMIN' ? 'admin' : 'staff'
+}
 
 export interface AuthUser {
   id: string
@@ -50,6 +56,8 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
   const user = await prisma.user.findUnique({ where: { id: userId } })
   if (!user) throw new Error('Cannot create a session for a user that does not exist')
 
+  // Platform admins land in the 'admin' cookie namespace; everyone else 'staff'.
+  const scope = scopeForRole(user.role)
   const ctx = await requestContext()
   const refreshToken = generateToken()
 
@@ -73,8 +81,8 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
   })
 
   const store = await cookies()
-  store.set(ACCESS_COOKIE, accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
-  store.set(REFRESH_COOKIE, refreshToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
+  store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
+  store.set(refreshCookieName(scope), refreshToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
 
   await prisma.user.update({
     where: { id: userId },
@@ -89,7 +97,10 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
  * so a stolen token is usable at most once before the legitimate client's next
  * refresh invalidates it.
  */
-export async function rotateSession(rawRefreshToken: string): Promise<AuthUser | null> {
+export async function rotateSession(
+  rawRefreshToken: string,
+  scope: SessionScope = 'staff',
+): Promise<AuthUser | null> {
   const session = await prisma.session.findUnique({
     where: { refreshTokenHash: hashToken(rawRefreshToken) },
     include: { user: true },
@@ -97,6 +108,8 @@ export async function rotateSession(rawRefreshToken: string): Promise<AuthUser |
 
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null
   if (!session.user.isActive || session.user.deletedAt) return null
+  // The refresh token must belong to the scope it's being used for.
+  if (scopeForRole(session.user.role) !== scope) return null
 
   const ctx = await requestContext()
   const nextToken = generateToken()
@@ -128,8 +141,8 @@ export async function rotateSession(rawRefreshToken: string): Promise<AuthUser |
   })
 
   const store = await cookies()
-  store.set(ACCESS_COOKIE, accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
-  store.set(REFRESH_COOKIE, nextToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
+  store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
+  store.set(refreshCookieName(scope), nextToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
 
   return {
     id: user.id,
@@ -143,9 +156,9 @@ export async function rotateSession(rawRefreshToken: string): Promise<AuthUser |
   }
 }
 
-export async function destroySession(): Promise<void> {
+export async function destroySession(scope: SessionScope = 'staff'): Promise<void> {
   const store = await cookies()
-  const raw = store.get(REFRESH_COOKIE)?.value
+  const raw = store.get(refreshCookieName(scope))?.value
   if (raw) {
     await prisma.session
       .updateMany({
@@ -154,8 +167,8 @@ export async function destroySession(): Promise<void> {
       })
       .catch(() => undefined)
   }
-  store.delete(ACCESS_COOKIE)
-  store.delete(REFRESH_COOKIE)
+  store.delete(accessCookieName(scope))
+  store.delete(refreshCookieName(scope))
 }
 
 export async function revokeAllSessions(userId: string, exceptSessionId?: string): Promise<number> {
@@ -177,9 +190,9 @@ export async function revokeAllSessions(userId: string, exceptSessionId?: string
  * so revoking a session takes effect immediately rather than after the JWT
  * expires.
  */
-export async function getCurrentUser(): Promise<AuthUser | null> {
+async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
   const store = await cookies()
-  const token = store.get(ACCESS_COOKIE)?.value
+  const token = store.get(accessCookieName(scope))?.value
   if (!token) return null
 
   const claims = await verifyAccessToken(token)
@@ -206,6 +219,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   })
 
   if (!session || !session.user.isActive || session.user.deletedAt) return null
+  // A token from the wrong namespace (e.g. an admin token used as staff) is
+  // rejected — the scope and the user's role must agree.
+  if (scopeForRole(session.user.role) !== scope) return null
 
   return {
     id: session.user.id,
@@ -217,6 +233,16 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     permissions: session.user.permissions,
     sessionId: session.id,
   }
+}
+
+/** The signed-in staff / restaurant user (dashboard, kitchen, cashier, …). */
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  return resolveUser('staff')
+}
+
+/** The signed-in platform admin — a completely separate session from staff. */
+export async function getAdminUser(): Promise<AuthUser | null> {
+  return resolveUser('admin')
 }
 
 /** Stable anonymous identifier for QR guests, so they can track their orders. */

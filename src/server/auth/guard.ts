@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { ForbiddenError, UnauthorizedError } from '@/lib/errors'
 import { can, canAny, type Permission } from '@/lib/rbac'
-import { getCurrentUser, type AuthUser } from './session'
+import { getAdminUser, getCurrentUser, type AuthUser } from './session'
 
 /**
  * Guards used by every server action, route handler and protected page.
@@ -21,9 +21,13 @@ export async function requireUser(): Promise<AuthUser> {
   return user
 }
 
-/** Platform operator — not bound to any restaurant. Used by the /admin console. */
+/**
+ * Platform operator — reads the SEPARATE admin session, so it is independent of
+ * any restaurant login in the same browser.
+ */
 export async function requireSuperAdmin(): Promise<AuthUser> {
-  const user = await requireUser()
+  const user = await getAdminUser()
+  if (!user) throw new UnauthorizedError()
   if (user.role !== 'SUPER_ADMIN') {
     throw new ForbiddenError('This area is restricted to platform administrators')
   }
@@ -31,8 +35,10 @@ export async function requireSuperAdmin(): Promise<AuthUser> {
 }
 
 export async function requirePageSuperAdmin(nextPath?: string): Promise<AuthUser> {
-  const user = await requirePageUser(nextPath)
-  if (user.role !== 'SUPER_ADMIN') redirect('/forbidden')
+  const user = await getAdminUser()
+  if (!user || user.role !== 'SUPER_ADMIN') {
+    redirect(nextPath ? `/admin/login?next=${encodeURIComponent(nextPath)}` : '/admin/login')
+  }
   return user
 }
 

@@ -8,10 +8,28 @@ import type { UserRole } from '@prisma/client'
  * server actions) and the Edge runtime (middleware).
  */
 
+// Staff / restaurant sessions.
 export const ACCESS_COOKIE = 'ros_at'
 export const REFRESH_COOKIE = 'ros_rt'
+
+// Platform-admin sessions use a SEPARATE cookie namespace so an admin and a
+// restaurant owner can be signed in at the same time in the same browser
+// (admin in one tab, a dashboard in another) without clobbering each other.
+export const ADMIN_ACCESS_COOKIE = 'ros_admin_at'
+export const ADMIN_REFRESH_COOKIE = 'ros_admin_rt'
+
 export const GUEST_COOKIE = 'ros_gs'
 export const CSRF_COOKIE = 'ros_csrf'
+
+export type SessionScope = 'staff' | 'admin'
+
+export function accessCookieName(scope: SessionScope) {
+  return scope === 'admin' ? ADMIN_ACCESS_COOKIE : ACCESS_COOKIE
+}
+
+export function refreshCookieName(scope: SessionScope) {
+  return scope === 'admin' ? ADMIN_REFRESH_COOKIE : REFRESH_COOKIE
+}
 
 const ISSUER = 'restaurantos'
 const AUDIENCE = 'restaurantos.app'
