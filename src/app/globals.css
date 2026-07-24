@@ -107,6 +107,17 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     text-rendering: optimizeLegibility;
+    /* Never let a stray wide element cause the whole page to scroll sideways
+       on phones — wide content (tables, charts) scrolls inside its own box. */
+    overflow-x: hidden;
+  }
+
+  /* Media and long words never blow out the mobile viewport. */
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
   }
 
   ::selection {
