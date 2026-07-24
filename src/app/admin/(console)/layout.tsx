@@ -2,21 +2,9 @@ import Link from 'next/link'
 import { ShieldCheck } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Avatar, AvatarFallback } from '@/components/ui/primitives'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { logoutAdmin } from '@/features/auth/actions'
+import { AdminAccountMenu } from '@/features/platform/components/admin-account-menu'
 import { requirePageSuperAdmin } from '@/server/auth/guard'
-import { initials } from '@/lib/utils'
-import { LogOut } from 'lucide-react'
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await requirePageSuperAdmin('/admin')
@@ -41,26 +29,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
           <div className="ml-auto flex items-center gap-1.5">
             <ThemeToggle />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="gap-2 px-2">
-                  <Avatar className="size-7">
-                    <AvatarFallback>{initials(user.name)}</AvatarFallback>
-                  </Avatar>
-                  <span className="hidden text-sm font-medium sm:inline">{user.name}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>
-                  <p className="text-sm font-semibold text-foreground">{user.name}</p>
-                  <p className="truncate text-xs font-normal">{user.email}</p>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onClick={() => void logoutAdmin()}>
-                  <LogOut /> Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <AdminAccountMenu name={user.name} email={user.email} />
           </div>
         </div>
       </header>

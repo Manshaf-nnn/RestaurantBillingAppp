@@ -138,9 +138,9 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
         </p>
       ) : (
         <p className="text-center text-sm text-muted-foreground">
-          New to RestaurantOS?{' '}
+          Don’t have an account?{' '}
           <Link href="/register" className="font-medium text-primary hover:underline">
-            Create your restaurant
+            Register your restaurant
           </Link>
         </p>
       )}

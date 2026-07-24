@@ -12,8 +12,8 @@ import bcrypt from 'bcryptjs'
 const prisma = new PrismaClient()
 
 const SLUG = 'the-copper-spoon'
-const PASSWORD = process.env.SEED_PASSWORD || 'Password123!'
-const OWNER_EMAIL = process.env.SEED_OWNER_EMAIL || 'owner@restaurantos.dev'
+const PASSWORD = process.env.SEED_PASSWORD || 'Nila@123'
+const OWNER_EMAIL = process.env.SEED_OWNER_EMAIL || 'shop@gmail.com'
 
 // Deterministic pseudo-random so seeded analytics look natural but stable.
 let seedState = 1234567
@@ -37,7 +37,7 @@ async function main() {
 
   // ── restaurant ─────────────────────────────────────────────────────────────
   // ── platform super-admin (the developer / platform operator) ───────────────
-  const SUPER_ADMIN_EMAIL = process.env.SEED_SUPERADMIN_EMAIL || 'admin@restaurantos.dev'
+  const SUPER_ADMIN_EMAIL = process.env.SEED_SUPERADMIN_EMAIL || 'test@gmail.com'
   await prisma.user.upsert({
     where: { email: SUPER_ADMIN_EMAIL },
     update: { role: 'SUPER_ADMIN', restaurantId: null, passwordHash },

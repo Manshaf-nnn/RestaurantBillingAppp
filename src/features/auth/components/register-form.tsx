@@ -55,9 +55,8 @@ function strengthOf(password: string) {
   return { value: (checks / 5) * 100, label: labels[checks], color: colors[checks] }
 }
 
-export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' }) {
+export function RegisterForm() {
   const [formError, setFormError] = React.useState<string | null>(null)
-  const isTrial = mode === 'trial'
 
   const form = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
@@ -69,7 +68,7 @@ export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' })
       password: '',
       confirmPassword: '',
       currency: 'INR',
-      mode,
+      mode: 'request',
       acceptTerms: undefined as unknown as true,
     },
   })
@@ -99,20 +98,17 @@ export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' })
   return (
     <div className="space-y-7">
       <header className="space-y-1.5">
-        <h1 className="text-2xl font-bold tracking-tight">
-          {isTrial ? 'Start your free trial' : 'Buy a plan'}
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight">Register your restaurant</h1>
         <p className="text-sm text-muted-foreground">
-          {isTrial
-            ? 'Full access for 30 days. No card needed — you’ll be signed in straight away.'
-            : 'Tell us about your restaurant. An admin reviews your request and activates your account — you get full access once approved.'}
+          Tell us about your restaurant. An admin reviews your request and activates your account —
+          you can sign in and use your dashboard once approved.
         </p>
       </header>
 
       {formError ? <Alert variant="destructive">{formError}</Alert> : null}
 
       <form onSubmit={onSubmit} className="space-y-4" noValidate>
-        <input type="hidden" {...form.register('mode')} value={mode} />
+        <input type="hidden" {...form.register('mode')} value="request" />
         <Field
           label="Restaurant name"
           htmlFor="restaurantName"
@@ -244,7 +240,7 @@ export function RegisterForm({ mode = 'trial' }: { mode?: 'trial' | 'request' })
         </label>
 
         <Button type="submit" size="lg" className="w-full" loading={form.formState.isSubmitting}>
-          {isTrial ? 'Start free trial' : 'Send purchase request'}
+          Send registration request
         </Button>
       </form>
 

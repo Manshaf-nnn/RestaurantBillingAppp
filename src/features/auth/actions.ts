@@ -157,11 +157,8 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
 
     const passwordHash = await hashPassword(data.password)
 
-    // Free trial goes live immediately for 30 days; the request path is created
-    // disabled and waits for a platform admin to approve it.
-    const isTrial = data.mode === 'trial'
-    const trialEndsAt = isTrial ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null
-
+    // Every registration is a request: the restaurant is created disabled and
+    // must be approved by a platform admin before it can be used.
     const { user } = await prisma.$transaction(async (tx) => {
       const restaurant = await tx.restaurant.create({
         data: {
@@ -171,10 +168,8 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
           phone: data.phone,
           currency: data.currency,
           plan: 'TRIAL',
-          status: isTrial ? 'ACTIVE' : 'PENDING',
-          isActive: isTrial,
-          approvedAt: isTrial ? new Date() : null,
-          trialEndsAt,
+          status: 'PENDING',
+          isActive: false,
           paymentConfig: { cash: true, card: true, qr: true, online: false },
           features: { reservations: true, loyalty: true, happyHour: false, inventory: true },
         },
@@ -223,12 +218,12 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
       action: AUDIT_ACTIONS.REGISTER,
       entity: 'Restaurant',
       entityId: user.restaurantId,
-      after: { name: data.restaurantName, slug, mode: data.mode },
+      after: { name: data.restaurantName, slug },
     })
 
-    // Trial owners go straight to their dashboard; request owners wait on the
-    // pending screen until a platform admin approves them.
-    return { redirectTo: isTrial ? '/dashboard' : '/pending-approval' }
+    // The owner is signed in but parked on the pending screen until an admin
+    // approves the request; then their dashboard unlocks.
+    return { redirectTo: '/pending-approval' }
   })
 }
 
