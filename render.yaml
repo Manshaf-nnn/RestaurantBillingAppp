@@ -22,8 +22,11 @@ services:
     branch: main
     healthCheckPath: /api/health
     autoDeploy: true
-    # Installs deps, creates DB tables, ensures your admin account, then builds.
-    buildCommand: npm ci && npx prisma generate && npx prisma db push && npm run db:seed:prod && npx next build
+    # Build the app (no database needed here).
+    buildCommand: npm ci && npx prisma generate && npx next build
+    # Runs after the build, with the database available: create/upgrade tables
+    # and make sure the admin account exists. Safe to run on every deploy.
+    preDeployCommand: npx prisma db push && npm run db:seed:prod
     startCommand: node server.mjs
     envVars:
       - key: DATABASE_URL
