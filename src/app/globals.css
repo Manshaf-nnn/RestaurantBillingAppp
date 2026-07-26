@@ -99,7 +99,10 @@
   }
 
   html {
+    /* Stop mobile browsers from auto-inflating text (the "slightly zoomed"
+       look). Both the WebKit and the standard property, for every engine. */
     -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
     scroll-behavior: smooth;
   }
 
@@ -109,6 +112,8 @@
     text-rendering: optimizeLegibility;
     /* Never let a stray wide element cause the whole page to scroll sideways
        on phones — wide content (tables, charts) scrolls inside its own box. */
+    width: 100%;
+    max-width: 100%;
     overflow-x: hidden;
   }
 

@@ -96,7 +96,7 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
   return (
     <Dialog open={Boolean(item)} onOpenChange={onOpenChange}>
       <SheetContent className="max-h-[92dvh]">
-        <div className="px-5 pb-32">
+        <div className="px-5 pb-6">
           {item.imageUrl ? (
             <div className="relative -mx-5 mb-4 h-52 overflow-hidden">
               <Image
@@ -255,7 +255,7 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
           </section>
         </div>
 
-        <div className="fixed inset-x-0 bottom-0 mx-auto max-w-lg border-t bg-background/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur">
+        <div className="sticky bottom-0 z-10 border-t bg-background/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1 rounded-xl border p-1">
               <Button
