@@ -82,6 +82,6 @@ export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(80),
   phone: phoneSchema.optional().or(z.literal('')),
-  avatarUrl: z.string().url().max(500).optional().or(z.literal('')),
+  avatarUrl: z.string().url().max(2048).optional().or(z.literal('')),
 })
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>
