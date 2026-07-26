@@ -50,6 +50,7 @@ export interface SettingsData {
   serviceChargePercent: number
   loyaltyEnabled: boolean
   loyaltyEarnRate: number
+  loyaltyPointValue: number
   payment: { cash: boolean; card: boolean; qr: boolean; online: boolean; upiId: string; payeeName: string }
 }
 
@@ -223,19 +224,58 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
 
         <TabsContent value="loyalty" className="space-y-4">
           <SectionCard title="Loyalty programme">
-            <label className="flex items-center gap-2 text-sm">
+            <p className="text-sm text-muted-foreground">
+              Reward guests with points on every order that they can redeem for money off future
+              visits. Guests see this on the ordering page after they scan your QR.
+            </p>
+            <label className="mt-4 flex items-center gap-2 text-sm">
               <Switch checked={form.loyaltyEnabled} onCheckedChange={(v) => set('loyaltyEnabled', v)} disabled={!canManage} />
               Enable loyalty points
             </label>
-            <Field label="Points earned per currency unit spent" className="mt-4 max-w-xs" hint="e.g. 1 point per ₹1">
-              <Input
-                type="number"
-                step="0.1"
-                value={form.loyaltyEarnRate}
-                onChange={(e) => set('loyaltyEarnRate', Number(e.target.value))}
-                disabled={!canManage || !form.loyaltyEnabled}
-              />
-            </Field>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label={`Points earned per 1 ${form.currency} spent`} hint="e.g. 1 point for every ₹1 on the bill">
+                <Input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  value={form.loyaltyEarnRate}
+                  onChange={(e) => set('loyaltyEarnRate', Number(e.target.value))}
+                  disabled={!canManage || !form.loyaltyEnabled}
+                />
+              </Field>
+              <Field label={`Value of 1 point (in ${form.currency})`} hint="e.g. 0.10 means 10 points = ₹1 off">
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.loyaltyPointValue}
+                  onChange={(e) => set('loyaltyPointValue', Number(e.target.value))}
+                  disabled={!canManage || !form.loyaltyEnabled}
+                />
+              </Field>
+            </div>
+
+            {form.loyaltyEnabled ? (
+              <p className="mt-4 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                Example: a {form.currency} 1,000 order earns{' '}
+                <strong className="text-foreground">
+                  {Math.round(1000 * (form.loyaltyEarnRate || 0)).toLocaleString()} points
+                </strong>
+                {form.loyaltyPointValue > 0 ? (
+                  <>
+                    {' '}— worth about{' '}
+                    <strong className="text-foreground">
+                      {form.currency}{' '}
+                      {Math.round(1000 * (form.loyaltyEarnRate || 0) * form.loyaltyPointValue).toLocaleString()}
+                    </strong>{' '}
+                    off a future visit.
+                  </>
+                ) : (
+                  '.'
+                )}
+              </p>
+            ) : null}
           </SectionCard>
           {canManage ? (
             <Button onClick={saveProfile} loading={savingProfile}>

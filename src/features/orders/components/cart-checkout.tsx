@@ -9,6 +9,7 @@ import {
   Minus,
   Plus,
   ShoppingBag,
+  Sparkles,
   Tag,
   Ticket,
   Trash2,
@@ -26,16 +27,25 @@ import { VegIndicator } from '@/components/ui/status'
 import { formatMoney } from '@/lib/money'
 import { placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
-import type { OrderTotals } from '../pricing'
+import { pointsEarned, type OrderTotals } from '../pricing'
 
 interface Props {
   currency: string
   locale: string
   taxLabel: string
   restaurantName: string
+  loyaltyEnabled: boolean
+  loyaltyEarnRateX100: number
 }
 
-export function CartCheckout({ currency, locale, taxLabel, restaurantName }: Props) {
+export function CartCheckout({
+  currency,
+  locale,
+  taxLabel,
+  restaurantName,
+  loyaltyEnabled,
+  loyaltyEarnRateX100,
+}: Props) {
   const router = useRouter()
   const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines } =
     useCart()
@@ -376,6 +386,18 @@ export function CartCheckout({ currency, locale, taxLabel, restaurantName }: Pro
             <span>To pay</span>
             <span>{formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}</span>
           </div>
+
+          {loyaltyEnabled && loyaltyEarnRateX100 > 0
+            ? (() => {
+                const earned = pointsEarned(totals?.grandTotal ?? subtotal, loyaltyEarnRateX100)
+                return earned > 0 ? (
+                  <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
+                    <Sparkles className="size-3.5 shrink-0" />
+                    You&rsquo;ll earn {earned.toLocaleString()} point{earned === 1 ? '' : 's'} on this order
+                  </div>
+                ) : null
+              })()
+            : null}
 
           {eta ? (
             <p className="pt-1 text-xs text-muted-foreground">

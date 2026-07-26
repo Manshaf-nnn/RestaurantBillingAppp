@@ -40,6 +40,8 @@ export async function updateRestaurantSettings(input: unknown): Promise<ActionRe
           serviceChargeBps: bpsFromPercent(data.serviceChargePercent),
           loyaltyEnabled: data.loyaltyEnabled,
           loyaltyEarnRateX100: Math.round(data.loyaltyEarnRate * 100),
+          // Stored in minor units (paise/cents).
+          loyaltyPointValue: Math.round(data.loyaltyPointValue * 100),
         },
       })
 

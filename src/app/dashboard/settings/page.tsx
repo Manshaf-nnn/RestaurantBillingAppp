@@ -38,6 +38,7 @@ export default async function SettingsPage() {
         serviceChargePercent: restaurant.serviceChargeBps / 100,
         loyaltyEnabled: restaurant.loyaltyEnabled,
         loyaltyEarnRate: restaurant.loyaltyEarnRateX100 / 100,
+        loyaltyPointValue: restaurant.loyaltyPointValue / 100,
         payment: {
           cash: payment.cash ?? true,
           card: payment.card ?? true,

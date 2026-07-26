@@ -52,11 +52,13 @@ export function MenuBrowser({
   restaurantName,
   currency,
   locale,
+  loyalty,
 }: {
   menu: PublicMenu
   restaurantName: string
   currency: string
   locale: string
+  loyalty?: { enabled: boolean; earnRateX100: number; pointValue: number }
 }) {
   const router = useRouter()
   const { state, itemCount, subtotal, hydrated } = useCart()
@@ -172,6 +174,24 @@ export function MenuBrowser({
       </header>
 
       <main className="flex-1">
+        {loyalty?.enabled && loyalty.earnRateX100 > 0 ? (
+          <div className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-lg">
+              🎁
+            </span>
+            <div className="min-w-0 text-xs leading-snug">
+              <p className="font-semibold text-foreground">
+                Earn {formatPoints(loyalty.earnRateX100 / 100)}{' '}
+                {loyalty.earnRateX100 === 100 ? 'point' : 'points'} for every {currency} 1 you spend
+              </p>
+              <p className="text-muted-foreground">
+                Collect points on every order
+                {loyalty.pointValue > 0 ? ` and redeem them for ${currency} off future visits` : ''}.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {showRecommended ? (
           <section className="border-b py-5">
             <div className="mb-3 flex items-center gap-2 px-4">
@@ -368,6 +388,11 @@ export function MenuBrowser({
       />
     </div>
   )
+}
+
+/** Trim trailing zeros so "1.0" reads as "1" and "0.50" as "0.5". */
+function formatPoints(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '')
 }
 
 function Chip({

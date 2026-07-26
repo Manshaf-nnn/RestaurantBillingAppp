@@ -24,6 +24,11 @@ export default async function MenuPage() {
       restaurantName={restaurant.name}
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      loyalty={{
+        enabled: restaurant.loyaltyEnabled,
+        earnRateX100: restaurant.loyaltyEarnRateX100,
+        pointValue: restaurant.loyaltyPointValue,
+      }}
     />
   )
 }

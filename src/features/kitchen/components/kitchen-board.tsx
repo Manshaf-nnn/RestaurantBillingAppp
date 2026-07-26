@@ -288,29 +288,41 @@ function TicketCard({
         flashing && 'animate-flash-ring ring-2 ring-primary',
       )}
     >
-      <div className="flex items-start justify-between gap-2 border-b p-3">
-        <div className="min-w-0">
-          <p className="text-lg font-bold leading-none tracking-tight">#{ticket.orderNumber}</p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{ticket.customerName}</p>
+      <div className="flex items-stretch justify-between gap-2 border-b">
+        {/* Table number — the biggest thing on the ticket so the line can
+            identify the table across the room at a glance. */}
+        <div
+          className={cn(
+            'flex shrink-0 flex-col items-center justify-center px-3.5 py-2 text-center leading-none',
+            ticket.tableNumber ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {ticket.tableNumber ? (
+            <>
+              <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Table</span>
+              <span className="text-3xl font-black tabular-nums">{ticket.tableNumber}</span>
+            </>
+          ) : (
+            <>
+              <Utensils className="size-5" />
+              <span className="mt-1 text-[10px] font-bold uppercase tracking-wide">Takeaway</span>
+            </>
+          )}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {ticket.tableNumber ? (
-            <Badge variant="solid" size="lg" className="font-bold">
-              T{ticket.tableNumber}
-            </Badge>
-          ) : (
-            <Badge variant="secondary">Takeaway</Badge>
-          )}
+        <div className="flex min-w-0 flex-1 items-start justify-between gap-2 py-3 pr-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold leading-tight tracking-tight">#{ticket.orderNumber}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{ticket.customerName}</p>
+          </div>
           <span
             className={cn(
-              'flex items-center gap-1 font-mono text-xs font-semibold tabular-nums',
+              'flex shrink-0 items-center gap-1 font-mono text-xs font-semibold tabular-nums',
               overdue ? 'text-destructive' : warning ? 'text-warning' : 'text-muted-foreground',
             )}
           >
             <Clock className="size-3" />
-            {elapsed}m
-            {overdue ? ' late' : ''}
+            {elapsed}m{overdue ? ' late' : ''}
           </span>
         </div>
       </div>

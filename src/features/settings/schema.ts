@@ -20,6 +20,8 @@ export const restaurantSettingsSchema = z.object({
   serviceChargePercent: z.coerce.number().min(0).max(100),
   loyaltyEnabled: z.coerce.boolean().default(true),
   loyaltyEarnRate: z.coerce.number().min(0).max(100).default(1),
+  // Value of one point when redeemed, in whole currency units (e.g. 0.10 = ₹0.10).
+  loyaltyPointValue: z.coerce.number().min(0).max(10_000).default(1),
 })
 export type RestaurantSettingsInput = z.infer<typeof restaurantSettingsSchema>
 

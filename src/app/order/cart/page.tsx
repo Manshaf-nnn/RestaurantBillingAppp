@@ -18,6 +18,8 @@ export default async function CartPage() {
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
       taxLabel={restaurant.taxLabel}
       restaurantName={restaurant.name}
+      loyaltyEnabled={restaurant.loyaltyEnabled}
+      loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
     />
   )
 }
