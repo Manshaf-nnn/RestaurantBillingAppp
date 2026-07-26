@@ -32,16 +32,19 @@ export default async function AdminLoginPage() {
       </div>
 
       <div className="flex flex-1 items-center justify-center px-5 py-16">
-        <div className="w-full max-w-[400px] animate-fade-up">
-          <div className="mb-8 flex flex-col items-center gap-3">
-            <Link href="/">
+        <div className="w-full max-w-[420px] animate-fade-up">
+          <div className="mb-6 flex flex-col items-center gap-3">
+            <Link
+              href="/"
+              className="inline-block rounded-2xl bg-white px-7 py-5 shadow-elevated ring-1 ring-black/5"
+            >
               <Image
                 src="/logo-full.png"
                 alt="TableFlow"
                 width={1143}
                 height={380}
                 priority
-                className="h-11 w-auto"
+                className="h-10 w-auto"
               />
             </Link>
             <span className="rounded-full bg-foreground px-3 py-0.5 text-xs font-semibold text-background">
@@ -49,9 +52,11 @@ export default async function AdminLoginPage() {
             </span>
           </div>
 
-          <Suspense fallback={<Skeleton className="h-72 w-full" />}>
-            <LoginForm variant="admin" />
-          </Suspense>
+          <div className="rounded-3xl border bg-card/80 p-6 shadow-elevated backdrop-blur sm:p-8">
+            <Suspense fallback={<Skeleton className="h-72 w-full" />}>
+              <LoginForm variant="admin" />
+            </Suspense>
+          </div>
         </div>
       </div>
     </div>

@@ -46,23 +46,41 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </p>
       </aside>
 
-      <main id="main" className="relative flex flex-col">
-        <div className="flex items-center justify-end p-5">
+      <main
+        id="main"
+        className="relative flex flex-col justify-center overflow-hidden bg-gradient-to-b from-background to-muted/40 px-5 py-10"
+      >
+        {/* Soft brand glow for a little depth behind the card. */}
+        <div className="pointer-events-none absolute -right-24 -top-24 size-[360px] rounded-full bg-primary/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-32 left-0 size-[320px] rounded-full bg-chart-5/10 blur-3xl" />
+
+        <div className="absolute right-5 top-5 z-10">
           <ThemeToggle />
         </div>
 
-        <div className="flex flex-1 flex-col items-center justify-center px-5 pb-16">
-          <Link href="/" className="mb-8 block">
-            <Image
-              src="/logo-full.png"
-              alt="TableFlow — Smart Dining, Simplified"
-              width={1143}
-              height={380}
-              priority
-              className="h-12 w-auto sm:h-14"
-            />
-          </Link>
-          <div className="w-full max-w-[400px] animate-fade-up">{children}</div>
+        <div className="relative z-10 mx-auto w-full max-w-[440px] animate-fade-up">
+          {/* Logo sits on a white card so the navy wordmark stays crisp in
+              both light and dark themes. */}
+          <div className="mb-6 flex justify-center">
+            <Link
+              href="/"
+              className="inline-block rounded-2xl bg-white px-7 py-5 shadow-elevated ring-1 ring-black/5"
+            >
+              <Image
+                src="/logo-full.png"
+                alt="TableFlow — Smart Dining, Simplified"
+                width={1143}
+                height={380}
+                priority
+                className="h-10 w-auto sm:h-11"
+              />
+            </Link>
+          </div>
+
+          {/* The sign-in / register form in a clean surface card. */}
+          <div className="rounded-3xl border bg-card/80 p-6 shadow-elevated backdrop-blur sm:p-8">
+            {children}
+          </div>
         </div>
       </main>
     </div>

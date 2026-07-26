@@ -14,14 +14,8 @@ export const metadata: Metadata = {
   description:
     'Cloud restaurant operating system: QR ordering, kitchen display, billing, payments, inventory and analytics in one platform.',
   applicationName: 'TableFlow',
-  icons: {
-    icon: [
-      { url: '/favicon.ico', sizes: '48x48' },
-      { url: '/icons/icon-192.png', type: 'image/png', sizes: '192x192' },
-      { url: '/icons/icon-512.png', type: 'image/png', sizes: '512x512' },
-    ],
-    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180' }],
-  },
+  // Favicon/apple icon come from src/app/icon.png & apple-icon.png (hashed
+  // URLs that bust the browser's cached placeholder).
   manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
