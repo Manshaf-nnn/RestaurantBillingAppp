@@ -9,6 +9,11 @@ const nextConfig = {
   // Pin the file-tracing root to this project so serverless bundling on hosts
   // like Netlify includes the right files (avoids the multi-lockfile warning).
   outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
+  // Force the Prisma query-engine binary into every serverless function bundle
+  // (it's loaded via a computed path that file-tracing can otherwise miss).
+  outputFileTracingIncludes: {
+    '/**': ['./node_modules/.prisma/client/**/*', './node_modules/@prisma/client/**/*'],
+  },
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'exceljs', 'nodemailer', 'ioredis'],
   images: {
     remotePatterns: [

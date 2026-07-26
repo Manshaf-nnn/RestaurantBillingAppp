@@ -12,6 +12,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Include the serverless (AWS Lambda / Netlify Functions) engine binaries so
+  // Prisma works at runtime on the host, not just on the local machine.
+  binaryTargets = ["native", "rhel-openssl-3.0.x", "rhel-openssl-1.0.x"]
 }
 
 datasource db {
