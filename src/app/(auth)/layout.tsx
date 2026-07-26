@@ -1,5 +1,6 @@
+import Image from 'next/image'
 import Link from 'next/link'
-import { ChefHat, QrCode, Radio, ShieldCheck } from 'lucide-react'
+import { QrCode, Radio, ShieldCheck } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
 
@@ -18,8 +19,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="pointer-events-none absolute -bottom-32 -left-16 size-[380px] rounded-full bg-black/10 blur-3xl" />
 
         <Link href="/" className="relative z-10 flex items-center gap-2.5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-white/20 backdrop-blur">
-            <ChefHat className="size-5" />
+          <span className="flex size-9 items-center justify-center rounded-xl bg-white p-1 shadow-soft">
+            <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain" />
           </span>
           <span className="text-[15px] font-bold tracking-tight">TableFlow</span>
         </Link>
@@ -46,17 +47,21 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       </aside>
 
       <main id="main" className="relative flex flex-col">
-        <div className="flex items-center justify-between p-5 lg:justify-end">
-          <Link href="/" className="flex items-center gap-2 lg:hidden">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <ChefHat className="size-4" />
-            </span>
-            <span className="text-sm font-bold tracking-tight">TableFlow</span>
-          </Link>
+        <div className="flex items-center justify-end p-5">
           <ThemeToggle />
         </div>
 
-        <div className="flex flex-1 items-center justify-center px-5 pb-16">
+        <div className="flex flex-1 flex-col items-center justify-center px-5 pb-16">
+          <Link href="/" className="mb-8 block">
+            <Image
+              src="/logo-full.png"
+              alt="TableFlow — Smart Dining, Simplified"
+              width={1143}
+              height={380}
+              priority
+              className="h-12 w-auto sm:h-14"
+            />
+          </Link>
           <div className="w-full max-w-[400px] animate-fade-up">{children}</div>
         </div>
       </main>

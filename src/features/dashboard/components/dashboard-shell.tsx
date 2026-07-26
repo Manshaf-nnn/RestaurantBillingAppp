@@ -1,11 +1,11 @@
 'use client'
 
 import * as React from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Bell,
-  ChefHat,
   ExternalLink,
   LogOut,
   Menu,
@@ -145,8 +145,8 @@ export function DashboardShell({
       {/* ── desktop sidebar ─────────────────────────────────────── */}
       <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r bg-background lg:flex">
         <Link href="/dashboard" className="flex h-16 items-center gap-2.5 border-b px-5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <ChefHat className="size-4" />
+          <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
+            <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain p-0.5" />
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-bold leading-tight">{restaurantName}</span>
@@ -191,8 +191,8 @@ export function DashboardShell({
           </Button>
 
           <Link href="/dashboard" className="flex items-center gap-2 lg:hidden">
-            <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <ChefHat className="size-3.5" />
+            <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
+              <Image src="/logo-mark.png" alt="TableFlow" width={512} height={512} className="size-full object-contain p-0.5" />
             </span>
           </Link>
 

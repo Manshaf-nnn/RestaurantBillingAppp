@@ -1,8 +1,8 @@
 import { Suspense } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import type { Metadata } from 'next'
-import { ShieldCheck } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Skeleton } from '@/components/ui/feedback'
@@ -33,12 +33,21 @@ export default async function AdminLoginPage() {
 
       <div className="flex flex-1 items-center justify-center px-5 py-16">
         <div className="w-full max-w-[400px] animate-fade-up">
-          <Link href="/" className="mb-8 flex items-center justify-center gap-2.5">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-foreground text-background">
-              <ShieldCheck className="size-5" />
+          <div className="mb-8 flex flex-col items-center gap-3">
+            <Link href="/">
+              <Image
+                src="/logo-full.png"
+                alt="TableFlow"
+                width={1143}
+                height={380}
+                priority
+                className="h-11 w-auto"
+              />
+            </Link>
+            <span className="rounded-full bg-foreground px-3 py-0.5 text-xs font-semibold text-background">
+              Platform Admin
             </span>
-            <span className="text-[15px] font-bold tracking-tight">TableFlow · Admin</span>
-          </Link>
+          </div>
 
           <Suspense fallback={<Skeleton className="h-72 w-full" />}>
             <LoginForm variant="admin" />

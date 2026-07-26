@@ -1,5 +1,5 @@
+import Image from 'next/image'
 import Link from 'next/link'
-import { ShieldCheck } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -14,8 +14,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl">
         <div className="container flex h-16 items-center gap-3">
           <Link href="/admin" className="flex items-center gap-2.5">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-foreground text-background">
-              <ShieldCheck className="size-4" />
+            <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
+              <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain p-0.5" />
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-bold leading-tight">TableFlow</span>
