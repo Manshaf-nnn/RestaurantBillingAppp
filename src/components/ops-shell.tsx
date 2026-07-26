@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ChefHat, LayoutDashboard, LogOut, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
+import { ChefHat, LayoutDashboard, LogOut, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/primitives'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { logout } from '@/features/auth/actions'
 import { useSocket } from '@/hooks/use-socket'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { initials } from '@/lib/utils'
 
 /**
@@ -43,6 +44,7 @@ export function OpsShell({
   children: React.ReactNode
 }) {
   const { connected } = useSocket()
+  const realtimeOff = !isRealtimeEnabled()
   const [clock, setClock] = React.useState(() => new Date())
 
   React.useEffect(() => {
@@ -63,10 +65,17 @@ export function OpsShell({
             {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : null}
           </div>
 
-          <Badge variant={connected ? 'success' : 'destructive'} className="ml-2 shrink-0">
-            {connected ? <Wifi /> : <WifiOff />}
-            <span className="hidden sm:inline">{connected ? 'Live' : 'Reconnecting'}</span>
-          </Badge>
+          {realtimeOff ? (
+            <Badge variant="secondary" className="ml-2 shrink-0">
+              <RefreshCw />
+              <span className="hidden sm:inline">Auto-refresh</span>
+            </Badge>
+          ) : (
+            <Badge variant={connected ? 'success' : 'destructive'} className="ml-2 shrink-0">
+              {connected ? <Wifi /> : <WifiOff />}
+              <span className="hidden sm:inline">{connected ? 'Live' : 'Reconnecting'}</span>
+            </Badge>
+          )}
 
           <div className="ml-auto flex items-center gap-1.5">
             {actions}

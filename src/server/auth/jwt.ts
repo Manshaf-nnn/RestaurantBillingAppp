@@ -117,7 +117,10 @@ export async function verifyRefreshToken(token: string): Promise<RefreshTokenCla
  * cookies Secure only when the site is actually served over HTTPS.
  */
 export function cookieOptions(maxAgeSeconds: number) {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  // Detect the public URL from our own env or the host's (Netlify sets URL,
+  // Render sets RENDER_EXTERNAL_URL). Cookies are Secure only over HTTPS.
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL || process.env.URL || process.env.RENDER_EXTERNAL_URL || ''
   return {
     httpOnly: true,
     secure: appUrl.startsWith('https://'),

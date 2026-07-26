@@ -55,8 +55,14 @@ export function env(): ServerEnv {
   return cached
 }
 
+/** Public base URL — explicit env first, then the host's (Netlify/Render). */
 export const appUrl = () =>
-  process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? 'http://localhost:3000'
+  (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    'http://localhost:3000'
+  ).replace(/\/$/, '')
 
 export const isProduction = () => process.env.NODE_ENV === 'production'
 

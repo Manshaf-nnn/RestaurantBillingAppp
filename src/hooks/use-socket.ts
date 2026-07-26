@@ -4,6 +4,7 @@ import * as React from 'react'
 import { io, type Socket } from 'socket.io-client'
 
 import { EVENTS, type ServerToClientEvents } from '@/lib/realtime/events'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 
 /**
  * The socket is intentionally untyped at the transport level — event payloads
@@ -42,6 +43,12 @@ export function useSocket() {
   const ref = React.useRef<AppSocket | null>(null)
 
   React.useEffect(() => {
+    // Serverless host (no Socket.IO server): don't try to connect. Screens poll.
+    if (!isRealtimeEnabled()) {
+      setState('disconnected')
+      return
+    }
+
     const client = getSocket()
     ref.current = client
     refCount += 1

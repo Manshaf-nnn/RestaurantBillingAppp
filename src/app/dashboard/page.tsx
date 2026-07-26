@@ -34,6 +34,7 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,6 +63,7 @@ export default async function DashboardPage() {
 
   return (
     <>
+      <AutoRefresh intervalMs={15000} />
       <PageHeader
         title={`Good ${greeting()}, ${user.name.split(' ')[0]}`}
         description={`Here is how ${restaurant.name} is doing today.`}

@@ -33,6 +33,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
+import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/realtime/events'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
@@ -92,6 +93,9 @@ export function CashierBoard({
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
 
+  // Re-sync when polling (realtime off / serverless).
+  React.useEffect(() => setBills(initialBills), [initialBills])
+
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
     toast.info(`New order ${payload.orderNumber}`, {
       description: payload.tableNumber ? `Table ${payload.tableNumber}` : undefined,
@@ -133,6 +137,7 @@ export function CashierBoard({
 
   return (
     <OpsShell title="Cashier" subtitle={restaurant.name} user={user}>
+      <AutoRefresh intervalMs={6000} />
       <OpsStats
         items={[
           { label: 'Open bills', value: bills.length, tone: 'warning' },

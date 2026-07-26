@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 
+import { AutoRefresh } from '@/components/auto-refresh'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { PlatformConsole } from '@/features/platform/components/platform-console'
 import { getPlatformStats, listPlatformRestaurants } from '@/features/platform/queries'
@@ -20,6 +21,7 @@ export default async function AdminPage() {
 
   return (
     <>
+      <AutoRefresh intervalMs={12000} />
       <PageHeader
         title="Restaurants"
         description="Review sign-ups, approve new restaurants, and manage every tenant on the platform."

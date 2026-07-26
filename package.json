@@ -20,7 +20,8 @@
     "db:reset": "prisma migrate reset --force",
     "db:backup": "tsx scripts/backup.ts",
     "setup": "prisma generate && prisma db push && npm run db:seed",
-    "setup:prod": "prisma generate && prisma db push && npm run db:seed:prod"
+    "setup:prod": "prisma generate && prisma db push && npm run db:seed:prod",
+    "netlify:build": "prisma generate && prisma db push --accept-data-loss && npm run db:seed:prod && next build"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

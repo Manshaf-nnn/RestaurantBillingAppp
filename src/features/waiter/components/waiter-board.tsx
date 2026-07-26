@@ -21,6 +21,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { OrderStatusBadge, TableStatusBadge, VegIndicator } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
+import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderStatusPayload, type ServiceRequestPayload } from '@/lib/realtime/events'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
@@ -88,7 +89,13 @@ export function WaiterBoard({
   const [ready, setReady] = React.useState(initialReady)
   const [serving, setServing] = React.useState(initialServing)
   const [requests, setRequests] = React.useState(initialRequests)
-  const [tables] = React.useState(initialTables)
+  const [tables, setTables] = React.useState(initialTables)
+
+  // Re-sync from fresh server props when polling (realtime off / serverless).
+  React.useEffect(() => setReady(initialReady), [initialReady])
+  React.useEffect(() => setServing(initialServing), [initialServing])
+  React.useEffect(() => setRequests(initialRequests), [initialRequests])
+  React.useEffect(() => setTables(initialTables), [initialTables])
   const [soundEnabled, setSoundEnabled] = React.useState(true)
   const [busyId, setBusyId] = React.useState<string | null>(null)
   const { play } = useNotificationSound(soundEnabled)
@@ -186,6 +193,7 @@ export function WaiterBoard({
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >
+      <AutoRefresh intervalMs={5000} />
       <OpsStats
         items={[
           { label: 'Ready to serve', value: ready.length, tone: 'success' },

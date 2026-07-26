@@ -26,6 +26,7 @@ import { EVENTS } from '@/lib/realtime/events'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
+import { AutoRefresh } from '@/components/auto-refresh'
 import type { PaymentConfig } from '../service'
 import { declareGuestPayment, emailReceipt, requestPaymentQr } from '../actions'
 
@@ -74,6 +75,9 @@ export function GuestBill({
   paymentConfig: PaymentConfig
 }) {
   const [bill, setBill] = React.useState(initial)
+
+  // Re-sync when polling (realtime off / serverless).
+  React.useEffect(() => setBill(initial), [initial])
   const [qr, setQr] = React.useState<{ dataUrl: string; amount: number } | null>(null)
   const [loadingQr, setLoadingQr] = React.useState(false)
   const [declared, setDeclared] = React.useState(false)
@@ -129,6 +133,7 @@ export function GuestBill({
 
   return (
     <div className="flex min-h-dvh flex-col pb-8">
+      <AutoRefresh intervalMs={7000} />
       <header className="no-print sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back">
           <Link href={`/order/track/${bill.id}`}>

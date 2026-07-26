@@ -9,6 +9,7 @@ import {
   ExternalLink,
   LogOut,
   Menu,
+  RefreshCw,
   Settings,
   Sparkles,
   User,
@@ -35,6 +36,7 @@ import { EVENTS, type NotificationPayload } from '@/lib/realtime/events'
 import { cn, initials } from '@/lib/utils'
 import { permissionsFor, ROLE_LABELS } from '@/lib/rbac'
 import { useSocket, useSocketEvent } from '@/hooks/use-socket'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { logout } from '@/features/auth/actions'
 import { markAllRead } from '../actions'
@@ -194,10 +196,16 @@ export function DashboardShell({
             </span>
           </Link>
 
-          <Badge variant={connected ? 'success' : 'destructive'} className="hidden sm:inline-flex">
-            {connected ? <Wifi /> : <WifiOff />}
-            {connected ? 'Live' : 'Offline'}
-          </Badge>
+          {isRealtimeEnabled() ? (
+            <Badge variant={connected ? 'success' : 'destructive'} className="hidden sm:inline-flex">
+              {connected ? <Wifi /> : <WifiOff />}
+              {connected ? 'Live' : 'Offline'}
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="hidden sm:inline-flex">
+              <RefreshCw /> Auto-refresh
+            </Badge>
+          )}
 
           <div className="ml-auto flex items-center gap-1">
             <Popover>

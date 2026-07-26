@@ -29,6 +29,7 @@ import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
+import { AutoRefresh } from '@/components/auto-refresh'
 import { createServiceRequest } from '../actions'
 
 const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
@@ -75,6 +76,9 @@ export function OrderTracker({
 }) {
   const router = useRouter()
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
+
+  // Re-sync when polling (realtime off / serverless).
+  React.useEffect(() => setStatus(initial.status), [initial.status])
   const { play } = useNotificationSound()
 
   useOrderRoom(initial.id)
@@ -109,6 +113,7 @@ export function OrderTracker({
 
   return (
     <div className="flex min-h-dvh flex-col pb-8">
+      <AutoRefresh intervalMs={6000} />
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back to menu">
           <Link href="/order/menu">

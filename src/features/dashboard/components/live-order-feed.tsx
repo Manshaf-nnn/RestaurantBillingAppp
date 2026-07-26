@@ -35,6 +35,9 @@ export function LiveOrderFeed({
 }) {
   const [orders, setOrders] = React.useState(initialOrders)
 
+  // Re-sync when polling (realtime off / serverless).
+  React.useEffect(() => setOrders(initialOrders), [initialOrders])
+
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
     setOrders((current) => [
       {

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { VegIndicator } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
+import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderStatusPayload, type OrderSummaryPayload } from '@/lib/realtime/events'
 import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
@@ -76,6 +77,11 @@ export function KitchenBoard({
 }) {
   const [tickets, setTickets] = React.useState(initialTickets)
   const [stats, setStats] = React.useState(initialStats)
+
+  // When realtime is off (serverless), AutoRefresh re-fetches and passes fresh
+  // props — re-sync local state from them.
+  React.useEffect(() => setTickets(initialTickets), [initialTickets])
+  React.useEffect(() => setStats(initialStats), [initialStats])
   const [flashing, setFlashing] = React.useState<Set<string>>(new Set())
   const [soundEnabled, setSoundEnabled] = React.useState(true)
   const [pendingId, setPendingId] = React.useState<string | null>(null)
@@ -181,6 +187,7 @@ export function KitchenBoard({
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >
+      <AutoRefresh intervalMs={5000} />
       <OpsStats
         items={[
           { label: 'New', value: live.pending, tone: 'warning' },
