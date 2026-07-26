@@ -1,8 +1,14 @@
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  // Pin the file-tracing root to this project so serverless bundling on hosts
+  // like Netlify includes the right files (avoids the multi-lockfile warning).
+  outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'exceljs', 'nodemailer', 'ioredis'],
   images: {
     remotePatterns: [
