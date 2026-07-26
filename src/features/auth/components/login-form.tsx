@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
-import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, Lock, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Alert } from '@/components/ui/feedback'
@@ -58,24 +58,24 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
     <div className="space-y-7">
       <header className="space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">
-          {isAdmin ? 'Platform admin' : 'Sign in'}
+          {isAdmin ? 'Platform admin 🛡️' : 'Welcome back 👋'}
         </h1>
         <p className="text-sm text-muted-foreground">
           {isAdmin
             ? 'Sign in to review and manage restaurants on your platform.'
-            : 'Welcome back. Enter your details to reach your dashboard.'}
+            : 'Sign in to continue to your account'}
         </p>
       </header>
 
       {formError ? <Alert variant="destructive">{formError}</Alert> : null}
 
       <form onSubmit={onSubmit} className="space-y-4" noValidate>
-        <Field label="Email" htmlFor="email" required error={form.formState.errors.email?.message}>
+        <Field label="Email address" htmlFor="email" required error={form.formState.errors.email?.message}>
           <Input
             id="email"
             type="email"
             autoComplete="email"
-            placeholder="you@restaurant.com"
+            placeholder="Enter your email"
             startIcon={<Mail />}
             aria-invalid={Boolean(form.formState.errors.email)}
             {...form.register('email')}
@@ -93,7 +93,7 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
               id="password"
               type={showPassword ? 'text' : 'password'}
               autoComplete="current-password"
-              placeholder="••••••••"
+              placeholder="Enter your password"
               startIcon={<Lock />}
               className="pr-10"
               aria-invalid={Boolean(form.formState.errors.password)}
@@ -117,15 +117,20 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
               className="size-4 rounded border-input accent-[hsl(var(--primary))]"
               {...form.register('remember')}
             />
-            Keep me signed in
+            Remember me
           </label>
           <Link href="/forgot-password" className="font-medium text-primary hover:underline">
             Forgot password?
           </Link>
         </div>
 
-        <Button type="submit" size="lg" className="w-full" loading={form.formState.isSubmitting}>
-          Sign in
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full bg-gradient-to-r from-primary to-chart-5 text-primary-foreground shadow-lg shadow-primary/25 hover:opacity-95"
+          loading={form.formState.isSubmitting}
+        >
+          Sign in <ArrowRight />
         </Button>
       </form>
 
