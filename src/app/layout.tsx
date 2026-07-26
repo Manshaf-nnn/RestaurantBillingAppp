@@ -8,23 +8,23 @@ import './globals.css'
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl()),
   title: {
-    default: 'RestaurantOS — Restaurant POS & QR Ordering',
-    template: '%s · RestaurantOS',
+    default: 'TableFlow — Smart Dining, Simplified',
+    template: '%s · TableFlow',
   },
   description:
     'Cloud restaurant operating system: QR ordering, kitchen display, billing, payments, inventory and analytics in one platform.',
-  applicationName: 'RestaurantOS',
+  applicationName: 'TableFlow',
   manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
-    title: 'RestaurantOS',
+    title: 'TableFlow',
     statusBarStyle: 'black-translucent',
   },
   formatDetection: { telephone: false },
   openGraph: {
     type: 'website',
-    siteName: 'RestaurantOS',
-    title: 'RestaurantOS — Restaurant POS & QR Ordering',
+    siteName: 'TableFlow',
+    title: 'TableFlow — Restaurant POS & QR Ordering',
     description:
       'Run your whole restaurant from one screen: orders, kitchen, billing, inventory and insights.',
   },

@@ -212,7 +212,7 @@ export function printReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
       ${receipt.paymentMethod ? `<div class="rule"></div><div class="row"><span>Paid via</span><span class="bold">${escapeHtml(receipt.paymentMethod)}</span></div>` : ''}
       <div class="rule"></div>
       <div class="center">${escapeHtml(receipt.footer ?? 'Thank you — please come again!')}</div>
-      <div class="center muted">Powered by RestaurantOS</div>
+      <div class="center muted">Powered by TableFlow</div>
     `,
   )
 }

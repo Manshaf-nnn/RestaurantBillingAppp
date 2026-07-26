@@ -43,7 +43,7 @@ export function QrPoster({
         <p>Scan to view the menu & order</p>
         <img src="${qrDataUrl}" alt="QR code" />
         <div class="steps">1. Scan this code &nbsp;·&nbsp; 2. Enter your table number &nbsp;·&nbsp; 3. Order</div>
-        <div class="brand">Powered by RestaurantOS</div>
+        <div class="brand">Powered by TableFlow</div>
       </div>
       <script>window.onload=function(){window.print()}</script>
       </body></html>`)

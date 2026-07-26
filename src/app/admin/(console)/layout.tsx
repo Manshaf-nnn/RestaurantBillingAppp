@@ -18,7 +18,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               <ShieldCheck className="size-4" />
             </span>
             <span className="min-w-0">
-              <span className="block text-sm font-bold leading-tight">RestaurantOS</span>
+              <span className="block text-sm font-bold leading-tight">TableFlow</span>
               <span className="block text-[11px] text-muted-foreground">Platform admin</span>
             </span>
           </Link>

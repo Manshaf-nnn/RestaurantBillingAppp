@@ -1,7 +1,7 @@
 /**
  * Money handling.
  *
- * All monetary amounts in RestaurantOS are integers in the currency's minor
+ * All monetary amounts in TableFlow are integers in the currency's minor
  * unit (cents, paise, …). Floating point never touches a price.
  * Rates are basis points: 10000 bps = 100%.
  */

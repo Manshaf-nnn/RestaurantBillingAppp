@@ -21,7 +21,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <span className="flex size-9 items-center justify-center rounded-xl bg-white/20 backdrop-blur">
             <ChefHat className="size-5" />
           </span>
-          <span className="text-[15px] font-bold tracking-tight">RestaurantOS</span>
+          <span className="text-[15px] font-bold tracking-tight">TableFlow</span>
         </Link>
 
         <div className="relative z-10 max-w-md">
@@ -41,7 +41,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </div>
 
         <p className="relative z-10 text-xs text-primary-foreground/70">
-          © {new Date().getFullYear()} RestaurantOS · Built for restaurants that move fast
+          © {new Date().getFullYear()} TableFlow · Built for restaurants that move fast
         </p>
       </aside>
 
@@ -51,7 +51,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <ChefHat className="size-4" />
             </span>
-            <span className="text-sm font-bold tracking-tight">RestaurantOS</span>
+            <span className="text-sm font-bold tracking-tight">TableFlow</span>
           </Link>
           <ThemeToggle />
         </div>

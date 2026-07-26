@@ -150,7 +150,7 @@ export function DashboardShell({
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-bold leading-tight">{restaurantName}</span>
-            <span className="block text-[11px] text-muted-foreground">RestaurantOS</span>
+            <span className="block text-[11px] text-muted-foreground">TableFlow</span>
           </span>
         </Link>
 

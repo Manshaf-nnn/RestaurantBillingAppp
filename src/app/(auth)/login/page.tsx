@@ -6,7 +6,7 @@ import { LoginForm } from '@/features/auth/components/login-form'
 
 export const metadata: Metadata = {
   title: 'Sign in',
-  description: 'Sign in to your RestaurantOS dashboard.',
+  description: 'Sign in to your TableFlow dashboard.',
 }
 
 export default function LoginPage() {

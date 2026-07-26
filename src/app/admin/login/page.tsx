@@ -37,7 +37,7 @@ export default async function AdminLoginPage() {
             <span className="flex size-9 items-center justify-center rounded-xl bg-foreground text-background">
               <ShieldCheck className="size-5" />
             </span>
-            <span className="text-[15px] font-bold tracking-tight">RestaurantOS · Admin</span>
+            <span className="text-[15px] font-bold tracking-tight">TableFlow · Admin</span>
           </Link>
 
           <Suspense fallback={<Skeleton className="h-72 w-full" />}>

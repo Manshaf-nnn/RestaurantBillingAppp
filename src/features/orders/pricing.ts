@@ -3,7 +3,7 @@ import type { Coupon, Food, SpiceLevel, VariantKind } from '@prisma/client'
 import { applyBps, roundToNearestMajor } from '@/lib/money'
 
 /**
- * The single source of truth for money in RestaurantOS.
+ * The single source of truth for money in TableFlow.
  *
  * The guest app renders prices with these functions, and the server recomputes
  * every total with the *same* functions from database records before an order

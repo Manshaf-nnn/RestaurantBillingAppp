@@ -45,7 +45,7 @@ export async function sendMail(input: MailInput): Promise<{ sent: boolean }> {
 
   try {
     await transport.sendMail({
-      from: process.env.SMTP_FROM ?? 'RestaurantOS <no-reply@restaurantos.app>',
+      from: process.env.SMTP_FROM ?? 'TableFlow <no-reply@tableflow.app>',
       ...input,
     })
     return { sent: true }
@@ -63,7 +63,7 @@ function layout(title: string, body: string, cta?: { label: string; href: string
 <body style="margin:0;padding:24px;background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#18181b">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)">
     <tr><td style="padding:28px 32px 8px">
-      <div style="font-size:15px;font-weight:700;letter-spacing:-.01em;color:#ea580c">RestaurantOS</div>
+      <div style="font-size:15px;font-weight:700;letter-spacing:-.01em;color:#ea580c">TableFlow</div>
     </td></tr>
     <tr><td style="padding:8px 32px 4px">
       <h1 style="margin:0;font-size:22px;line-height:1.3;letter-spacing:-.02em">${title}</h1>
@@ -78,7 +78,7 @@ function layout(title: string, body: string, cta?: { label: string; href: string
         : ''
     }
     <tr><td style="padding:20px 32px 28px;font-size:12px;color:#a1a1aa;border-top:1px solid #f4f4f5">
-      Sent by RestaurantOS. If you did not expect this email you can safely ignore it.
+      Sent by TableFlow. If you did not expect this email you can safely ignore it.
     </td></tr>
   </table>
 </body></html>`
@@ -87,10 +87,10 @@ function layout(title: string, body: string, cta?: { label: string; href: string
 export function verificationEmail(name: string, token: string) {
   const href = `${appUrl()}/verify-email?token=${token}`
   return {
-    subject: 'Confirm your RestaurantOS email',
+    subject: 'Confirm your TableFlow email',
     html: layout(
       'Confirm your email',
-      `<p>Hi ${name}, welcome to RestaurantOS. Confirm your email address to activate your account.</p><p>This link expires in 24 hours.</p>`,
+      `<p>Hi ${name}, welcome to TableFlow. Confirm your email address to activate your account.</p><p>This link expires in 24 hours.</p>`,
       { label: 'Confirm email', href },
     ),
     text: `Confirm your email: ${href}`,
@@ -100,7 +100,7 @@ export function verificationEmail(name: string, token: string) {
 export function passwordResetEmail(name: string, token: string) {
   const href = `${appUrl()}/reset-password?token=${token}`
   return {
-    subject: 'Reset your RestaurantOS password',
+    subject: 'Reset your TableFlow password',
     html: layout(
       'Reset your password',
       `<p>Hi ${name}, we received a request to reset your password. This link expires in 1 hour and can be used once.</p><p>If you did not request this, no action is needed.</p>`,
@@ -119,7 +119,7 @@ export function staffInviteEmail(params: {
 }) {
   const href = `${appUrl()}/login`
   return {
-    subject: `You have been added to ${params.restaurantName} on RestaurantOS`,
+    subject: `You have been added to ${params.restaurantName} on TableFlow`,
     html: layout(
       `Welcome to ${params.restaurantName}`,
       `<p>Hi ${params.name}, an account was created for you as <strong>${params.role}</strong>.</p>

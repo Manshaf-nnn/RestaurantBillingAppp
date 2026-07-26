@@ -5,8 +5,8 @@ export const dynamic = 'force-static'
 /** PWA manifest — installable staff dashboards and guest ordering. */
 export function GET() {
   const manifest = {
-    name: 'RestaurantOS',
-    short_name: 'RestaurantOS',
+    name: 'TableFlow',
+    short_name: 'TableFlow',
     description: 'Restaurant POS, QR ordering, kitchen display and analytics.',
     start_url: '/dashboard',
     scope: '/',

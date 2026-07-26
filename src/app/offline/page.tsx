@@ -11,7 +11,7 @@ export default function OfflinePage() {
         </span>
         <h1 className="text-2xl font-bold tracking-tight">You’re offline</h1>
         <p className="text-balance text-sm text-muted-foreground">
-          RestaurantOS can’t reach the network right now. Any screen you’ve already opened still
+          TableFlow can’t reach the network right now. Any screen you’ve already opened still
           works — new data will sync the moment you’re back online.
         </p>
       </div>

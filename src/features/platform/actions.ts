@@ -43,7 +43,7 @@ export async function approveRestaurant(input: unknown): Promise<ActionResult<{ 
         restaurantId: restaurant.id,
         type: 'SYSTEM',
         title: 'Your restaurant is approved 🎉',
-        body: 'Welcome to RestaurantOS. Your dashboard is now live.',
+        body: 'Welcome to TableFlow. Your dashboard is now live.',
         audience: 'MANAGEMENT',
       })
 

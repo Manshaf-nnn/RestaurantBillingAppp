@@ -61,11 +61,11 @@ const CLIENT_EVENTS = [
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const spec = {
-    name: 'RestaurantOS API',
+    name: 'TableFlow API',
     version: '1.0.0',
     baseUrl: appUrl(),
     description:
-      'REST + WebSocket API for the RestaurantOS platform. Staff endpoints authenticate with the httpOnly session cookie; the websocket authenticates from the same cookie.',
+      'REST + WebSocket API for the TableFlow platform. Staff endpoints authenticate with the httpOnly session cookie; the websocket authenticates from the same cookie.',
     rest: REST_ENDPOINTS,
     websocket: {
       url: `${appUrl().replace(/^http/, 'ws')}/socket.io`,
@@ -96,7 +96,7 @@ function renderHtml(spec: ReturnType<typeof buildSpecShape>): string {
     .map((event) => `<tr><td><code>${event.event}</code></td><td>${event.audience}</td><td>${event.description}</td></tr>`)
     .join('')
 
-  return `<!doctype html><html><head><meta charset="utf-8"><title>RestaurantOS API</title>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>TableFlow API</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
       body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:920px;margin:0 auto;padding:40px 24px;color:#18181b;line-height:1.6}

@@ -33,7 +33,7 @@ export async function toExcel(
   rows: Array<Record<string, unknown>>,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'RestaurantOS'
+  workbook.creator = 'TableFlow'
   workbook.created = new Date()
 
   const sheet = workbook.addWorksheet(sheetName.slice(0, 30))
@@ -64,7 +64,7 @@ export async function buildReportWorkbook(
   restaurantName: string,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'RestaurantOS'
+  workbook.creator = 'TableFlow'
   workbook.created = new Date()
 
   const money = (value: number) => formatMoney(value, currency)

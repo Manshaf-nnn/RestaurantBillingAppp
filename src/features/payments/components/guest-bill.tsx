@@ -262,7 +262,7 @@ export function GuestBill({
           ) : null}
 
           <p className="mt-5 text-center text-[11px] text-muted-foreground">
-            Thank you for dining with us · Powered by RestaurantOS
+            Thank you for dining with us · Powered by TableFlow
           </p>
         </section>
 

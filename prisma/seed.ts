@@ -31,7 +31,7 @@ function between(min: number, max: number) {
 const IMG = (id: string) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=600&q=70`
 
 async function main() {
-  console.log('🌱 Seeding RestaurantOS…')
+  console.log('🌱 Seeding TableFlow…')
 
   const passwordHash = await bcrypt.hash(PASSWORD, 12)
 

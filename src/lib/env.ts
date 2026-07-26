@@ -27,7 +27,7 @@ const serverSchema = z.object({
   SMTP_PORT: z.coerce.number().int().optional(),
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
-  SMTP_FROM: z.string().default('RestaurantOS <no-reply@restaurantos.app>'),
+  SMTP_FROM: z.string().default('TableFlow <no-reply@tableflow.app>'),
 
   BACKUP_DIR: z.string().default('./backups'),
   BACKUP_RETENTION_DAYS: z.coerce.number().int().default(14),
