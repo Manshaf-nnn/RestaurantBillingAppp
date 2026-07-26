@@ -55,14 +55,30 @@ export function env(): ServerEnv {
   return cached
 }
 
-/** Public base URL — explicit env first, then the host's (Netlify/Render). */
-export const appUrl = () =>
-  (
+/**
+ * Public base URL — explicit env first, then the host's (Netlify/Render).
+ *
+ * Tolerant on purpose: a value pasted without a scheme (e.g. "myapp.netlify.app")
+ * is upgraded to https, and anything unparseable falls back to localhost so a
+ * stray env value can never crash `new URL(appUrl())` during the build.
+ */
+export const appUrl = () => {
+  const raw = (
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.URL ||
     process.env.RENDER_EXTERNAL_URL ||
     'http://localhost:3000'
-  ).replace(/\/$/, '')
+  )
+    .trim()
+    .replace(/\/$/, '')
+
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+  try {
+    return new URL(candidate).origin
+  } catch {
+    return 'http://localhost:3000'
+  }
+}
 
 export const isProduction = () => process.env.NODE_ENV === 'production'
 
