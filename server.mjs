@@ -1,5 +1,5 @@
 // ============================================================================
-// RestaurantOS custom server
+// TableFlow custom server
 // ----------------------------------------------------------------------------
 // Runs Next.js and Socket.IO in a single Node process so server actions and
 // route handlers can publish realtime events directly (via globalThis.__ros_io)
@@ -162,7 +162,7 @@ globalThis.__ros_io = io
 
 httpServer.listen(port, hostname, () => {
   const shown = hostname === '0.0.0.0' ? 'localhost' : hostname
-  console.log(`\n  RestaurantOS ${dev ? '(development)' : '(production)'}`)
+  console.log(`\n  TableFlow ${dev ? '(development)' : '(production)'}`)
   console.log(`  ▸ App        http://${shown}:${port}`)
   console.log(`  ▸ Realtime   ws://${shown}:${port}/socket.io`)
   console.log(`  ▸ Dashboard  http://${shown}:${port}/dashboard`)
