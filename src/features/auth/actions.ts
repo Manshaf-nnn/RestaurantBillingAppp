@@ -8,6 +8,7 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ForbiddenError, UnauthorizedError } from '@/lib/errors'
 import { ROLE_HOME } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
+import { defaultCategoryRows } from '@/features/menu/default-categories'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requireUser } from '@/server/auth/guard'
 import {
@@ -195,6 +196,9 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
           sortOrder: index,
         })),
       })
+
+      // Every restaurant starts with a fixed set of menu categories.
+      await tx.category.createMany({ data: defaultCategoryRows(restaurant.id) })
 
       return { user: created, restaurant }
     })

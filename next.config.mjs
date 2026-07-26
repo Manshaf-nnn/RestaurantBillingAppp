@@ -16,11 +16,8 @@ const nextConfig = {
   },
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'exceljs', 'nodemailer', 'ioredis'],
   images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: 'res.cloudinary.com' },
-      { protocol: 'https', hostname: 'images.unsplash.com' },
-      { protocol: 'https', hostname: 'ui-avatars.com' },
-    ],
+    // Allow any HTTPS image URL owners paste for menu photos/logos.
+    remotePatterns: [{ protocol: 'https', hostname: '**' }],
     formats: ['image/avif', 'image/webp'],
   },
   eslint: { ignoreDuringBuilds: true },

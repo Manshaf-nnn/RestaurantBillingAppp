@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 
+import { defaultCategoryRows } from '@/features/menu/default-categories'
 import { MenuManager } from '@/features/menu/components/menu-manager'
 import { getManagedMenu } from '@/features/menu/queries'
 import { can, PERMISSIONS } from '@/lib/rbac'
@@ -13,6 +14,16 @@ export const metadata: Metadata = { title: 'Menu' }
 
 export default async function MenuPage() {
   const user = await requirePagePermission(PERMISSIONS.MENU_VIEW, '/dashboard/menu')
+
+  // Categories are a fixed set. Seed them idempotently so the "add dish"
+  // dropdown is never empty — including for restaurants approved before the
+  // fixed-category change. The unique (restaurantId, slug) makes this a no-op
+  // once they exist.
+  await prisma.category.createMany({
+    data: defaultCategoryRows(user.restaurantId),
+    skipDuplicates: true,
+  })
+
   const [restaurant, menu, inventory] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getManagedMenu(user.restaurantId),

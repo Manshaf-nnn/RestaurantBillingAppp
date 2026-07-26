@@ -24,12 +24,13 @@ const ALLOWED: Record<string, string> = {
  * Authenticated image upload for menu photos, logos and covers.
  *   POST /api/uploads  (multipart/form-data, field "file")
  *
- * Uploads to Cloudinary when configured; otherwise writes to
- * `public/uploads` on the server's disk. Returns `{ url }`.
+ * Storage, in order of preference:
+ *   1. Cloudinary            (if CLOUDINARY_* env is set)
+ *   2. Netlify Blobs         (when running on Netlify — its disk is read-only)
+ *   3. Local disk /public    (local dev / a normal VPS)
  */
 export async function POST(request: NextRequest) {
   try {
-    // Only signed-in restaurant staff may upload.
     await requireTenantUser()
     await enforceRateLimit('upload')
 
@@ -54,24 +55,35 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const bytes = Buffer.from(await file.arrayBuffer())
+    const arrayBuffer = await file.arrayBuffer()
+    const bytes = Buffer.from(arrayBuffer)
+    const key = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
 
     if (isCloudinaryConfigured()) {
-      const url = await uploadToCloudinary(bytes)
-      return NextResponse.json({ url })
+      return NextResponse.json({ url: await uploadToCloudinary(bytes) })
     }
 
-    // Local disk fallback — persistent on a VPS, served by Next from /public.
-    const filename = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
+    if (isNetlify()) {
+      const { getStore } = await import('@netlify/blobs')
+      const store = getStore('menu-media')
+      await store.set(key, arrayBuffer, { metadata: { contentType: file.type } })
+      // Served back by /api/media/[key].
+      return NextResponse.json({ url: `/api/media/${key}` })
+    }
+
+    // Local disk fallback (dev / VPS).
     const dir = join(process.cwd(), 'public', 'uploads')
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, filename), bytes)
-
-    return NextResponse.json({ url: `/uploads/${filename}` })
+    await writeFile(join(dir, key), bytes)
+    return NextResponse.json({ url: `/uploads/${key}` })
   } catch (error) {
     const app = toAppError(error)
     return NextResponse.json({ error: app.message, code: app.code }, { status: app.status })
   }
+}
+
+function isNetlify(): boolean {
+  return Boolean(process.env.NETLIFY || process.env.NETLIFY_BLOBS_CONTEXT || process.env.NETLIFY_DEV)
 }
 
 async function uploadToCloudinary(bytes: Buffer): Promise<string> {

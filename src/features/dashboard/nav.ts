@@ -1,6 +1,5 @@
 import {
   BarChart3,
-  Boxes,
   ChefHat,
   ClipboardList,
   CreditCard,
@@ -72,13 +71,9 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Menu',
     items: [
+      // Categories are a fixed set (see default-categories.ts) — no management
+      // screen; owners just pick one when adding a dish.
       { href: '/dashboard/menu', label: 'Menu items', icon: Utensils, permission: PERMISSIONS.MENU_VIEW },
-      {
-        href: '/dashboard/categories',
-        label: 'Categories',
-        icon: Boxes,
-        permission: PERMISSIONS.CATEGORY_MANAGE,
-      },
       { href: '/dashboard/coupons', label: 'Coupons', icon: Ticket, permission: PERMISSIONS.COUPON_MANAGE },
     ],
   },
