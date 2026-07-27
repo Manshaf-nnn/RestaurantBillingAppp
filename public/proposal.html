@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ef6716">
+<meta name="description" content="TableFlow — let your guests order from the table by scanning one QR code. QR ordering, kitchen display, billing, loyalty and analytics for restaurants.">
+<meta property="og:title" content="TableFlow — Smart Dining, Simplified">
+<meta property="og:description" content="Let your guests order right from the table. No waiter to take orders, no app to download.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/icon.png">
+<title>TableFlow — Smart Dining, Simplified · For Restaurant Owners</title>
+<style>
+  :root{
+    --ink:#141f38; --ink2:#33415f; --muted:#5c6883; --line:rgba(20,31,56,.10);
+    --orange1:#fb8c3a; --orange2:#ef6716; --navy:#152341;
+    --good:#12a150;
+    --glass:linear-gradient(158deg,rgba(255,255,255,.72),rgba(255,255,255,.48));
+    --shadow:0 18px 48px -16px rgba(20,31,56,.30);
+    --r:20px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink); line-height:1.6; -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(60% 45% at 12% 6%, rgba(255,150,70,.30), transparent 60%),
+      radial-gradient(52% 42% at 90% 10%, rgba(120,160,255,.26), transparent 62%),
+      radial-gradient(50% 50% at 85% 96%, rgba(255,172,88,.26), transparent 60%),
+      linear-gradient(150deg,#eff2f9,#e8ecf5);
+    background-attachment:fixed;
+  }
+  .wrap{max-width:1000px;margin:0 auto;padding:20px 20px 72px}
+  .glass{background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(155%);backdrop-filter:blur(22px) saturate(155%);
+    border:1px solid rgba(255,255,255,.68);box-shadow:var(--shadow);border-radius:var(--r)}
+
+  /* top bar */
+  .bar{display:flex;align-items:center;gap:12px;padding:11px 16px;position:sticky;top:14px;z-index:10;border-radius:16px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em;font-size:19px}
+  .brand img{width:34px;height:34px;border-radius:50%;box-shadow:0 4px 14px rgba(239,103,22,.4)}
+  .brand .t{color:var(--navy)} .brand .f{color:var(--orange2)}
+  .bar .sp{flex:1}
+  .cta{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:14px;color:#fff;text-decoration:none;
+    padding:10px 16px;border-radius:12px;background:linear-gradient(90deg,var(--orange1),var(--orange2));
+    box-shadow:0 8px 18px -6px rgba(239,103,22,.55);white-space:nowrap;transition:transform .15s,opacity .15s}
+  .cta:hover{transform:translateY(-1px);opacity:.96}
+  .cta.sm{padding:8px 13px;font-size:13px}
+
+  .eyebrow{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--orange2);margin:0 0 10px}
+  h1{font-size:clamp(30px,5.6vw,50px);line-height:1.08;letter-spacing:-.03em;font-weight:850;margin:0 0 16px;text-wrap:balance;color:var(--navy)}
+  h1 .hl{background:linear-gradient(90deg,var(--orange1),var(--orange2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:clamp(17px,2.4vw,20px);color:var(--ink2);max-width:60ch;margin:0 auto 26px;text-wrap:pretty}
+  .center{text-align:center}
+
+  /* hero */
+  .hero{margin-top:26px;padding:44px 30px}
+  .hero .actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:6px}
+  .ghost{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:14px;color:var(--navy);text-decoration:none;
+    padding:12px 18px;border-radius:12px;background:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.7)}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:34px}
+  .stat{padding:16px;text-align:center;border-radius:16px;background:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.6)}
+  .stat .n{font-size:clamp(22px,3.4vw,30px);font-weight:850;color:var(--navy);letter-spacing:-.02em}
+  .stat .l{font-size:12.5px;color:var(--muted);font-weight:600;margin-top:2px}
+
+  section{margin-top:46px}
+  h2{font-size:clamp(24px,3.6vw,32px);letter-spacing:-.02em;font-weight:850;margin:0 0 8px;color:var(--navy);text-wrap:balance}
+  .lead{font-size:16.5px;color:var(--ink2);max-width:64ch;margin:0 0 26px}
+
+  /* how it works */
+  .steps{display:grid;gap:16px}
+  @media(min-width:760px){.steps{grid-template-columns:repeat(4,1fr)}}
+  .step{padding:20px}
+  .step .no{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:12px;
+    font-weight:850;color:#fff;background:linear-gradient(150deg,var(--orange1),var(--orange2));margin-bottom:12px;font-size:16px}
+  .step h3{margin:0 0 5px;font-size:16.5px;font-weight:800;color:var(--navy)}
+  .step p{margin:0;font-size:14px;color:var(--muted)}
+
+  /* features */
+  .feat{display:grid;gap:16px}
+  @media(min-width:720px){.feat{grid-template-columns:1fr 1fr}}
+  .card{padding:22px;display:flex;gap:15px;align-items:flex-start}
+  .ic{flex:none;width:46px;height:46px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:23px;
+    background:linear-gradient(150deg,rgba(239,103,22,.16),rgba(251,140,58,.08));border:1px solid rgba(239,103,22,.16)}
+  .card h3{margin:0 0 4px;font-size:17px;font-weight:800;color:var(--navy)}
+  .card p{margin:0 0 8px;font-size:14px;color:var(--ink2)}
+  .win{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--good);
+    background:rgba(18,161,80,.10);border-radius:999px;padding:4px 10px}
+  .win svg{flex:none}
+
+  /* benefits band */
+  .band{padding:34px 30px;margin-top:46px}
+  .blist{display:grid;gap:14px;margin-top:18px}
+  @media(min-width:680px){.blist{grid-template-columns:1fr 1fr}}
+  .b{display:flex;gap:11px;align-items:flex-start;font-size:15px;color:var(--ink2)}
+  .b .tick{flex:none;width:24px;height:24px;border-radius:50%;background:linear-gradient(150deg,var(--orange1),var(--orange2));
+    display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;margin-top:1px}
+  .b b{color:var(--navy)}
+
+  /* close */
+  .close{margin-top:46px;padding:42px 30px;text-align:center;
+    background:linear-gradient(150deg,#182a4d,#0f1c36);border-radius:24px;color:#fff;box-shadow:var(--shadow)}
+  .close h2{color:#fff}
+  .close p{color:rgba(255,255,255,.82);max-width:52ch;margin:0 auto 24px;font-size:16.5px}
+  .close .cta{font-size:15px;padding:14px 22px}
+  .cbtns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .cta.light{background:rgba(255,255,255,.14);box-shadow:none;border:1px solid rgba(255,255,255,.28)}
+  .sig{margin-top:26px;padding-top:22px;border-top:1px solid rgba(255,255,255,.14);
+    display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center;justify-content:center;text-align:center}
+  .sig .who b{display:block;color:#fff;font-size:16px}
+  .sig .who span{color:rgba(255,255,255,.7);font-size:13px}
+  .sig .lines{display:flex;flex-direction:column;gap:3px}
+  .sig .lines a{color:#ffb877;font-size:14px;font-weight:600;text-decoration:none}
+  .sig .lines a:hover{text-decoration:underline}
+
+  .foot{margin-top:30px;text-align:center;color:var(--muted);font-size:13px}
+  a{color:var(--orange2)}
+  /* Reveal-on-scroll is an enhancement: content is visible by default, and
+     only hidden/animated once JS marks the root with .anim (so no-JS = visible). */
+  .anim .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .anim .reveal.go{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){.anim .reveal{opacity:1!important;transform:none!important;transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="bar glass">
+    <span class="brand"><img src="data:image/png;base64,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" alt=""><span><span class="t">Table</span><span class="f">Flow</span></span></span>
+    <span class="sp"></span>
+    <a class="cta sm" href="https://wa.me/94752977591?text=Hi%20Manshaf%2C%20I%27d%20like%20to%20know%20more%20about%20TableFlow%20for%20my%20restaurant." target="_blank" rel="noopener">Chat on WhatsApp ↗</a>
+  </div>
+
+  <!-- HERO -->
+  <div class="hero glass center reveal">
+    <p class="eyebrow">For restaurant owners</p>
+    <h1>Let your guests order <span class="hl">right from the table.</span></h1>
+    <p class="sub">TableFlow turns every table into a self-service ordering point. Guests scan one QR code, browse your menu with photos, and order in seconds — the kitchen gets it instantly. No paper tickets, no missed orders, no app to download.</p>
+    <div class="actions">
+      <a class="cta" href="#start">See how it works</a>
+      <a class="ghost" href="#features">Explore the features</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">1 QR</div><div class="l">code for the whole table</div></div>
+      <div class="stat"><div class="n">0 apps</div><div class="l">for guests to download</div></div>
+      <div class="stat"><div class="n">Any device</div><div class="l">phone, tablet or PC</div></div>
+    </div>
+  </div>
+
+  <!-- THE SHIFT -->
+  <section class="reveal">
+    <p class="eyebrow">Why it matters</p>
+    <h2>Free your team from taking orders — so they can focus on hospitality.</h2>
+    <p class="lead">On a busy night, orders get missed, handwriting gets misread, and guests wait just to flag someone down. TableFlow removes that bottleneck completely: guests order themselves, the kitchen sees it the moment it's placed, and your staff spend their time serving and delighting — not ferrying slips of paper.</p>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="start" class="reveal">
+    <p class="eyebrow">How it works</p>
+    <h2>From seated to served — in four simple steps.</h2>
+    <p class="lead">It feels effortless for your guests, and it runs itself for you.</p>
+    <div class="steps">
+      <div class="glass step"><span class="no">1</span><h3>Scan &amp; sit</h3><p>The guest scans the QR on the table and enters their table number. The menu opens instantly — no app, no sign-up.</p></div>
+      <div class="glass step"><span class="no">2</span><h3>Browse &amp; order</h3><p>They explore your menu with photos, prices and dietary tags, add items, leave notes like “extra spicy”, and place the order.</p></div>
+      <div class="glass step"><span class="no">3</span><h3>Kitchen cooks</h3><p>The order lands on the kitchen screen the same second — with the table number in bold — so the line knows exactly what and where.</p></div>
+      <div class="glass step"><span class="no">4</span><h3>Track &amp; pay</h3><p>The guest watches “preparing → ready” on their phone, then pays at the table by QR, card or cash. Table turns faster.</p></div>
+    </div>
+  </section>
+
+  <!-- FEATURES + BENEFITS -->
+  <section id="features" class="reveal">
+    <p class="eyebrow">Everything included</p>
+    <h2>Every feature earns its place — here's what each one does for you.</h2>
+    <p class="lead">One system runs your whole floor. No juggling separate tools, no per-feature add-ons.</p>
+    <div class="feat">
+
+      <div class="glass card">
+        <span class="ic">📱</span>
+        <div><h3>Single-QR table ordering</h3>
+          <p>One QR per table. Guests order themselves, at their own pace, with your full menu in front of them.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Serve more tables with fewer staff — and guests often order more.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🍳</span>
+        <div><h3>Kitchen display screen</h3>
+          <p>Orders appear instantly with the table number front-and-centre and a live timer on every ticket.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>No lost paper tickets, no misreads, faster prep on busy nights.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">⏱️</span>
+        <div><h3>Live order tracking</h3>
+          <p>Guests follow their order from “received” to “ready” right on their phone.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Far fewer “where's my food?” interruptions — calmer service.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">💳</span>
+        <div><h3>Billing &amp; payments</h3>
+          <p>Guests request the bill and pay at the table — by QR, card or cash — without waiting.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Tables turn faster and the checkout queue disappears.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">📋</span>
+        <div><h3>Menu you control</h3>
+          <p>Update dishes, prices, photos and availability from your dashboard in seconds.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Mark a dish “sold out” instantly — never disappoint a guest, never reprint a menu.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🎁</span>
+        <div><h3>Loyalty &amp; rewards</h3>
+          <p>Guests earn points on every order and redeem them for money off future visits — you set the rate.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Turns one-time visitors into regulars who come back and spend more.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🏷️</span>
+        <div><h3>Coupons &amp; offers</h3>
+          <p>Run discounts and happy-hour deals whenever you like.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Fill your quiet hours and pull in new customers on demand.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">📦</span>
+        <div><h3>Inventory &amp; suppliers</h3>
+          <p>Track stock levels and get alerted before key ingredients run low.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Cut waste and never get caught out mid-service.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">📊</span>
+        <div><h3>Analytics &amp; reports</h3>
+          <p>See best-sellers, revenue, peak hours and staff performance — exportable any time.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Decide with facts: what to promote, when to staff up, what to drop.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🔐</span>
+        <div><h3>Staff roles &amp; security</h3>
+          <p>Separate secure logins for owner, manager, cashier, waiter and kitchen — each sees only what they need.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Full accountability, and your data stays private and protected.</span></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- BENEFITS BAND -->
+  <div class="band glass reveal">
+    <p class="eyebrow">The bottom line</p>
+    <h2>What you gain from day one</h2>
+    <div class="blist">
+      <div class="b"><span class="tick">✓</span><span><b>Lower labour pressure.</b> Guests self-order, so the same team handles a busier room.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>Faster table turns.</b> Order and pay at the table means more covers per shift.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>Zero order errors.</b> What the guest taps is what the kitchen sees — every time.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>Bigger tickets.</b> A visual menu with photos and add-ons gently lifts the average order.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>Repeat customers.</b> Loyalty points and offers bring guests back through the door.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>No new hardware.</b> Works on the phones and tablets you already have.</span></div>
+    </div>
+  </div>
+
+  <!-- CLOSE / CTA -->
+  <div class="close reveal">
+    <h2>Ready to modernise your restaurant?</h2>
+    <p>Setup is simple: we get you live, you add your menu, print your table QR codes — and you're taking orders the same day. I'd be glad to walk you through a quick, no-obligation demo whenever suits you.</p>
+    <div class="cbtns">
+      <a class="cta" href="https://wa.me/94752977591?text=Hi%20Manshaf%2C%20I%27d%20like%20to%20book%20a%20TableFlow%20demo%20for%20my%20restaurant." target="_blank" rel="noopener">Book a free demo on WhatsApp →</a>
+      <a class="cta light" href="mailto:manshafj83@gmail.com?subject=TableFlow%20demo%20request">Email me</a>
+    </div>
+    <div class="sig">
+      <div class="who"><b>Manshaf Jamsith</b><span>Software Developer · Mark&nbsp;UI</span></div>
+      <div class="lines">
+        <a href="https://wa.me/94752977591" target="_blank" rel="noopener">WhatsApp / Call&nbsp;·&nbsp;+94&nbsp;75&nbsp;297&nbsp;7591</a>
+        <a href="mailto:manshafj83@gmail.com">manshafj83@gmail.com</a>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">Prepared by Manshaf Jamsith, Mark UI · TableFlow — Smart Dining, Simplified</p>
+</div>
+
+<script>
+  // Enhancement only — enable the hidden state, then reveal on scroll.
+  document.documentElement.classList.add('anim');
+  var els = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('go'); io.unobserve(e.target); } });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    els.forEach(function (el) { io.observe(el); });
+  } else {
+    els.forEach(function (el) { el.classList.add('go'); });
+  }
+</script>
+</body>
+</html>
