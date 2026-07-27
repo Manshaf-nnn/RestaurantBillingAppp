@@ -141,7 +141,7 @@
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply text-foreground antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     text-rendering: optimizeLegibility;
     /* Never let a stray wide element cause the whole page to scroll sideways
@@ -149,6 +149,15 @@
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
+    /* Glassmorphism canvas: a soft warm light mesh so frosted surfaces frost. */
+    min-height: 100dvh;
+    background:
+      radial-gradient(58% 48% at 14% 10%, rgba(255, 150, 70, 0.28), transparent 60%),
+      radial-gradient(52% 46% at 88% 14%, rgba(120, 160, 255, 0.26), transparent 62%),
+      radial-gradient(56% 56% at 82% 94%, rgba(255, 172, 88, 0.24), transparent 60%),
+      radial-gradient(46% 46% at 8% 90%, rgba(86, 120, 224, 0.18), transparent 60%),
+      linear-gradient(135deg, #eef1f8, #e9edf5);
+    background-attachment: fixed;
   }
 
   /* Media and long words never blow out the mobile viewport. */
@@ -193,12 +202,16 @@
 }
 
 @layer components {
-  .glass {
-    @apply border border-white/20 bg-white/70 backdrop-blur-xl dark:border-white/10 dark:bg-white/5;
-  }
-
+  .glass,
   .surface {
-    @apply rounded-xl border bg-card shadow-soft;
+    border-radius: 0.85rem;
+    background: linear-gradient(158deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.42));
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow:
+      0 14px 40px -14px rgba(21, 34, 63, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
   }
 
   .grid-fade {
@@ -299,4 +312,29 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ── Glassmorphism ─────────────────────────────────────────────────────────
+   Turn every solid card/panel surface into frosted glass in one place. These
+   rules are unlayered, so they win over Tailwind's `bg-card` utility. Dialogs,
+   popovers and menus deliberately keep their own opaque backgrounds for
+   readability (they use bg-popover/bg-background, not bg-card). */
+[class~='bg-card'] {
+  background-color: transparent !important;
+  background-image: linear-gradient(158deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.4)) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+[class~='bg-card'][class~='border'],
+[class~='bg-card'][class~='border-b'],
+[class~='bg-card'][class~='border-t'] {
+  border-color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* Frosted, translucent chrome so the mesh reads behind the app shells. */
+.glass-chrome {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.55)) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  border-color: rgba(255, 255, 255, 0.6) !important;
 }

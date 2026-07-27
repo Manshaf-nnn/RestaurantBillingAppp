@@ -29,7 +29,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      {/* TableFlow uses a single glassmorphism light theme — dark isn't offered. */}
+      <ThemeProvider attribute="class" defaultTheme="light" forcedTheme="light" enableSystem={false} disableTransitionOnChange>
         <TooltipProvider delayDuration={200}>
           {children}
           <Toaster

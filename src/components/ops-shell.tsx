@@ -53,8 +53,8 @@ export function OpsShell({
   }, [])
 
   return (
-    <div className="flex min-h-dvh flex-col bg-muted/40">
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-xl">
+    <div className="flex min-h-dvh flex-col">
+      <header className="glass-chrome sticky top-0 z-40 border-b">
         <div className="flex h-14 items-center gap-3 px-4">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <ChefHat className="size-4" />

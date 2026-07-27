@@ -141,9 +141,9 @@ export function DashboardShell({
   )
 
   return (
-    <div className="flex min-h-dvh bg-muted/30">
+    <div className="flex min-h-dvh">
       {/* ── desktop sidebar ─────────────────────────────────────── */}
-      <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r bg-background lg:flex">
+      <aside className="glass-chrome sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r lg:flex">
         <Link href="/dashboard" className="flex h-16 items-center gap-2.5 border-b px-5">
           <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
             <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain p-0.5" />
@@ -179,7 +179,7 @@ export function DashboardShell({
       </Dialog>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur-xl">
+        <header className="glass-chrome sticky top-0 z-30 flex h-16 items-center gap-2 border-b px-4">
           <Button
             variant="ghost"
             size="icon"

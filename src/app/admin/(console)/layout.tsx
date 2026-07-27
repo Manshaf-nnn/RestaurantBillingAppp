@@ -10,8 +10,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const user = await requirePageSuperAdmin('/admin')
 
   return (
-    <div className="min-h-dvh bg-muted/30">
-      <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl">
+    <div className="min-h-dvh">
+      <header className="glass-chrome sticky top-0 z-40 border-b">
         <div className="container flex h-16 items-center gap-3">
           <Link href="/admin" className="flex items-center gap-2.5">
             <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
