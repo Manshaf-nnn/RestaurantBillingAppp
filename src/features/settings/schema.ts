@@ -1,11 +1,13 @@
 import { z } from 'zod'
 
+import { imageUrlField } from '@/lib/media-url'
+
 export const restaurantSettingsSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(80),
   tagline: z.string().trim().max(120).optional().or(z.literal('')),
   description: z.string().trim().max(500).optional().or(z.literal('')),
-  logoUrl: z.string().url().max(2048).optional().or(z.literal('')),
-  coverUrl: z.string().url().max(2048).optional().or(z.literal('')),
+  logoUrl: imageUrlField(),
+  coverUrl: imageUrlField(),
   email: z.string().email().max(255).optional().or(z.literal('')),
   phone: z.string().trim().max(20).optional().or(z.literal('')),
   addressLine: z.string().trim().max(200).optional().or(z.literal('')),
