@@ -1,12 +1,16 @@
-/* RestaurantOS service worker
+/* TableFlow service worker
  * -------------------------------------------------------------------------
  * Gives staff dashboards a working offline shell and fast repeat loads.
  * Strategy:
  *   • navigations  → network-first, fall back to cache, then /offline
  *   • static assets → stale-while-revalidate
  *   • API / socket  → never cached (always live)
+ *
+ * Bump VERSION whenever cached assets (icons, offline shell) change — the
+ * activate handler purges every cache that doesn't match, so stale favicons
+ * and pages are dropped on the next visit.
  */
-const VERSION = 'ros-v1'
+const VERSION = 'tf-v2'
 const STATIC_CACHE = `${VERSION}-static`
 const PAGE_CACHE = `${VERSION}-pages`
 const OFFLINE_URL = '/offline'
