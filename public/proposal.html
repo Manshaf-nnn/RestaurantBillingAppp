@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ef6716">
-<meta name="description" content="TableFlow — let your guests order from the table by scanning one QR code. Keep a small team to serve, not to take orders.">
+<meta name="description" content="TableFlow — let your guests order from the table. Imagine keeping a small team to serve, not to take orders — and what you could save every month.">
 <meta property="og:title" content="TableFlow — Smart Dining, Simplified">
-<meta property="og:description" content="Let your guests order right from the table. No waiter to take orders, no app to download.">
+<meta property="og:description" content="Let your guests order right from the table. Keep a small team to serve, not to take orders.">
 <meta property="og:type" content="website">
 <link rel="icon" href="/icon.png">
 <title>TableFlow — Smart Dining, Simplified · For Restaurant Owners</title>
@@ -68,14 +68,23 @@
   h2{font-size:clamp(24px,3.6vw,32px);letter-spacing:-.02em;font-weight:850;margin:0 0 8px;color:var(--navy);text-wrap:balance}
   .lead{font-size:16.5px;color:var(--ink2);max-width:64ch;margin:0 0 26px}
 
-  /* labour-saving highlight */
-  .highlight{margin-top:6px;padding:26px 28px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;
-    border-left:5px solid var(--orange2)}
-  .highlight .big{flex:none;text-align:center;min-width:180px}
-  .highlight .pct{display:block;font-size:clamp(36px,6.5vw,56px);font-weight:850;letter-spacing:-.03em;line-height:1;
+  /* "just imagine" cost-savings scene */
+  .imagine{margin-top:6px;padding:30px 28px;border-left:5px solid var(--orange2)}
+  .im-eyebrow{font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--orange2);margin:0 0 18px}
+  .im-grid{display:grid;gap:26px;align-items:center}
+  @media(min-width:720px){.im-grid{grid-template-columns:minmax(240px,auto) 1fr}}
+  .im-math{text-align:center;padding:22px 24px;border-radius:18px;
+    background:linear-gradient(155deg,rgba(239,103,22,.12),rgba(255,255,255,.42));border:1px solid rgba(239,103,22,.20)}
+  .im-people{font-size:26px;letter-spacing:4px;margin-bottom:8px;filter:saturate(.9)}
+  .im-calc{font-size:14px;color:var(--muted);font-weight:600}
+  .im-calc b{color:var(--navy);font-weight:800}
+  .im-line{height:1px;background:rgba(20,31,56,.12);margin:12px 0}
+  .im-total{font-size:clamp(30px,5.4vw,44px);font-weight:850;letter-spacing:-.03em;line-height:1;
     background:linear-gradient(90deg,var(--orange1),var(--orange2));-webkit-background-clip:text;background-clip:text;color:transparent}
-  .highlight .cap{display:block;font-size:13px;font-weight:700;color:var(--muted);margin-top:8px}
-  .highlight p{margin:0;flex:1;min-width:240px;font-size:15.5px;color:var(--ink2)}
+  .im-total .sub{display:block;font-size:12px;font-weight:700;color:var(--muted);-webkit-text-fill-color:var(--muted);margin-top:7px;letter-spacing:.02em}
+  .im-copy h3{margin:0 0 10px;font-size:clamp(20px,2.8vw,26px);font-weight:850;color:var(--navy);letter-spacing:-.02em;text-wrap:balance;line-height:1.15}
+  .im-copy p{margin:0 0 10px;font-size:15.5px;color:var(--ink2)}
+  .im-note{font-size:12.5px;color:var(--muted);font-style:italic}
 
   /* how it works */
   .steps{display:grid;gap:16px}
@@ -163,12 +172,22 @@
     <h2>Free your team from taking orders — so they can focus on hospitality.</h2>
     <p class="lead">On a busy night, orders get missed, handwriting gets misread, and guests wait just to flag someone down. TableFlow removes that bottleneck completely: guests order themselves, the kitchen sees it the moment it's placed, and your staff spend their time serving and delighting — not ferrying slips of paper.</p>
 
-    <div class="glass highlight">
-      <div class="big">
-        <span class="pct">up to 75%</span>
-        <span class="cap">fewer order-taking waiters</span>
+    <div class="glass imagine">
+      <p class="im-eyebrow">Just imagine…</p>
+      <div class="im-grid">
+        <div class="im-math">
+          <div class="im-people">🧑‍🍳🧑‍🍳🧑‍🍳🧑‍🍳</div>
+          <div class="im-calc"><b>4 waiters</b> just to take orders<br>≈ <b>Rs 35,000</b> each, every month</div>
+          <div class="im-line"></div>
+          <div class="im-total">Rs 140,000<span class="sub">that could stay in your pocket — every month</span></div>
+        </div>
+        <div class="im-copy">
+          <h3>What could you do with an extra Rs&nbsp;140,000 a month?</h3>
+          <p>Picture your busiest night. Instead of a full team rushing table to table just to take orders, your guests order themselves the moment they sit down — and nobody waits. You keep one or two warm faces to serve the food and look after the room, and the rest of that wage bill is <b>yours to reinvest</b>: better ingredients, a fresh coat of paint, a little breathing room… month after month.</p>
+          <p style="margin-bottom:0"><b>That's not a cost — it's TableFlow paying for itself, many times over.</b></p>
+          <span class="im-note">An illustration to picture the impact — your exact saving depends on your team size and hours.</span>
+        </div>
       </div>
-      <p>You no longer need a large team of waiters just to take orders. Keep a small, warm team to <b>serve the food and look after your guests</b> — TableFlow handles the ordering itself. And even at the busiest rush hour, <b>no guest sits waiting for someone to come and take their order</b>: they simply scan, order, and relax. It's gentler on your wage bill, and a smoother experience for everyone.</p>
     </div>
   </section>
 
@@ -270,7 +289,7 @@
     <p class="eyebrow">The bottom line</p>
     <h2>What you gain from day one</h2>
     <div class="blist">
-      <div class="b"><span class="tick">✓</span><span><b>A leaner wage bill.</b> Keep a small team just to serve the food and care for guests — up to 75% fewer order-taking waiters needed.</span></div>
+      <div class="b"><span class="tick">✓</span><span><b>A leaner wage bill.</b> Keep a small team just to serve the food and care for your guests — your order-taking staff cost shrinks dramatically.</span></div>
       <div class="b"><span class="tick">✓</span><span><b>No waiting at the rush.</b> Guests order the moment they sit down, so no one waits to flag a waiter on your busiest nights.</span></div>
       <div class="b"><span class="tick">✓</span><span><b>Faster table turns.</b> Order and pay at the table means more covers per shift.</span></div>
       <div class="b"><span class="tick">✓</span><span><b>Zero order errors.</b> What the guest taps is what the kitchen sees — every time.</span></div>
