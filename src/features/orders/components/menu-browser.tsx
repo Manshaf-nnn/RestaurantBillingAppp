@@ -14,6 +14,7 @@ import {
   Sparkles,
   Star,
   Timer,
+  Utensils,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -206,7 +207,7 @@ export function MenuBrowser({
                   onClick={() => setActive(item)}
                   className="w-40 shrink-0 overflow-hidden rounded-xl border bg-card text-left shadow-soft transition-transform active:scale-[0.98]"
                 >
-                  <div className="relative h-24 bg-muted">
+                  <div className="relative h-24 bg-gradient-to-br from-amber-50 to-orange-100">
                     {item.imageUrl ? (
                       <Image
                         src={item.imageUrl}
@@ -215,7 +216,11 @@ export function MenuBrowser({
                         sizes="160px"
                         className="object-cover"
                       />
-                    ) : null}
+                    ) : (
+                      <span className="flex size-full items-center justify-center text-orange-400">
+                        <Utensils className="size-6" />
+                      </span>
+                    )}
                   </div>
                   <div className="space-y-1 p-2.5">
                     <p className="line-clamp-1 text-sm font-medium">{item.name}</p>
@@ -326,7 +331,7 @@ export function MenuBrowser({
                         </div>
                       </div>
 
-                      <div className="relative size-24 shrink-0 overflow-hidden rounded-xl bg-muted">
+                      <div className="relative size-24 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 to-orange-100 ring-1 ring-black/5">
                         {item.imageUrl ? (
                           <Image
                             src={item.imageUrl}
@@ -336,7 +341,10 @@ export function MenuBrowser({
                             className="object-cover"
                           />
                         ) : (
-                          <span className="flex size-full items-center justify-center text-2xl">🍽️</span>
+                          <span className="flex size-full flex-col items-center justify-center gap-0.5 text-orange-400">
+                            <Utensils className="size-6" />
+                            <span className="text-[9px] font-medium uppercase tracking-wide">Photo soon</span>
+                          </span>
                         )}
                         {item.isAvailable ? (
                           <span className="absolute bottom-1 right-1 rounded-lg bg-background px-2 py-0.5 text-[11px] font-bold text-primary shadow-soft">
