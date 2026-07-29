@@ -89,7 +89,9 @@ export function CashierBoard({
   }
 }) {
   const [bills, setBills] = React.useState(initialBills)
-  const [search, setSearch] = React.useState('')
+  // Defaults to "T" so the cashier just types a table number, e.g. "T4".
+  // Deleting the T lets them search by name/phone/order instead.
+  const [search, setSearch] = React.useState('T')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
 
@@ -110,12 +112,14 @@ export function CashierBoard({
   const filtered = React.useMemo(() => {
     const query = search.trim().toLowerCase()
     if (!query) return bills
+    // "T4" (or "t4") targets table 4 — match the digits against the table number.
+    const tableQuery = query.startsWith('t') ? query.slice(1).trim() : query
     return bills.filter(
       (bill) =>
         bill.orderNumber.toLowerCase().includes(query) ||
         bill.customerName.toLowerCase().includes(query) ||
         bill.customerPhone.includes(query) ||
-        bill.tableNumber?.toLowerCase().includes(query),
+        (bill.tableNumber != null && bill.tableNumber.toLowerCase().includes(tableQuery)),
     )
   }, [bills, search])
 
@@ -161,7 +165,7 @@ export function CashierBoard({
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search order, table, name or phone…"
+            placeholder="Type a table number, e.g. T4 — or a name / order"
             startIcon={<Search />}
           />
 

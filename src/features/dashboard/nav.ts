@@ -4,6 +4,7 @@ import {
   ClipboardList,
   CreditCard,
   FileText,
+  HandPlatter,
   Landmark,
   LayoutDashboard,
   ListOrdered,
@@ -67,6 +68,7 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.RESERVATION_MANAGE,
       },
       { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
+      { href: '/waiter', label: 'Waiter station', icon: HandPlatter, permission: PERMISSIONS.WAITER_VIEW },
       { href: '/cashier', label: 'Cashier', icon: CreditCard, permission: PERMISSIONS.PAYMENT_COLLECT },
       {
         href: '/dashboard/online-payments',

@@ -152,13 +152,13 @@ export function MenuBrowser({
 
         <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3">
           <Chip active={diet === 'VEG'} onClick={() => setDiet(diet === 'VEG' ? 'ALL' : 'VEG')}>
-            <VegIndicator isVeg /> Veg
+            <span className="text-success">●</span> Veg
           </Chip>
           <Chip
             active={diet === 'NON_VEG'}
             onClick={() => setDiet(diet === 'NON_VEG' ? 'ALL' : 'NON_VEG')}
           >
-            <VegIndicator isVeg={false} /> Non-veg
+            <span className="text-destructive">●</span> Non-veg
           </Chip>
           <span className="my-1 w-px shrink-0 bg-border" />
           <Chip active={category === 'ALL'} onClick={() => setCategory('ALL')}>
