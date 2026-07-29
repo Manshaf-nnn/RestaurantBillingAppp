@@ -15,6 +15,7 @@ import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderStatusPayload, type OrderSummaryPayload } from '@/lib/realtime/events'
 import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
 import { printKitchenTicket } from '@/features/printing/print'
@@ -86,6 +87,16 @@ export function KitchenBoard({
   const [soundEnabled, setSoundEnabled] = React.useState(true)
   const [pendingId, setPendingId] = React.useState<string | null>(null)
   const { play } = useNotificationSound(soundEnabled)
+
+  // Serverless has no websocket, so new orders arrive via polling (fresh props),
+  // not socket events — chime here too so the kitchen never misses one.
+  const seenTicketIds = React.useRef<Set<string>>(new Set(initialTickets.map((t) => t.id)))
+  React.useEffect(() => {
+    if (isRealtimeEnabled()) return
+    const hasNew = initialTickets.some((t) => !seenTicketIds.current.has(t.id))
+    seenTicketIds.current = new Set(initialTickets.map((t) => t.id))
+    if (hasNew) play('new-order')
+  }, [initialTickets, play])
 
   const toTicket = (payload: OrderSummaryPayload): KitchenTicket => ({
     id: payload.id,
@@ -369,18 +380,12 @@ function TicketCard({
         </Button>
 
         {ticket.status === 'PENDING' ? (
-          <Button className="flex-1" loading={pending} onClick={() => onAdvance(ticket, 'ACCEPTED')}>
-            <Hand /> Accept
-          </Button>
-        ) : null}
-
-        {ticket.status === 'ACCEPTED' ? (
           <Button className="flex-1" loading={pending} onClick={() => onAdvance(ticket, 'PREPARING')}>
-            <Flame /> Start cooking
+            <Hand /> Accept &amp; start
           </Button>
         ) : null}
 
-        {ticket.status === 'PREPARING' ? (
+        {ticket.status === 'ACCEPTED' || ticket.status === 'PREPARING' ? (
           <Button
             variant="success"
             className="flex-1"

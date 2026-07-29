@@ -26,6 +26,7 @@ import { EVENTS, type OrderStatusPayload, type ServiceRequestPayload } from '@/l
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { resolveServiceRequest, updateOrderStatus } from '@/features/orders/actions'
 
@@ -99,6 +100,23 @@ export function WaiterBoard({
   const [soundEnabled, setSoundEnabled] = React.useState(true)
   const [busyId, setBusyId] = React.useState<string | null>(null)
   const { play } = useNotificationSound(soundEnabled)
+
+  // On serverless there's no websocket — new requests / ready orders arrive via
+  // polling (fresh props). Chime here so waiters are alerted with sound too.
+  const seenRequestIds = React.useRef<Set<string>>(new Set(initialRequests.map((r) => r.id)))
+  const seenReadyIds = React.useRef<Set<string>>(new Set(initialReady.map((o) => o.id)))
+  React.useEffect(() => {
+    if (isRealtimeEnabled()) return
+    const hasNew = initialRequests.some((r) => !seenRequestIds.current.has(r.id))
+    seenRequestIds.current = new Set(initialRequests.map((r) => r.id))
+    if (hasNew) play('alert')
+  }, [initialRequests, play])
+  React.useEffect(() => {
+    if (isRealtimeEnabled()) return
+    const hasNew = initialReady.some((o) => !seenReadyIds.current.has(o.id))
+    seenReadyIds.current = new Set(initialReady.map((o) => o.id))
+    if (hasNew) play('ready')
+  }, [initialReady, play])
 
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
     if (payload.status === 'READY') {

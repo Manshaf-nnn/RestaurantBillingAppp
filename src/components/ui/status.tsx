@@ -11,8 +11,10 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock,
+  Drumstick,
   Flame,
   Hand,
+  Leaf,
   UtensilsCrossed,
   XCircle,
 } from 'lucide-react'
@@ -115,19 +117,34 @@ export function RoleBadge({ role, className }: { role: UserRole; className?: str
 }
 
 /** Veg / non-veg indicator used across the menu, following FSSAI marking. */
-export function VegIndicator({ isVeg, className }: { isVeg: boolean; className?: string }) {
+/**
+ * Clear veg / non-veg marker: a green leaf for vegetarian, a (red) drumstick
+ * for non-vegetarian — recognisable at a glance. Pass `showLabel` to add the
+ * "Veg" / "Non-veg" text (used on menu filter chips).
+ */
+export function VegIndicator({
+  isVeg,
+  showLabel = false,
+  className,
+}: {
+  isVeg: boolean
+  showLabel?: boolean
+  className?: string
+}) {
+  const Icon = isVeg ? Leaf : Drumstick
   return (
     <span
       title={isVeg ? 'Vegetarian' : 'Non-vegetarian'}
       className={cn(
-        'inline-flex size-4 shrink-0 items-center justify-center rounded-sm border-2',
-        isVeg ? 'border-success' : 'border-destructive',
+        'inline-flex shrink-0 items-center gap-1',
+        isVeg ? 'text-success' : 'text-destructive',
         className,
       )}
     >
-      <span
-        className={cn('size-1.5 rounded-full', isVeg ? 'bg-success' : 'bg-destructive')}
-      />
+      <Icon className="size-4 shrink-0" strokeWidth={2.25} />
+      {showLabel ? (
+        <span className="text-xs font-semibold">{isVeg ? 'Veg' : 'Non-veg'}</span>
+      ) : null}
       <span className="sr-only">{isVeg ? 'Vegetarian' : 'Non-vegetarian'}</span>
     </span>
   )

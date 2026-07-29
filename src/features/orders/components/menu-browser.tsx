@@ -101,7 +101,10 @@ export function MenuBrowser({
   }, [filtered, menu.categories])
 
   const recommended = React.useMemo(
-    () => menu.items.filter((item) => item.isRecommended && item.isAvailable).slice(0, 8),
+    () =>
+      menu.items
+        .filter((item) => (item.isRecommended || item.isPopular) && item.isAvailable)
+        .slice(0, 10),
     [menu.items],
   )
 
@@ -194,39 +197,49 @@ export function MenuBrowser({
         ) : null}
 
         {showRecommended ? (
-          <section className="border-b py-5">
-            <div className="mb-3 flex items-center gap-2 px-4">
-              <Sparkles className="size-4 text-primary" />
-              <h2 className="text-sm font-semibold">Chef&rsquo;s recommendations</h2>
+          <section className="border-b bg-gradient-to-b from-primary/[0.07] to-transparent py-5">
+            <div className="mb-3 flex items-center gap-2.5 px-4">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-chart-5 text-white shadow-soft">
+                <Sparkles className="size-4" />
+              </span>
+              <div>
+                <h2 className="text-sm font-bold leading-tight">Chef&rsquo;s picks &amp; favourites</h2>
+                <p className="text-[11px] text-muted-foreground">Our guests love these — tap to add</p>
+              </div>
             </div>
-            <div className="no-scrollbar flex gap-3 overflow-x-auto px-4">
-              {recommended.map((item) => (
+            <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-1">
+              {recommended.map((item, index) => (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => setActive(item)}
-                  className="w-40 shrink-0 overflow-hidden rounded-xl border bg-card text-left shadow-soft transition-transform active:scale-[0.98]"
+                  style={{ animationDelay: `${index * 70}ms` }}
+                  className="group w-44 shrink-0 animate-fade-up overflow-hidden rounded-2xl border border-primary/15 bg-card text-left shadow-soft ring-1 ring-black/5 transition-transform active:scale-[0.97]"
                 >
-                  <div className="relative h-24 bg-gradient-to-br from-amber-50 to-orange-100">
+                  <div className="relative h-28 overflow-hidden bg-gradient-to-br from-amber-50 to-orange-100">
                     {item.imageUrl ? (
                       <Image
                         src={item.imageUrl}
                         alt={item.name}
                         fill
-                        sizes="160px"
-                        className="object-cover"
+                        sizes="176px"
+                        className="object-cover transition-transform duration-500 group-hover:scale-110"
                       />
                     ) : (
                       <span className="flex size-full items-center justify-center text-orange-400">
-                        <Utensils className="size-6" />
+                        <Utensils className="size-7" />
                       </span>
                     )}
-                  </div>
-                  <div className="space-y-1 p-2.5">
-                    <p className="line-clamp-1 text-sm font-medium">{item.name}</p>
-                    <p className="text-sm font-semibold text-primary">
+                    <span className="absolute left-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-bold text-primary shadow-soft backdrop-blur">
+                      {item.isPopular ? '🔥 Popular' : '⭐ Chef’s pick'}
+                    </span>
+                    <span className="absolute bottom-2 right-2 rounded-lg bg-black/65 px-2 py-0.5 text-xs font-bold text-white backdrop-blur">
                       {formatMoney(item.price, currency, locale)}
-                    </p>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 p-2.5">
+                    <VegIndicator isVeg={item.isVeg} />
+                    <p className="line-clamp-1 text-sm font-semibold">{item.name}</p>
                   </div>
                 </button>
               ))}
