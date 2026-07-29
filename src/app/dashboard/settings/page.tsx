@@ -46,6 +46,12 @@ export default async function SettingsPage() {
           online: payment.online ?? false,
           upiId: payment.upiId ?? '',
           payeeName: payment.payeeName ?? '',
+          bankTransfer: payment.bankTransfer ?? false,
+          bankName: payment.bankName ?? '',
+          accountName: payment.accountName ?? '',
+          accountNumber: payment.accountNumber ?? '',
+          bankBranch: payment.bankBranch ?? '',
+          receiptWhatsapp: payment.receiptWhatsapp ?? '',
         },
       }}
     />

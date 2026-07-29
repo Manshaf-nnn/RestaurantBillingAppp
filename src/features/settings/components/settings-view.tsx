@@ -51,7 +51,20 @@ export interface SettingsData {
   loyaltyEnabled: boolean
   loyaltyEarnRate: number
   loyaltyPointValue: number
-  payment: { cash: boolean; card: boolean; qr: boolean; online: boolean; upiId: string; payeeName: string }
+  payment: {
+    cash: boolean
+    card: boolean
+    qr: boolean
+    online: boolean
+    upiId: string
+    payeeName: string
+    bankTransfer: boolean
+    bankName: string
+    accountName: string
+    accountNumber: string
+    bankBranch: string
+    receiptWhatsapp: string
+  }
 }
 
 export function SettingsView({ initial, canManage }: { initial: SettingsData; canManage: boolean }) {
@@ -215,6 +228,39 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
               </Field>
             </div>
           </SectionCard>
+
+          <SectionCard title="Online / bank transfer">
+            <p className="text-sm text-muted-foreground">
+              Show your bank account to guests so they can transfer the bill directly, then send you
+              the receipt on WhatsApp. Great where card machines aren&rsquo;t used.
+            </p>
+            <div className="mt-4">
+              <PaymentToggle
+                label="Accept online bank transfer"
+                checked={payment.bankTransfer}
+                onChange={(v) => setPayment({ ...payment, bankTransfer: v })}
+                disabled={!canManage}
+              />
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label="Bank name">
+                <Input value={payment.bankName} onChange={(e) => setPayment({ ...payment, bankName: e.target.value })} disabled={!canManage || !payment.bankTransfer} placeholder="e.g. Commercial Bank" />
+              </Field>
+              <Field label="Account holder name">
+                <Input value={payment.accountName} onChange={(e) => setPayment({ ...payment, accountName: e.target.value })} disabled={!canManage || !payment.bankTransfer} />
+              </Field>
+              <Field label="Account number">
+                <Input value={payment.accountNumber} onChange={(e) => setPayment({ ...payment, accountNumber: e.target.value })} disabled={!canManage || !payment.bankTransfer} />
+              </Field>
+              <Field label="Branch">
+                <Input value={payment.bankBranch} onChange={(e) => setPayment({ ...payment, bankBranch: e.target.value })} disabled={!canManage || !payment.bankTransfer} />
+              </Field>
+              <Field label="Receipt WhatsApp number" hint="Guests send their transfer slip here" className="sm:col-span-2">
+                <Input value={payment.receiptWhatsapp} onChange={(e) => setPayment({ ...payment, receiptWhatsapp: e.target.value })} disabled={!canManage || !payment.bankTransfer} placeholder="+94 7X XXX XXXX" />
+              </Field>
+            </div>
+          </SectionCard>
+
           {canManage ? (
             <Button onClick={savePayments} loading={savingPayments}>
               Save payment settings

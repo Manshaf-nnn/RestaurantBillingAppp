@@ -7,9 +7,13 @@ import {
   ArrowLeft,
   BadgeCheck,
   Banknote,
+  Check,
+  Copy,
   CreditCard,
+  Landmark,
   Loader2,
   Mail,
+  MessageCircle,
   Printer,
   QrCode,
   Receipt,
@@ -80,6 +84,8 @@ export function GuestBill({
   React.useEffect(() => setBill(initial), [initial])
   const [qr, setQr] = React.useState<{ dataUrl: string; amount: number } | null>(null)
   const [loadingQr, setLoadingQr] = React.useState(false)
+  const [showBank, setShowBank] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
   const [declared, setDeclared] = React.useState(false)
   const [email, setEmail] = React.useState(initial.customerEmail ?? '')
   const [emailing, setEmailing] = React.useState(false)
@@ -113,8 +119,8 @@ export function GuestBill({
     setQr({ dataUrl: result.data.qrDataUrl, amount: result.data.amount })
   }
 
-  const declarePaid = async () => {
-    const result = await declareGuestPayment({ orderId: bill.id })
+  const declarePaid = async (reference?: string) => {
+    const result = await declareGuestPayment({ orderId: bill.id, reference })
     if (result.ok) {
       setDeclared(true)
       toast.success('Our cashier will confirm shortly')
@@ -122,6 +128,23 @@ export function GuestBill({
       toast.error(result.error)
     }
   }
+
+  const copyAccount = async () => {
+    const acc = paymentConfig.accountNumber ?? ''
+    try {
+      await navigator.clipboard.writeText(acc)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      toast.error('Could not copy — please note it down')
+    }
+  }
+
+  // wa.me needs the international number with no "+" or spaces.
+  const waNumber = (paymentConfig.receiptWhatsapp ?? '').replace(/[^0-9]/g, '')
+  const waHref = `https://wa.me/${waNumber}?text=${encodeURIComponent(
+    `Hi, I've paid my bill for order ${bill.orderNumber} (${formatMoney(due, currency, locale)}). Here is my transfer receipt:`,
+  )}`
 
   const sendReceipt = async () => {
     setEmailing(true)
@@ -274,7 +297,80 @@ export function GuestBill({
               Pay from your phone, or call a waiter to pay by card or cash at the table.
             </p>
 
-            {qr ? (
+            {showBank ? (
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Landmark className="size-4 text-primary" /> Transfer to our bank account
+                </div>
+                <dl className="space-y-2 text-sm">
+                  {paymentConfig.bankName ? (
+                    <BankRow label="Bank" value={paymentConfig.bankName} />
+                  ) : null}
+                  {paymentConfig.accountName ? (
+                    <BankRow label="Account name" value={paymentConfig.accountName} />
+                  ) : null}
+                  {paymentConfig.accountNumber ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <dt className="text-muted-foreground">Account no.</dt>
+                      <dd className="flex items-center gap-2">
+                        <span className="font-semibold tabular-nums tracking-wide">
+                          {paymentConfig.accountNumber}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={copyAccount}
+                          className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          aria-label="Copy account number"
+                        >
+                          {copied ? (
+                            <Check className="size-4 text-success" />
+                          ) : (
+                            <Copy className="size-4" />
+                          )}
+                        </button>
+                      </dd>
+                    </div>
+                  ) : null}
+                  {paymentConfig.bankBranch ? (
+                    <BankRow label="Branch" value={paymentConfig.bankBranch} />
+                  ) : null}
+                  <div className="flex items-center justify-between border-t pt-2 text-base font-bold text-primary">
+                    <dt>Amount to transfer</dt>
+                    <dd>{formatMoney(due, currency, locale)}</dd>
+                  </div>
+                </dl>
+
+                {paymentConfig.receiptWhatsapp ? (
+                  <Button className="w-full" asChild>
+                    <a href={waHref} target="_blank" rel="noopener noreferrer">
+                      <MessageCircle /> Send your receipt on WhatsApp
+                    </a>
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    After transferring, show your receipt to our staff.
+                  </p>
+                )}
+
+                {declared ? (
+                  <Badge variant="success" className="w-full justify-center py-2">
+                    <BadgeCheck /> Thanks! We&rsquo;ll confirm once your transfer arrives
+                  </Badge>
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => declarePaid('Online bank transfer')}
+                  >
+                    I have completed the transfer
+                  </Button>
+                )}
+
+                <Button variant="ghost" size="sm" className="w-full" onClick={() => setShowBank(false)}>
+                  Choose another method
+                </Button>
+              </div>
+            ) : qr ? (
               <div className="flex flex-col items-center gap-3 rounded-xl border bg-card p-5">
                 <Image
                   src={qr.dataUrl}
@@ -294,7 +390,7 @@ export function GuestBill({
                     <BadgeCheck /> Waiting for our cashier to confirm
                   </Badge>
                 ) : (
-                  <Button variant="outline" className="w-full" onClick={declarePaid}>
+                  <Button variant="outline" className="w-full" onClick={() => declarePaid()}>
                     I have completed the payment
                   </Button>
                 )}
@@ -314,12 +410,20 @@ export function GuestBill({
                     loading={loadingQr}
                   />
                 ) : null}
+                {paymentConfig.bankTransfer && paymentConfig.accountNumber ? (
+                  <PaymentOption
+                    icon={Landmark}
+                    label="Online / bank transfer"
+                    hint="Transfer to our account & send the receipt"
+                    onClick={() => setShowBank(true)}
+                  />
+                ) : null}
                 {paymentConfig.card !== false ? (
                   <PaymentOption
                     icon={CreditCard}
                     label="Card at the table"
                     hint="Our waiter will bring the terminal"
-                    onClick={declarePaid}
+                    onClick={() => declarePaid()}
                   />
                 ) : null}
                 {paymentConfig.cash !== false ? (
@@ -327,7 +431,7 @@ export function GuestBill({
                     icon={Banknote}
                     label="Cash"
                     hint="Pay our cashier directly"
-                    onClick={declarePaid}
+                    onClick={() => declarePaid()}
                   />
                 ) : null}
               </div>
@@ -399,6 +503,15 @@ function PaymentOption({
         <span className="block text-xs text-muted-foreground">{hint}</span>
       </span>
     </button>
+  )
+}
+
+function BankRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-medium">{value}</dd>
+    </div>
   )
 }
 

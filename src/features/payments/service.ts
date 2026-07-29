@@ -18,6 +18,14 @@ export interface PaymentConfig {
   online?: boolean
   upiId?: string
   payeeName?: string
+  // Direct bank / online transfer — the owner's account shown to guests.
+  bankTransfer?: boolean
+  bankName?: string
+  accountName?: string
+  accountNumber?: string
+  bankBranch?: string
+  /// WhatsApp number guests send their transfer receipt to.
+  receiptWhatsapp?: string
 }
 
 export function readPaymentConfig(value: unknown): PaymentConfig {

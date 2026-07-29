@@ -79,6 +79,12 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
             online: data.online,
             upiId: data.upiId || undefined,
             payeeName: data.payeeName || undefined,
+            bankTransfer: data.bankTransfer,
+            bankName: data.bankName || undefined,
+            accountName: data.accountName || undefined,
+            accountNumber: data.accountNumber || undefined,
+            bankBranch: data.bankBranch || undefined,
+            receiptWhatsapp: data.receiptWhatsapp || undefined,
           } as Prisma.InputJsonValue,
         },
       })

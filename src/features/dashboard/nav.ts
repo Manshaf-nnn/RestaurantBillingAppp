@@ -4,6 +4,7 @@ import {
   ClipboardList,
   CreditCard,
   FileText,
+  Landmark,
   LayoutDashboard,
   ListOrdered,
   Package,
@@ -67,6 +68,12 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
       { href: '/cashier', label: 'Cashier', icon: CreditCard, permission: PERMISSIONS.PAYMENT_COLLECT },
+      {
+        href: '/dashboard/online-payments',
+        label: 'Online payments',
+        icon: Landmark,
+        permission: PERMISSIONS.PAYMENT_COLLECT,
+      },
     ],
   },
   {

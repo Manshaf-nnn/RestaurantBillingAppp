@@ -34,5 +34,12 @@ export const paymentSettingsSchema = z.object({
   online: z.coerce.boolean().default(false),
   upiId: z.string().trim().max(80).optional().or(z.literal('')),
   payeeName: z.string().trim().max(80).optional().or(z.literal('')),
+  // Direct bank / online transfer.
+  bankTransfer: z.coerce.boolean().default(false),
+  bankName: z.string().trim().max(80).optional().or(z.literal('')),
+  accountName: z.string().trim().max(80).optional().or(z.literal('')),
+  accountNumber: z.string().trim().max(40).optional().or(z.literal('')),
+  bankBranch: z.string().trim().max(80).optional().or(z.literal('')),
+  receiptWhatsapp: z.string().trim().max(24).optional().or(z.literal('')),
 })
 export type PaymentSettingsInput = z.infer<typeof paymentSettingsSchema>
