@@ -10,6 +10,7 @@ import {
   Clock,
   HandPlatter,
   Receipt,
+  ShoppingBag,
   Sparkles,
   Users,
 } from 'lucide-react'
@@ -288,22 +289,32 @@ export function WaiterBoard({
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.97 }}
-                    className="overflow-hidden rounded-xl border border-t-4 border-t-success bg-card shadow-soft"
+                    className="overflow-hidden rounded-2xl border bg-card shadow-soft"
                   >
-                    <div className="flex items-start justify-between gap-2 border-b p-3">
-                      <div className="min-w-0">
-                        <p className="text-lg font-bold leading-none">#{order.orderNumber}</p>
-                        <p className="mt-1 truncate text-xs text-muted-foreground">
-                          {order.customerName}
-                        </p>
-                      </div>
+                    <div className="flex items-stretch border-b">
                       {order.tableNumber ? (
-                        <Badge variant="solid" size="lg" className="font-bold">
-                          T{order.tableNumber}
-                        </Badge>
+                        <div className="flex shrink-0 flex-col items-center justify-center bg-gradient-to-br from-success to-emerald-600 px-4 py-2.5 text-center leading-none text-white">
+                          <span className="text-[10px] font-bold uppercase tracking-widest opacity-90">Table</span>
+                          <span className="text-[40px] font-black tabular-nums">{order.tableNumber}</span>
+                        </div>
                       ) : (
-                        <Badge variant="secondary">Takeaway</Badge>
+                        <div className="flex shrink-0 flex-col items-center justify-center bg-muted px-4 py-2.5 text-center leading-none text-muted-foreground">
+                          <ShoppingBag className="size-5" />
+                          <span className="mt-1 text-[10px] font-bold uppercase">Takeaway</span>
+                        </div>
                       )}
+                      <div className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-success">Ready to serve</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            #{order.orderNumber} · {order.customerName}
+                          </p>
+                        </div>
+                        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+                          <Clock className="size-3" />
+                          {order.readyAt ? `${minutesSince(order.readyAt)}m` : 'now'}
+                        </span>
+                      </div>
                     </div>
 
                     <ul className="divide-y text-sm">
@@ -340,19 +351,14 @@ export function WaiterBoard({
                       ))}
                     </ul>
 
-                    <div className="flex items-center gap-2 border-t p-3">
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Clock className="size-3" />
-                        {order.readyAt ? `${minutesSince(order.readyAt)}m waiting` : 'just now'}
-                      </span>
+                    <div className="border-t p-3">
                       <Button
                         variant="success"
-                        size="sm"
-                        className="ml-auto"
+                        className="w-full"
                         loading={busyId === order.id}
                         onClick={() => markDelivered(order)}
                       >
-                        <Check /> Serve all
+                        <Check /> Serve all items
                       </Button>
                     </div>
                   </motion.article>
@@ -380,27 +386,33 @@ export function WaiterBoard({
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.97 }}
-                    className="flex items-center gap-3 rounded-xl border border-warning/40 bg-warning/5 p-4"
+                    className="flex items-stretch overflow-hidden rounded-2xl border border-warning/50 bg-card shadow-soft"
                   >
-                    <span className="text-3xl">{REQUEST_META[request.type].emoji}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold">Table {request.tableNumber}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {REQUEST_META[request.type].label}
-                        {request.note ? ` · ${request.note}` : ''}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {minutesSince(request.createdAt)}m ago
-                      </p>
+                    <div className="flex shrink-0 flex-col items-center justify-center bg-warning px-4 py-2.5 text-center leading-none text-white">
+                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-90">Table</span>
+                      <span className="text-[40px] font-black tabular-nums">{request.tableNumber}</span>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      loading={busyId === request.id}
-                      onClick={() => clearRequest(request)}
-                    >
-                      <Check /> Done
-                    </Button>
+                    <div className="flex min-w-0 flex-1 items-center gap-3 p-3">
+                      <span className="text-3xl">{REQUEST_META[request.type].emoji}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold leading-tight">{REQUEST_META[request.type].label}</p>
+                        {request.note ? (
+                          <p className="truncate text-xs text-muted-foreground">{request.note}</p>
+                        ) : null}
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {minutesSince(request.createdAt)}m ago
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        loading={busyId === request.id}
+                        onClick={() => clearRequest(request)}
+                      >
+                        <Check /> Done
+                      </Button>
+                    </div>
                   </motion.div>
                 ))}
               </AnimatePresence>
