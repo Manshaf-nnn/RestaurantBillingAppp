@@ -4,7 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { OrderStatus } from '@prisma/client'
+import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 import {
   ArrowLeft,
   Bell,
@@ -59,6 +59,7 @@ export interface TrackedOrder {
     lineTotal: number
     notes: string | null
     isVeg: boolean
+    status: OrderItemStatus
     optionsLabel: string
   }>
 }
@@ -264,9 +265,10 @@ export function OrderTracker({
                     <p className="mt-0.5 text-xs italic text-primary">“{item.notes}”</p>
                   ) : null}
                 </div>
-                <span className="shrink-0 font-medium">
-                  {formatMoney(item.lineTotal, currency, locale)}
-                </span>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <span className="font-medium">{formatMoney(item.lineTotal, currency, locale)}</span>
+                  <ItemStatusPill status={item.status} />
+                </div>
               </li>
             ))}
           </ul>
@@ -314,5 +316,22 @@ function CallWaiter({ tableId }: { tableId: string }) {
     >
       <Bell className="size-3.5" /> Help
     </Button>
+  )
+}
+
+const ITEM_STATUS_META: Record<OrderItemStatus, { label: string; className: string }> = {
+  QUEUED: { label: 'Pending', className: 'bg-muted text-muted-foreground' },
+  PREPARING: { label: 'Preparing', className: 'bg-warning/15 text-warning' },
+  READY: { label: 'Ready to serve', className: 'bg-primary/15 text-primary' },
+  SERVED: { label: 'Served ✓', className: 'bg-success/15 text-success' },
+  CANCELLED: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive' },
+}
+
+function ItemStatusPill({ status }: { status: OrderItemStatus }) {
+  const meta = ITEM_STATUS_META[status]
+  return (
+    <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold', meta.className)}>
+      {meta.label}
+    </span>
   )
 }

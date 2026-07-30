@@ -245,11 +245,30 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
 
     const item = await prisma.orderItem.findFirst({
       where: { id: data.itemId, order: { id: data.orderId, restaurantId: user.restaurantId } },
+      include: { order: { select: { status: true } } },
     })
     if (!item) throw new NotFoundError('Order item')
 
     await prisma.orderItem.update({ where: { id: item.id }, data: { status: data.status } })
     realtime.orderItemStatus(user.restaurantId, data.orderId, data.itemId, data.status)
+
+    // Once the waiter serves the last outstanding item, the whole order is
+    // served — move the order to SERVED so it clears from the kitchen/waiter
+    // boards and the kitchen knows everything was delivered.
+    if (data.status === 'SERVED' && item.order.status === 'READY') {
+      const remaining = await prisma.orderItem.count({
+        where: { orderId: data.orderId, status: { notIn: ['SERVED', 'CANCELLED'] } },
+      })
+      if (remaining === 0) {
+        await updateOrderStatusService({
+          restaurantId: user.restaurantId,
+          orderId: data.orderId,
+          status: 'SERVED',
+          actorId: user.id,
+          actorName: user.name,
+        })
+      }
+    }
 
     return { id: item.id }
   })

@@ -41,6 +41,7 @@ export default async function KitchenPage() {
             quantity: item.quantity,
             notes: item.notes,
             isVeg: item.isVeg,
+            status: item.status,
             optionsLabel: readOptions(item.options)
               .map((option) => option.name)
               .join(' · '),

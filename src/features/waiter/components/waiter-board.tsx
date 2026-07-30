@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { ServiceRequestType, TableStatus } from '@prisma/client'
+import type { OrderItemStatus, ServiceRequestType, TableStatus } from '@prisma/client'
 import {
   Bell,
   Check,
@@ -28,7 +28,7 @@ import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { resolveServiceRequest, updateOrderStatus } from '@/features/orders/actions'
+import { resolveServiceRequest, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 
 export interface WaiterOrder {
   id: string
@@ -39,7 +39,14 @@ export interface WaiterOrder {
   grandTotal: number
   readyAt: string | null
   placedAt: string
-  items: Array<{ id: string; name: string; quantity: number; isVeg: boolean; notes: string | null }>
+  items: Array<{
+    id: string
+    name: string
+    quantity: number
+    isVeg: boolean
+    notes: string | null
+    status: OrderItemStatus
+  }>
 }
 
 export interface WaiterRequest {
@@ -176,6 +183,33 @@ export function WaiterBoard({
     setRequests((current) => current.filter((request) => request.id !== payload.id))
   })
 
+  // Serve a single item. When it's the last outstanding item the server moves
+  // the whole order to SERVED, so we drop the card once every item is served.
+  const serveItem = async (orderId: string, itemId: string) => {
+    setBusyId(itemId)
+    const result = await updateItemStatus({ orderId, itemId, status: 'SERVED' })
+    setBusyId(null)
+
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setReady((current) =>
+      current
+        .map((order) =>
+          order.id === orderId
+            ? {
+                ...order,
+                items: order.items.map((it) =>
+                  it.id === itemId ? { ...it, status: 'SERVED' as OrderItemStatus } : it,
+                ),
+              }
+            : order,
+        )
+        .filter((order) => !order.items.every((it) => it.status === 'SERVED')),
+    )
+  }
+
   const markDelivered = async (order: WaiterOrder) => {
     setBusyId(order.id)
     const result = await updateOrderStatus({ orderId: order.id, status: 'SERVED' })
@@ -279,7 +313,29 @@ export function WaiterBoard({
                             {item.quantity}
                           </span>
                           <VegIndicator isVeg={item.isVeg} />
-                          <span className="truncate">{item.name}</span>
+                          <span
+                            className={cn(
+                              'flex-1 truncate',
+                              item.status === 'SERVED' && 'text-muted-foreground line-through',
+                            )}
+                          >
+                            {item.name}
+                          </span>
+                          {item.status === 'SERVED' ? (
+                            <span className="flex items-center gap-1 text-xs font-semibold text-success">
+                              <Check className="size-3.5" /> Served
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 shrink-0 px-2.5 text-xs"
+                              loading={busyId === item.id}
+                              onClick={() => serveItem(order.id, item.id)}
+                            >
+                              Serve
+                            </Button>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -291,11 +347,12 @@ export function WaiterBoard({
                       </span>
                       <Button
                         variant="success"
+                        size="sm"
                         className="ml-auto"
                         loading={busyId === order.id}
                         onClick={() => markDelivered(order)}
                       >
-                        <Check /> Delivered
+                        <Check /> Serve all
                       </Button>
                     </div>
                   </motion.article>

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { OrderStatus } from '@prisma/client'
+import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 import { Check, ChefHat, Clock, Flame, Hand, Printer, Timer, Utensils, X } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -35,6 +35,7 @@ export interface KitchenTicket {
     quantity: number
     notes: string | null
     isVeg: boolean
+    status: OrderItemStatus
     optionsLabel: string
   }>
 }
@@ -113,6 +114,7 @@ export function KitchenBoard({
       quantity: item.quantity,
       notes: item.notes,
       isVeg: item.isVeg,
+      status: 'PREPARING' as OrderItemStatus,
       optionsLabel: item.options.map((option) => option.name).join(' · '),
     })),
   })
@@ -347,7 +349,14 @@ function TicketCard({
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-sm font-semibold leading-tight">
                 <VegIndicator isVeg={item.isVeg} />
-                <span className="truncate">{item.name}</span>
+                <span className={cn('truncate', item.status === 'SERVED' && 'text-muted-foreground line-through')}>
+                  {item.name}
+                </span>
+                {item.status === 'SERVED' ? (
+                  <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-success">
+                    <Check className="size-3" /> Served
+                  </span>
+                ) : null}
               </p>
               {item.optionsLabel ? (
                 <p className="mt-0.5 text-xs text-muted-foreground">{item.optionsLabel}</p>
