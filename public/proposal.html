@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ef6716">
-<meta name="description" content="TableFlow — let your guests order from the table. Imagine keeping a small team to serve, not to take orders — and what you could save every month.">
+<meta name="description" content="TableFlow — QR table ordering, dish-by-dish serving, live item tracking, bank-transfer payments, loyalty and more for restaurants.">
 <meta property="og:title" content="TableFlow — Smart Dining, Simplified">
-<meta property="og:description" content="Let your guests order right from the table. Keep a small team to serve, not to take orders.">
+<meta property="og:description" content="Let your guests order from the table. Serve dish by dish, tracked live on the guest phone.">
 <meta property="og:type" content="website">
 <link rel="icon" href="/icon.png">
 <title>TableFlow — Smart Dining, Simplified · For Restaurant Owners</title>
@@ -139,6 +139,45 @@
   .anim .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
   .anim .reveal.go{opacity:1;transform:none}
   @media (prefers-reduced-motion:reduce){.anim .reveal{opacity:1!important;transform:none!important;transition:none}}
+
+  /* "see it in action" phone mockups */
+  .shots{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:16px;margin-top:10px}
+  .phone{margin:0;flex:1 1 300px;max-width:360px}
+  .phone figcaption{text-align:center;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .screen{background:#fff;border:1px solid rgba(20,31,56,.10);border-radius:20px;box-shadow:var(--shadow);overflow:hidden}
+  .trow{display:flex;align-items:stretch;border-bottom:1px solid var(--line)}
+  .trow .tnum{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 16px;color:#fff;background:linear-gradient(150deg,#22c55e,#12a150);line-height:1}
+  .trow .tnum span{font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;opacity:.9}
+  .trow .tnum b{font-size:30px;font-weight:900}
+  .trow .rmeta{display:flex;flex-direction:column;justify-content:center;padding:8px 12px}
+  .rmeta .ready{font-size:13px;font-weight:800;color:#12a150}
+  .rmeta small{font-size:11px;color:var(--muted)}
+  .ilist,.clist{list-style:none;margin:0;padding:0}
+  .ilist li{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px}
+  .ilist li:last-child,.clist li:last-child{border-bottom:0}
+  .ilist .q{width:20px;height:20px;border-radius:5px;background:rgba(239,103,22,.12);color:var(--orange2);font-weight:800;font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+  .vg{font-size:9px;font-weight:800;text-transform:uppercase;padding:2px 5px;border-radius:4px;background:rgba(18,161,80,.14);color:#12a150;flex:none}
+  .vg.nv{background:rgba(229,72,77,.14);color:#e5484d}
+  .ilist .nm{flex:1;font-weight:600;color:var(--ink)}
+  .ilist .nm.done{color:var(--muted);text-decoration:line-through}
+  .ilist .servedtag{font-size:11px;font-weight:800;color:#12a150}
+  .ilist .serve{font:inherit;font-size:11px;font-weight:700;border:1px solid rgba(20,31,56,.15);background:#fff;color:var(--ink);border-radius:8px;padding:4px 11px}
+  .sync{font-size:13px;font-weight:800;color:var(--orange2);white-space:nowrap;padding:4px 0;text-align:center}
+  .ohead{margin:0;padding:11px 14px;font-size:11.5px;font-weight:800;color:var(--muted);border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
+  .clist li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .clist .nm{font-weight:600;color:var(--ink)}
+  .pill{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;white-space:nowrap}
+  .pill.s{background:rgba(18,161,80,.14);color:#12a150}
+  .pill.p{background:rgba(224,138,30,.16);color:#b45309}
+  .pill.r{background:rgba(47,109,240,.14);color:#2f6df0}
+  @media(max-width:560px){.sync{transform:rotate(90deg)}}
+
+  /* bank-transfer mockup */
+  .bankcard{max-width:360px;margin:12px auto 0}
+  .bankcard .brow{display:flex;justify-content:space-between;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}
+  .bankcard .brow:last-of-type{border-bottom:0}
+  .bankcard .brow .k{color:var(--muted)} .bankcard .brow .v{font-weight:700;color:var(--ink)}
+  .bankcard .wa{display:flex;align-items:center;justify-content:center;gap:8px;margin:10px;padding:11px;border-radius:12px;background:#25d366;color:#fff;font-weight:800;font-size:13.5px}
 </style>
 </head>
 <body>
@@ -281,6 +320,82 @@
           <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Full accountability, and your data stays private and protected.</span></div>
       </div>
 
+      <div class="glass card">
+        <span class="ic">🍽️</span>
+        <div><h3>Serve dish by dish</h3>
+          <p>The kitchen taps “Ready”, then the waiter serves each dish and marks it “Served”. The guest’s phone shows every item live — Served, Ready or still Preparing.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Nothing is forgotten and nobody double-serves — the whole table stays in sync.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🏦</span>
+        <div><h3>Pay by bank transfer</h3>
+          <p>Show your bank details right on the bill. Guests transfer the amount and send the receipt to your WhatsApp with one tap — and you track it all in a dashboard.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Accept online payments even without a card machine.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">🔔</span>
+        <div><h3>Call a waiter, instantly</h3>
+          <p>From the table QR, a guest can ask for water, extra plates, the bill or help. It pops up on your waiter’s screen with a sound.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>No arm-waving across the room — guests feel looked after.</span></div>
+      </div>
+
+      <div class="glass card">
+        <span class="ic">⭐</span>
+        <div><h3>Spotlight your best dishes</h3>
+          <p>Mark any dish as a chef’s pick or popular, and it appears in a bright, tempting spotlight at the top of the menu.</p>
+          <span class="win"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Gently nudges guests towards your high-margin favourites.</span></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- SEE IT IN ACTION -->
+  <section class="reveal">
+    <p class="eyebrow">See it in action</p>
+    <h2>Serve dish by dish — and your guests watch it happen.</h2>
+    <p class="lead">A real example. Table 7 ordered three items. As your waiter serves each one and taps “Served”, the guest’s phone updates in the same moment — so everyone knows what’s on the table and what’s still coming.</p>
+
+    <div class="shots">
+      <figure class="phone">
+        <figcaption>Your waiter’s screen</figcaption>
+        <div class="screen">
+          <div class="trow">
+            <div class="tnum"><span>Table</span><b>7</b></div>
+            <div class="rmeta"><span class="ready">Ready to serve</span><small>#260726-002 · 2m</small></div>
+          </div>
+          <ul class="ilist">
+            <li><span class="q">1</span><span class="vg nv">Non-veg</span><span class="nm done">Chicken Burger</span><span class="servedtag">Served ✓</span></li>
+            <li><span class="q">1</span><span class="vg">Veg</span><span class="nm">French Fries</span><span class="serve">Serve</span></li>
+            <li><span class="q">1</span><span class="vg">Veg</span><span class="nm">Coke</span><span class="serve">Serve</span></li>
+          </ul>
+        </div>
+      </figure>
+
+      <div class="sync">syncs instantly →</div>
+
+      <figure class="phone">
+        <figcaption>Your guest’s phone</figcaption>
+        <div class="screen">
+          <p class="ohead">Your order · Table 7</p>
+          <ul class="clist">
+            <li><span class="nm">Chicken Burger</span><span class="pill s">Served ✓</span></li>
+            <li><span class="nm">French Fries</span><span class="pill p">Preparing</span></li>
+            <li><span class="nm">Coke</span><span class="pill r">Ready to serve</span></li>
+          </ul>
+        </div>
+      </figure>
+    </div>
+
+    <p class="colhead" style="margin-top:34px">And paying is just as simple</p>
+    <div class="glass bankcard">
+      <p class="ohead">Pay by bank transfer</p>
+      <div class="brow"><span class="k">Bank</span><span class="v">Commercial Bank</span></div>
+      <div class="brow"><span class="k">Account</span><span class="v">The Copper Spoon</span></div>
+      <div class="brow"><span class="k">Account no.</span><span class="v">8001 2345 6789</span></div>
+      <div class="brow"><span class="k">Amount</span><span class="v">Rs 4,200.00</span></div>
+      <div class="wa">✓ Send your receipt on WhatsApp</div>
     </div>
   </section>
 
