@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ef6716">
-<meta name="description" content="TableFlow — QR table ordering, dish-by-dish serving, live item tracking, bank-transfer payments, loyalty and more for restaurants.">
+<meta name="description" content="TableFlow — QR table ordering, dish-by-dish serving, live tracking, bank-transfer payments, loyalty and one clean owner dashboard.">
 <meta property="og:title" content="TableFlow — Smart Dining, Simplified">
-<meta property="og:description" content="Let your guests order from the table. Serve dish by dish, tracked live on the guest phone.">
+<meta property="og:description" content="Let your guests order from the table. Run everything from one dashboard.">
 <meta property="og:type" content="website">
 <link rel="icon" href="/icon.png">
 <title>TableFlow — Smart Dining, Simplified · For Restaurant Owners</title>
@@ -178,6 +178,36 @@
   .bankcard .brow:last-of-type{border-bottom:0}
   .bankcard .brow .k{color:var(--muted)} .bankcard .brow .v{font-weight:700;color:var(--ink)}
   .bankcard .wa{display:flex;align-items:center;justify-content:center;gap:8px;margin:10px;padding:11px;border-radius:12px;background:#25d366;color:#fff;font-weight:800;font-size:13.5px}
+
+  /* dashboard mockup */
+  .browser{padding:0;overflow:hidden;margin-top:12px}
+  .bbar{display:flex;align-items:center;gap:7px;padding:9px 14px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.55)}
+  .bbar .dot{width:11px;height:11px;border-radius:50%;flex:none}
+  .bbar .dot.r{background:#ff5f57}.bbar .dot.y{background:#febc2e}.bbar .dot.g{background:#28c840}
+  .bbar .url{margin-left:8px;font-size:12px;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;max-width:340px}
+  .dash{display:flex;background:#f6f7fb;min-height:300px}
+  .dnav{width:180px;flex:none;border-right:1px solid var(--line);background:#fff;padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+  .dbrand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px;color:var(--navy);padding:4px 8px 10px}
+  .dmark{width:22px;height:22px;border-radius:50%;background:linear-gradient(150deg,var(--orange1),var(--orange2));display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex:none}
+  .dnav a{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink2);padding:7px 9px;border-radius:8px;text-decoration:none}
+  .dnav a.active{background:rgba(239,103,22,.12);color:var(--orange2)}
+  .dmain{flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px 12px}
+  .kpi>span{font-size:10.5px;color:var(--muted);font-weight:600}
+  .kpi b{display:block;font-size:19px;font-weight:850;color:var(--navy);margin:2px 0}
+  .kpi i{font-size:11px;font-weight:800;font-style:normal}
+  .kpi i.up{color:#12a150}.kpi i.down{color:#e5484d}
+  .drow{display:grid;grid-template-columns:1.4fr 1fr;gap:12px}
+  .dcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+  .chead{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
+  .dchart svg{width:100%;height:90px;display:block}
+  .tsell{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+  .tsell li{font-size:12px}
+  .tsell .tl{display:flex;justify-content:space-between;margin-bottom:3px;font-weight:600;color:var(--ink)}
+  .tsell .bar{height:6px;border-radius:99px;background:rgba(239,103,22,.14);overflow:hidden}
+  .tsell .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--orange1),var(--orange2))}
+  @media(max-width:640px){.dnav{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.drow{grid-template-columns:1fr}.bbar .url{max-width:170px}}
 </style>
 </head>
 <body>
@@ -397,6 +427,61 @@
       <div class="brow"><span class="k">Amount</span><span class="v">Rs 4,200.00</span></div>
       <div class="wa">✓ Send your receipt on WhatsApp</div>
     </div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section class="reveal">
+    <p class="eyebrow">Your control centre</p>
+    <h2>Run your whole restaurant from one screen.</h2>
+    <p class="lead">Sales, orders, kitchen, menu, staff and loyalty — all in one clean dashboard, on any device.</p>
+    <div class="glass browser">
+      <div class="bbar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="url">tableflow-markui.netlify.app/dashboard</span>
+      </div>
+      <div class="dash">
+        <aside class="dnav">
+          <div class="dbrand"><span class="dmark">🍽️</span> TableFlow</div>
+          <a class="active">📊 Dashboard</a>
+          <a>🧾 Orders</a>
+          <a>🍳 Kitchen</a>
+          <a>🍽️ Waiter</a>
+          <a>💳 Cashier</a>
+          <a>📋 Menu</a>
+          <a>✨ Loyalty</a>
+          <a>📈 Analytics</a>
+        </aside>
+        <div class="dmain">
+          <div class="kpis">
+            <div class="kpi"><span>Revenue today</span><b>Rs 48,250</b><i class="up">▲ 12%</i></div>
+            <div class="kpi"><span>Orders</span><b>137</b><i class="up">▲ 8</i></div>
+            <div class="kpi"><span>Avg cook time</span><b>13 min</b><i class="down">▼ 1.5m</i></div>
+            <div class="kpi"><span>Tables</span><b>9/12</b></div>
+          </div>
+          <div class="drow">
+            <div class="dcard dchart">
+              <div class="chead">Revenue · last 7 days</div>
+              <svg viewBox="0 0 300 90" preserveAspectRatio="none" aria-hidden="true">
+                <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(239,103,22,.35)"/><stop offset="1" stop-color="rgba(239,103,22,0)"/></linearGradient></defs>
+                <path d="M0 70 L43 60 L86 66 L129 44 L172 52 L215 30 L258 36 L300 18 L300 90 L0 90 Z" fill="url(#dg)"/>
+                <path d="M0 70 L43 60 L86 66 L129 44 L172 52 L215 30 L258 36 L300 18" fill="none" stroke="#ef6716" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="300" cy="18" r="3.5" fill="#ef6716"/>
+              </svg>
+            </div>
+            <div class="dcard">
+              <div class="chead">Top sellers today</div>
+              <ul class="tsell">
+                <li><div class="tl"><span>Wood-fired Pizza</span><span>42</span></div><div class="bar"><i style="width:90%"></i></div></li>
+                <li><div class="tl"><span>Chicken Burger</span><span>35</span></div><div class="bar"><i style="width:74%"></i></div></li>
+                <li><div class="tl"><span>Garlic Naan</span><span>28</span></div><div class="bar"><i style="width:60%"></i></div></li>
+                <li><div class="tl"><span>Cold Coffee</span><span>21</span></div><div class="bar"><i style="width:45%"></i></div></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="im-note" style="margin-top:12px;text-align:center">A sample view — your real numbers, live, the moment you go live.</p>
   </section>
 
   <!-- BENEFITS BAND -->
