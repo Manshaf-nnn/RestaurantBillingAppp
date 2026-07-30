@@ -208,6 +208,38 @@
   .tsell .bar{height:6px;border-radius:99px;background:rgba(239,103,22,.14);overflow:hidden}
   .tsell .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--orange1),var(--orange2))}
   @media(max-width:640px){.dnav{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.drow{grid-template-columns:1fr}.bbar .url{max-width:170px}}
+
+  /* guest menu mockup */
+  .mhead{padding:10px 12px;border-bottom:1px solid var(--line)}
+  .mhead b{font-size:13px;color:var(--navy)} .mhead small{display:block;font-size:11px;color:var(--muted)}
+  .mloyal{display:flex;align-items:center;gap:8px;margin:10px;padding:8px 10px;border-radius:12px;background:linear-gradient(120deg,rgba(239,103,22,.12),rgba(255,255,255,.4));border:1px solid rgba(239,103,22,.2);font-size:11px;font-weight:600;color:var(--ink)}
+  .stitle{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:2px 10px 6px}
+  .mcards{display:flex;gap:8px;padding:0 10px 6px}
+  .mcards .mc{flex:1;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .mcards .mc .img{height:50px;background:linear-gradient(150deg,#ffd9a8,#ffb066);display:flex;align-items:center;justify-content:center;font-size:22px;position:relative}
+  .mcards .mc .bdg{position:absolute;left:5px;top:5px;font-size:8px;font-weight:800;background:#fff;color:var(--orange2);border-radius:99px;padding:2px 6px}
+  .mcards .mc .cap{padding:6px 7px;font-size:11px;font-weight:700;color:var(--navy)}
+  .mitem{display:flex;gap:10px;padding:10px 12px;border-top:1px solid var(--line);align-items:center}
+  .mitem .ph{width:44px;height:44px;border-radius:10px;background:linear-gradient(150deg,#ffd9a8,#ffb066);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none}
+  .mitem .mi{flex:1;min-width:0}
+  .mitem .mi .nm{font-size:12.5px;font-weight:700;color:var(--navy);margin-top:3px}
+  .mitem .mi .pr{font-size:12px;font-weight:700;color:var(--ink);margin-top:2px}
+  .mcart{margin:10px;padding:10px 12px;border-radius:12px;background:linear-gradient(90deg,var(--orange1),var(--orange2));color:#fff;font-weight:800;font-size:12.5px;display:flex;justify-content:space-between;align-items:center}
+
+  /* kitchen display mockup */
+  .kwrap{padding:10px;display:flex;flex-direction:column;gap:10px;background:#f6f7fb}
+  .ktik{background:#fff;border:1px solid var(--line);border-top:3px solid var(--orange2);border-radius:12px;overflow:hidden}
+  .ktik .kh{display:flex;border-bottom:1px solid var(--line)}
+  .ktik .kt{background:linear-gradient(150deg,var(--orange1),var(--orange2));color:#fff;padding:6px 13px;text-align:center;line-height:1;display:flex;flex-direction:column;justify-content:center}
+  .ktik .kt span{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;opacity:.9}
+  .ktik .kt b{font-size:24px;font-weight:900}
+  .ktik .km{flex:1;display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:11px;color:var(--muted)}
+  .ktik .km b{color:var(--navy);font-size:12px}
+  .kitems{list-style:none;margin:0;padding:6px 10px;font-size:12px}
+  .kitems li{display:flex;align-items:center;gap:6px;padding:2px 0;color:var(--ink)}
+  .kitems .q{width:17px;height:17px;border-radius:4px;background:rgba(239,103,22,.12);color:var(--orange2);font-weight:800;font-size:10px;display:flex;align-items:center;justify-content:center;flex:none}
+  .kbtn{margin:8px 10px;padding:7px;border-radius:8px;color:#fff;text-align:center;font-size:11px;font-weight:800}
+  .kbtn.a{background:var(--navy)} .kbtn.g{background:#12a150}
 </style>
 </head>
 <body>
@@ -482,6 +514,67 @@
       </div>
     </div>
     <p class="im-note" style="margin-top:12px;text-align:center">A sample view — your real numbers, live, the moment you go live.</p>
+  </section>
+
+  <!-- MORE SCREENS -->
+  <section class="reveal">
+    <p class="eyebrow">What your guests &amp; kitchen see</p>
+    <h2>Beautiful for guests, simple for your kitchen.</h2>
+    <p class="lead">The guest orders from a clean, photo-rich menu; the kitchen sees big, clear tickets by table.</p>
+
+    <div class="shots">
+      <figure class="phone">
+        <figcaption>Guest ordering screen</figcaption>
+        <div class="screen">
+          <div class="mhead"><b>The Copper Spoon</b><small>Table 7</small></div>
+          <div class="mloyal"><span style="font-size:16px">🎁</span> Earn 1 point for every Rs 1 you spend</div>
+          <p class="stitle">✨ Chef’s picks &amp; favourites</p>
+          <div class="mcards">
+            <div class="mc"><div class="img">🍕<span class="bdg">🔥 Popular</span></div><div class="cap">Wood-fired Pizza</div></div>
+            <div class="mc"><div class="img">🍔<span class="bdg">⭐ Chef’s pick</span></div><div class="cap">Chicken Burger</div></div>
+          </div>
+          <div class="mitem">
+            <div class="ph">🍕</div>
+            <div class="mi"><span class="vg nv">Non-veg</span><div class="nm">Wood-fired Pizza</div><div class="pr">Rs 4,000</div></div>
+          </div>
+          <div class="mitem">
+            <div class="ph">🍟</div>
+            <div class="mi"><span class="vg">Veg</span><div class="nm">French Fries</div><div class="pr">Rs 750</div></div>
+          </div>
+          <div class="mcart"><span>🛒 View cart · 3 items</span><span>Rs 5,500 ›</span></div>
+        </div>
+      </figure>
+
+      <figure class="phone">
+        <figcaption>Kitchen display screen</figcaption>
+        <div class="screen">
+          <div class="kwrap">
+            <div class="ktik">
+              <div class="kh">
+                <div class="kt"><span>Table</span><b>7</b></div>
+                <div class="km"><b>#002</b><span>⏱ 2m</span></div>
+              </div>
+              <ul class="kitems">
+                <li><span class="q">1</span><span class="vg nv">Non-veg</span> Wood-fired Pizza</li>
+                <li><span class="q">2</span><span class="vg">Veg</span> Garlic Naan</li>
+              </ul>
+              <div class="kbtn g">✓ Mark ready</div>
+            </div>
+            <div class="ktik" style="border-top-color:#e08a1e">
+              <div class="kh">
+                <div class="kt" style="background:linear-gradient(150deg,#f6b64a,#e08a1e)"><span>Table</span><b>3</b></div>
+                <div class="km"><b>#003</b><span>⏱ new</span></div>
+              </div>
+              <ul class="kitems">
+                <li><span class="q">1</span><span class="vg">Veg</span> Veg Fried Rice</li>
+                <li><span class="q">1</span><span class="vg">Veg</span> Cold Coffee</li>
+              </ul>
+              <div class="kbtn a">👐 Accept &amp; start</div>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </div>
   </section>
 
   <!-- BENEFITS BAND -->
