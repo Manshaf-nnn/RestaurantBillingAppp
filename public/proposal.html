@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ef6716">
-<meta name="description" content="TableFlow — QR table ordering, dish-by-dish serving, live tracking, bank-transfer payments, loyalty and one clean owner dashboard.">
+<meta name="description" content="TableFlow — QR ordering, dish-by-dish serving, live table status, feedback, shift handover, smart alerts, QR analytics and an AI assistant for restaurants.">
 <meta property="og:title" content="TableFlow — Smart Dining, Simplified">
-<meta property="og:description" content="Let your guests order from the table. Run everything from one dashboard.">
+<meta property="og:description" content="Everything to run your restaurant from one screen.">
 <meta property="og:type" content="website">
 <link rel="icon" href="/icon.png">
 <title>TableFlow — Smart Dining, Simplified · For Restaurant Owners</title>
@@ -240,6 +240,38 @@
   .kitems .q{width:17px;height:17px;border-radius:4px;background:rgba(239,103,22,.12);color:var(--orange2);font-weight:800;font-size:10px;display:flex;align-items:center;justify-content:center;flex:none}
   .kbtn{margin:8px 10px;padding:7px;border-radius:8px;color:#fff;text-align:center;font-size:11px;font-weight:800}
   .kbtn.a{background:var(--navy)} .kbtn.g{background:#12a150}
+
+  /* feature spotlight grid */
+  .spotgrid{display:grid;gap:16px;margin-top:8px}
+  @media(min-width:640px){.spotgrid{grid-template-columns:1fr 1fr}}
+  @media(min-width:960px){.spotgrid{grid-template-columns:1fr 1fr 1fr}}
+  .spot{padding:16px;display:flex;flex-direction:column}
+  .spot-h{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+  .spot-h .ic{width:34px;height:34px;font-size:17px;border-radius:10px}
+  .spot-h h3{margin:0;font-size:15px;font-weight:800;color:var(--navy)}
+  .spot .cap{margin:12px 0 0;font-size:12px;color:var(--muted)}
+  .rate{margin-left:auto;font-size:11px;color:#f5a623;letter-spacing:1px}
+  .callgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .callgrid span{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px;font-size:12px;font-weight:700;color:var(--ink);text-align:center}
+  .tstat{display:flex;flex-wrap:wrap;gap:6px}
+  .ts{font-size:11px;font-weight:700;padding:4px 9px;border-radius:99px;border:1px solid}
+  .ts.e{background:#f1f5f9;color:#64748b;border-color:#e2e8f0}
+  .ts.o{background:rgba(47,109,240,.12);color:#2f6df0;border-color:rgba(47,109,240,.25)}
+  .ts.ea{background:rgba(18,161,80,.12);color:#12a150;border-color:rgba(18,161,80,.25)}
+  .ts.b{background:rgba(224,138,30,.14);color:#b45309;border-color:rgba(224,138,30,.3)}
+  .ts.c{background:rgba(239,103,22,.12);color:var(--orange2);border-color:rgba(239,103,22,.25)}
+  .fbrow{display:flex;justify-content:space-around;font-size:28px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+  .notes,.alerts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .notes li{background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:12px;font-weight:600;color:var(--ink)}
+  .alerts li{border:1px solid rgba(224,138,30,.35);background:rgba(224,138,30,.06);color:#b45309;border-radius:9px;padding:8px 10px;font-size:12px;font-weight:600}
+  .qstats{display:flex;gap:8px;text-align:center}
+  .qstats div{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 6px}
+  .qstats b{display:block;font-size:20px;font-weight:850;color:var(--navy)}
+  .qstats span{font-size:10px;color:var(--muted);font-weight:600}
+  .chat{display:flex;flex-direction:column;gap:7px}
+  .chat .q{align-self:flex-end;background:linear-gradient(90deg,var(--orange1),var(--orange2));color:#fff;font-size:12px;font-weight:600;padding:7px 11px;border-radius:12px 12px 3px 12px;max-width:88%}
+  .chat .a{align-self:flex-start;background:#fff;border:1px solid var(--line);font-size:12px;color:var(--ink);padding:8px 11px;border-radius:12px 12px 12px 3px;max-width:92%}
+  .chat .a b{color:var(--navy)}
 </style>
 </head>
 <body>
@@ -574,6 +606,72 @@
           </div>
         </div>
       </figure>
+    </div>
+  </section>
+
+  <!-- POWER FEATURES -->
+  <section class="reveal">
+    <p class="eyebrow">More power for owners &amp; staff</p>
+    <h2>Little touches that run your restaurant smarter.</h2>
+    <p class="lead">Beyond ordering — the everyday tools that keep your floor calm, your guests happy and you in control.</p>
+
+    <div class="spotgrid">
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">🔔</span><h3>Call a waiter</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><div class="callgrid"><span>💧 Water</span><span>🍽️ Plates</span><span>🧾 Bill</span><span>🙋 Help</span></div></div>
+        <p class="cap">From the table QR — it pops up on the waiter’s screen with a sound. No arm-waving.</p>
+      </div>
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">🪑</span><h3>Live table status</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><div class="tstat">
+          <span class="ts e">T1 · Empty</span><span class="ts o">T2 · Ordering</span><span class="ts ea">T3 · Eating</span><span class="ts b">T4 · Waiting bill</span><span class="ts c">T5 · Cleaning</span>
+        </div></div>
+        <p class="cap">Staff tap to set each table — everyone sees the whole floor at a glance.</p>
+      </div>
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">💬</span><h3>Quick feedback</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><div class="fbrow">😞 😐 🙂 😍</div></div>
+        <p class="cap">One tap, no sign-up, no personal details — so guests actually leave it, and you learn fast.</p>
+      </div>
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">🔄</span><h3>Digital shift handover</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><ul class="notes">
+          <li>💰 Table 7 hasn’t paid</li><li>📦 Chicken stock low</li><li>⭐ VIP booking · 7 PM</li>
+        </ul></div>
+        <p class="cap">The day manager leaves notes; the night manager sees everything. Nothing slips.</p>
+      </div>
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">⚠️</span><h3>Smart alerts</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><ul class="alerts">
+          <li>⚠️ Table 5 waiting 20 minutes</li><li>⚠️ Kitchen running late</li><li>⚠️ Inventory low</li>
+        </ul></div>
+        <p class="cap">The system watches for trouble and warns you early — before a guest complains.</p>
+      </div>
+
+      <div class="glass spot">
+        <div class="spot-h"><span class="ic">📈</span><h3>Menu QR analytics</h3><span class="rate">★★★★☆</span></div>
+        <div class="mk"><div class="qstats">
+          <div><b>500</b><span>Scans</span></div><div><b>320</b><span>Orders</span></div><div><b>64%</b><span>Conversion</span></div>
+        </div></div>
+        <p class="cap">See how many scans become orders — and improve the ones that don’t.</p>
+      </div>
+
+      <div class="glass spot" style="grid-column:1/-1">
+        <div class="spot-h"><span class="ic">🤖</span><h3>AI restaurant assistant</h3><span class="rate">★★★★★</span></div>
+        <div class="mk"><div class="chat">
+          <div class="q">What sold best today?</div>
+          <div class="a"><b>Chicken Burger</b> — 52 sold · Rs 67,000 revenue</div>
+          <div class="q">Which table waited longest?</div>
+          <div class="a"><b>Table 9</b> — waited 26 minutes for its order</div>
+        </div></div>
+        <p class="cap">Just ask in plain words and get instant answers — no digging through reports.</p>
+      </div>
+
     </div>
   </section>
 
