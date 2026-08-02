@@ -35,7 +35,7 @@ import {
   updateTableStatus,
 } from '../actions'
 
-type TableStatus = 'AVAILABLE' | 'OCCUPIED' | 'RESERVED' | 'CLEANING' | 'OUT_OF_SERVICE'
+import type { TableStatus } from '@prisma/client'
 
 export interface ManagedTable {
   id: string

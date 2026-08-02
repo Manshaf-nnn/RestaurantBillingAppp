@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Smile,
   Sparkles,
   Star,
   Ticket,
@@ -53,6 +54,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Analytics',
         icon: BarChart3,
         permission: PERMISSIONS.ANALYTICS_VIEW,
+      },
+      {
+        href: '/dashboard/handover',
+        label: 'Shift handover',
+        icon: ClipboardList,
+        permission: PERMISSIONS.ORDER_VIEW,
       },
     ],
   },
@@ -112,6 +119,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
       { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
+      { href: '/dashboard/feedback', label: 'Feedback', icon: Smile, permission: PERMISSIONS.REVIEW_MANAGE },
     ],
   },
   {

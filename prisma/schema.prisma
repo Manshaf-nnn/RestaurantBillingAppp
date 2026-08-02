@@ -50,6 +50,9 @@ enum RestaurantStatus {
 
 enum TableStatus {
   AVAILABLE
+  ORDERING
+  EATING
+  WAITING_BILL
   OCCUPIED
   RESERVED
   CLEANING
@@ -264,6 +267,8 @@ model Restaurant {
   coupons           Coupon[]
   reservations      Reservation[]
   reviews           Review[]
+  feedback          Feedback[]
+  shiftNotes        ShiftNote[]
   suppliers         Supplier[]
   inventoryItems    InventoryItem[]
   stockMovements    StockMovement[]
@@ -959,6 +964,38 @@ model Review {
 
   @@index([restaurantId, createdAt])
   @@map("reviews")
+}
+
+/// Anonymous one-tap guest feedback — no personal details, so guests actually leave it.
+model Feedback {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// 1 = unhappy 😞 … 4 = delighted 😍
+  rating       Int
+  comment      String?
+  tableNumber  String?
+  createdAt    DateTime   @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@map("feedback")
+}
+
+/// Digital shift handover — notes one manager leaves for the next shift.
+model ShiftNote {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  body         String
+  authorId     String?
+  authorName   String
+  resolved     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+
+  @@index([restaurantId, resolved, createdAt])
+  @@map("shift_notes")
 }
 
 // ─────────────────────────────────────────── ops: notify / audit / hr ──────

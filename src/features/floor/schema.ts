@@ -25,7 +25,22 @@ export const bulkTablesSchema = z.object({
 
 export const updateTableStatusSchema = z.object({
   id: z.string().cuid(),
-  status: z.enum(['AVAILABLE', 'OCCUPIED', 'RESERVED', 'CLEANING', 'OUT_OF_SERVICE']),
+  status: z.enum([
+    'AVAILABLE',
+    'ORDERING',
+    'EATING',
+    'WAITING_BILL',
+    'OCCUPIED',
+    'RESERVED',
+    'CLEANING',
+    'OUT_OF_SERVICE',
+  ]),
+})
+
+/** The everyday statuses a waiter can set from the floor. */
+export const serviceTableStatusSchema = z.object({
+  id: z.string().cuid(),
+  status: z.enum(['AVAILABLE', 'ORDERING', 'EATING', 'WAITING_BILL', 'CLEANING']),
 })
 
 export const reservationSchema = z.object({

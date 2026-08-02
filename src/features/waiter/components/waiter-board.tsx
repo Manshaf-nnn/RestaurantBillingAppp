@@ -30,6 +30,15 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { resolveServiceRequest, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
+import { setServiceTableStatus } from '@/features/floor/actions'
+
+const TABLE_STATUSES: Array<{ value: TableStatus; label: string }> = [
+  { value: 'AVAILABLE', label: 'Empty' },
+  { value: 'ORDERING', label: 'Ordering' },
+  { value: 'EATING', label: 'Eating' },
+  { value: 'WAITING_BILL', label: 'Bill' },
+  { value: 'CLEANING', label: 'Clean' },
+]
 
 export interface WaiterOrder {
   id: string
@@ -222,6 +231,12 @@ export function WaiterBoard({
     }
     setReady((current) => current.filter((entry) => entry.id !== order.id))
     toast.success(`Order ${order.orderNumber} served`)
+  }
+
+  const setTableStatus = async (tableId: string, status: TableStatus) => {
+    setTables((current) => current.map((t) => (t.id === tableId ? { ...t, status } : t)))
+    const result = await setServiceTableStatus({ id: tableId, status })
+    if (!result.ok) toast.error(result.error)
   }
 
   const clearRequest = async (request: WaiterRequest) => {
@@ -444,6 +459,24 @@ export function WaiterBoard({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {table.area ? `${table.area} · ` : ''}seats {table.capacity}
                   </p>
+
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {TABLE_STATUSES.map((s) => (
+                      <button
+                        key={s.value}
+                        type="button"
+                        onClick={() => setTableStatus(table.id, s.value)}
+                        className={cn(
+                          'rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors',
+                          table.status === s.value
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-input bg-background text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
 
                   {table.openOrders.length ? (
                     <div className="mt-3 space-y-1 border-t pt-2 text-xs">

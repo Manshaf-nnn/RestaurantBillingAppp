@@ -45,7 +45,10 @@ export default async function DashboardPage() {
   const restaurant = await requireRestaurant(user.restaurantId)
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
 
-  const [stats, series, popular, categories, paymentMix, recentOrders] = await Promise.all([
+  // Smart alert: orders still not ready after 20 minutes.
+  const waitCutoff = new Date(Date.now() - 20 * 60 * 1000)
+
+  const [stats, series, popular, categories, paymentMix, recentOrders, longWaiting] = await Promise.all([
     getDashboardStats(user.restaurantId),
     getSalesSeries(user.restaurantId, 14),
     getPopularItems(user.restaurantId, 30, 6),
@@ -56,6 +59,13 @@ export default async function DashboardPage() {
       orderBy: { placedAt: 'desc' },
       take: 8,
       include: { table: { select: { number: true } }, items: { select: { quantity: true } } },
+    }),
+    prisma.order.count({
+      where: {
+        restaurantId: user.restaurantId,
+        status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] },
+        placedAt: { lt: waitCutoff },
+      },
     }),
   ])
 
@@ -83,9 +93,23 @@ export default async function DashboardPage() {
         }
       />
 
-      {/* ── attention strip ─────────────────────────────────────── */}
-      {stats.lowStockCount > 0 || stats.unpaidTotal > 0 ? (
+      {/* ── smart alerts ────────────────────────────────────────── */}
+      {stats.lowStockCount > 0 || stats.unpaidTotal > 0 || longWaiting > 0 ? (
         <div className="mb-5 grid gap-3 sm:grid-cols-2">
+          {longWaiting > 0 ? (
+            <Link
+              href="/kitchen"
+              className="flex items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 transition-colors hover:bg-destructive/10"
+            >
+              <AlertTriangle className="size-5 shrink-0 text-destructive" />
+              <span className="min-w-0 flex-1 text-sm">
+                <strong>{longWaiting}</strong> order{longWaiting === 1 ? ' has' : 's have'} been waiting
+                over 20 minutes — check the kitchen.
+              </span>
+              <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+            </Link>
+          ) : null}
+
           {stats.lowStockCount > 0 ? (
             <Link
               href="/dashboard/inventory"

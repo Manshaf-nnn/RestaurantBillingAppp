@@ -338,3 +338,30 @@
   backdrop-filter: blur(22px) saturate(160%);
   border-color: rgba(255, 255, 255, 0.6) !important;
 }
+
+/* ── Dark theme: retune the mesh + glass so dark mode reads well ──────────── */
+.dark body {
+  background:
+    radial-gradient(58% 48% at 14% 10%, rgba(239, 103, 22, 0.12), transparent 60%),
+    radial-gradient(52% 46% at 88% 14%, rgba(90, 130, 220, 0.12), transparent 62%),
+    radial-gradient(56% 56% at 82% 94%, rgba(239, 103, 22, 0.08), transparent 60%),
+    linear-gradient(150deg, #0d0f14, #0a0c11);
+  background-attachment: fixed;
+}
+.dark [class~='bg-card'] {
+  background-image: linear-gradient(158deg, rgba(32, 38, 52, 0.72), rgba(28, 33, 46, 0.5)) !important;
+}
+.dark [class~='bg-card'][class~='border'],
+.dark [class~='bg-card'][class~='border-b'],
+.dark [class~='bg-card'][class~='border-t'] {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+.dark .glass,
+.dark .surface {
+  background: linear-gradient(158deg, rgba(32, 38, 52, 0.7), rgba(28, 33, 46, 0.45));
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.dark .glass-chrome {
+  background: linear-gradient(180deg, rgba(20, 24, 33, 0.82), rgba(18, 21, 29, 0.62)) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}

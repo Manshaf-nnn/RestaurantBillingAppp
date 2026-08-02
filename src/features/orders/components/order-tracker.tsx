@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { GuestFeedback } from '@/features/feedback/components/guest-feedback'
 import { createServiceRequest } from '../actions'
 
 const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
@@ -293,6 +294,8 @@ export function OrderTracker({
             </Link>
           </Button>
         </div>
+
+        <GuestFeedback tableNumber={initial.tableNumber} />
       </div>
     </div>
   )

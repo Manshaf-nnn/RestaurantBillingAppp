@@ -12,6 +12,7 @@ import { realtime } from '@/server/realtime/emitter'
 import {
   bulkTablesSchema,
   reservationSchema,
+  serviceTableStatusSchema,
   tableSchema,
   updateTableStatusSchema,
 } from './schema'
@@ -106,6 +107,23 @@ export async function updateTableStatus(input: unknown): Promise<ActionResult<{ 
     realtime.tableUpdated(user.restaurantId, { id: data.id, number: '', status: data.status })
     revalidatePath('/dashboard/tables')
     revalidatePath('/waiter')
+    return { id: data.id }
+  })
+}
+
+/** Waiters set the everyday table status (Empty / Ordering / Eating / etc.). */
+export async function setServiceTableStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(serviceTableStatusSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
+    const result = await prisma.restaurantTable.updateMany({
+      where: { id: data.id, restaurantId: user.restaurantId },
+      data: { status: data.status },
+    })
+    if (result.count === 0) throw new NotFoundError('Table')
+
+    realtime.tableUpdated(user.restaurantId, { id: data.id, number: '', status: data.status })
+    revalidatePath('/waiter')
+    revalidatePath('/dashboard/tables')
     return { id: data.id }
   })
 }

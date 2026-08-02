@@ -45,10 +45,13 @@ export const PAYMENT_STATUS_META: Record<PaymentStatus, { label: string; variant
 }
 
 export const TABLE_STATUS_META: Record<TableStatus, { label: string; variant: Variant; dot: string }> = {
-  AVAILABLE: { label: 'Available', variant: 'success', dot: 'bg-success' },
+  AVAILABLE: { label: 'Empty', variant: 'secondary', dot: 'bg-muted-foreground' },
+  ORDERING: { label: 'Ordering', variant: 'info', dot: 'bg-chart-2' },
+  EATING: { label: 'Eating', variant: 'success', dot: 'bg-success' },
+  WAITING_BILL: { label: 'Waiting bill', variant: 'warning', dot: 'bg-warning' },
   OCCUPIED: { label: 'Occupied', variant: 'default', dot: 'bg-primary' },
   RESERVED: { label: 'Reserved', variant: 'info', dot: 'bg-chart-2' },
-  CLEANING: { label: 'Cleaning', variant: 'warning', dot: 'bg-warning' },
+  CLEANING: { label: 'Cleaning', variant: 'default', dot: 'bg-primary' },
   OUT_OF_SERVICE: { label: 'Out of service', variant: 'secondary', dot: 'bg-muted-foreground' },
 }
 
