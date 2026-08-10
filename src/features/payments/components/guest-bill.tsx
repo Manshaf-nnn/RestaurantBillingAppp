@@ -31,6 +31,7 @@ import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { submitFeedback } from '@/features/feedback/actions'
 import type { PaymentConfig } from '../service'
 import { declareGuestPayment, emailReceipt, requestPaymentQr } from '../actions'
 
@@ -89,6 +90,18 @@ export function GuestBill({
   const [declared, setDeclared] = React.useState(false)
   const [email, setEmail] = React.useState(initial.customerEmail ?? '')
   const [emailing, setEmailing] = React.useState(false)
+  const [feedbackOpen, setFeedbackOpen] = React.useState(false)
+  const [feedbackComment, setFeedbackComment] = React.useState('')
+  const [feedbackBusy, setFeedbackBusy] = React.useState<number | null>(null)
+  const [feedbackSubmitted, setFeedbackSubmitted] = React.useState(false)
+  const [feedbackDismissed, setFeedbackDismissed] = React.useState(false)
+
+  const due = Math.max(0, bill.grandTotal - bill.paidTotal)
+  const settled = bill.paymentStatus === 'PAID' || due === 0
+
+  React.useEffect(() => {
+    if (settled && !feedbackSubmitted && !feedbackDismissed) setFeedbackOpen(true)
+  }, [settled, feedbackSubmitted, feedbackDismissed])
 
   useOrderRoom(bill.id)
 
@@ -103,9 +116,6 @@ export function GuestBill({
     setQr(null)
     toast.success('Payment confirmed — thank you!')
   })
-
-  const due = Math.max(0, bill.grandTotal - bill.paidTotal)
-  const settled = bill.paymentStatus === 'PAID' || due === 0
 
   const showQr = async () => {
     setLoadingQr(true)
@@ -154,6 +164,26 @@ export function GuestBill({
     else toast.error(result.error)
   }
 
+  const sendFoodFeedback = async (rating: number) => {
+    setFeedbackBusy(rating)
+    const result = await submitFeedback({
+      category: 'FOOD',
+      rating,
+      comment: feedbackComment,
+      tableNumber: bill.tableNumber ?? '',
+    })
+    setFeedbackBusy(null)
+
+    if (result.ok) {
+      setFeedbackSubmitted(true)
+      setFeedbackOpen(false)
+      toast.success('Thanks for the feedback!')
+      return
+    }
+
+    toast.error(result.error)
+  }
+
   return (
     <div className="flex min-h-dvh flex-col pb-8">
       <AutoRefresh intervalMs={7000} />
@@ -175,6 +205,57 @@ export function GuestBill({
           <Alert variant="success" title="Paid in full">
             Thank you! Your bill for {formatMoney(bill.grandTotal, currency, locale)} is settled.
           </Alert>
+        ) : null}
+
+        {feedbackOpen ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4">
+            <div className="w-full max-w-md rounded-2xl border bg-background p-4 shadow-2xl">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">How was your food?</p>
+                  <p className="text-xs text-muted-foreground">A quick rating helps us improve.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackDismissed(true)
+                    setFeedbackOpen(false)
+                  }}
+                  className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                >
+                  Skip
+                </button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { rating: 1, emoji: '😞', label: 'Bad' },
+                  { rating: 2, emoji: '😐', label: 'Okay' },
+                  { rating: 3, emoji: '🙂', label: 'Good' },
+                  { rating: 4, emoji: '😍', label: 'Great' },
+                ].map((option) => (
+                  <button
+                    key={option.rating}
+                    type="button"
+                    disabled={feedbackBusy !== null}
+                    onClick={() => sendFoodFeedback(option.rating)}
+                    className="rounded-xl border p-2 text-center transition-colors hover:border-primary hover:bg-primary/5 disabled:opacity-60"
+                  >
+                    <div className="text-2xl">{option.emoji}</div>
+                    <div className="mt-1 text-[11px] font-medium text-muted-foreground">{option.label}</div>
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={feedbackComment}
+                onChange={(event) => setFeedbackComment(event.target.value.slice(0, 300))}
+                placeholder="Optional note"
+                rows={3}
+                className="mt-3 w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none ring-0 placeholder:text-muted-foreground"
+              />
+            </div>
+          </div>
         ) : null}
 
         {/* ── the bill itself ───────────────────────────────────── */}

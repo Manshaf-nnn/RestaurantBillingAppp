@@ -135,9 +135,20 @@ export async function reactivateRestaurant(input: unknown): Promise<ActionResult
     async (data) => {
       const admin = await requireSuperAdmin()
 
+      const restaurant = await prisma.restaurant.findUnique({
+        where: { id: data.restaurantId },
+        select: { plan: true },
+      })
+      if (!restaurant) throw new NotFoundError('Restaurant')
+
+      const trialReactivation =
+        restaurant.plan === 'TRIAL'
+          ? { trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) }
+          : {}
+
       const result = await prisma.restaurant.updateMany({
         where: { id: data.restaurantId },
-        data: { status: 'ACTIVE', isActive: true },
+        data: { status: 'ACTIVE', isActive: true, ...trialReactivation },
       })
       if (result.count === 0) throw new NotFoundError('Restaurant')
 

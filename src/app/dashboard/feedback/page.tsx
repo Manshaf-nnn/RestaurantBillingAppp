@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
+import { SystemFeedback } from '@/features/feedback/components/guest-feedback'
 import { getFeedbackOverview } from '@/features/feedback/queries'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -30,6 +31,10 @@ export default async function FeedbackPage() {
         <StatCard label="Responses" value={data.total.toLocaleString()} />
         <StatCard label="Happy guests" value={`${data.happyPct}%`} />
         <StatCard label="Average" value={data.total ? `${data.average.toFixed(1)} / 4` : '—'} />
+      </div>
+
+      <div className="mt-4">
+        <SystemFeedback title="How was the system?" subtitle="Quick owner feedback for the platform" />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-5">

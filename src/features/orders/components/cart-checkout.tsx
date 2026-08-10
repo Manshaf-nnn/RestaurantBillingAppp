@@ -324,22 +324,6 @@ export function CartCheckout({
             />
           </Field>
 
-          <Field
-            label="Email"
-            htmlFor="customerEmail"
-            hint="Optional — for your receipt"
-            error={fieldErrors.customerEmail}
-          >
-            <Input
-              id="customerEmail"
-              type="email"
-              value={state.customer.email}
-              onChange={(event) => setCustomer({ email: event.target.value })}
-              placeholder="you@example.com"
-              autoComplete="email"
-            />
-          </Field>
-
           <Field label="Note for the kitchen" htmlFor="orderNotes">
             <Textarea
               id="orderNotes"

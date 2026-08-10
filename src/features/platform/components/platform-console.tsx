@@ -32,7 +32,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatCard } from '@/features/dashboard/components/page-header'
-import type { PlatformRestaurant, PlatformStats } from '../queries'
+import type { PlatformFeedbackItem, PlatformRestaurant, PlatformStats } from '../queries'
 import {
   approveRestaurant,
   reactivateRestaurant,
@@ -58,10 +58,12 @@ const FILTERS: Array<{ key: 'ALL' | RestaurantStatus; label: string }> = [
 export function PlatformConsole({
   restaurants: initial,
   stats,
+  recentFeedback,
   appUrl,
 }: {
   restaurants: PlatformRestaurant[]
   stats: PlatformStats
+  recentFeedback: PlatformFeedbackItem[]
   appUrl: string
 }) {
   const [restaurants, setRestaurants] = React.useState(initial)
@@ -91,6 +93,9 @@ export function PlatformConsole({
       )
     })
   }, [restaurants, filter, search])
+
+  const trialExpired = (restaurant: PlatformRestaurant) =>
+    restaurant.plan === 'TRIAL' && restaurant.trialEndsAt !== null && new Date(restaurant.trialEndsAt).getTime() < Date.now()
 
   const approve = async (restaurant: PlatformRestaurant) => {
     setBusyId(restaurant.id)
@@ -197,6 +202,12 @@ export function PlatformConsole({
                 </p>
               ) : null}
 
+              {trialExpired(restaurant) ? (
+                <p className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-xs font-medium text-warning">
+                  Trial expired — access is blocked until admin reactivates it.
+                </p>
+              ) : null}
+
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {restaurant.status === 'PENDING' ? (
                   <>
@@ -221,6 +232,11 @@ export function PlatformConsole({
                         <ExternalLink /> Guest menu
                       </a>
                     </Button>
+                    {trialExpired(restaurant) ? (
+                      <Button size="sm" loading={busyId === restaurant.id} onClick={() => reactivate(restaurant)}>
+                        <Play /> Reactivate
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"
@@ -242,6 +258,37 @@ export function PlatformConsole({
           ))}
         </div>
       )}
+
+      <div className="rounded-xl border bg-card p-5 shadow-soft">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-semibold">Recent feedback</h3>
+          <span className="text-xs text-muted-foreground">{recentFeedback.length} items</span>
+        </div>
+
+        {recentFeedback.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No guest or owner feedback has been submitted yet.</p>
+        ) : (
+          <ul className="space-y-3">
+            {recentFeedback.map((entry) => (
+              <li key={entry.id} className="rounded-lg border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium">{entry.restaurantName}</p>
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                      {entry.category === 'SYSTEM' ? 'System' : 'Food'}
+                    </p>
+                  </div>
+                  <span className="text-lg">{['😞', '😐', '🙂', '😍'][entry.rating - 1] ?? '💬'}</span>
+                </div>
+                <p className="mt-2 text-sm text-foreground">{entry.comment || 'No extra note provided.'}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {new Date(entry.createdAt).toLocaleDateString()} · /{entry.restaurantSlug}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <RejectDialog
         restaurant={rejectFor}

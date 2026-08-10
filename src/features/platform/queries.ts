@@ -13,6 +13,7 @@ export interface PlatformRestaurant {
   currency: string
   plan: string
   status: RestaurantStatus
+  trialEndsAt: string | null
   createdAt: string
   approvedAt: string | null
   rejectionReason: string | null
@@ -20,6 +21,16 @@ export interface PlatformRestaurant {
   ownerEmail: string | null
   staffCount: number
   orderCount: number
+}
+
+export interface PlatformFeedbackItem {
+  id: string
+  restaurantName: string
+  restaurantSlug: string
+  category: 'FOOD' | 'SYSTEM'
+  rating: number
+  comment: string | null
+  createdAt: string
 }
 
 /** Every tenant on the platform, newest first, with owner + basic counts. */
@@ -52,6 +63,7 @@ export async function listPlatformRestaurants(status?: RestaurantStatus): Promis
     currency: restaurant.currency,
     plan: restaurant.plan,
     status: restaurant.status,
+    trialEndsAt: restaurant.trialEndsAt?.toISOString() ?? null,
     createdAt: restaurant.createdAt.toISOString(),
     approvedAt: restaurant.approvedAt?.toISOString() ?? null,
     rejectionReason: restaurant.rejectionReason,
@@ -59,6 +71,25 @@ export async function listPlatformRestaurants(status?: RestaurantStatus): Promis
     ownerEmail: restaurant.users[0]?.email ?? null,
     staffCount: restaurant._count.users,
     orderCount: restaurant._count.orders,
+  }))
+}
+
+export async function listRecentPlatformFeedback(limit = 8): Promise<PlatformFeedbackItem[]> {
+  const feedback = await prisma.feedback.findMany({
+    where: { category: { in: ['FOOD', 'SYSTEM'] } },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    include: { restaurant: { select: { name: true, slug: true } } },
+  })
+
+  return feedback.map((item) => ({
+    id: item.id,
+    restaurantName: item.restaurant.name,
+    restaurantSlug: item.restaurant.slug,
+    category: item.category,
+    rating: item.rating,
+    comment: item.comment,
+    createdAt: item.createdAt.toISOString(),
   }))
 }
 

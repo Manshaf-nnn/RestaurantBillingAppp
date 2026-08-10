@@ -19,9 +19,9 @@ export interface FeedbackOverview {
 /** Owner-facing summary of anonymous guest feedback. */
 export async function getFeedbackOverview(restaurantId: string): Promise<FeedbackOverview> {
   const [groups, recent] = await Promise.all([
-    prisma.feedback.groupBy({ by: ['rating'], where: { restaurantId }, _count: true }),
+    prisma.feedback.groupBy({ by: ['rating'], where: { restaurantId, category: 'FOOD' }, _count: true }),
     prisma.feedback.findMany({
-      where: { restaurantId, comment: { not: null } },
+      where: { restaurantId, category: 'FOOD', comment: { not: null } },
       orderBy: { createdAt: 'desc' },
       take: 12,
       select: { id: true, rating: true, comment: true, tableNumber: true, createdAt: true },

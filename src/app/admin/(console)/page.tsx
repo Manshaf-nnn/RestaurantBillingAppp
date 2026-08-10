@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { PlatformConsole } from '@/features/platform/components/platform-console'
-import { getPlatformStats, listPlatformRestaurants } from '@/features/platform/queries'
+import { getPlatformStats, listPlatformRestaurants, listRecentPlatformFeedback } from '@/features/platform/queries'
 import { appUrl } from '@/lib/env'
 import { requirePageSuperAdmin } from '@/server/auth/guard'
 
@@ -14,9 +14,10 @@ export const metadata: Metadata = { title: 'Platform admin' }
 export default async function AdminPage() {
   await requirePageSuperAdmin('/admin')
 
-  const [restaurants, stats] = await Promise.all([
+  const [restaurants, stats, recentFeedback] = await Promise.all([
     listPlatformRestaurants(),
     getPlatformStats(),
+    listRecentPlatformFeedback(),
   ])
 
   return (
@@ -26,7 +27,7 @@ export default async function AdminPage() {
         title="Restaurants"
         description="Review sign-ups, approve new restaurants, and manage every tenant on the platform."
       />
-      <PlatformConsole restaurants={restaurants} stats={stats} appUrl={appUrl()} />
+      <PlatformConsole restaurants={restaurants} stats={stats} recentFeedback={recentFeedback} appUrl={appUrl()} />
     </>
   )
 }

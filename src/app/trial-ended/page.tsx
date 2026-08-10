@@ -46,7 +46,7 @@ export default async function TrialEndedPage() {
         <div className="space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">Your free trial has ended</h1>
           <p className="text-balance text-sm text-muted-foreground">
-            Thanks for trying TableFlow with {restaurant.name}. Your 30-day trial is over — upgrade
+            Thanks for trying TableFlow with {restaurant.name}. Your 14-day trial is over — upgrade
             to keep your dashboard, menu and orders exactly as you left them.
           </p>
         </div>

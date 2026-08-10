@@ -197,6 +197,11 @@ enum TokenPurpose {
   PASSWORD_RESET
 }
 
+enum FeedbackCategory {
+  FOOD
+  SYSTEM
+}
+
 // ──────────────────────────────────────────────────────────── tenancy ──────
 
 model Restaurant {
@@ -968,17 +973,20 @@ model Review {
 
 /// Anonymous one-tap guest feedback — no personal details, so guests actually leave it.
 model Feedback {
-  id           String     @id @default(cuid())
+  id           String           @id @default(cuid())
   restaurantId String
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  category     FeedbackCategory @default(FOOD)
 
   /// 1 = unhappy 😞 … 4 = delighted 😍
   rating       Int
   comment      String?
   tableNumber  String?
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime         @default(now())
 
   @@index([restaurantId, createdAt])
+  @@index([category, createdAt])
   @@map("feedback")
 }
 
