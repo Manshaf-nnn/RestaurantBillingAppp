@@ -60,6 +60,8 @@ export interface CashierBill {
   items: Array<{ id: string; name: string; optionsLabel: string; quantity: number; lineTotal: number }>
 }
 
+type CashierView = 'billing' | 'payment'
+
 const METHODS = [
   { key: 'CASH' as const, label: 'Cash', icon: Banknote },
   { key: 'CARD' as const, label: 'Card', icon: CreditCard },
@@ -93,6 +95,7 @@ export function CashierBoard({
   // Deleting the T lets them search by name/phone/order instead.
   const [search, setSearch] = React.useState('T')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
+  const [view, setView] = React.useState<CashierView>('billing')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
 
   // Re-sync when polling (realtime off / serverless).
@@ -158,6 +161,27 @@ export function CashierBoard({
           { label: 'Payments today', value: collected.count },
         ]}
       />
+
+      <div className="p-4 pb-0">
+        <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+          {([
+            { key: 'billing', label: 'Billing' },
+            { key: 'payment', label: 'Payments' },
+          ] as const).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setView(tab.key)}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                view === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,380px)_1fr]">
         {/* ── open bills ─────────────────────────────────────────── */}
@@ -226,23 +250,193 @@ export function CashierBoard({
         {/* ── bill detail + payment ──────────────────────────────── */}
         <section>
           {selected ? (
-            <BillPanel
-              key={selected.id}
-              bill={selected}
-              restaurant={restaurant}
-              onSettled={onSettled}
-            />
+            view === 'billing' ? (
+              <BillingDetailPanel
+                key={selected.id}
+                bill={selected}
+                restaurant={restaurant}
+              />
+            ) : (
+              <BillPanel
+                key={selected.id}
+                bill={selected}
+                restaurant={restaurant}
+                onSettled={onSettled}
+              />
+            )
           ) : (
             <EmptyState
               className="h-full"
               icon={<Receipt />}
               title="Select a bill"
-              description="Choose an order on the left to take payment."
+              description="Choose an order on the left to view or collect payment."
             />
           )}
         </section>
       </div>
     </OpsShell>
+  )
+}
+
+function buildReceiptForBill(
+  bill: CashierBill,
+  restaurant: {
+    name: string
+    currency: string
+    locale: string
+    taxLabel: string
+    addressLine: string | null
+    phone: string | null
+  },
+  paymentMethod?: string | null,
+) {
+  return {
+    restaurantName: restaurant.name,
+    addressLine: restaurant.addressLine,
+    phone: restaurant.phone,
+    orderNumber: bill.orderNumber,
+    tableNumber: bill.tableNumber,
+    customerName: bill.customerName,
+    placedAt: bill.placedAt,
+    paymentMethod,
+    lines: bill.items.map((item) => ({
+      name: item.name,
+      optionsLabel: item.optionsLabel,
+      quantity: item.quantity,
+      lineTotal: formatMoney(item.lineTotal, restaurant.currency, restaurant.locale),
+    })),
+    totals: [
+      { label: 'Subtotal', value: formatMoney(bill.subtotal, restaurant.currency, restaurant.locale) },
+      ...(bill.discountTotal
+        ? [{ label: 'Discount', value: `-${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}` }]
+        : []),
+      ...(bill.serviceCharge
+        ? [{ label: 'Service', value: formatMoney(bill.serviceCharge, restaurant.currency, restaurant.locale) }]
+        : []),
+      ...(bill.taxTotal
+        ? [{ label: restaurant.taxLabel, value: formatMoney(bill.taxTotal, restaurant.currency, restaurant.locale) }]
+        : []),
+      {
+        label: 'TOTAL',
+        value: formatMoney(bill.grandTotal, restaurant.currency, restaurant.locale),
+        strong: true,
+      },
+    ],
+  }
+}
+
+function BillingDetailPanel({
+  bill,
+  restaurant,
+}: {
+  bill: CashierBill
+  restaurant: {
+    name: string
+    currency: string
+    locale: string
+    taxLabel: string
+    addressLine: string | null
+    phone: string | null
+  }
+}) {
+  const print = () => {
+    printReceipt(buildReceiptForBill(bill, restaurant))
+  }
+
+  return (
+    <div className="rounded-xl border bg-card shadow-soft">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div>
+          <p className="text-xl font-bold leading-none">#{bill.orderNumber}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {bill.customerName} · {bill.customerPhone}
+            {bill.tableNumber ? ` · Table ${bill.tableNumber}` : ''}
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={print}>
+          <Printer /> Print bill
+        </Button>
+      </header>
+
+      <div className="grid gap-4 p-4 md:grid-cols-[1.1fr_0.9fr]">
+        <div>
+          <h3 className="mb-2 text-sm font-semibold">Live billing</h3>
+          <ul className="space-y-2 text-sm">
+            {bill.items.map((item) => (
+              <li key={item.id} className="flex justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="font-medium">
+                    {item.quantity} × {item.name}
+                  </span>
+                  {item.optionsLabel ? (
+                    <span className="block text-xs text-muted-foreground">{item.optionsLabel}</span>
+                  ) : null}
+                </span>
+                <span className="shrink-0 tabular-nums">
+                  {formatMoney(item.lineTotal, restaurant.currency, restaurant.locale)}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <Separator className="my-3" />
+
+          <dl className="space-y-1 text-sm">
+            <SummaryRow label="Subtotal" value={formatMoney(bill.subtotal, restaurant.currency, restaurant.locale)} />
+            {bill.discountTotal > 0 ? (
+              <SummaryRow
+                label="Discount"
+                value={`− ${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}`}
+              />
+            ) : null}
+            {bill.serviceCharge > 0 ? (
+              <SummaryRow
+                label="Service charge"
+                value={formatMoney(bill.serviceCharge, restaurant.currency, restaurant.locale)}
+              />
+            ) : null}
+            {bill.taxTotal > 0 ? (
+              <SummaryRow
+                label={restaurant.taxLabel}
+                value={formatMoney(bill.taxTotal, restaurant.currency, restaurant.locale)}
+              />
+            ) : null}
+          </dl>
+
+          <Separator className="my-3" />
+
+          <div className="flex items-center justify-between text-lg font-bold">
+            <span>Bill total</span>
+            <span>{formatMoney(bill.grandTotal, restaurant.currency, restaurant.locale)}</span>
+          </div>
+        </div>
+
+        <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Status</span>
+            <OrderStatusBadge status={bill.status} showIcon={false} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Payment</span>
+            <PaymentStatusBadge status={bill.paymentStatus} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Placed</span>
+            <span>{new Date(bill.placedAt).toLocaleString(restaurant.locale)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Due now</span>
+            <span className="font-semibold tabular-nums">
+              {formatMoney(Math.max(0, bill.grandTotal - bill.paidTotal), restaurant.currency, restaurant.locale)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Paid</span>
+            <span className="tabular-nums">{formatMoney(bill.paidTotal, restaurant.currency, restaurant.locale)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -314,39 +508,7 @@ function BillPanel({
   }
 
   const print = () => {
-    printReceipt({
-      restaurantName: restaurant.name,
-      addressLine: restaurant.addressLine,
-      phone: restaurant.phone,
-      orderNumber: bill.orderNumber,
-      tableNumber: bill.tableNumber,
-      customerName: bill.customerName,
-      placedAt: bill.placedAt,
-      paymentMethod: method,
-      lines: bill.items.map((item) => ({
-        name: item.name,
-        optionsLabel: item.optionsLabel,
-        quantity: item.quantity,
-        lineTotal: formatMoney(item.lineTotal, restaurant.currency, restaurant.locale),
-      })),
-      totals: [
-        { label: 'Subtotal', value: formatMoney(bill.subtotal, restaurant.currency, restaurant.locale) },
-        ...(bill.discountTotal
-          ? [{ label: 'Discount', value: `-${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}` }]
-          : []),
-        ...(bill.serviceCharge
-          ? [{ label: 'Service', value: formatMoney(bill.serviceCharge, restaurant.currency, restaurant.locale) }]
-          : []),
-        ...(bill.taxTotal
-          ? [{ label: restaurant.taxLabel, value: formatMoney(bill.taxTotal, restaurant.currency, restaurant.locale) }]
-          : []),
-        {
-          label: 'TOTAL',
-          value: formatMoney(bill.grandTotal, restaurant.currency, restaurant.locale),
-          strong: true,
-        },
-      ],
-    })
+    printReceipt(buildReceiptForBill(bill, restaurant, method))
   }
 
   return (
