@@ -30,8 +30,7 @@ import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { AutoRefresh } from '@/components/auto-refresh'
-import { GuestFeedback } from '@/features/feedback/components/guest-feedback'
-import { createServiceRequest } from '../actions'
+import { createServiceRequest, updateGuestOrderItems } from '../actions'
 
 const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
   { status: 'PENDING', label: 'Order received', description: 'We have your order', icon: Check },
@@ -78,6 +77,14 @@ export function OrderTracker({
 }) {
   const router = useRouter()
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
+  const [editing, setEditing] = React.useState(false)
+  const [draftItems, setDraftItems] = React.useState(
+    () => initial.items.map((item) => ({ id: item.id, name: item.name, quantity: item.quantity })),
+  )
+
+  React.useEffect(() => {
+    setDraftItems(initial.items.map((item) => ({ id: item.id, name: item.name, quantity: item.quantity })))
+  }, [initial.items])
 
   // Re-sync when polling (realtime off / serverless).
   React.useEffect(() => setStatus(initial.status), [initial.status])
@@ -112,6 +119,27 @@ export function OrderTracker({
     Math.round((Date.now() - new Date(initial.placedAt).getTime()) / 60000),
   )
   const remaining = Math.max(0, initial.estimatedMinutes - elapsedMinutes)
+
+  const saveEditChanges = async () => {
+    const items = draftItems
+      .filter((item) => item.quantity > 0)
+      .map((item) => ({ itemId: item.id, quantity: item.quantity }))
+
+    if (!items.length) {
+      toast.error('Your order needs at least one item.')
+      return
+    }
+
+    const result = await updateGuestOrderItems({ orderId: initial.id, items })
+    if (result.ok) {
+      setEditing(false)
+      toast.success('Order updated. The kitchen has the new list.')
+      router.refresh()
+      return
+    }
+
+    toast.error(result.error)
+  }
 
   return (
     <div className="flex min-h-dvh flex-col pb-8">
@@ -295,7 +323,61 @@ export function OrderTracker({
           </Button>
         </div>
 
-        <GuestFeedback tableNumber={initial.tableNumber} />
+        <section className="surface p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Update your order</h2>
+              <p className="text-xs text-muted-foreground">Add a few more or remove what you no longer need.</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setEditing((value) => !value)}>
+              {editing ? 'Close' : 'Edit'}
+            </Button>
+          </div>
+
+          {editing ? (
+            <div className="space-y-3">
+              {draftItems.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border bg-muted/20 p-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{item.name}</p>
+                    <p className="text-[11px] text-muted-foreground">Tap to adjust</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={() =>
+                        setDraftItems((list) =>
+                          list.map((entry) =>
+                            entry.id === item.id ? { ...entry, quantity: Math.max(0, entry.quantity - 1) } : entry,
+                          ),
+                        )
+                      }
+                    >
+                      <span className="text-base leading-none">−</span>
+                    </Button>
+                    <span className="w-6 text-center text-sm font-semibold tabular-nums">{item.quantity}</span>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={() =>
+                        setDraftItems((list) =>
+                          list.map((entry) =>
+                            entry.id === item.id ? { ...entry, quantity: Math.min(50, entry.quantity + 1) } : entry,
+                          ),
+                        )
+                      }
+                    >
+                      <span className="text-base leading-none">＋</span>
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              <Button className="w-full" onClick={saveEditChanges}>Save changes</Button>
+            </div>
+          ) : null}
+        </section>
       </div>
     </div>
   )

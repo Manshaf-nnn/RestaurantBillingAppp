@@ -48,6 +48,20 @@ export const updateOrderStatusSchema = z.object({
 })
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>
 
+export const updateGuestOrderItemsSchema = z.object({
+  orderId: z.string().cuid(),
+  items: z
+    .array(
+      z.object({
+        itemId: z.string().cuid(),
+        quantity: z.coerce.number().int().min(0).max(50),
+      }),
+    )
+    .min(1)
+    .max(60),
+})
+export type UpdateGuestOrderItemsInput = z.infer<typeof updateGuestOrderItemsSchema>
+
 export const cancelOrderSchema = z.object({
   orderId: z.string().cuid(),
   reason: z.string().trim().min(3, 'Give a short reason').max(200),

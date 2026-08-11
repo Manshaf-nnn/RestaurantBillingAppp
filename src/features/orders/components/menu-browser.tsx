@@ -67,6 +67,19 @@ export function MenuBrowser({
   const [category, setCategory] = React.useState<string>('ALL')
   const [diet, setDiet] = React.useState<DietFilter>('ALL')
   const [active, setActive] = React.useState<PublicMenuItem | null>(null)
+  const [liveOrder, setLiveOrder] = React.useState<{ id: string; orderNumber: string } | null>(null)
+
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('ros:last-order')
+      if (!raw) return
+      const parsed = JSON.parse(raw) as { id?: string; orderId?: string; orderNumber?: string } | null
+      const orderId = parsed?.orderId ?? parsed?.id
+      if (orderId && parsed?.orderNumber) setLiveOrder({ id: orderId, orderNumber: parsed.orderNumber })
+    } catch {
+      // Ignore invalid cached state.
+    }
+  }, [])
 
   // Without a table the guest has skipped the entry screen — send them back.
   React.useEffect(() => {
@@ -178,6 +191,16 @@ export function MenuBrowser({
       </header>
 
       <main className="flex-1">
+        {liveOrder ? (
+          <div className="mx-4 mt-4">
+            <Button asChild className="w-full justify-center gap-2 rounded-xl">
+              <Link href={`/order/track/${liveOrder.id}`}>
+                <span className="text-base">📡</span> Live order {liveOrder.orderNumber}
+              </Link>
+            </Button>
+          </div>
+        ) : null}
+
         {loyalty?.enabled && loyalty.earnRateX100 > 0 ? (
           <div className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-lg">

@@ -20,6 +20,7 @@ import {
   serviceRequestSchema,
   staffOrderSchema,
   tableEntrySchema,
+  updateGuestOrderItemsSchema,
   updateItemStatusSchema,
   updateOrderStatusSchema,
 } from './schema'
@@ -29,7 +30,7 @@ import {
   placeOrder as placeOrderService,
   updateOrderStatus as updateOrderStatusService,
 } from './service'
-import { computeTotals } from './pricing'
+import { computeTotals, estimatePrepMinutes } from './pricing'
 
 // ── guest surface ────────────────────────────────────────────────────────────
 
@@ -139,6 +140,157 @@ export async function placeGuestOrder(
       return { orderId: order.id, orderNumber: order.orderNumber }
     },
     'Order placed. The kitchen has it now.',
+  )
+}
+
+export async function updateGuestOrderItems(
+  input: unknown,
+  slug?: string,
+): Promise<ActionResult<{ orderId: string; grandTotal: number }>> {
+  return runAction(
+    updateGuestOrderItemsSchema,
+    input,
+    async (data) => {
+      const restaurant = await resolvePublicTenant(slug)
+      if (!restaurant) throw new NotFoundError('Restaurant')
+
+      const guestSessionId = await getOrCreateGuestSessionId()
+      const order = await prisma.order.findFirst({
+        where: { id: data.orderId, restaurantId: restaurant.id, guestSessionId },
+        include: {
+          items: true,
+          table: { select: { id: true, number: true } },
+          restaurant: { select: { currency: true, taxInclusive: true, taxRateBps: true, serviceChargeBps: true } },
+        },
+      })
+
+      if (!order) throw new NotFoundError('Order')
+      if (['SERVED', 'COMPLETED', 'CANCELLED'].includes(order.status)) {
+        throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
+      }
+
+      const orderItems = new Map(order.items.map((item) => [item.id, item]))
+      const keep: Array<{ id: string; quantity: number; unitPrice: number; optionsTotal: number; prepTimeMinutes: number; lineTotal: number }> = []
+
+      for (const patch of data.items) {
+        const current = orderItems.get(patch.itemId)
+        if (!current) continue
+        const quantity = Math.max(0, Math.min(50, patch.quantity))
+        if (quantity === 0) continue
+        const lineTotal = (current.unitPrice + current.optionsTotal) * quantity
+        keep.push({
+          id: current.id,
+          quantity,
+          unitPrice: current.unitPrice,
+          optionsTotal: current.optionsTotal,
+          prepTimeMinutes: current.prepTimeMinutes,
+          lineTotal,
+        })
+      }
+
+      if (keep.length === 0) {
+        throw new AppError('Your order must have at least one item.', 400, 'EMPTY_ORDER')
+      }
+
+      const totals = computeTotals({
+        lines: keep.map((item) => ({ lineTotal: item.lineTotal })),
+        taxRateBps: order.taxRateBps || order.restaurant.taxRateBps,
+        serviceChargeBps: order.serviceChargeBps || order.restaurant.serviceChargeBps,
+        taxInclusive: order.restaurant.taxInclusive,
+        couponDiscount: order.discountTotal,
+        loyaltyDiscount: order.loyaltyDiscount,
+        currency: order.restaurant.currency,
+        roundTotal: true,
+      })
+
+      await prisma.$transaction(async (tx) => {
+        for (const patch of data.items) {
+          const current = orderItems.get(patch.itemId)
+          if (!current) continue
+          const quantity = Math.max(0, Math.min(50, patch.quantity))
+          if (quantity === 0) {
+            await tx.orderItem.delete({ where: { id: current.id } })
+            continue
+          }
+
+          const lineTotal = (current.unitPrice + current.optionsTotal) * quantity
+          await tx.orderItem.update({
+            where: { id: current.id },
+            data: {
+              quantity,
+              lineTotal,
+              status: current.status === 'CANCELLED' ? 'QUEUED' : current.status,
+            },
+          })
+        }
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            subtotal: totals.subtotal,
+            discountTotal: order.discountTotal,
+            loyaltyDiscount: order.loyaltyDiscount,
+            taxTotal: totals.taxTotal,
+            serviceCharge: totals.serviceCharge,
+            roundingAdj: totals.roundingAdj,
+            grandTotal: totals.grandTotal,
+            estimatedMinutes: estimatePrepMinutes(
+              keep.map((item) => ({ prepTimeMinutes: item.prepTimeMinutes, quantity: item.quantity })),
+              0,
+            ),
+            events: {
+              create: { status: order.status, note: 'Customer updated the order before it was served' },
+            },
+          },
+        })
+      })
+
+      const refreshedOrder = await prisma.order.findFirst({
+        where: { id: order.id, restaurantId: restaurant.id },
+        include: { table: true, items: true },
+      })
+
+      if (refreshedOrder) {
+        const payload = {
+          id: refreshedOrder.id,
+          orderNumber: refreshedOrder.orderNumber,
+          status: refreshedOrder.status,
+          type: refreshedOrder.type,
+          tableId: refreshedOrder.tableId,
+          tableNumber: refreshedOrder.table?.number ?? null,
+          customerName: refreshedOrder.customerName,
+          customerPhone: refreshedOrder.customerPhone,
+          itemCount: refreshedOrder.items.reduce((total, item) => total + item.quantity, 0),
+          grandTotal: refreshedOrder.grandTotal,
+          notes: refreshedOrder.notes,
+          placedAt: refreshedOrder.placedAt.toISOString(),
+          estimatedMinutes: refreshedOrder.estimatedMinutes,
+          items: refreshedOrder.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            notes: item.notes,
+            isVeg: item.isVeg,
+            options: ((item.options as Array<{ groupName: string; name: string }> | null) ?? []).map((option) => ({
+              groupName: option.groupName,
+              name: option.name,
+            })),
+          })),
+        }
+        realtime.orderUpdated(restaurant.id, payload)
+        realtime.orderStatus(restaurant.id, {
+          orderId: refreshedOrder.id,
+          orderNumber: refreshedOrder.orderNumber,
+          status: refreshedOrder.status,
+          tableId: refreshedOrder.tableId,
+          tableNumber: refreshedOrder.table?.number ?? null,
+          at: new Date().toISOString(),
+        })
+      }
+
+      return { orderId: order.id, grandTotal: totals.grandTotal }
+    },
+    'Your order was updated.',
   )
 }
 

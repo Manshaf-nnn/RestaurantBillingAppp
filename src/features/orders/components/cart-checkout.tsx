@@ -144,6 +144,15 @@ export function CartCheckout({
       return
     }
 
+    try {
+      window.localStorage.setItem(
+        'ros:last-order',
+        JSON.stringify({ orderId: result.data.orderId, orderNumber: result.data.orderNumber }),
+      )
+    } catch {
+      // unavailable storage should not block the checkout flow
+    }
+
     clearLines()
     toast.success(`Order ${result.data.orderNumber} sent to the kitchen`)
     router.push(`/order/track/${result.data.orderId}`)

@@ -164,13 +164,13 @@ export function GuestBill({
     else toast.error(result.error)
   }
 
-  const sendFoodFeedback = async (rating: number) => {
+  const sendSystemFeedback = async (rating: number) => {
     setFeedbackBusy(rating)
     const result = await submitFeedback({
-      category: 'FOOD',
+      category: 'SYSTEM',
       rating,
       comment: feedbackComment,
-      tableNumber: bill.tableNumber ?? '',
+      tableNumber: '',
     })
     setFeedbackBusy(null)
 
@@ -212,8 +212,8 @@ export function GuestBill({
             <div className="w-full max-w-md rounded-2xl border bg-background p-4 shadow-2xl">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold">How was your food?</p>
-                  <p className="text-xs text-muted-foreground">A quick rating helps us improve.</p>
+                  <p className="text-sm font-semibold">How was the system?</p>
+                  <p className="text-xs text-muted-foreground">Quick feedback about the ordering and payment experience.</p>
                 </div>
                 <button
                   type="button"
@@ -238,7 +238,7 @@ export function GuestBill({
                     key={option.rating}
                     type="button"
                     disabled={feedbackBusy !== null}
-                    onClick={() => sendFoodFeedback(option.rating)}
+                    onClick={() => sendSystemFeedback(option.rating)}
                     className="rounded-xl border p-2 text-center transition-colors hover:border-primary hover:bg-primary/5 disabled:opacity-60"
                   >
                     <div className="text-2xl">{option.emoji}</div>
