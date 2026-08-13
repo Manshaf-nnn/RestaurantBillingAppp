@@ -216,7 +216,13 @@ export async function getCashierQueue(restaurantId: string) {
     where: {
       restaurantId,
       status: { notIn: ['CANCELLED'] },
-      paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
+      // Show unpaid/partially-paid bills plus takeaway orders (so cashier
+      // can keep a copy of takeaway orders even after payment until the
+      // food is served/delivered).
+      OR: [
+        { paymentStatus: { in: ['UNPAID', 'PARTIAL'] } },
+        { AND: [{ type: 'TAKEAWAY' }, { status: { notIn: ['SERVED', 'COMPLETED'] } }] },
+      ],
     },
     include: {
       items: true,

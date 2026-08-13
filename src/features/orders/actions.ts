@@ -386,6 +386,7 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
     revalidatePath('/kitchen')
     revalidatePath('/waiter')
     revalidatePath('/dashboard/orders')
+    revalidatePath('/cashier')
 
     return { id: order.id, status: order.status }
   })
@@ -498,6 +499,7 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
       })
 
       revalidatePath('/dashboard/orders')
+      revalidatePath('/cashier')
       return { orderId: order.id, orderNumber: order.orderNumber }
     },
     'Order created.',
