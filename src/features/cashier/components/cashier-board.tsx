@@ -98,6 +98,7 @@ export function CashierBoard({
   const [search, setSearch] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
   const [view, setView] = React.useState<CashierView>('billing')
+  const [filter, setFilter] = React.useState<'ALL' | 'TAKEAWAY' | 'DINE_IN' | 'DELIVERY'>('ALL')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
   const [takeawayOpen, setTakeawayOpen] = React.useState(false)
   const [menuSearch, setMenuSearch] = React.useState('')
@@ -124,12 +125,11 @@ export function CashierBoard({
 
   const filtered = React.useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return bills
-
     const tableQuery = query.startsWith('t') ? query.slice(1).trim() : query
     const takeawayKeywords = ['takeaway', 'take away', 'pickup', 'pick up', 'collection', 'takeout']
 
-    return bills.filter((bill) => {
+    let result = bills.filter((bill) => {
+      if (!query) return true
       const normalizedType = bill.type.toLowerCase()
       const normalizedName = bill.customerName.toLowerCase()
       const normalizedPhone = bill.customerPhone
@@ -140,11 +140,17 @@ export function CashierBoard({
         normalizedName.includes(query) ||
         normalizedPhone.includes(query) ||
         normalizedType.includes(query) ||
-        takeawayKeywords.some((keyword) => query.includes(keyword) || keyword.includes(query)) && bill.type === 'TAKEAWAY' ||
+        (takeawayKeywords.some((keyword) => query.includes(keyword) || keyword.includes(query)) && bill.type === 'TAKEAWAY') ||
         (bill.tableNumber != null && tableNumber.includes(tableQuery))
       )
     })
-  }, [bills, search])
+
+    if (filter !== 'ALL') {
+      result = result.filter((bill) => bill.type === filter)
+    }
+
+    return result
+  }, [bills, search, filter])
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
@@ -315,9 +321,31 @@ export function CashierBoard({
           ))}
         </div>
 
-        <Button size="sm" onClick={() => setTakeawayOpen(true)}>
-          New takeaway
-        </Button>
+        <div className="inline-flex items-center gap-2">
+          <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+            {([
+              { key: 'ALL', label: 'All' },
+              { key: 'TAKEAWAY', label: 'Takeaway' },
+              { key: 'DINE_IN', label: 'Dine-in' },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setFilter(t.key)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                  filter === t.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <Button size="sm" onClick={() => setTakeawayOpen(true)}>
+            New takeaway
+          </Button>
+        </div>
       </div>
 
       <Dialog open={takeawayOpen} onOpenChange={setTakeawayOpen}>
@@ -484,9 +512,27 @@ export function CashierBoard({
                         <OrderStatusBadge status={bill.status} showIcon={false} />
                         <PaymentStatusBadge status={bill.paymentStatus} />
                       </div>
-                      <span className="font-bold">
-                        {formatMoney(bill.grandTotal - bill.paidTotal, restaurant.currency, restaurant.locale)}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">
+                          {formatMoney(bill.grandTotal - bill.paidTotal, restaurant.currency, restaurant.locale)}
+                        </span>
+                        {bill.type === 'TAKEAWAY' && (
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              try {
+                                printReceipt(buildReceiptForBill(bill, restaurant))
+                              } catch (err) {
+                                toast.error('Unable to print receipt')
+                              }
+                            }}
+                          >
+                            <Printer />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </motion.button>
                 ))}
