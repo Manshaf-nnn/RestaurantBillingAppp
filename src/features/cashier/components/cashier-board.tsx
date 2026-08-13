@@ -39,8 +39,9 @@ import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { printReceipt } from '@/features/printing/print'
-import { applyManualDiscount } from '@/features/orders/actions'
+import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
+import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 
 export interface CashierBill {
   id: string
@@ -77,11 +78,13 @@ export function CashierBoard({
   todayCount,
   user,
   restaurant,
+  menu,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
   todayCount: number
   user: { name: string; role: string }
+  menu: PublicMenu
   restaurant: {
     name: string
     currency: string
@@ -96,6 +99,14 @@ export function CashierBoard({
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
   const [view, setView] = React.useState<CashierView>('billing')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
+  const [takeawayOpen, setTakeawayOpen] = React.useState(false)
+  const [menuSearch, setMenuSearch] = React.useState('')
+  const [customerName, setCustomerName] = React.useState('')
+  const [customerPhone, setCustomerPhone] = React.useState('')
+  const [notes, setNotes] = React.useState('')
+  const [takeawayCart, setTakeawayCart] = React.useState<Record<string, number>>({})
+  const [creatingTakeaway, setCreatingTakeaway] = React.useState(false)
+  const [takeawayError, setTakeawayError] = React.useState<string | null>(null)
 
   // Re-sync when polling (realtime off / serverless).
   React.useEffect(() => setBills(initialBills), [initialBills])
@@ -137,6 +148,119 @@ export function CashierBoard({
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
+  const availableMenu = React.useMemo(
+    () =>
+      menu.items.filter(
+        (item) => item.isAvailable && (menuSearch.trim() === '' || item.name.toLowerCase().includes(menuSearch.trim().toLowerCase())),
+      ),
+    [menu.items, menuSearch],
+  )
+
+  const takeawayLines = React.useMemo(
+    () =>
+      menu.items
+        .filter((item) => takeawayCart[item.id])
+        .map((item) => ({ id: item.id, name: item.name, quantity: takeawayCart[item.id], price: item.price })),
+    [menu.items, takeawayCart],
+  )
+
+  const takeawayTotal = React.useMemo(
+    () => takeawayLines.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [takeawayLines],
+  )
+
+  const addTakeawayItem = (item: PublicMenuItem) => {
+    setTakeawayCart((current) => ({ ...current, [item.id]: (current[item.id] ?? 0) + 1 }))
+  }
+
+  const changeTakeawayQty = (itemId: string, delta: number) => {
+    setTakeawayCart((current) => {
+      const next = (current[itemId] ?? 0) + delta
+      if (next <= 0) {
+        const { [itemId]: _removed, ...rest } = current
+        return rest
+      }
+      return { ...current, [itemId]: next }
+    })
+  }
+
+  const submitTakeawayOrder = async () => {
+    if (!customerName.trim() || !customerPhone.trim()) {
+      setTakeawayError('Enter the customer name and phone number.')
+      return
+    }
+
+    const items = menu.items
+      .filter((item) => takeawayCart[item.id])
+      .map((item) => ({
+        foodId: item.id,
+        quantity: takeawayCart[item.id],
+        optionIds: [],
+        notes: '',
+      }))
+
+    if (!items.length) {
+      setTakeawayError('Add at least one menu item to the takeaway order.')
+      return
+    }
+
+    setCreatingTakeaway(true)
+    setTakeawayError(null)
+
+    const result = await createStaffOrder({
+      type: 'TAKEAWAY',
+      tableId: '',
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      customerEmail: '',
+      notes,
+      items,
+    })
+
+    setCreatingTakeaway(false)
+
+    if (!result.ok) {
+      setTakeawayError(result.error)
+      return
+    }
+
+    setTakeawayOpen(false)
+    setTakeawayCart({})
+    setCustomerName('')
+    setCustomerPhone('')
+    setNotes('')
+    setMenuSearch('')
+    const next = { ...result.data, orderNumber: result.data.orderNumber }
+    toast.success(`Takeaway order ${result.data.orderNumber} is now in the kitchen`)
+    setBills((current) => [
+      {
+        id: next.orderId,
+        orderNumber: next.orderNumber,
+        type: 'TAKEAWAY',
+        status: 'PENDING',
+        paymentStatus: 'UNPAID',
+        tableNumber: null,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        placedAt: new Date().toISOString(),
+        subtotal: takeawayTotal,
+        discountTotal: 0,
+        serviceCharge: 0,
+        taxTotal: 0,
+        grandTotal: takeawayTotal,
+        paidTotal: 0,
+        items: takeawayLines.map((entry) => ({
+          id: `${entry.id}-takeaway`,
+          name: entry.name,
+          optionsLabel: '',
+          quantity: entry.quantity,
+          lineTotal: entry.price * entry.quantity,
+        })),
+      },
+      ...current,
+    ])
+  }
+
   const onSettled = (billId: string, amount: number, fullySettled: boolean) => {
     setCollected((current) => ({ total: current.total + amount, count: current.count + 1 }))
     setBills((current) =>
@@ -171,7 +295,7 @@ export function CashierBoard({
         ]}
       />
 
-      <div className="p-4 pb-0">
+      <div className="flex items-center justify-between gap-3 p-4 pb-0">
         <div className="inline-flex rounded-lg border bg-muted/40 p-1">
           {([
             { key: 'billing', label: 'Billing' },
@@ -190,7 +314,119 @@ export function CashierBoard({
             </button>
           ))}
         </div>
+
+        <Button size="sm" onClick={() => setTakeawayOpen(true)}>
+          New takeaway
+        </Button>
       </div>
+
+      <Dialog open={takeawayOpen} onOpenChange={setTakeawayOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Create takeaway order</DialogTitle>
+            <DialogDescription>Pick menu items, add customer details, and send it straight to the kitchen.</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+            <div className="space-y-3">
+              <Input
+                value={menuSearch}
+                onChange={(event) => setMenuSearch(event.target.value)}
+                placeholder="Search menu items…"
+              />
+
+              <div className="grid max-h-[420px] gap-3 overflow-y-auto pr-1 md:grid-cols-2">
+                {availableMenu.length === 0 ? (
+                  <div className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground md:col-span-2">
+                    No menu items match this search.
+                  </div>
+                ) : (
+                  availableMenu.map((item) => (
+                    <div key={item.id} className="rounded-xl border bg-card p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">{item.name}</p>
+                          {item.description ? (
+                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.description}</p>
+                          ) : null}
+                        </div>
+                        <Badge variant="secondary">{formatMoney(item.price, restaurant.currency, restaurant.locale)}</Badge>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" size="icon-sm" onClick={() => changeTakeawayQty(item.id, -1)}>
+                            −
+                          </Button>
+                          <span className="w-5 text-center text-sm font-semibold tabular-nums">
+                            {takeawayCart[item.id] ?? 0}
+                          </span>
+                          <Button variant="outline" size="icon-sm" onClick={() => addTakeawayItem(item)}>
+                            +
+                          </Button>
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {takeawayCart[item.id] ? `${takeawayCart[item.id]} selected` : 'Add'}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border bg-muted/30 p-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium">Customer name</label>
+                <Input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="John Doe" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Phone</label>
+                <Input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} placeholder="+91 98765 43210" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Kitchen note</label>
+                <textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  className="min-h-[90px] w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  placeholder="Any extra instruction?"
+                />
+              </div>
+
+              <div className="rounded-lg border bg-background p-3">
+                <p className="text-sm font-semibold">Takeaway bill</p>
+                {takeawayLines.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">No items selected yet.</p>
+                ) : (
+                  <div className="mt-2 space-y-2 text-sm">
+                    {takeawayLines.map((item) => (
+                      <div key={item.id} className="flex items-center justify-between gap-3">
+                        <span>
+                          {item.quantity} × {item.name}
+                        </span>
+                        <span className="tabular-nums">
+                          {formatMoney(item.price * item.quantity, restaurant.currency, restaurant.locale)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-3 flex items-center justify-between border-t pt-2 font-semibold">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatMoney(takeawayTotal, restaurant.currency, restaurant.locale)}</span>
+                </div>
+              </div>
+
+              {takeawayError ? <p className="text-sm font-medium text-destructive">{takeawayError}</p> : null}
+
+              <Button className="w-full" loading={creatingTakeaway} onClick={submitTakeawayOrder}>
+                Send to kitchen and bill customer
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,380px)_1fr]">
         {/* ── open bills ─────────────────────────────────────────── */}

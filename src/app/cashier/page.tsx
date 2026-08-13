@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { CashierBoard } from '@/features/cashier/components/cashier-board'
+import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -17,8 +18,10 @@ export default async function CashierPage() {
   const startOfDay = new Date()
   startOfDay.setHours(0, 0, 0, 0)
 
-  const [restaurant, bills, today] = await Promise.all([
-    requireRestaurant(user.restaurantId),
+  const restaurant = await requireRestaurant(user.restaurantId)
+
+  const [menu, bills, today] = await Promise.all([
+    getPublicMenu(user.restaurantId, restaurant.timezone),
     getCashierQueue(user.restaurantId),
     prisma.payment.aggregate({
       where: {
@@ -33,6 +36,7 @@ export default async function CashierPage() {
 
   return (
     <CashierBoard
+      menu={menu}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       todayTotal={today._sum.amount ?? 0}
       todayCount={today._count}
