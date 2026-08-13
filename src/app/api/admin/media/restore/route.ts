@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
     if (!restaurantId) return NextResponse.json({ error: 'restaurantId required' }, { status: 400 })
 
-    const backups = await (prisma as any).mediaBackup.findMany({ where: { restaurantId } })
+    const backups = await prisma.mediaBackup.findMany({ where: { restaurantId } })
     const results: Array<{ id: string; original: string; restored?: string; updated: number; error?: string }> = []
 
     for (const b of backups) {
@@ -70,8 +70,7 @@ export async function POST(request: NextRequest) {
             prisma.orderItem.updateMany({ where: { imageUrl: b.originalUrl }, data: { imageUrl: newUrl } }),
           ])
           updated = f1.count + f2.count + r1.count + oi.count
-          // persist new backupUrl too
-          await (prisma as any).mediaBackup.update({ where: { id: b.id }, data: { backupUrl: newUrl } })
+          await prisma.mediaBackup.update({ where: { id: b.id }, data: { backupUrl: newUrl } })
         }
         results.push({ id: b.id, original: b.originalUrl, restored: newUrl, updated })
       } catch (err: any) {

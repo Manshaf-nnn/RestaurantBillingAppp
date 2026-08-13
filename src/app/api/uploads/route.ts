@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     if (isCloudinaryConfigured()) {
       const url = await uploadToCloudinary(bytes)
       try {
-        await (prisma as any).mediaBackup.create({
+        await prisma.mediaBackup.create({
           data: {
             restaurantId: user.restaurantId,
             key,
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
       await store.set(key, arrayBuffer, { metadata: { contentType: file.type } })
       // Served back by /api/media/[key].
       try {
-        await (prisma as any).mediaBackup.create({
+        await prisma.mediaBackup.create({
           data: {
             restaurantId: user.restaurantId,
             key,
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, key), bytes)
     try {
-      await (prisma as any).mediaBackup.create({
+      await prisma.mediaBackup.create({
         data: {
           restaurantId: user.restaurantId,
           key,
