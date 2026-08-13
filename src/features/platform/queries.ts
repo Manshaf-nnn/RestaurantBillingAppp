@@ -33,6 +33,21 @@ export interface PlatformFeedbackItem {
   createdAt: string
 }
 
+export interface RestaurantMenuSnapshotItem {
+  id: string
+  restaurantId: string
+  restaurantName: string
+  restaurantSlug: string
+  entityType: 'CATEGORY' | 'FOOD'
+  entityId: string
+  name: string
+  slug: string | null
+  categoryName: string | null
+  imageUrl: string | null
+  price: number | null
+  createdAt: string
+}
+
 /** Every tenant on the platform, newest first, with owner + basic counts. */
 export async function listPlatformRestaurants(status?: RestaurantStatus): Promise<PlatformRestaurant[]> {
   const restaurants = await prisma.restaurant.findMany({
@@ -90,6 +105,29 @@ export async function listRecentPlatformFeedback(limit = 8): Promise<PlatformFee
     rating: item.rating,
     comment: item.comment,
     createdAt: item.createdAt.toISOString(),
+  }))
+}
+
+export async function listRecentRestaurantMenuSnapshots(limit = 12): Promise<RestaurantMenuSnapshotItem[]> {
+  const rows = await prisma.restaurantMenuSnapshot.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    include: { restaurant: { select: { name: true, slug: true } } },
+  })
+
+  return rows.map((row) => ({
+    id: row.id,
+    restaurantId: row.restaurantId,
+    restaurantName: row.restaurant.name,
+    restaurantSlug: row.restaurant.slug,
+    entityType: row.entityType as 'CATEGORY' | 'FOOD',
+    entityId: row.entityId,
+    name: row.name,
+    slug: row.slug,
+    categoryName: row.categoryName,
+    imageUrl: row.imageUrl,
+    price: row.price,
+    createdAt: row.createdAt.toISOString(),
   }))
 }
 

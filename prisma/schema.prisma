@@ -283,6 +283,7 @@ model Restaurant {
   serviceRequests   ServiceRequest[]
   shifts            StaffShift[]
   mediaBackups      MediaBackup[]
+  menuSnapshots     RestaurantMenuSnapshot[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -305,6 +306,30 @@ model MediaBackup {
 
   @@index([restaurantId])
   @@map("media_backups")
+}
+
+/// Snapshot of each restaurant menu item/category, mirrored to the platform admin so
+/// changes are visible even when the tenant account is moved or the site changes.
+model RestaurantMenuSnapshot {
+  id           String   @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  entityType   String   // CATEGORY | FOOD
+  entityId     String
+  name         String
+  slug         String?
+  categoryName String?
+  imageUrl     String?
+  price        Int?
+  snapshot     Json
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([restaurantId, entityType, entityId])
+  @@index([restaurantId, createdAt])
+  @@map("restaurant_menu_snapshots")
 }
 
 // ───────────────────────────────────────────────── identity & access ───────

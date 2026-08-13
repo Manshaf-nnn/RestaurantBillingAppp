@@ -37,6 +37,51 @@ async function uniqueSlug(
   return `${base}-${Date.now().toString(36)}`
 }
 
+async function syncRestaurantMenuSnapshot({
+  restaurantId,
+  entityType,
+  entityId,
+  name,
+  slug,
+  categoryName,
+  imageUrl,
+  price,
+  snapshot,
+}: {
+  restaurantId: string
+  entityType: 'CATEGORY' | 'FOOD'
+  entityId: string
+  name: string
+  slug?: string | null
+  categoryName?: string | null
+  imageUrl?: string | null
+  price?: number | null
+  snapshot: any
+}) {
+  await prisma.restaurantMenuSnapshot.upsert({
+    where: { restaurantId_entityType_entityId: { restaurantId, entityType, entityId } },
+    update: {
+      name,
+      slug: slug ?? null,
+      categoryName: categoryName ?? null,
+      imageUrl: imageUrl ?? null,
+      price: price ?? null,
+      snapshot,
+    },
+    create: {
+      restaurantId,
+      entityType,
+      entityId,
+      name,
+      slug: slug ?? null,
+      categoryName: categoryName ?? null,
+      imageUrl: imageUrl ?? null,
+      price: price ?? null,
+      snapshot,
+    },
+  })
+}
+
 // ── categories ───────────────────────────────────────────────────────────────
 
 export async function saveCategory(input: unknown): Promise<ActionResult<{ id: string }>> {
@@ -89,6 +134,17 @@ export async function saveCategory(input: unknown): Promise<ActionResult<{ id: s
         })
       }
 
+      await syncRestaurantMenuSnapshot({
+        restaurantId: user.restaurantId,
+        entityType: 'CATEGORY',
+        entityId: record.id,
+        name: record.name,
+        slug: record.slug,
+        categoryName: record.name,
+        imageUrl: record.imageUrl,
+        snapshot: record,
+      })
+
       realtime.menuUpdated(user.restaurantId)
       revalidatePath('/dashboard/categories')
       revalidatePath('/dashboard/menu')
@@ -114,6 +170,9 @@ export async function deleteCategory(id: string): Promise<ActionResult<{ id: str
     }
 
     await prisma.category.update({ where: { id }, data: { deletedAt: new Date() } })
+    await prisma.restaurantMenuSnapshot.deleteMany({
+      where: { restaurantId: user.restaurantId, entityType: 'CATEGORY', entityId: id },
+    })
     await audit({
       restaurantId: user.restaurantId,
       userId: user.id,
@@ -178,7 +237,7 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
 
       const category = await prisma.category.findFirst({
         where: { id: data.categoryId, restaurantId: user.restaurantId, deletedAt: null },
-        select: { id: true },
+        select: { id: true, name: true },
       })
       if (!category) throw new NotFoundError('Category')
 
@@ -282,6 +341,24 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
         after: base,
       })
 
+      await syncRestaurantMenuSnapshot({
+        restaurantId: user.restaurantId,
+        entityType: 'FOOD',
+        entityId: id,
+        name: data.name,
+        slug: slug,
+        categoryName: category.name,
+        imageUrl: data.imageUrl || null,
+        price: data.price,
+        snapshot: {
+          ...base,
+          id,
+          slug,
+          categoryId: category.id,
+          categoryName: category.name,
+        },
+      })
+
       realtime.menuUpdated(user.restaurantId)
       revalidatePath('/dashboard/menu')
       revalidatePath('/order/menu')
@@ -306,6 +383,9 @@ export async function deleteFood(id: string): Promise<ActionResult<{ id: string 
       data: { deletedAt: new Date(), isAvailable: false },
     })
 
+    await prisma.restaurantMenuSnapshot.deleteMany({
+      where: { restaurantId: user.restaurantId, entityType: 'FOOD', entityId: id },
+    })
     await audit({
       restaurantId: user.restaurantId,
       userId: user.id,

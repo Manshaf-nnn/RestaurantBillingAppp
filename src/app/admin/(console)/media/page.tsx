@@ -1,9 +1,10 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 
 import { requirePageSuperAdmin } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
-import { listPlatformRestaurants } from '@/features/platform/queries'
+import { listPlatformRestaurants, listRecentRestaurantMenuSnapshots } from '@/features/platform/queries'
 
 export const metadata: Metadata = { title: 'Media backups' }
 
@@ -11,16 +12,19 @@ export default async function AdminMediaPage() {
   await requirePageSuperAdmin('/admin')
 
   const restaurants = await listPlatformRestaurants()
-  const backupCounts = await Promise.all(
-    restaurants.map(async (restaurant) => ({
-      restaurantId: restaurant.id,
-      count: await prisma.mediaBackup.count({ where: { restaurantId: restaurant.id } }),
-    })),
-  )
+  const [backupCounts, recentMenu] = await Promise.all([
+    Promise.all(
+      restaurants.map(async (restaurant) => ({
+        restaurantId: restaurant.id,
+        count: await prisma.mediaBackup.count({ where: { restaurantId: restaurant.id } }),
+      })),
+    ),
+    listRecentRestaurantMenuSnapshots(12),
+  ])
   const countByRestaurant = new Map(backupCounts.map((entry) => [entry.restaurantId, entry.count]))
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Media backups</h1>
@@ -65,6 +69,39 @@ export default async function AdminMediaPage() {
             </div>
           )
         })}
+      </div>
+
+      <div className="rounded-xl border bg-card p-4 shadow-soft">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Recently synced menu items</h2>
+          <span className="text-xs text-muted-foreground">Live mirror from tenant uploads</span>
+        </div>
+
+        {recentMenu.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No synced menu items yet.</p>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {recentMenu.map((item) => (
+              <div key={item.id} className="rounded-lg border bg-muted/20 p-3">
+                <div className="flex items-center gap-3">
+                  {item.imageUrl ? (
+                    <div className="relative h-12 w-12 overflow-hidden rounded-md border bg-background">
+                      <Image src={item.imageUrl} alt={item.name} fill className="object-cover" sizes="48px" />
+                    </div>
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{item.name}</div>
+                    <div className="text-xs text-muted-foreground">{item.restaurantName}</div>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>{item.entityType}</span>
+                  {item.price !== null ? <span>₹{(item.price / 100).toFixed(2)}</span> : <span>—</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
