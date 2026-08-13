@@ -38,6 +38,7 @@ export interface OrderRow {
 
 const STATUS_OPTIONS = ['ALL', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']
 const PAYMENT_OPTIONS = ['ALL', 'UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']
+const TYPE_OPTIONS = ['ALL', 'DINE_IN', 'TAKEAWAY', 'DELIVERY']
 
 export function OrdersTable({
   orders,
@@ -54,7 +55,7 @@ export function OrdersTable({
   pageCount: number
   currency: string
   locale: string
-  filters: { search: string; status: string; paymentStatus: string }
+  filters: { search: string; status: string; paymentStatus: string; type: string }
 }) {
   const router = useRouter()
   const params = useSearchParams()
@@ -108,7 +109,7 @@ export function OrdersTable({
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Order #, name, phone, table…"
+            placeholder="Order #, name, phone, takeaway keyword, or table…"
             startIcon={<Search />}
           />
         </form>
@@ -132,6 +133,18 @@ export function OrdersTable({
             {PAYMENT_OPTIONS.map((status) => (
               <SelectItem key={status} value={status}>
                 {status === 'ALL' ? 'All payments' : status.charAt(0) + status.slice(1).toLowerCase()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filters.type} onValueChange={(value) => setParam('type', value)}>
+          <SelectTrigger className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TYPE_OPTIONS.map((type) => (
+              <SelectItem key={type} value={type}>
+                {type === 'ALL' ? 'All types' : type.replace('_', ' ').toLowerCase()}
               </SelectItem>
             ))}
           </SelectContent>
@@ -171,7 +184,7 @@ export function OrdersTable({
                         </Badge>
                       ) : (
                         <Badge variant="outline" size="sm">
-                          {order.type.replace('_', ' ').toLowerCase()}
+                          {order.type === 'TAKEAWAY' ? 'takeaway' : order.type.replace('_', ' ').toLowerCase()}
                         </Badge>
                       )}
                       {order.itemCount} items

@@ -24,6 +24,7 @@ export default async function OrdersPage({
     search: params.search,
     status: params.status ?? 'ALL',
     paymentStatus: params.paymentStatus ?? 'ALL',
+    type: params.type ?? 'ALL',
     page: params.page ? Number(params.page) : 1,
   })
 
@@ -40,6 +41,7 @@ export default async function OrdersPage({
           search: params.search ?? '',
           status: params.status ?? 'ALL',
           paymentStatus: params.paymentStatus ?? 'ALL',
+          type: params.type ?? 'ALL',
         }}
         orders={result.orders.map((order) => ({
           id: order.id,

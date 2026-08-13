@@ -47,6 +47,7 @@ export default async function CashierPage() {
       initialBills={bills.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
+        type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
         status: order.status as 'PENDING',
         paymentStatus: order.paymentStatus,
         tableNumber: order.table?.number ?? null,

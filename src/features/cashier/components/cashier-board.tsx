@@ -45,6 +45,7 @@ import { collectPayment, createStaffPaymentQr } from '@/features/payments/action
 export interface CashierBill {
   id: string
   orderNumber: string
+  type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
   status: 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'SERVED' | 'COMPLETED'
   paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'REFUNDED' | 'FAILED'
   tableNumber: string | null
@@ -91,9 +92,7 @@ export function CashierBoard({
   }
 }) {
   const [bills, setBills] = React.useState(initialBills)
-  // Defaults to "T" so the cashier just types a table number, e.g. "T4".
-  // Deleting the T lets them search by name/phone/order instead.
-  const [search, setSearch] = React.useState('T')
+  const [search, setSearch] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
   const [view, setView] = React.useState<CashierView>('billing')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
@@ -115,15 +114,25 @@ export function CashierBoard({
   const filtered = React.useMemo(() => {
     const query = search.trim().toLowerCase()
     if (!query) return bills
-    // "T4" (or "t4") targets table 4 — match the digits against the table number.
+
     const tableQuery = query.startsWith('t') ? query.slice(1).trim() : query
-    return bills.filter(
-      (bill) =>
+    const takeawayKeywords = ['takeaway', 'take away', 'pickup', 'pick up', 'collection', 'takeout']
+
+    return bills.filter((bill) => {
+      const normalizedType = bill.type.toLowerCase()
+      const normalizedName = bill.customerName.toLowerCase()
+      const normalizedPhone = bill.customerPhone
+      const tableNumber = bill.tableNumber?.toLowerCase() ?? ''
+
+      return (
         bill.orderNumber.toLowerCase().includes(query) ||
-        bill.customerName.toLowerCase().includes(query) ||
-        bill.customerPhone.includes(query) ||
-        (bill.tableNumber != null && bill.tableNumber.toLowerCase().includes(tableQuery)),
-    )
+        normalizedName.includes(query) ||
+        normalizedPhone.includes(query) ||
+        normalizedType.includes(query) ||
+        takeawayKeywords.some((keyword) => query.includes(keyword) || keyword.includes(query)) && bill.type === 'TAKEAWAY' ||
+        (bill.tableNumber != null && tableNumber.includes(tableQuery))
+      )
+    })
   }, [bills, search])
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
@@ -189,7 +198,7 @@ export function CashierBoard({
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Type a table number, e.g. T4 — or a name / order"
+            placeholder="Search by table, name, order #, phone, or takeaway keyword"
             startIcon={<Search />}
           />
 
@@ -230,6 +239,9 @@ export function CashierBoard({
                     </div>
                     <p className="mt-1 truncate text-xs text-muted-foreground">
                       {bill.customerName} · {bill.customerPhone}
+                    </p>
+                    <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+                      {bill.type === 'TAKEAWAY' ? 'Pickup order' : bill.type.replace('_', ' ').toLowerCase()}
                     </p>
                     <div className="mt-2 flex items-center justify-between">
                       <div className="flex items-center gap-1.5">

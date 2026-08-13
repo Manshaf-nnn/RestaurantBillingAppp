@@ -23,9 +23,11 @@ import { printKitchenTicket } from '@/features/printing/print'
 export interface KitchenTicket {
   id: string
   orderNumber: string
+  type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
   status: OrderStatus
   tableNumber: string | null
   customerName: string
+  customerPhone: string
   notes: string | null
   placedAt: string
   estimatedMinutes: number
@@ -79,6 +81,7 @@ export function KitchenBoard({
 }) {
   const [tickets, setTickets] = React.useState(initialTickets)
   const [stats, setStats] = React.useState(initialStats)
+  const [search, setSearch] = React.useState('')
 
   // When realtime is off (serverless), AutoRefresh re-fetches and passes fresh
   // props — re-sync local state from them.
@@ -102,9 +105,11 @@ export function KitchenBoard({
   const toTicket = (payload: OrderSummaryPayload): KitchenTicket => ({
     id: payload.id,
     orderNumber: payload.orderNumber,
+    type: payload.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
     status: payload.status,
     tableNumber: payload.tableNumber,
     customerName: payload.customerName,
+    customerPhone: payload.customerPhone,
     notes: payload.notes,
     placedAt: payload.placedAt,
     estimatedMinutes: payload.estimatedMinutes,
@@ -192,6 +197,24 @@ export function KitchenBoard({
     return counts
   }, [tickets])
 
+  const matchesSearch = React.useCallback((ticket: KitchenTicket) => {
+    if (!search.trim()) return true
+
+    const query = search.trim().toLowerCase()
+    const text = [
+      ticket.orderNumber,
+      ticket.customerName,
+      ticket.customerPhone,
+      ticket.tableNumber ?? 'takeaway pickup collection',
+      ticket.type.toLowerCase(),
+      ticket.notes ?? '',
+    ]
+      .join(' ')
+      .toLowerCase()
+
+    return text.includes(query)
+  }, [search])
+
   return (
     <OpsShell
       title="Kitchen display"
@@ -210,10 +233,22 @@ export function KitchenBoard({
         ]}
       />
 
+      <div className="px-4 pt-4">
+        <div className="max-w-md">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search orders by name, phone, takeaway keyword or order #"
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 p-4 lg:grid-cols-3">
         {COLUMNS.map((column) => {
           const columnTickets = tickets
             .filter((ticket) => column.statuses.includes(ticket.status))
+            .filter(matchesSearch)
             .sort((a, b) => new Date(a.placedAt).getTime() - new Date(b.placedAt).getTime())
 
           return (
@@ -326,7 +361,10 @@ function TicketCard({
         <div className="flex min-w-0 flex-1 items-start justify-between gap-2 py-3 pr-3">
           <div className="min-w-0">
             <p className="truncate text-sm font-bold leading-tight tracking-tight">#{ticket.orderNumber}</p>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{ticket.customerName}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {ticket.customerName}
+              {ticket.type === 'TAKEAWAY' ? ' · Pickup' : ''}
+            </p>
           </div>
           <span
             className={cn(

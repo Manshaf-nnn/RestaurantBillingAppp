@@ -27,9 +27,11 @@ export default async function KitchenPage() {
       initialTickets={queue.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
+        type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
         status: order.status,
         tableNumber: order.table?.number ?? null,
         customerName: order.customerName,
+        customerPhone: order.customerPhone,
         notes: order.notes,
         placedAt: order.placedAt.toISOString(),
         estimatedMinutes: order.estimatedMinutes,
