@@ -282,9 +282,29 @@ model Restaurant {
   auditLogs         AuditLog[]
   serviceRequests   ServiceRequest[]
   shifts            StaffShift[]
+  mediaBackups      MediaBackup[]
 
   @@index([isActive])
   @@map("restaurants")
+}
+
+/// Backups of uploaded media for platform-level restore/migration.
+model MediaBackup {
+  id           String   @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  key          String?  // internal key (uploads filename or blob key)
+  originalUrl  String   // URL returned to tenant at upload time
+  backupUrl    String?  // URL in backup storage (Cloudinary) when available
+  contentType  String?
+  size         Int?
+  notes        String?  // optional note about source (uploader, field name)
+
+  createdAt    DateTime @default(now())
+
+  @@index([restaurantId])
+  @@map("media_backups")
 }
 
 // ───────────────────────────────────────────────── identity & access ───────

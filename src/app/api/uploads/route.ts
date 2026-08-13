@@ -7,6 +7,7 @@ import { toAppError } from '@/lib/errors'
 import { isCloudinaryConfigured } from '@/lib/env'
 import { requireTenantUser } from '@/server/auth/guard'
 import { enforceRateLimit } from '@/server/security/rate-limit'
+import { prisma } from '@/server/db/prisma'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,7 +32,7 @@ const ALLOWED: Record<string, string> = {
  */
 export async function POST(request: NextRequest) {
   try {
-    await requireTenantUser()
+    const user = await requireTenantUser()
     await enforceRateLimit('upload')
 
     const form = await request.formData()
@@ -60,7 +61,22 @@ export async function POST(request: NextRequest) {
     const key = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
 
     if (isCloudinaryConfigured()) {
-      return NextResponse.json({ url: await uploadToCloudinary(bytes) })
+      const url = await uploadToCloudinary(bytes)
+      try {
+        await (prisma as any).mediaBackup.create({
+          data: {
+            restaurantId: user.restaurantId,
+            key,
+            originalUrl: url,
+            backupUrl: url,
+            contentType: file.type,
+            size: file.size,
+          },
+        })
+      } catch (e) {
+        // non-fatal: do not break uploads if backup record fails
+      }
+      return NextResponse.json({ url })
     }
 
     if (isNetlify()) {
@@ -68,6 +84,19 @@ export async function POST(request: NextRequest) {
       const store = getStore('menu-media')
       await store.set(key, arrayBuffer, { metadata: { contentType: file.type } })
       // Served back by /api/media/[key].
+      try {
+        await (prisma as any).mediaBackup.create({
+          data: {
+            restaurantId: user.restaurantId,
+            key,
+            originalUrl: `/api/media/${key}`,
+            contentType: file.type,
+            size: file.size,
+          },
+        })
+      } catch (e) {
+        // ignore
+      }
       return NextResponse.json({ url: `/api/media/${key}` })
     }
 
@@ -75,6 +104,19 @@ export async function POST(request: NextRequest) {
     const dir = join(process.cwd(), 'public', 'uploads')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, key), bytes)
+    try {
+      await (prisma as any).mediaBackup.create({
+        data: {
+          restaurantId: user.restaurantId,
+          key,
+          originalUrl: `/uploads/${key}`,
+          contentType: file.type,
+          size: file.size,
+        },
+      })
+    } catch (e) {
+      // ignore
+    }
     return NextResponse.json({ url: `/uploads/${key}` })
   } catch (error) {
     const app = toAppError(error)
