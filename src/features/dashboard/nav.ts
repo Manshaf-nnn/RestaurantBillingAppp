@@ -76,6 +76,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
       { href: '/waiter', label: 'Waiter station', icon: HandPlatter, permission: PERMISSIONS.WAITER_VIEW },
+      { href: '/cashier?mode=takeaway', label: 'Takeaway', icon: HandPlatter, permission: PERMISSIONS.PAYMENT_COLLECT },
       { href: '/cashier', label: 'Cashier', icon: CreditCard, permission: PERMISSIONS.PAYMENT_COLLECT },
       {
         href: '/dashboard/online-payments',
