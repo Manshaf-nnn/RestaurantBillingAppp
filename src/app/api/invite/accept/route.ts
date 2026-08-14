@@ -5,7 +5,7 @@ import { hashPassword, generateToken } from '@/server/auth/password'
 import { createSession } from '@/server/auth/session'
 import { appUrl } from '@/lib/env'
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
