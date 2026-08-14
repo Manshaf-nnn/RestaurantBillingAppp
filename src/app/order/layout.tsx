@@ -15,9 +15,9 @@ export default async function OrderLayout({ children }: { children: React.ReactN
   if (!restaurant) notFound()
 
   return (
-    <div className="min-h-dvh">
+    <div className="min-h-dvh bg-zinc-950 text-white">
       <CartProvider restaurantId={restaurant.id}>
-        <div className="mx-auto min-h-dvh w-full max-w-lg overflow-x-clip bg-background shadow-elevated sm:my-0">
+        <div className="mx-auto min-h-dvh w-full max-w-md relative overflow-x-hidden sm:my-0 shadow-2xl">
           {children}
         </div>
       </CartProvider>
