@@ -283,6 +283,7 @@ model Restaurant {
   serviceRequests   ServiceRequest[]
   shifts            StaffShift[]
   mediaBackups      MediaBackup[]
+  invites           Invite[]
   menuSnapshots     RestaurantMenuSnapshot[]
 
   @@index([isActive])
@@ -367,6 +368,7 @@ model User {
   stockMovements  StockMovement[]
   shifts          StaffShift[]
   handledRequests ServiceRequest[]   @relation("RequestHandledBy")
+  createdInvites  Invite[]
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -404,6 +406,23 @@ model VerificationToken {
 
   @@index([userId, purpose])
   @@map("verification_tokens")
+}
+
+/// Short-lived invite links that create a temporary staff session for a role.
+model Invite {
+  id           String    @id @default(cuid())
+  token        String    @unique
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  role         UserRole
+  expiresAt    DateTime?
+  isActive     Boolean   @default(true)
+  createdById  String?
+  createdBy    User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+
+  @@index([restaurantId, isActive])
+  @@map("invites")
 }
 
 // ─────────────────────────────────────────────────────────────── menu ──────

@@ -135,6 +135,7 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.AUDIT_VIEW,
       },
       { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: PERMISSIONS.SETTINGS_VIEW },
+      { href: '/dashboard/links', label: 'Share links', icon: UsersRound, permission: PERMISSIONS.STAFF_MANAGE },
     ],
   },
 ]

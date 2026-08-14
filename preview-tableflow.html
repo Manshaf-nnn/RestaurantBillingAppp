@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TableFlow — Preview</title>
+<style>
+  :root{
+    --bg:#0b0b0d; --muted:#9aa0a6; --accent:#ff7a2d;
+  }
+  body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:var(--bg);color:#fff}
+  .viewport{max-width:420px;margin:24px auto;border-radius:14px;overflow:hidden;background:linear-gradient(180deg,#070708 0%, #0f1012 60%);box-shadow:0 8px 30px rgba(2,6,23,.6)}
+  .cover{height:220px;position:relative;background-size:cover;background-position:center}
+  .cover .overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,6,23,0.25),rgba(2,6,23,0.7));}
+  .body{padding:18px 20px 28px}
+  .logo-wrap{margin-top:-44px;display:flex;align-items:center;flex-direction:column}
+  .logo{width:84px;height:84px;border-radius:14px;overflow:hidden;background:#111;border:4px solid rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-weight:700;color:white}
+  h1{margin:14px 0 6px;font-size:22px}
+  p.tag{margin:0;color:var(--muted);font-size:13px}
+  .meta{margin-top:10px;display:flex;gap:10px;justify-content:center;color:var(--muted);font-size:12px;align-items:center}
+  /* Marketing card */
+  .marketing{max-width:360px;margin:18px auto 0;padding:14px;border-radius:14px;display:flex;gap:12px;align-items:center;backdrop-filter: blur(6px) saturate(1.05);-webkit-backdrop-filter: blur(6px);border:1px solid rgba(255,255,255,0.06)}
+  .marketing .logo-mark{width:48px;height:48px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#c85a00);display:grid;place-items:center;font-weight:700}
+  .marketing .text small{display:block;color:rgba(255,255,255,0.9);font-weight:600}
+  .marketing .text span{display:block;color:var(--muted);font-size:13px;margin-top:4px}
+  /* Variant when no cover present */
+  .no-cover .cover{height:120px;background:linear-gradient(180deg,#0c0c0e,#131315)}
+  .demo-row{display:flex;gap:18px;padding:18px;justify-content:center;background:transparent}
+  .note{color:var(--muted);font-size:13px;text-align:center;padding:12px}
+</style>
+</head>
+<body>
+
+<!-- WITH COVER -->
+<div class="viewport">
+  <div class="cover" style="background-image:url('https://images.unsplash.com/photo-1541542684-1b4b1c3d3c20?q=80&w=1400&auto=format&fit=crop&s=3f4d1c4f3f2a');">
+    <div class="overlay"></div>
+  </div>
+  <div class="body">
+    <div class="logo-wrap">
+      <div class="logo"> <img src="https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=200&auto=format&fit=crop&s=29a8b2d1" style="width:100%;height:100%;object-fit:cover" alt="logo"> </div>
+      <h1>Nila</h1>
+      <p class="tag">11:00 – 23:30 · <span style="color:#ff6b6b">Closed</span></p>
+      <div class="meta"> <span>📍 Mumbai</span> <span>•</span> <span>⏱ 10–20 min</span> </div>
+    </div>
+
+    <!-- Marketing card blends with cover because of backdrop blur and semi-transparent bg -->
+    <div class="marketing">
+      <div class="logo-mark">TF</div>
+      <div class="text">
+        <small>Powered by <span style="color:var(--accent)">TableFlow</span></small>
+        <span>Smart dining — QR ordering, kitchen, billing and analytics in one screen.</span>
+      </div>
+    </div>
+
+    <div style="margin-top:20px;text-align:center">
+      <div style="background:#0b0b0d;border-radius:12px;padding:18px;color:#fff;font-size:32px;display:inline-block;min-width:140px">5</div>
+    </div>
+
+    <div style="margin-top:18px">
+      <button style="width:100%;padding:14px;border-radius:12px;background:var(--accent);border:0;color:#111;font-weight:700">Continue to the menu →</button>
+    </div>
+
+    <div class="note">No app, no sign-up. Order straight from your phone.</div>
+  </div>
+</div>
+
+<!-- WITHOUT COVER -->
+<div class="viewport no-cover" style="margin-top:28px">
+  <div class="cover"></div>
+  <div class="body">
+    <div class="logo-wrap">
+      <div class="logo"> <img src="https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=200&auto=format&fit=crop&s=29a8b2d1" style="width:100%;height:100%;object-fit:cover" alt="logo"> </div>
+      <h1>Nila</h1>
+      <p class="tag">TableFlow — Smart Dining, Simplified</p>
+    </div>
+
+    <!-- Default card uses gradient/background to look like second picture -->
+    <div class="marketing" style="background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04)">
+      <div class="logo-mark">TF</div>
+      <div class="text">
+        <small>Powered by <span style="color:var(--accent)">TableFlow</span></small>
+        <span>Smart dining — QR ordering, kitchen, billing and analytics in one screen.</span>
+      </div>
+    </div>
+
+    <div style="margin-top:20px;text-align:center">
+      <div style="background:#0b0b0d;border-radius:12px;padding:18px;color:#fff;font-size:32px;display:inline-block;min-width:140px">5</div>
+    </div>
+
+    <div style="margin-top:18px">
+      <button style="width:100%;padding:14px;border-radius:12px;background:var(--accent);border:0;color:#111;font-weight:700">Continue to the menu →</button>
+    </div>
+
+    <div class="note">No app, no sign-up. Order straight from your phone.</div>
+  </div>
+</div>
+
+</body>
+</html>

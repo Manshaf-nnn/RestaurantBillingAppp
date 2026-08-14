@@ -35,43 +35,65 @@ async function uploadToCloudinaryFromUrl(url: string): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
+    // only super-admins may run restores
     await requireSuperAdmin()
-    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-      return NextResponse.json({ error: 'Cloudinary not configured' }, { status: 400 })
-    }
 
-    let restaurantId: string | undefined
-    let dryRun = false
-    const ct = request.headers.get('content-type') || ''
-    if (ct.includes('application/json')) {
-      const body = await request.json()
-      restaurantId = body.restaurantId
-      dryRun = Boolean(body.dryRun)
-    } else {
-      const form = await request.formData()
-      restaurantId = form.get('restaurantId') as string | undefined
-      dryRun = String(form.get('dryRun') ?? '') === 'true'
+    const body = await request.json().catch(() => ({})) as { restaurantId?: string; dryRun?: boolean }
+    const restaurantId = body.restaurantId
+    const dryRun = body.dryRun ?? true
+
+    if (!restaurantId) {
+      return NextResponse.json({ error: 'restaurantId is required' }, { status: 400 })
     }
-    if (!restaurantId) return NextResponse.json({ error: 'restaurantId required' }, { status: 400 })
 
     const backups = await prisma.mediaBackup.findMany({ where: { restaurantId } })
-    const results: Array<{ id: string; original: string; restored?: string; updated: number; error?: string }> = []
+    const results: Array<Record<string, any>> = []
 
     for (const b of backups) {
       try {
         const source = b.backupUrl ?? b.originalUrl
-        const newUrl = await uploadToCloudinaryFromUrl(source)
-        let updated = 0
-        if (!dryRun) {
-          const [f1, f2, r1, oi] = await Promise.all([
-            prisma.food.updateMany({ where: { restaurantId, imageUrl: b.originalUrl }, data: { imageUrl: newUrl } }),
-            prisma.category.updateMany({ where: { restaurantId, imageUrl: b.originalUrl }, data: { imageUrl: newUrl } }),
-            prisma.restaurant.updateMany({ where: { id: restaurantId, logoUrl: b.originalUrl }, data: { logoUrl: newUrl } }),
-            prisma.orderItem.updateMany({ where: { imageUrl: b.originalUrl }, data: { imageUrl: newUrl } }),
-          ])
-          updated = f1.count + f2.count + r1.count + oi.count
-          await prisma.mediaBackup.update({ where: { id: b.id }, data: { backupUrl: newUrl } })
+        let newUrl: string | null = null
+
+        // find any synced snapshots that reference this original URL
+        const snaps = await prisma.restaurantMenuSnapshot.findMany({ where: { restaurantId: b.restaurantId, imageUrl: b.originalUrl } })
+
+        // Dry-run: do not upload; just report what would be done
+        if (dryRun) {
+          newUrl = b.backupUrl ?? b.originalUrl
+          const wouldUpdate = snaps.length
+          results.push({ id: b.id, original: b.originalUrl, restored: newUrl, updated: wouldUpdate })
+          continue
         }
+
+        // Real restore: upload source to Cloudinary and update tenant rows using snapshots
+        newUrl = await uploadToCloudinaryFromUrl(source)
+
+        let updated = 0
+        // Update by snapshot entity mapping — more reliable than matching by URL only
+        for (const s of snaps) {
+          if (s.entityType === 'FOOD') {
+            const res = await prisma.food.updateMany({ where: { id: s.entityId }, data: { imageUrl: newUrl } })
+            updated += res.count
+          } else if (s.entityType === 'CATEGORY') {
+            const res = await prisma.category.updateMany({ where: { id: s.entityId }, data: { imageUrl: newUrl } })
+            updated += res.count
+          }
+        }
+
+        // Also update any restaurant logo that matches the original URL
+        const r = await prisma.restaurant.updateMany({ where: { id: b.restaurantId, logoUrl: b.originalUrl }, data: { logoUrl: newUrl } })
+        updated += r.count
+
+        // As a fallback, update order items that still reference the exact URL
+        const oi = await prisma.orderItem.updateMany({ where: { imageUrl: b.originalUrl }, data: { imageUrl: newUrl } })
+        updated += oi.count
+
+        // Refresh the snapshot rows so admin UI reflects the new image URL
+        await prisma.restaurantMenuSnapshot.updateMany({ where: { restaurantId: b.restaurantId, imageUrl: b.originalUrl }, data: { imageUrl: newUrl } })
+
+        // persist new backupUrl
+        await prisma.mediaBackup.update({ where: { id: b.id }, data: { backupUrl: newUrl } })
+
         results.push({ id: b.id, original: b.originalUrl, restored: newUrl, updated })
       } catch (err: any) {
         results.push({ id: b.id, original: b.originalUrl, updated: 0, error: String(err?.message ?? err) })
