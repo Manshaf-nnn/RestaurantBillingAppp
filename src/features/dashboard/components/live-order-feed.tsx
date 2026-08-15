@@ -10,6 +10,7 @@ import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { EVENTS, type OrderStatusPayload, type OrderSummaryPayload } from '@/lib/realtime/events'
 import { formatMoney } from '@/lib/money'
 import { useSocketEvent } from '@/hooks/use-socket'
+import { LocalTime } from '@/components/local-time'
 
 export interface FeedOrder {
   id: string
@@ -98,10 +99,7 @@ export function LiveOrderFeed({
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
                   {order.customerName} · {order.itemCount} item
                   {order.itemCount === 1 ? '' : 's'} ·{' '}
-                  {new Date(order.placedAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+                  <LocalTime value={order.placedAt} />
                 </p>
               </div>
 

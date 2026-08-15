@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/feedback'
 import { Input } from '@/components/ui/input'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { SpiceLevelIndicator, VegIndicator } from '@/components/ui/status'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
@@ -142,17 +143,17 @@ export function MenuBrowser({
   }, [])
 
   return (
-    <div className="flex min-h-dvh flex-col pb-28 text-white">
+    <div className="guest-ink flex min-h-dvh flex-col pb-28">
       {/* Glass chrome over the restaurant's own cover photo (see BrandTheme). */}
       <header
         ref={headerRef}
-        className="sticky top-0 z-30 border-b border-white/10 bg-black/35 backdrop-blur-2xl"
+        className="guest-chrome sticky top-0 z-30 border-b"
       >
         <div className="flex items-center gap-2.5 px-4 py-3">
           <Link
             href="/order"
             aria-label="Back"
-            className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors active:bg-white/20"
+            className="guest-control flex size-9 shrink-0 items-center justify-center rounded-xl border transition-opacity active:opacity-70"
           >
             <ArrowLeft className="size-4" />
           </Link>
@@ -162,20 +163,21 @@ export function MenuBrowser({
             <img
               src={logoUrl}
               alt=""
-              className="size-9 shrink-0 rounded-xl border border-white/20 object-cover"
+              className="size-9 shrink-0 rounded-xl border border-black/10 object-cover dark:border-white/20"
             />
           ) : null}
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold leading-tight text-white">{restaurantName}</p>
+            <p className="guest-ink truncate text-sm font-semibold leading-tight">{restaurantName}</p>
             {state.table ? (
-              <p className="text-xs text-white/60">
+              <p className="guest-ink-muted text-xs">
                 Table {state.table.tableNumber}
                 {state.table.label ? ` · ${state.table.label}` : ''}
               </p>
             ) : null}
           </div>
 
+          <ThemeToggle className="guest-ink shrink-0 hover:bg-black/5 dark:hover:bg-white/10" />
           <ServiceRequestDialog tableId={state.table?.tableId ?? null} />
         </div>
 
@@ -192,7 +194,7 @@ export function MenuBrowser({
                 </button>
               ) : undefined
             }
-            className="h-11 rounded-xl border-white/15 bg-white/10 text-white placeholder:text-white/45 focus-visible:ring-[rgb(var(--brand-r),var(--brand-g),var(--brand-b))]"
+            className="guest-control h-11 rounded-xl border focus-visible:ring-[rgb(var(--brand-r),var(--brand-g),var(--brand-b))]"
           />
         </div>
 
@@ -206,7 +208,7 @@ export function MenuBrowser({
           >
             <span className="text-red-400">●</span> Non-veg
           </Chip>
-          <span className="my-1 w-px shrink-0 bg-white/15" />
+          <span className="guest-divider my-1 w-px shrink-0" />
           <Chip active={category === 'ALL'} onClick={() => setCategory('ALL')}>
             All
           </Chip>
@@ -242,15 +244,15 @@ export function MenuBrowser({
               backgroundColor: 'rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.12)',
             }}
           >
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-lg">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-black/5 text-lg dark:bg-white/10">
               🎁
             </span>
             <div className="min-w-0 text-xs leading-snug">
-              <p className="font-semibold text-white">
+              <p className="guest-ink font-semibold">
                 Earn {formatPoints(loyalty.earnRateX100 / 100)}{' '}
                 {loyalty.earnRateX100 === 100 ? 'point' : 'points'} for every {currency} 1 you spend
               </p>
-              <p className="text-white/60">
+              <p className="guest-ink-muted">
                 Collect points on every order
                 {loyalty.pointValue > 0 ? ` and redeem them for ${currency} off future visits` : ''}.
               </p>
@@ -268,10 +270,10 @@ export function MenuBrowser({
                 <Sparkles className="size-4" />
               </span>
               <div>
-                <h2 className="text-sm font-bold leading-tight text-white">
+                <h2 className="guest-ink text-sm font-bold leading-tight">
                   Chef&rsquo;s picks &amp; favourites
                 </h2>
-                <p className="text-[11px] text-white/55">Our guests love these — tap to add</p>
+                <p className="guest-ink-muted text-[11px]">Our guests love these — tap to add</p>
               </div>
             </div>
             <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-1">
@@ -281,9 +283,9 @@ export function MenuBrowser({
                   type="button"
                   onClick={() => setActive(item)}
                   style={{ animationDelay: `${index * 70}ms` }}
-                  className="group w-44 shrink-0 animate-fade-up overflow-hidden rounded-2xl border border-white/12 bg-white/[0.07] text-left shadow-[0_10px_30px_rgba(0,0,0,0.4)] backdrop-blur-xl transition-transform active:scale-[0.97]"
+                  className="guest-surface group w-44 shrink-0 animate-fade-up overflow-hidden rounded-2xl border text-left transition-transform active:scale-[0.97]"
                 >
-                  <div className="relative h-28 overflow-hidden bg-white/[0.06]">
+                  <div className="relative h-28 overflow-hidden bg-black/[0.04] dark:bg-white/[0.06]">
                     {item.imageUrl ? (
                       <Image
                         src={item.imageUrl}
@@ -312,7 +314,7 @@ export function MenuBrowser({
                   </div>
                   <div className="flex items-center gap-1.5 p-2.5">
                     <VegIndicator isVeg={item.isVeg} />
-                    <p className="line-clamp-1 text-sm font-semibold text-white">{item.name}</p>
+                    <p className="guest-ink line-clamp-1 text-sm font-semibold">{item.name}</p>
                   </div>
                 </button>
               ))}
@@ -348,11 +350,11 @@ export function MenuBrowser({
             <section key={entry.id}>
               <div
                 style={{ top: headerHeight }}
-                className="sticky z-10 bg-black/35 px-4 py-2.5 backdrop-blur-xl"
+                className="guest-chrome sticky z-10 px-4 py-2.5"
               >
-                <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-white/55">
+                <h2 className="guest-ink-muted text-xs font-bold uppercase tracking-[0.14em]">
                   {entry.name}
-                  <span className="ml-2 font-normal normal-case text-white/35">{items.length}</span>
+                  <span className="guest-ink-faint ml-2 font-normal normal-case">{items.length}</span>
                 </h2>
               </div>
 
@@ -364,9 +366,9 @@ export function MenuBrowser({
                       onClick={() => item.isAvailable && setActive(item)}
                       disabled={!item.isAvailable}
                       className={cn(
-                        'flex w-full items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.07] p-3 text-left shadow-[0_8px_28px_rgba(0,0,0,0.35)] backdrop-blur-xl transition-all',
+                        'guest-surface flex w-full items-start gap-3 rounded-2xl border p-3 text-left transition-all',
                         item.isAvailable
-                          ? 'active:scale-[0.985] active:bg-white/[0.12]'
+                          ? 'active:scale-[0.985] active:opacity-80'
                           : 'cursor-not-allowed opacity-45',
                       )}
                     >
@@ -385,7 +387,7 @@ export function MenuBrowser({
                           ) : null}
                         </div>
 
-                        <h3 className="mt-1 text-[15px] font-semibold leading-tight text-white">
+                        <h3 className="guest-ink mt-1 text-[15px] font-semibold leading-tight">
                           {item.name}
                         </h3>
 
@@ -397,19 +399,19 @@ export function MenuBrowser({
                             {formatMoney(item.price, currency, locale)}
                           </span>
                           {item.compareAt ? (
-                            <span className="text-xs text-white/40 line-through">
+                            <span className="guest-ink-faint text-xs line-through">
                               {formatMoney(item.compareAt, currency, locale)}
                             </span>
                           ) : null}
                         </div>
 
                         {item.description ? (
-                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-white/55">
+                          <p className="guest-ink-muted mt-1.5 line-clamp-2 text-xs leading-relaxed">
                             {item.description}
                           </p>
                         ) : null}
 
-                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/50">
+                        <div className="guest-ink-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
                           <span className="flex items-center gap-1">
                             <Timer className="size-3" /> {item.prepTimeMinutes} min
                           </span>
@@ -427,7 +429,7 @@ export function MenuBrowser({
                         </div>
                       </div>
 
-                      <div className="relative size-24 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/[0.06]">
+                      <div className="guest-surface relative size-24 shrink-0 overflow-hidden rounded-xl border">
                         {item.imageUrl ? (
                           <Image
                             src={item.imageUrl}
@@ -540,7 +542,7 @@ function Chip({
         'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all active:scale-95',
         active
           ? 'border-transparent text-white'
-          : 'border-white/15 bg-white/10 text-white/85 hover:bg-white/15',
+          : 'guest-control border',
       )}
     >
       {children}
@@ -572,7 +574,7 @@ function ServiceRequestDialog({ tableId }: { tableId: string | null }) {
         {/* Glass, not the default outline button — this sits on the dark chrome. */}
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white transition-colors active:bg-white/20"
+          className="guest-control flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition-opacity active:opacity-70"
         >
           <Bell className="size-3.5" /> Call
         </button>

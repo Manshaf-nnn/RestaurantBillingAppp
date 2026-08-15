@@ -8,6 +8,7 @@ import { GuestBill } from '@/features/payments/components/guest-bill'
 import { readPaymentConfig } from '@/features/payments/service'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
+import { BrandTheme } from '@/features/orders/components/brand-theme'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,42 +43,44 @@ export default async function GuestBillPage({
   }
 
   return (
-    <GuestBill
-      restaurantName={restaurant.name}
-      restaurantAddress={[restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null}
-      currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-      paymentConfig={readPaymentConfig(restaurant.paymentConfig)}
-      bill={{
-        id: order.id,
-        orderNumber: order.orderNumber,
-        tableNumber: order.table?.number ?? null,
-        customerName: order.customerName,
-        customerEmail: order.customerEmail,
-        placedAt: order.placedAt.toISOString(),
-        paymentStatus: order.paymentStatus,
-        subtotal: order.subtotal,
-        discountTotal: order.discountTotal,
-        loyaltyDiscount: order.loyaltyDiscount,
-        serviceCharge: order.serviceCharge,
-        taxTotal: order.taxTotal,
-        tipAmount: order.tipAmount,
-        roundingAdj: order.roundingAdj,
-        grandTotal: order.grandTotal,
-        paidTotal: order.paidTotal,
-        taxLabel: restaurant.taxLabel,
-        couponCode: order.coupon?.code ?? null,
-        items: order.items.map((item) => ({
-          id: item.id,
-          name: item.name,
-          optionsLabel: readOptions(item.options)
-            .map((option) => option.name)
-            .join(', '),
-          quantity: item.quantity,
-          unitPrice: item.unitPrice + item.optionsTotal,
-          lineTotal: item.lineTotal,
-        })),
-      }}
-    />
+    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
+      <GuestBill
+        restaurantName={restaurant.name}
+        restaurantAddress={[restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null}
+        currency={restaurant.currency}
+        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        paymentConfig={readPaymentConfig(restaurant.paymentConfig)}
+        bill={{
+          id: order.id,
+          orderNumber: order.orderNumber,
+          tableNumber: order.table?.number ?? null,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+          placedAt: order.placedAt.toISOString(),
+          paymentStatus: order.paymentStatus,
+          subtotal: order.subtotal,
+          discountTotal: order.discountTotal,
+          loyaltyDiscount: order.loyaltyDiscount,
+          serviceCharge: order.serviceCharge,
+          taxTotal: order.taxTotal,
+          tipAmount: order.tipAmount,
+          roundingAdj: order.roundingAdj,
+          grandTotal: order.grandTotal,
+          paidTotal: order.paidTotal,
+          taxLabel: restaurant.taxLabel,
+          couponCode: order.coupon?.code ?? null,
+          items: order.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            optionsLabel: readOptions(item.options)
+              .map((option) => option.name)
+              .join(', '),
+            quantity: item.quantity,
+            unitPrice: item.unitPrice + item.optionsTotal,
+            lineTotal: item.lineTotal,
+          })),
+        }}
+      />
+    </BrandTheme>
   )
 }

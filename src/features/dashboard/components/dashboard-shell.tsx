@@ -39,6 +39,7 @@ import { useSocket, useSocketEvent } from '@/hooks/use-socket'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { logout } from '@/features/auth/actions'
+import { LocalTime } from '@/components/local-time'
 import { markAllRead } from '../actions'
 import { NAV_SECTIONS } from '../nav'
 
@@ -255,10 +256,7 @@ export function DashboardShell({
                             <p className="mt-0.5 text-xs text-muted-foreground">{notification.body}</p>
                           ) : null}
                           <p className="mt-1 text-[11px] text-muted-foreground">
-                            {new Date(notification.createdAt).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
+                            <LocalTime value={notification.createdAt} />
                           </p>
                         </li>
                       ))}

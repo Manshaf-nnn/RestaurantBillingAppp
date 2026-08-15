@@ -115,7 +115,7 @@ export default function CoverPage(props: Props) {
      * everything already fits.
      */
     <div
-      className="relative isolate flex min-h-dvh w-full flex-col items-center justify-between px-4 py-3 text-center text-white selection:bg-orange-500/30 selection:text-white"
+      className="guest-ink relative isolate flex min-h-dvh w-full flex-col items-center justify-between px-4 py-3 text-center selection:bg-orange-500/30"
       style={{ ['--theme-r' as any]: theme.r, ['--theme-g' as any]: theme.g, ['--theme-b' as any]: theme.b }}
     >
       {/*
@@ -134,10 +134,7 @@ export default function CoverPage(props: Props) {
         className="fixed inset-0 z-0 bg-cover bg-center scale-105 pointer-events-none"
         style={{ backgroundImage: `url(${bgImage})` }}
       />
-      <div
-        className="fixed inset-0 z-0 pointer-events-none"
-        style={{ background: 'linear-gradient(180deg,rgba(0,0,0,0.42) 0%,rgba(5,6,10,0.68) 45%,rgba(3,4,8,0.94) 100%)' }}
-      />
+      <div className="guest-scrim fixed inset-0 z-0 pointer-events-none" />
       <div className="fixed inset-0 z-0 backdrop-blur-[12px] pointer-events-none" />
       <div
         className="fixed inset-0 z-0 pointer-events-none"
@@ -152,7 +149,7 @@ export default function CoverPage(props: Props) {
             className="absolute -inset-1 rounded-xl blur-sm opacity-50 group-hover:opacity-75 transition-opacity"
             style={{ backgroundColor: `rgb(${rgb})` }}
           />
-          <div className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-white/40 bg-white shadow-xl shadow-black/80 p-0.5">
+          <div className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-black/10 bg-white p-0.5 shadow-xl shadow-black/20 dark:border-white/40 dark:shadow-black/80">
             {logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoUrl} alt={restaurantName} className="h-full w-full rounded-[10px] object-cover" />
@@ -165,21 +162,21 @@ export default function CoverPage(props: Props) {
         </div>
 
         {/* Restaurant name */}
-        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-white drop-shadow-lg leading-tight">
+        <h1 className="guest-ink mt-2 text-2xl font-extrabold tracking-tight leading-tight">
           {restaurantName}
         </h1>
 
         {tagline && (
-          <p className="mt-0.5 text-[11px] font-medium text-zinc-300 drop-shadow leading-tight max-w-[200px] truncate">
+          <p className="guest-ink-muted mt-0.5 text-[11px] font-medium leading-tight max-w-[200px] truncate">
             {tagline}
           </p>
         )}
 
         {/* Hours + status pill */}
-        <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/40 backdrop-blur-xl px-3 py-1 text-[11px] font-medium text-white shadow-lg">
-          <Clock size={11} className="text-zinc-300 shrink-0" />
-          <span className="text-zinc-200">{openingLabel ?? '11:00 – 23:30'}</span>
-          <span className="text-white/30">•</span>
+        <div className="guest-surface mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-medium">
+          <Clock size={11} className="guest-ink-muted shrink-0" />
+          <span className="guest-ink">{openingLabel ?? '11:00 – 23:30'}</span>
+          <span className="guest-ink-faint">•</span>
           <span className={isOpen
             ? 'inline-flex items-center gap-1 text-emerald-400 font-semibold'
             : 'inline-flex items-center gap-1 text-red-400 font-semibold'
@@ -196,7 +193,7 @@ export default function CoverPage(props: Props) {
       {/* ── 2. LIQUID GLASS CARD ─────────────────────────────────────────────── */}
       <main className="relative z-10 w-full max-w-md flex-1 flex items-center my-2">
         <div
-          className="relative w-full overflow-hidden rounded-[28px] border border-amber-500/30 bg-gradient-to-b from-white/[0.14] via-white/[0.04] to-black/65 backdrop-blur-2xl px-5 py-5 shadow-[0_20px_55px_rgba(0,0,0,0.78),0_0_45px_rgba(249,115,22,0.16)]"
+          className="guest-surface relative w-full overflow-hidden rounded-[28px] border px-5 py-5"
         >
           {/* Corner refraction highlight */}
           <div className="pointer-events-none absolute -top-10 -right-10 h-28 w-28 rounded-full bg-gradient-to-bl from-amber-400/35 via-orange-500/15 to-transparent blur-md" />
@@ -214,9 +211,9 @@ export default function CoverPage(props: Props) {
           <div className="relative">
             {/* Brand header */}
             <div className="flex flex-col items-center text-center">
-              <p className="text-[10px] font-medium tracking-widest text-zinc-300 uppercase">Powered by</p>
+              <p className="guest-ink-muted text-[10px] font-medium tracking-widest uppercase">Powered by</p>
               <div className="mt-0.5 flex items-baseline justify-center">
-                <span className="text-xl font-extrabold tracking-tight text-white">Table</span>
+                <span className="guest-ink text-xl font-extrabold tracking-tight">Table</span>
                 <span className="relative ml-0.5 pr-1 text-2xl font-extrabold italic text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-400 to-orange-500 font-serif">
                   Flow
                   <svg className="absolute -bottom-0.5 left-0 w-full h-1.5" viewBox="0 0 60 10" fill="none">
@@ -229,36 +226,36 @@ export default function CoverPage(props: Props) {
                   </svg>
                 </span>
               </div>
-              <p className="mt-1 text-[9px] font-bold tracking-[0.24em] text-zinc-400 uppercase">
+              <p className="guest-ink-faint mt-1 text-[9px] font-bold tracking-[0.24em] uppercase">
                 SMART DINING, SIMPLIFIED.
               </p>
             </div>
 
             {/* Table number prompt */}
             <div className="mt-4 text-center">
-              <h2 className="text-base font-bold text-white tracking-tight">What is your table number?</h2>
-              <p className="mt-0.5 text-[11px] text-zinc-400">You will find it on the stand or card on your table.</p>
+              <h2 className="guest-ink text-base font-bold tracking-tight">What is your table number?</h2>
+              <p className="guest-ink-muted mt-0.5 text-[11px]">You will find it on the stand or card on your table.</p>
             </div>
 
             {/* Input + submit */}
             <form onSubmit={submit} className="mt-3.5">
               <div
-                className={`relative flex h-14 items-center rounded-xl border bg-black/55 backdrop-blur-md px-3.5 transition-all duration-300 ${
+                className={`guest-control relative flex h-14 items-center rounded-xl border px-3.5 transition-all duration-300 ${
                   focused
                     ? 'border-amber-500/80 ring-4 ring-amber-500/20 shadow-[0_0_28px_rgba(249,115,22,0.28)]'
                     : tableNumber.length > 0
                     ? 'border-amber-500/55 shadow-[0_0_18px_rgba(249,115,22,0.18)]'
-                    : 'border-white/20 hover:border-white/30'
+                    : ''
                 }`}
               >
                 {/* Table icon */}
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/5 text-amber-400 border border-white/10">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-black/10 bg-black/5 text-amber-500 dark:border-white/10 dark:bg-white/5 dark:text-amber-400">
                   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 7h18" /><path d="M5 7v13" /><path d="M19 7v13" />
                     <path d="M8 12h8" /><path d="M12 7v5" />
                   </svg>
                 </div>
-                <div className="mx-3 h-6 w-px bg-white/20 shrink-0" />
+                <div className="guest-divider mx-3 h-6 w-px shrink-0" />
                 <input
                   ref={inputRef}
                   value={tableNumber}
@@ -269,7 +266,7 @@ export default function CoverPage(props: Props) {
                   placeholder="5"
                   aria-label="Table number"
                   aria-describedby={error ? 'table-error' : undefined}
-                  className="w-full bg-transparent text-center text-2xl font-extrabold tracking-wider text-white outline-none placeholder:text-zinc-600"
+                  className="guest-ink w-full bg-transparent text-center text-2xl font-extrabold tracking-wider outline-none placeholder:opacity-40"
                 />
               </div>
 
@@ -299,7 +296,7 @@ export default function CoverPage(props: Props) {
               <FeatureTile icon={<CreditCard size={16} />} label="Pay" />
             </div>
 
-            <p className="mt-3.5 text-center text-[10px] text-zinc-500">
+            <p className="guest-ink-faint mt-3.5 text-center text-[10px]">
               No app, no sign-up. Order straight from your phone.
             </p>
           </div>
@@ -308,7 +305,7 @@ export default function CoverPage(props: Props) {
 
       {/* ── 3. FOOTER ─────────────────────────────────────────────────────────── */}
       <footer className="relative z-10 shrink-0 pb-1">
-        <p className="text-[9px] text-zinc-500 font-medium">
+        <p className="guest-ink-faint text-[9px] font-medium">
           © {new Date().getFullYear()} {restaurantName} · Powered by TableFlow
         </p>
       </footer>
@@ -318,11 +315,11 @@ export default function CoverPage(props: Props) {
 
 function FeatureTile({ icon, label }: { icon: React.ReactNode; label: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md py-2.5 px-1 text-center transition-all duration-200 hover:border-amber-500/30 hover:bg-black/55 hover:scale-[1.04]">
+    <div className="guest-surface flex flex-col items-center justify-center gap-1 rounded-xl border py-2.5 px-1 text-center transition-all duration-200 hover:scale-[1.04]">
       <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/10 text-orange-400 border border-orange-500/20">
         {icon}
       </div>
-      <span className="text-[10px] font-medium text-zinc-300">{label}</span>
+      <span className="guest-ink-muted text-[10px] font-medium">{label}</span>
     </div>
   )
 }

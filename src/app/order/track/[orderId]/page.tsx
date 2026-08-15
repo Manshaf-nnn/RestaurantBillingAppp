@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { OrderTracker } from '@/features/orders/components/order-tracker'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
+import { BrandTheme } from '@/features/orders/components/brand-theme'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,35 +42,37 @@ export default async function TrackOrderPage({
   }
 
   return (
-    <OrderTracker
-      restaurantName={restaurant.name}
-      currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-      order={{
-        id: order.id,
-        orderNumber: order.orderNumber,
-        status: order.status,
-        tableId: order.tableId,
-        tableNumber: order.table?.number ?? null,
-        customerName: order.customerName,
-        grandTotal: order.grandTotal,
-        estimatedMinutes: order.estimatedMinutes,
-        placedAt: order.placedAt.toISOString(),
-        paymentStatus: order.paymentStatus,
-        cancelReason: order.cancelReason,
-        items: order.items.map((item) => ({
-          id: item.id,
-          name: item.name,
-          quantity: item.quantity,
-          lineTotal: item.lineTotal,
-          notes: item.notes,
-          isVeg: item.isVeg,
-          status: item.status,
-          optionsLabel: readOptions(item.options)
-            .map((option) => option.name)
-            .join(' · '),
-        })),
-      }}
-    />
+    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
+      <OrderTracker
+        restaurantName={restaurant.name}
+        currency={restaurant.currency}
+        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        order={{
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          tableId: order.tableId,
+          tableNumber: order.table?.number ?? null,
+          customerName: order.customerName,
+          grandTotal: order.grandTotal,
+          estimatedMinutes: order.estimatedMinutes,
+          placedAt: order.placedAt.toISOString(),
+          paymentStatus: order.paymentStatus,
+          cancelReason: order.cancelReason,
+          items: order.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            lineTotal: item.lineTotal,
+            notes: item.notes,
+            isVeg: item.isVeg,
+            status: item.status,
+            optionsLabel: readOptions(item.options)
+              .map((option) => option.name)
+              .join(' · '),
+          })),
+        }}
+      />
+    </BrandTheme>
   )
 }

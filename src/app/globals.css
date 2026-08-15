@@ -366,3 +366,106 @@
   background: linear-gradient(180deg, rgba(20, 24, 33, 0.82), rgba(18, 21, 29, 0.62)) !important;
   border-color: rgba(255, 255, 255, 0.08) !important;
 }
+
+/* ── Guest ordering: liquid glass in both themes ───────────────────────────────
+ *
+ * The guest flow (landing → menu → cart → tracking → bill) sits on top of the
+ * restaurant's own cover photo. These tokens carry the glass treatment so the
+ * screens themselves never hard-code a colour, which is what previously pinned
+ * the whole flow to dark and made it ignore the light/system setting.
+ *
+ * Light mode frosts *white* over a lightened photo and uses dark ink; dark mode
+ * frosts white at low alpha over a darkened photo and uses light ink. Both keep
+ * the restaurant's sampled accent (--brand-*) untouched, so branding survives
+ * the theme switch.
+ */
+.guest-scrim {
+  /* Light mode still has to carry dark text, so it needs real opacity — but not
+   * so much that the restaurant's cover photo disappears, which is the whole
+   * reason the photo is there. This leaves the image legible as atmosphere
+   * while the frosted surfaces above carry the actual contrast. */
+  background: linear-gradient(
+    180deg,
+    rgba(250, 250, 252, 0.72) 0%,
+    rgba(247, 248, 251, 0.8) 40%,
+    rgba(244, 245, 249, 0.9) 100%
+  );
+}
+.dark .guest-scrim {
+  background: linear-gradient(
+    180deg,
+    rgba(8, 9, 12, 0.82) 0%,
+    rgba(8, 9, 12, 0.9) 40%,
+    rgba(6, 7, 10, 0.96) 100%
+  );
+}
+
+/* A raised surface: menu cards, sheets, summary panels. */
+.guest-surface {
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(15, 18, 25, 0.09);
+  box-shadow: 0 8px 28px rgba(15, 18, 25, 0.08);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+.dark .guest-surface {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+/* Sticky chrome: the header and the category rails. */
+.guest-chrome {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 18, 25, 0.08);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+}
+.dark .guest-chrome {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Inset controls: search field, the "Call" button, back button. */
+.guest-control {
+  background: rgba(15, 18, 25, 0.05);
+  border-color: rgba(15, 18, 25, 0.1);
+  color: rgb(24, 27, 34);
+}
+.dark .guest-control {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgb(255, 255, 255);
+}
+.guest-control::placeholder {
+  color: rgba(15, 18, 25, 0.45);
+}
+.dark .guest-control::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Ink. Named by role so a screen never picks a literal colour. */
+.guest-ink {
+  color: rgb(20, 23, 30);
+}
+.dark .guest-ink {
+  color: rgb(255, 255, 255);
+}
+.guest-ink-muted {
+  color: rgba(20, 23, 30, 0.62);
+}
+.dark .guest-ink-muted {
+  color: rgba(255, 255, 255, 0.55);
+}
+.guest-ink-faint {
+  color: rgba(20, 23, 30, 0.45);
+}
+.dark .guest-ink-faint {
+  color: rgba(255, 255, 255, 0.4);
+}
+.guest-divider {
+  background: rgba(15, 18, 25, 0.12);
+}
+.dark .guest-divider {
+  background: rgba(255, 255, 255, 0.15);
+}

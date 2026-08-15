@@ -28,11 +28,20 @@ const badgeVariants = cva(
 )
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends React.HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {}
 
+/**
+ * Renders a `<span>`, not a `<div>`.
+ *
+ * Badges are routinely placed inline inside a `<p>` — next to a table name, an
+ * order number, a guest's name. `<div>` is not permitted inside `<p>`, so the
+ * browser's parser closes the paragraph early and hoists the div out. The DOM
+ * then no longer matches the tree React rendered, which surfaced as a hydration
+ * error on every screen that put a badge in a sentence.
+ */
 function Badge({ className, variant, size, ...props }: BadgeProps) {
-  return <div className={cn(badgeVariants({ variant, size }), className)} {...props} />
+  return <span className={cn(badgeVariants({ variant, size }), className)} {...props} />
 }
 
 export { Badge, badgeVariants }

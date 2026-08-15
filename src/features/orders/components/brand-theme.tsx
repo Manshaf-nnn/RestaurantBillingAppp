@@ -175,7 +175,7 @@ export function BrandTheme({
      * component is mounted.
      */
     <div
-      className={cn('relative isolate min-h-dvh bg-[#08090c]', className)}
+      className={cn('relative isolate min-h-dvh bg-zinc-50 dark:bg-[#08090c]', className)}
       style={
         {
           '--brand': `${brand.r} ${brand.g} ${brand.b}`,
@@ -196,17 +196,12 @@ export function BrandTheme({
           style={{ backgroundImage: `url(${backdrop})` }}
         />
         <div className="absolute inset-0 backdrop-blur-2xl" />
+        {/* Scrim flips with the theme — see .guest-scrim in globals.css. */}
+        <div className="guest-scrim absolute inset-0" />
         <div
           className="absolute inset-0"
           style={{
-            background:
-              'linear-gradient(180deg, rgba(8,9,12,0.82) 0%, rgba(8,9,12,0.90) 40%, rgba(6,7,10,0.96) 100%)',
-          }}
-        />
-        <div
-          className="absolute inset-0"
-          style={{
-            background: `radial-gradient(120% 60% at 50% 0%, rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.20), transparent 70%)`,
+            background: `radial-gradient(120% 60% at 50% 0%, rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.18), transparent 70%)`,
           }}
         />
       </div>

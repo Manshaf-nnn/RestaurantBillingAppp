@@ -22,7 +22,15 @@ export function PageHeader({
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {/*
+        No `shrink-0`. It kept the action row at its natural width, so a header
+        with several buttons — Reports, with its export set — pushed past a
+        narrow viewport and scrolled the whole page sideways. Allowing it to
+        shrink lets `flex-wrap` do its job and stack the buttons instead.
+      */}
+      {actions ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>
+      ) : null}
     </div>
   )
 }

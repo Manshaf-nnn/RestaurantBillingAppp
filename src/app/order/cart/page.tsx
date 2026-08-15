@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 
 import { CartCheckout } from '@/features/orders/components/cart-checkout'
 import { resolvePublicTenant } from '@/server/db/tenant'
+import { BrandTheme } from '@/features/orders/components/brand-theme'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,13 +14,15 @@ export default async function CartPage() {
   if (!restaurant) notFound()
 
   return (
-    <CartCheckout
-      currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-      taxLabel={restaurant.taxLabel}
-      restaurantName={restaurant.name}
-      loyaltyEnabled={restaurant.loyaltyEnabled}
-      loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
-    />
+    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
+      <CartCheckout
+        currency={restaurant.currency}
+        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        taxLabel={restaurant.taxLabel}
+        restaurantName={restaurant.name}
+        loyaltyEnabled={restaurant.loyaltyEnabled}
+        loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
+      />
+    </BrandTheme>
   )
 }
