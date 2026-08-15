@@ -723,6 +723,9 @@ model Order {
   @@index([restaurantId, status, placedAt])
   @@index([restaurantId, paymentStatus])
   @@index([restaurantId, placedAt])
+  /// Lets /api/pulse read MAX("updatedAt") per restaurant as an index scan.
+  /// Every station polls that, so it has to stay O(1) as history grows.
+  @@index([restaurantId, updatedAt])
   @@index([restaurantId, tableId, status])
   @@index([customerId])
   @@index([guestSessionId])

@@ -283,7 +283,7 @@ export function CashierBoard({
 
   return (
     <OpsShell title="Cashier" subtitle={restaurant.name} user={user}>
-      <AutoRefresh intervalMs={6000} />
+      <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[
           { label: 'Open bills', value: bills.length, tone: 'warning' },

@@ -22,7 +22,7 @@ export default async function AdminPage() {
 
   return (
     <>
-      <AutoRefresh intervalMs={12000} />
+      <AutoRefresh intervalMs={12000} scope="none" />
       <PageHeader
         title="Restaurants"
         description="Review sign-ups, approve new restaurants, and manage every tenant on the platform."

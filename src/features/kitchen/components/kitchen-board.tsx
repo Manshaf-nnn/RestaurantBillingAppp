@@ -223,7 +223,7 @@ export function KitchenBoard({
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >
-      <AutoRefresh intervalMs={5000} />
+      <AutoRefresh intervalMs={2500} />
       <OpsStats
         items={[
           { label: 'New', value: live.pending, tone: 'warning' },

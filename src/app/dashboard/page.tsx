@@ -73,7 +73,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <AutoRefresh intervalMs={15000} />
+      <AutoRefresh intervalMs={10000} />
       <PageHeader
         title={`Good ${greeting()}, ${user.name.split(' ')[0]}`}
         description={`Here is how ${restaurant.name} is doing today.`}

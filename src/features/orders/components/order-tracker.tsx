@@ -29,8 +29,19 @@ import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
+import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { createServiceRequest, updateGuestOrderItems } from '../actions'
+
+/** What the guest is told when their order reaches each stage. */
+const STATUS_MESSAGES: Partial<Record<OrderStatus, string>> = {
+  ACCEPTED: 'The kitchen accepted your order',
+  PREPARING: 'Your food is being prepared',
+  READY: 'Your order is ready',
+  SERVED: 'Your food has been served — enjoy!',
+  COMPLETED: 'Thanks for dining with us',
+  CANCELLED: 'Your order was cancelled',
+}
 
 const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
   { status: 'PENDING', label: 'Order received', description: 'We have your order', icon: Check },
@@ -86,26 +97,36 @@ export function OrderTracker({
     setDraftItems(initial.items.map((item) => ({ id: item.id, name: item.name, quantity: item.quantity })))
   }, [initial.items])
 
-  // Re-sync when polling (realtime off / serverless).
-  React.useEffect(() => setStatus(initial.status), [initial.status])
   const { play } = useNotificationSound()
+
+  // Re-sync when polling (realtime off / serverless).
+  //
+  // On a serverless host there is no socket event to react to, so the chime and
+  // the "your order is ready" message have to be driven from the refreshed
+  // props — otherwise a guest watching this screen sees the timeline advance in
+  // silence and can miss that their food is ready.
+  const lastStatus = React.useRef(initial.status)
+  React.useEffect(() => {
+    setStatus(initial.status)
+    if (isRealtimeEnabled()) return
+    if (lastStatus.current === initial.status) return
+
+    lastStatus.current = initial.status
+    play(initial.status === 'READY' || initial.status === 'SERVED' ? 'ready' : 'new-order')
+
+    const message = STATUS_MESSAGES[initial.status]
+    if (message) toast.success(message)
+  }, [initial.status, play])
 
   useOrderRoom(initial.id)
 
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
     if (payload.orderId !== initial.id) return
     setStatus(payload.status)
+    lastStatus.current = payload.status
     play(payload.status === 'READY' || payload.status === 'SERVED' ? 'ready' : 'new-order')
 
-    const messages: Partial<Record<OrderStatus, string>> = {
-      ACCEPTED: 'The kitchen accepted your order',
-      PREPARING: 'Your food is being prepared',
-      READY: 'Your order is ready',
-      SERVED: 'Your food has been served — enjoy!',
-      COMPLETED: 'Thanks for dining with us',
-      CANCELLED: 'Your order was cancelled',
-    }
-    const message = messages[payload.status]
+    const message = STATUS_MESSAGES[payload.status]
     if (message) toast.success(message)
     router.refresh()
   })
@@ -143,7 +164,7 @@ export function OrderTracker({
 
   return (
     <div className="flex min-h-dvh flex-col pb-8">
-      <AutoRefresh intervalMs={6000} />
+      <AutoRefresh intervalMs={3000} scope={`order:${initial.id}`} />
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back to menu">
           <Link href="/order/menu">

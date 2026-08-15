@@ -261,7 +261,7 @@ export function WaiterBoard({
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >
-      <AutoRefresh intervalMs={5000} />
+      <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[
           { label: 'Ready to serve', value: ready.length, tone: 'success' },

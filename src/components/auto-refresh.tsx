@@ -4,52 +4,64 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 
 import { isRealtimeEnabled, REALTIME_POLL_MS } from '@/lib/realtime/client'
+import { usePulse } from '@/hooks/use-pulse'
 
 /**
  * Keeps a page fresh when there is no realtime server (e.g. on Netlify).
  *
  * When realtime push is available this renders nothing and does nothing —
- * live events handle updates. Otherwise it re-fetches the route's server data
- * on an interval, and pauses while the tab is hidden to save resources.
+ * live events handle updates.
+ *
+ * Otherwise it watches `/api/pulse`, a single cheap query that reports whether
+ * anything changed, and only re-renders the route when it actually did.
+ * Re-rendering blind on a timer meant re-running every query on the page just to
+ * discover nothing had happened; checking is now cheap enough to do far more
+ * often, so stations feel live while doing much less work overall.
+ *
+ * `scope` decides what "changed" means:
+ *   'staff'        — the signed-in restaurant (kitchen, waiter, cashier, dashboard)
+ *   'order:<id>'   — one guest's order (tracking, bill)
+ *   'none'         — no pulse available (the platform admin console, which is
+ *                    not scoped to a restaurant); falls back to a plain timer.
  */
-export function AutoRefresh({ intervalMs = REALTIME_POLL_MS }: { intervalMs?: number }) {
+export function AutoRefresh({
+  intervalMs = REALTIME_POLL_MS,
+  scope = 'staff',
+  onChange,
+}: {
+  intervalMs?: number
+  scope?: string
+  /** Extra work on a detected change — e.g. the kitchen's new-order chime. */
+  onChange?: () => void
+}) {
   const router = useRouter()
+  const live = isRealtimeEnabled()
 
+  const refresh = React.useCallback(() => {
+    onChange?.()
+    React.startTransition(() => {
+      router.refresh()
+    })
+  }, [router, onChange])
+
+  usePulse(scope, intervalMs, refresh, !live && scope !== 'none')
+
+  // Fallback for scopes the pulse cannot describe.
   React.useEffect(() => {
-    if (isRealtimeEnabled()) return
+    if (live || scope !== 'none') return
 
     let timer: ReturnType<typeof setInterval> | null = null
-    // A refresh re-runs every server query for the route. On a slow database a
-    // refresh can outlast the interval, so never stack a second one on top of
-    // an in-flight request — that is what turns a slow page into a stuck one.
-    let inFlight = false
-    let disposed = false
 
-    const refresh = () => {
-      if (inFlight || disposed || document.visibilityState !== 'visible') return
-      inFlight = true
-      React.startTransition(() => {
-        router.refresh()
-      })
-      // `router.refresh()` gives no completion signal, so gate on a short floor
-      // rather than letting the next tick pile on immediately.
-      window.setTimeout(() => {
-        inFlight = false
-      }, Math.min(intervalMs, 2_000))
+    const run = () => {
+      if (document.visibilityState === 'visible') refresh()
     }
-
     const start = () => {
-      if (timer) return
-      timer = setInterval(refresh, intervalMs)
+      if (!timer) timer = setInterval(run, intervalMs)
     }
-
     const stop = () => {
       if (timer) clearInterval(timer)
       timer = null
     }
-
-    // Only poll while the tab is actually being looked at. Coming back to a
-    // backgrounded tab refreshes once, immediately, then resumes the interval.
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         refresh()
@@ -63,13 +75,10 @@ export function AutoRefresh({ intervalMs = REALTIME_POLL_MS }: { intervalMs?: nu
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
-      disposed = true
       stop()
-      // Previously omitted — every mount leaked a listener, so navigating
-      // between dashboard screens multiplied the refreshes fired on each focus.
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [router, intervalMs])
+  }, [live, scope, intervalMs, refresh])
 
   return null
 }

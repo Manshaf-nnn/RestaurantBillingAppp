@@ -186,7 +186,7 @@ export function GuestBill({
 
   return (
     <div className="flex min-h-dvh flex-col pb-8">
-      <AutoRefresh intervalMs={7000} />
+      <AutoRefresh intervalMs={4000} scope={`order:${bill.id}`} />
       <header className="no-print sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back">
           <Link href={`/order/track/${bill.id}`}>

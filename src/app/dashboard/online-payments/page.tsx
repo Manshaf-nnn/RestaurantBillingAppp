@@ -32,7 +32,7 @@ export default async function OnlinePaymentsPage() {
 
   return (
     <>
-      <AutoRefresh intervalMs={12000} />
+      <AutoRefresh intervalMs={8000} />
       <PageHeader
         title="Online payments"
         description="Bank transfers and online payments your guests declared — cross-check them against your account and confirm."

@@ -50,6 +50,9 @@ const PUBLIC_API = [
   // Menu photos, logos and covers. Guests are anonymous, and short-circuiting
   // here also skips two JWT verifications per image on every page of the menu.
   '/api/media/',
+  // The change detector every station polls. It authenticates itself, and this
+  // is now the hottest route in the app — skip the duplicate work here.
+  '/api/pulse',
 ]
 
 function isProtected(pathname: string) {
