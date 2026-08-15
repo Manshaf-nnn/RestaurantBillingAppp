@@ -18,7 +18,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
-import { printKitchenTicket } from '@/features/printing/print'
+import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
 
 export interface KitchenTicket {
   id: string
@@ -73,11 +73,13 @@ export function KitchenBoard({
   initialStats,
   user,
   restaurantName,
+  paperWidth,
 }: {
   initialTickets: KitchenTicket[]
   initialStats: KitchenStats
   user: { name: string; role: string }
   restaurantName: string
+  paperWidth: PaperWidth
 }) {
   const [tickets, setTickets] = React.useState(initialTickets)
   const [stats, setStats] = React.useState(initialStats)
@@ -285,6 +287,7 @@ export function KitchenBoard({
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
                       restaurantName={restaurantName}
+                      paperWidth={paperWidth}
                     />
                   ))}
                 </AnimatePresence>
@@ -304,6 +307,7 @@ function TicketCard({
   pending,
   onAdvance,
   restaurantName,
+  paperWidth,
 }: {
   ticket: KitchenTicket
   accent: string
@@ -311,6 +315,7 @@ function TicketCard({
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
   restaurantName: string
+  paperWidth: PaperWidth
 }) {
   const [elapsed, setElapsed] = React.useState(() => minutesSince(ticket.placedAt))
 
@@ -419,7 +424,7 @@ function TicketCard({
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => printKitchenTicket(ticket, restaurantName)}
+          onClick={() => printKitchenTicket(ticket, restaurantName, paperWidth)}
           aria-label="Print ticket"
           title="Print ticket"
         >

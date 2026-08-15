@@ -9,7 +9,7 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
-import { paymentSettingsSchema, restaurantSettingsSchema } from './schema'
+import { paymentSettingsSchema, printerSettingsSchema, restaurantSettingsSchema } from './schema'
 
 export async function updateRestaurantSettings(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
@@ -103,5 +103,41 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
       return { id: user.restaurantId }
     },
     'Payment settings saved.',
+  )
+}
+
+export async function updatePrinterSettings(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    printerSettingsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: {
+          printerConfig: {
+            receipt: { width: data.receiptWidth },
+            kitchen: { width: data.kitchenWidth },
+          } as Prisma.InputJsonValue,
+        },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        after: { printer: { receipt: data.receiptWidth, kitchen: data.kitchenWidth } },
+      })
+
+      revalidatePath('/dashboard/settings')
+      revalidatePath('/cashier')
+      revalidatePath('/kitchen')
+      return { id: user.restaurantId }
+    },
+    'Printer settings saved.',
   )
 }

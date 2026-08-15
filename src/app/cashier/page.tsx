@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { CashierBoard } from '@/features/cashier/components/cashier-board'
+import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
@@ -55,6 +56,9 @@ export default async function CashierPage({
         currency: restaurant.currency,
         locale: restaurant.locale === 'en' ? 'en-IN' : restaurant.locale,
         taxLabel: restaurant.taxLabel,
+        // Paper size the owner chose in Settings — receipts printed at the wrong
+        // width waste a third of an 80 mm roll, or overflow a 58 mm one.
+        paper: readPaperWidths(restaurant.printerConfig),
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
         phone: restaurant.phone,
       }}

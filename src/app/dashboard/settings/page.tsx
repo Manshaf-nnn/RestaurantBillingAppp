@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 
 import { SettingsView } from '@/features/settings/components/settings-view'
 import { readPaymentConfig } from '@/features/payments/service'
+import { readPaperWidths } from '@/features/printing/paper'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -39,6 +40,10 @@ export default async function SettingsPage() {
         loyaltyEnabled: restaurant.loyaltyEnabled,
         loyaltyEarnRate: restaurant.loyaltyEarnRateX100 / 100,
         loyaltyPointValue: restaurant.loyaltyPointValue / 100,
+        printer: {
+          receiptWidth: readPaperWidths(restaurant.printerConfig).receipt,
+          kitchenWidth: readPaperWidths(restaurant.printerConfig).kitchen,
+        },
         payment: {
           cash: payment.cash ?? true,
           card: payment.card ?? true,

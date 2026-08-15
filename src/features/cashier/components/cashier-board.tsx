@@ -44,7 +44,7 @@ import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/rea
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { downloadReceipt, printReceipt } from '@/features/printing/print'
+import { downloadReceipt, printReceipt, type PaperWidth } from '@/features/printing/print'
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import {
@@ -106,6 +106,8 @@ export function CashierBoard({
     currency: string
     locale: string
     taxLabel: string
+    /** Thermal paper widths chosen in Settings. */
+    paper: { receipt: PaperWidth; kitchen: PaperWidth }
     addressLine: string | null
     phone: string | null
   }
@@ -537,7 +539,7 @@ export function CashierBoard({
                             onClick={(e) => {
                               e.stopPropagation()
                               try {
-                                printReceipt(buildReceiptForBill(bill, restaurant))
+                                printReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
                               } catch (err) {
                                 toast.error('Unable to print receipt')
                               }
@@ -593,6 +595,8 @@ function buildReceiptForBill(
     currency: string
     locale: string
     taxLabel: string
+    /** Thermal paper widths chosen in Settings. */
+    paper: { receipt: PaperWidth; kitchen: PaperWidth }
     addressLine: string | null
     phone: string | null
   },
@@ -644,6 +648,8 @@ function BillingDetailPanel({
     currency: string
     locale: string
     taxLabel: string
+    /** Thermal paper widths chosen in Settings. */
+    paper: { receipt: PaperWidth; kitchen: PaperWidth }
     addressLine: string | null
     phone: string | null
   }
@@ -655,7 +661,7 @@ function BillingDetailPanel({
 
   const print = () => {
     try {
-      printReceipt(buildReceiptForBill(bill, restaurant))
+      printReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
     } catch {
       toast.error('Unable to print receipt')
     }
@@ -663,7 +669,7 @@ function BillingDetailPanel({
 
   const download = () => {
     try {
-      downloadReceipt(buildReceiptForBill(bill, restaurant))
+      downloadReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
       toast.success('Receipt saved')
     } catch {
       toast.error('Unable to save receipt')
@@ -841,6 +847,8 @@ function BillPanel({
     currency: string
     locale: string
     taxLabel: string
+    /** Thermal paper widths chosen in Settings. */
+    paper: { receipt: PaperWidth; kitchen: PaperWidth }
     addressLine: string | null
     phone: string | null
   }
@@ -898,7 +906,7 @@ function BillPanel({
   }
 
   const print = () => {
-    printReceipt(buildReceiptForBill(bill, restaurant, method))
+    printReceipt(buildReceiptForBill(bill, restaurant, method), restaurant.paper.receipt)
   }
 
   return (

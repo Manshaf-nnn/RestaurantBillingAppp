@@ -16,7 +16,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
-import { updatePaymentSettings, updateRestaurantSettings } from '../actions'
+import { cn } from '@/lib/utils'
+import { updatePaymentSettings, updatePrinterSettings, updateRestaurantSettings } from '../actions'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
 const TIMEZONES = [
@@ -65,6 +66,10 @@ export interface SettingsData {
     bankBranch: string
     receiptWhatsapp: string
   }
+  printer: {
+    receiptWidth: 58 | 80
+    kitchenWidth: 58 | 80
+  }
 }
 
 export function SettingsView({ initial, canManage }: { initial: SettingsData; canManage: boolean }) {
@@ -72,6 +77,8 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
   const [payment, setPayment] = React.useState(initial.payment)
   const [savingProfile, setSavingProfile] = React.useState(false)
   const [savingPayments, setSavingPayments] = React.useState(false)
+  const [printer, setPrinter] = React.useState(initial.printer)
+  const [savingPrinter, setSavingPrinter] = React.useState(false)
 
   const set = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -92,6 +99,14 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
     else toast.error(result.error)
   }
 
+  const savePrinter = async () => {
+    setSavingPrinter(true)
+    const result = await updatePrinterSettings(printer)
+    setSavingPrinter(false)
+    if (result.ok) toast.success('Printer settings saved')
+    else toast.error(result.error)
+  }
+
   return (
     <>
       <PageHeader title="Settings" description="Your restaurant profile, tax, payments and loyalty" />
@@ -102,6 +117,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           <TabsTrigger value="billing">Tax & charges</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="loyalty">Loyalty</TabsTrigger>
+          <TabsTrigger value="printer">Printer</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-4">
@@ -329,6 +345,44 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
             </Button>
           ) : null}
         </TabsContent>
+
+        <TabsContent value="printer" className="space-y-4">
+          <SectionCard title="Receipt printer">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Choose the paper your thermal printer is loaded with. This sets the page
+              size and text scale of everything you print, so getting it wrong either
+              wastes a third of the roll or overflows it.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Customer receipts" hint="Bills printed from the cashier screen">
+                <PaperChoice
+                  value={printer.receiptWidth}
+                  disabled={!canManage}
+                  onChange={(receiptWidth) => setPrinter((c) => ({ ...c, receiptWidth }))}
+                />
+              </Field>
+              <Field label="Kitchen tickets" hint="Order tickets printed from the kitchen display">
+                <PaperChoice
+                  value={printer.kitchenWidth}
+                  disabled={!canManage}
+                  onChange={(kitchenWidth) => setPrinter((c) => ({ ...c, kitchenWidth }))}
+                />
+              </Field>
+            </div>
+
+            <p className="mt-4 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+              Any printer your computer or tablet can already print to will work — connect
+              it over USB, network or Bluetooth and install its driver, then it appears in
+              the print dialog. No extra setup is needed here.
+            </p>
+          </SectionCard>
+
+          {canManage ? (
+            <Button onClick={savePrinter} loading={savingPrinter}>
+              Save printer settings
+            </Button>
+          ) : null}
+        </TabsContent>
       </Tabs>
     </>
   )
@@ -350,5 +404,35 @@ function PaymentToggle({
       <span className="text-sm font-medium">{label}</span>
       <Switch checked={checked} onCheckedChange={onChange} disabled={disabled} />
     </label>
+  )
+}
+
+/** 58 mm / 80 mm picker — the two standard thermal roll sizes. */
+function PaperChoice({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: 58 | 80
+  onChange: (value: 58 | 80) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+      {([58, 80] as const).map((width) => (
+        <button
+          key={width}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(width)}
+          className={cn(
+            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors disabled:opacity-50',
+            value === width ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
+          )}
+        >
+          {width} mm
+        </button>
+      ))}
+    </div>
   )
 }

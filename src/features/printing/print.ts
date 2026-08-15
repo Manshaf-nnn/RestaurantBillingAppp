@@ -9,7 +9,8 @@
  * operating system, and degrades to "save as PDF" anywhere else.
  */
 
-export type PaperWidth = 58 | 80
+export type { PaperWidth } from './paper'
+import type { PaperWidth } from './paper'
 
 interface TicketItem {
   name: string

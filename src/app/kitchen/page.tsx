@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { KitchenBoard } from '@/features/kitchen/components/kitchen-board'
+import { readPaperWidths } from '@/features/printing/paper'
 import { getKitchenQueue, getKitchenStats, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -22,6 +23,7 @@ export default async function KitchenPage() {
   return (
     <KitchenBoard
       restaurantName={restaurant.name}
+      paperWidth={readPaperWidths(restaurant.printerConfig).kitchen}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       initialStats={stats}
       initialTickets={queue.map((order) => ({

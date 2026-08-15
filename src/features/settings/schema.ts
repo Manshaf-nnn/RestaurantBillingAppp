@@ -43,3 +43,16 @@ export const paymentSettingsSchema = z.object({
   receiptWhatsapp: z.string().trim().max(24).optional().or(z.literal('')),
 })
 export type PaymentSettingsInput = z.infer<typeof paymentSettingsSchema>
+
+/**
+ * Receipt and kitchen-ticket paper width, in millimetres.
+ *
+ * 58 mm and 80 mm are the two standard thermal roll sizes. The width decides the
+ * page size and font scale of the printed document, so a receipt formatted for
+ * 58 mm on an 80 mm printer wastes a third of the paper and prints small.
+ */
+export const printerSettingsSchema = z.object({
+  receiptWidth: z.coerce.number().refine((v) => v === 58 || v === 80, 'Choose 58 mm or 80 mm'),
+  kitchenWidth: z.coerce.number().refine((v) => v === 58 || v === 80, 'Choose 58 mm or 80 mm'),
+})
+export type PrinterSettingsInput = z.infer<typeof printerSettingsSchema>
