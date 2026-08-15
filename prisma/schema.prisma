@@ -700,6 +700,22 @@ model Order {
   estimatedMinutes Int        @default(0)
   guestCount    Int?
 
+  /// Parked at the counter so the cashier can serve someone else and come back.
+  /// A held bill stays out of the active queue but is never cancelled.
+  heldAt        DateTime?
+  holdReason    String?
+
+  /// Split lineage — this bill was created by splitting `splitFrom`.
+  splitFromId   String?
+  splitFrom     Order?        @relation("OrderSplit", fields: [splitFromId], references: [id], onDelete: SetNull)
+  splits        Order[]       @relation("OrderSplit")
+
+  /// Merge lineage — this bill's items moved into `mergedInto`, and it was
+  /// closed. Kept rather than deleted so the day's history stays auditable.
+  mergedIntoId  String?
+  mergedInto    Order?        @relation("OrderMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom    Order[]       @relation("OrderMerge")
+
   placedAt      DateTime      @default(now())
   acceptedAt    DateTime?
   preparingAt   DateTime?
@@ -729,6 +745,7 @@ model Order {
   @@index([restaurantId, tableId, status])
   @@index([customerId])
   @@index([guestSessionId])
+  @@index([restaurantId, heldAt])
   @@map("orders")
 }
 
