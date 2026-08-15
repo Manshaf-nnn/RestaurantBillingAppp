@@ -8,6 +8,52 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
+/** Longest edge kept after compression — plenty for a full-width phone photo. */
+const MAX_EDGE = 1600
+const WEBP_QUALITY = 0.82
+
+/**
+ * Shrink a photo in the browser before it is uploaded.
+ *
+ * Menu photos come straight from a phone camera at 3–8 MB, which is slow to
+ * upload on restaurant wifi, heavy to store, and slow for guests to download
+ * over mobile data. Re-encoding to WebP at a sane size typically cuts that to
+ * 80–200 KB with no visible difference at the sizes we actually render.
+ *
+ * Anything unexpected (an unsupported codec, a browser without WebP encoding,
+ * a result that came out *larger*) falls back to the original file — the upload
+ * must not fail just because the optimisation did.
+ */
+async function compressImage(file: File): Promise<File> {
+  // Animated GIFs lose their animation through a canvas, so leave them alone.
+  if (file.type === 'image/gif') return file
+
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+    const width = Math.round(bitmap.width * scale)
+    const height = Math.round(bitmap.height * scale)
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) return file
+    context.drawImage(bitmap, 0, 0, width, height)
+    bitmap.close()
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/webp', WEBP_QUALITY),
+    )
+    if (!blob || blob.size >= file.size) return file
+
+    const name = file.name.replace(/\.[^.]+$/, '') || 'image'
+    return new File([blob], `${name}.webp`, { type: 'image/webp' })
+  } catch {
+    return file
+  }
+}
+
 /**
  * Uploads an image to `/api/uploads` and returns the resulting URL. Falls back
  * to pasting a URL directly, so it works whether or not Cloudinary is set up.
@@ -36,8 +82,9 @@ export function ImageUpload({
     }
     setUploading(true)
     try {
+      const optimised = await compressImage(file)
       const body = new FormData()
-      body.append('file', file)
+      body.append('file', optimised)
       const response = await fetch('/api/uploads', { method: 'POST', body })
       const data = (await response.json()) as { url?: string; error?: string }
       if (!response.ok || !data.url) {

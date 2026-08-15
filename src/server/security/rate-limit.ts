@@ -11,15 +11,32 @@ export interface RateLimitRule {
   windowSeconds: number
 }
 
-/** Tuned per surface: auth is strict, browsing is generous. */
+/**
+ * Tuned per surface: auth is strict, browsing is generous.
+ *
+ * A note on the guest-facing limits. Every diner in a restaurant is on the same
+ * wifi, so they all share one public IP — an IP-keyed order limit would let the
+ * first few tables order and then block the whole room for the rest of the
+ * window. `placeOrder` and `serviceRequest` are therefore keyed on the guest
+ * session cookie (one phone), with the far looser `*Burst` rules below applied
+ * per IP purely as an abuse backstop for someone scripting fresh cookies.
+ */
 export const RATE_LIMITS = {
   login: { limit: 8, windowSeconds: 300 },
   register: { limit: 5, windowSeconds: 3600 },
   passwordReset: { limit: 5, windowSeconds: 3600 },
+  /** per guest device */
   placeOrder: { limit: 12, windowSeconds: 600 },
+  /** per venue IP — sized for a full dining room, not one phone */
+  placeOrderBurst: { limit: 240, windowSeconds: 600 },
+  /** per guest device */
   serviceRequest: { limit: 10, windowSeconds: 300 },
-  publicRead: { limit: 240, windowSeconds: 60 },
-  mutation: { limit: 120, windowSeconds: 60 },
+  /** per venue IP */
+  serviceRequestBurst: { limit: 200, windowSeconds: 300 },
+  // Also per IP, and also shared by the whole venue: guests browsing the menu
+  // and staff devices polling their stations all arrive from one address.
+  publicRead: { limit: 600, windowSeconds: 60 },
+  mutation: { limit: 300, windowSeconds: 60 },
   upload: { limit: 30, windowSeconds: 300 },
 } satisfies Record<string, RateLimitRule>
 

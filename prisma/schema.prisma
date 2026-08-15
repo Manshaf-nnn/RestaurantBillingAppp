@@ -283,6 +283,7 @@ model Restaurant {
   serviceRequests   ServiceRequest[]
   shifts            StaffShift[]
   mediaBackups      MediaBackup[]
+  mediaAssets       MediaAsset[]
   invites           Invite[]
   menuSnapshots     RestaurantMenuSnapshot[]
 
@@ -291,6 +292,39 @@ model Restaurant {
 }
 
 /// Backups of uploaded media for platform-level restore/migration.
+/// Durable image storage.
+///
+/// Uploaded image bytes live *in the database*, not on the host's disk or in a
+/// host-scoped blob store. This is deliberate: Netlify Blobs and the build
+/// filesystem are scoped to a Netlify site, so moving the site to another
+/// Netlify account (or simply redeploying onto a fresh one) silently destroys
+/// every uploaded photo while the database still points at them. Postgres is
+/// the only store that survives that move, so it is the source of truth and
+/// nothing ever needs "restoring".
+model MediaAsset {
+  id           String     @id @default(cuid())
+  restaurantId String?
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
+
+  /// public filename — `<timestamp>-<hex>.<ext>`, served at /api/media/<key>
+  key          String     @unique
+  contentType  String
+  size         Int
+  /// sha-256 of `data`, used as a strong ETag for conditional requests
+  checksum     String
+  /// the image itself (bytea)
+  data         Bytes
+
+  /// mirrored copy on a CDN (Cloudinary) when one is configured; the row is
+  /// still authoritative, so losing the CDN account costs performance, not data
+  cdnUrl       String?
+
+  createdAt    DateTime   @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@map("media_assets")
+}
+
 model MediaBackup {
   id           String   @id @default(cuid())
   restaurantId String

@@ -1,9 +1,21 @@
 import 'server-only'
 
+import { unstable_cache } from 'next/cache'
 import type { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import { percentChange } from '@/lib/utils'
+
+/**
+ * How long the trailing-window analytics may lag.
+ *
+ * The dashboard re-renders on a timer, and these are multi-day aggregations
+ * over `order_items` — the most expensive queries in the app. Recomputing a
+ * 30-day best-sellers list every fifteen seconds is pure waste: a minute of
+ * staleness is invisible on a 30-day window, while the live figures (today's
+ * revenue, open orders, the order feed) stay uncached and exact.
+ */
+const ANALYTICS_TTL_SECONDS = 60
 
 export function dayRange(offsetDays = 0): { start: Date; end: Date } {
   const start = new Date()
@@ -30,70 +42,81 @@ export interface DashboardStats {
   lowStockCount: number
 }
 
-/** Headline numbers for the dashboard hero row, each with a day-over-day delta. */
+/**
+ * Headline numbers for the dashboard hero row, each with a day-over-day delta.
+ *
+ * Deliberately one round trip. This was nine parallel queries, which is fine
+ * against a local database but not against serverless Postgres: each query pays
+ * its own network latency, and the dashboard re-runs this on an interval. The
+ * work is trivial for Postgres — it is the round trips that cost — so every
+ * figure is gathered as a scalar subquery in a single statement.
+ */
 export async function getDashboardStats(restaurantId: string): Promise<DashboardStats> {
   const today = dayRange(0)
   const yesterday = dayRange(1)
 
-  const [
-    todayAgg,
-    yesterdayAgg,
-    tablesTotal,
-    tablesOccupied,
-    customersToday,
-    newCustomers,
-    pendingOrders,
-    unpaid,
-    lowStock,
-  ] = await Promise.all([
-    prisma.order.aggregate({
-      where: {
-        restaurantId,
-        status: { notIn: ['CANCELLED'] },
-        placedAt: { gte: today.start, lt: today.end },
-      },
-      _sum: { grandTotal: true },
-      _count: true,
-    }),
-    prisma.order.aggregate({
-      where: {
-        restaurantId,
-        status: { notIn: ['CANCELLED'] },
-        placedAt: { gte: yesterday.start, lt: yesterday.end },
-      },
-      _sum: { grandTotal: true },
-      _count: true,
-    }),
-    prisma.restaurantTable.count({ where: { restaurantId, isActive: true } }),
-    prisma.restaurantTable.count({ where: { restaurantId, isActive: true, status: 'OCCUPIED' } }),
-    prisma.order
-      .findMany({
-        where: { restaurantId, placedAt: { gte: today.start, lt: today.end }, customerId: { not: null } },
-        select: { customerId: true },
-        distinct: ['customerId'],
-      })
-      .then((rows) => rows.length),
-    prisma.customer.count({ where: { restaurantId, createdAt: { gte: today.start, lt: today.end } } }),
-    prisma.order.count({
-      where: { restaurantId, status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] } },
-    }),
-    prisma.order.aggregate({
-      where: { restaurantId, paymentStatus: { in: ['UNPAID', 'PARTIAL'] }, status: { not: 'CANCELLED' } },
-      _sum: { grandTotal: true, paidTotal: true },
-    }),
-    prisma.$queryRaw<Array<{ count: bigint }>>`
-      SELECT COUNT(*)::bigint AS count
-      FROM inventory_items
-      WHERE "restaurantId" = ${restaurantId}
-        AND "isActive" = true
-        AND quantity <= "reorderLevel"
-    `,
-  ])
+  const [row] = await prisma.$queryRaw<
+    Array<{
+      revenue_today: bigint
+      orders_today: bigint
+      revenue_yesterday: bigint
+      orders_yesterday: bigint
+      tables_total: bigint
+      tables_occupied: bigint
+      customers_today: bigint
+      new_customers: bigint
+      pending_orders: bigint
+      unpaid_total: bigint
+      low_stock: bigint
+    }>
+  >`
+    SELECT
+      (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+          AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS revenue_today,
+      (SELECT COUNT(*) FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+          AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS orders_today,
+      (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+          AND "placedAt" >= ${yesterday.start} AND "placedAt" < ${yesterday.end})::bigint AS revenue_yesterday,
+      (SELECT COUNT(*) FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+          AND "placedAt" >= ${yesterday.start} AND "placedAt" < ${yesterday.end})::bigint AS orders_yesterday,
+      (SELECT COUNT(*) FROM restaurant_tables
+        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true)::bigint          AS tables_total,
+      (SELECT COUNT(*) FROM restaurant_tables
+        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
+          AND status = 'OCCUPIED')::bigint                                             AS tables_occupied,
+      (SELECT COUNT(DISTINCT "customerId") FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND "customerId" IS NOT NULL
+          AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS customers_today,
+      (SELECT COUNT(*) FROM customers
+        WHERE "restaurantId" = ${restaurantId}
+          AND "createdAt" >= ${today.start} AND "createdAt" < ${today.end})::bigint    AS new_customers,
+      (SELECT COUNT(*) FROM orders
+        WHERE "restaurantId" = ${restaurantId}
+          AND status IN ('PENDING', 'ACCEPTED', 'PREPARING'))::bigint                  AS pending_orders,
+      (SELECT COALESCE(SUM("grandTotal" - "paidTotal"), 0) FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+          AND "paymentStatus" IN ('UNPAID', 'PARTIAL'))::bigint                        AS unpaid_total,
+      (SELECT COUNT(*) FROM inventory_items
+        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
+          AND quantity <= "reorderLevel")::bigint                                      AS low_stock
+  `
 
-  const revenueToday = todayAgg._sum.grandTotal ?? 0
-  const revenueYesterday = yesterdayAgg._sum.grandTotal ?? 0
-  const ordersToday = todayAgg._count
-  const ordersYesterday = yesterdayAgg._count
+  const revenueToday = Number(row?.revenue_today ?? 0)
+  const revenueYesterday = Number(row?.revenue_yesterday ?? 0)
+  const ordersToday = Number(row?.orders_today ?? 0)
+  const ordersYesterday = Number(row?.orders_yesterday ?? 0)
+
+  const tablesTotal = Number(row?.tables_total ?? 0)
+  const tablesOccupied = Number(row?.tables_occupied ?? 0)
+  const customersToday = Number(row?.customers_today ?? 0)
+  const newCustomers = Number(row?.new_customers ?? 0)
+  const pendingOrders = Number(row?.pending_orders ?? 0)
+  const unpaidTotal = Number(row?.unpaid_total ?? 0)
+  const lowStockCount = Number(row?.low_stock ?? 0)
 
   const aovToday = ordersToday > 0 ? Math.round(revenueToday / ordersToday) : 0
   const aovYesterday = ordersYesterday > 0 ? Math.round(revenueYesterday / ordersYesterday) : 0
@@ -110,8 +133,8 @@ export async function getDashboardStats(restaurantId: string): Promise<Dashboard
     customersToday,
     newCustomersToday: newCustomers,
     pendingOrders,
-    unpaidTotal: (unpaid._sum.grandTotal ?? 0) - (unpaid._sum.paidTotal ?? 0),
-    lowStockCount: Number(lowStock[0]?.count ?? 0),
+    unpaidTotal,
+    lowStockCount,
   }
 }
 
@@ -470,3 +493,51 @@ export async function getReportSummary(restaurantId: string, range: ReportRange)
 }
 
 export type ReportSummary = Awaited<ReturnType<typeof getReportSummary>>
+
+// ── cached read paths for the dashboard ──────────────────────────────────────
+//
+// The uncached functions above stay exported for reports and exports, where an
+// operator has explicitly asked for a fresh figure and expects to wait for it.
+
+/** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
+export function getCachedSalesSeries(restaurantId: string, days = 14): Promise<SalesPoint[]> {
+  return unstable_cache(
+    () => getSalesSeries(restaurantId, days),
+    ['analytics:sales-series', restaurantId, String(days)],
+    { revalidate: ANALYTICS_TTL_SECONDS },
+  )()
+}
+
+/** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
+export function getCachedPopularItems(
+  restaurantId: string,
+  days = 30,
+  limit = 8,
+): Promise<PopularItem[]> {
+  return unstable_cache(
+    () => getPopularItems(restaurantId, days, limit),
+    ['analytics:popular', restaurantId, String(days), String(limit)],
+    { revalidate: ANALYTICS_TTL_SECONDS },
+  )()
+}
+
+/** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
+export function getCachedCategoryBreakdown(
+  restaurantId: string,
+  days = 30,
+): Promise<CategoryShare[]> {
+  return unstable_cache(
+    () => getCategoryBreakdown(restaurantId, days),
+    ['analytics:categories', restaurantId, String(days)],
+    { revalidate: ANALYTICS_TTL_SECONDS },
+  )()
+}
+
+/** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
+export function getCachedPaymentMix(restaurantId: string, days = 30): Promise<PaymentMix[]> {
+  return unstable_cache(
+    () => getPaymentMix(restaurantId, days),
+    ['analytics:payment-mix', restaurantId, String(days)],
+    { revalidate: ANALYTICS_TTL_SECONDS },
+  )()
+}

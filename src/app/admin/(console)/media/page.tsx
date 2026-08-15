@@ -6,38 +6,83 @@ import { requirePageSuperAdmin } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { listPlatformRestaurants, listRecentRestaurantMenuSnapshots } from '@/features/platform/queries'
 
-export const metadata: Metadata = { title: 'Media backups' }
+export const metadata: Metadata = { title: 'Image storage' }
 
-export default async function AdminMediaPage() {
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 KB'
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+export default async function AdminMediaPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   await requirePageSuperAdmin('/admin')
 
+  const params = await searchParams
+  const report = params.scanned
+    ? {
+        scanned: Number(params.scanned),
+        safe: Number(params.safe ?? 0),
+        imported: Number(params.imported ?? 0),
+        missing: Number(params.missing ?? 0),
+        dryRun: params.dryRun !== 'false',
+      }
+    : null
+
   const restaurants = await listPlatformRestaurants()
-  const [backupCounts, recentMenu] = await Promise.all([
+  const [assetStats, recentMenu] = await Promise.all([
     Promise.all(
       restaurants.map(async (restaurant) => ({
         restaurantId: restaurant.id,
-        count: await prisma.mediaBackup.count({ where: { restaurantId: restaurant.id } }),
+        stats: await prisma.mediaAsset.aggregate({
+          where: { restaurantId: restaurant.id },
+          _count: true,
+          _sum: { size: true },
+        }),
       })),
     ),
     listRecentRestaurantMenuSnapshots(12),
   ])
-  const countByRestaurant = new Map(backupCounts.map((entry) => [entry.restaurantId, entry.count]))
+  const statsByRestaurant = new Map(assetStats.map((entry) => [entry.restaurantId, entry.stats]))
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Media backups</h1>
-          <p className="text-sm text-muted-foreground">Restore backed-up media for a restaurant. Use dry-run first.</p>
+          <h1 className="text-2xl font-semibold">Image storage</h1>
+          <p className="text-sm text-muted-foreground">
+            Uploaded images are stored in the database, so they survive redeploys and Netlify
+            account changes. Use the repair tool below only for images uploaded before this.
+          </p>
         </div>
         <Link href="/admin" className="text-sm font-medium text-primary hover:underline">
           Back to restaurants
         </Link>
       </div>
 
+      {report ? (
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+          <p className="font-medium">
+            {report.dryRun ? 'Dry run complete — nothing was changed.' : 'Repair complete.'}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Scanned {report.scanned} image{report.scanned === 1 ? '' : 's'} · {report.safe} already
+            safe · {report.imported}{' '}
+            {report.dryRun ? 'can be imported' : 'imported into the database'} · {report.missing}{' '}
+            unrecoverable
+            {report.missing > 0 ? ' (those need re-uploading by the owner)' : ''}.
+          </p>
+        </div>
+      ) : null}
+
       <div className="grid gap-4">
         {restaurants.map((restaurant) => {
-          const count = countByRestaurant.get(restaurant.id) ?? 0
+          const stats = statsByRestaurant.get(restaurant.id)
+          const count = stats?._count ?? 0
+          const size = stats?._sum.size ?? 0
           return (
             <div key={restaurant.id} className="rounded-xl border bg-card p-4 shadow-soft">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -47,21 +92,21 @@ export default async function AdminMediaPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-                    {count} backups
+                  <span className="rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                    {count} image{count === 1 ? '' : 's'} secured · {formatBytes(size)}
                   </span>
                   <form method="post" action="/api/admin/media/restore">
                     <input type="hidden" name="restaurantId" value={restaurant.id} />
                     <input type="hidden" name="dryRun" value="true" />
                     <button type="submit" className="inline-flex items-center justify-center rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted">
-                      Dry-run restore
+                      Check images
                     </button>
                   </form>
                   <form method="post" action="/api/admin/media/restore">
                     <input type="hidden" name="restaurantId" value={restaurant.id} />
                     <input type="hidden" name="dryRun" value="false" />
                     <button type="submit" className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
-                      Restore all
+                      Repair &amp; import
                     </button>
                   </form>
                 </div>

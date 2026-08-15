@@ -47,6 +47,9 @@ const PUBLIC_API = [
   '/api/public/',
   '/api/health',
   '/api/docs',
+  // Menu photos, logos and covers. Guests are anonymous, and short-circuiting
+  // here also skips two JWT verifications per image on every page of the menu.
+  '/api/media/',
 ]
 
 function isProtected(pathname: string) {

@@ -1,7 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { randomBytes } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 
 import { toAppError } from '@/lib/errors'
 import { isCloudinaryConfigured } from '@/lib/env'
@@ -25,10 +23,18 @@ const ALLOWED: Record<string, string> = {
  * Authenticated image upload for menu photos, logos and covers.
  *   POST /api/uploads  (multipart/form-data, field "file")
  *
- * Storage, in order of preference:
- *   1. Cloudinary            (if CLOUDINARY_* env is set)
- *   2. Netlify Blobs         (when running on Netlify — its disk is read-only)
- *   3. Local disk /public    (local dev / a normal VPS)
+ * The bytes are written to Postgres (`MediaAsset`) and the caller always gets
+ * back a stable `/api/media/<key>` URL.
+ *
+ * Why the database and not the filesystem or Netlify Blobs: both of those are
+ * scoped to a single Netlify site. Redeploying onto a different Netlify account
+ * — which is exactly what happens when a free-tier build limit is hit — leaves
+ * the database pointing at images that no longer exist anywhere. Postgres moves
+ * with the data, so images uploaded once are never lost again.
+ *
+ * Cloudinary, when configured, is used as a pure CDN mirror. The returned URL
+ * still points at us, so swapping or losing the CDN account changes delivery
+ * speed and nothing else.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -56,76 +62,56 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const arrayBuffer = await file.arrayBuffer()
-    const bytes = Buffer.from(arrayBuffer)
+    const bytes = Buffer.from(await file.arrayBuffer())
     const key = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
+    const checksum = createHash('sha256').update(bytes).digest('hex')
+    const url = `/api/media/${key}`
 
+    // The durable write. If this fails the upload fails — silently returning a
+    // URL we cannot serve later is worse than asking the user to retry now.
+    await prisma.mediaAsset.create({
+      data: {
+        restaurantId: user.restaurantId,
+        key,
+        contentType: file.type,
+        size: bytes.byteLength,
+        checksum,
+        // Prisma's `Bytes` maps to Uint8Array.
+        data: new Uint8Array(bytes),
+      },
+    })
+
+    // Best-effort CDN mirror — never fatal, the image is already safe.
     if (isCloudinaryConfigured()) {
-      const url = await uploadToCloudinary(bytes)
       try {
-        await prisma.mediaBackup.create({
-          data: {
-            restaurantId: user.restaurantId,
-            key,
-            originalUrl: url,
-            backupUrl: url,
-            contentType: file.type,
-            size: file.size,
-          },
-        })
-      } catch (e) {
-        // non-fatal: do not break uploads if backup record fails
+        const cdnUrl = await uploadToCloudinary(bytes)
+        await prisma.mediaAsset.update({ where: { key }, data: { cdnUrl } })
+      } catch {
+        // Delivery falls back to serving the bytes straight from Postgres.
       }
-      return NextResponse.json({ url })
     }
 
-    if (isNetlify()) {
-      const { getStore } = await import('@netlify/blobs')
-      const store = getStore('menu-media')
-      await store.set(key, arrayBuffer, { metadata: { contentType: file.type } })
-      // Served back by /api/media/[key].
-      try {
-        await prisma.mediaBackup.create({
-          data: {
-            restaurantId: user.restaurantId,
-            key,
-            originalUrl: `/api/media/${key}`,
-            contentType: file.type,
-            size: file.size,
-          },
-        })
-      } catch (e) {
-        // ignore
-      }
-      return NextResponse.json({ url: `/api/media/${key}` })
-    }
-
-    // Local disk fallback (dev / VPS).
-    const dir = join(process.cwd(), 'public', 'uploads')
-    await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, key), bytes)
+    // Keep the upload ledger the admin console reads.
     try {
       await prisma.mediaBackup.create({
         data: {
           restaurantId: user.restaurantId,
           key,
-          originalUrl: `/uploads/${key}`,
+          originalUrl: url,
+          backupUrl: url,
           contentType: file.type,
-          size: file.size,
+          size: bytes.byteLength,
         },
       })
-    } catch (e) {
-      // ignore
+    } catch {
+      // Non-fatal: the ledger is a convenience, MediaAsset is the source of truth.
     }
-    return NextResponse.json({ url: `/uploads/${key}` })
+
+    return NextResponse.json({ url })
   } catch (error) {
     const app = toAppError(error)
     return NextResponse.json({ error: app.message, code: app.code }, { status: app.status })
   }
-}
-
-function isNetlify(): boolean {
-  return Boolean(process.env.NETLIFY || process.env.NETLIFY_BLOBS_CONTEXT || process.env.NETLIFY_DEV)
 }
 
 async function uploadToCloudinary(bytes: Buffer): Promise<string> {

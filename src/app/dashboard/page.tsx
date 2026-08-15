@@ -21,11 +21,11 @@ import {
   RevenueTrendChart,
 } from '@/features/analytics/components/charts'
 import {
-  getCategoryBreakdown,
+  getCachedCategoryBreakdown,
+  getCachedPaymentMix,
+  getCachedPopularItems,
+  getCachedSalesSeries,
   getDashboardStats,
-  getPaymentMix,
-  getPopularItems,
-  getSalesSeries,
 } from '@/features/analytics/queries'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
@@ -50,10 +50,10 @@ export default async function DashboardPage() {
 
   const [stats, series, popular, categories, paymentMix, recentOrders, longWaiting] = await Promise.all([
     getDashboardStats(user.restaurantId),
-    getSalesSeries(user.restaurantId, 14),
-    getPopularItems(user.restaurantId, 30, 6),
-    getCategoryBreakdown(user.restaurantId, 30),
-    getPaymentMix(user.restaurantId, 30),
+    getCachedSalesSeries(user.restaurantId, 14),
+    getCachedPopularItems(user.restaurantId, 30, 6),
+    getCachedCategoryBreakdown(user.restaurantId, 30),
+    getCachedPaymentMix(user.restaurantId, 30),
     prisma.order.findMany({
       where: { restaurantId: user.restaurantId },
       orderBy: { placedAt: 'desc' },

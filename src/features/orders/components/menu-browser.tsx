@@ -123,9 +123,28 @@ export function MenuBrowser({
 
   const showRecommended = !search && category === 'ALL' && diet === 'ALL' && recommended.length > 0
 
+  // The per-category headings stick *below* the main header. Measure the header
+  // instead of hard-coding its height: it changes with the device font size,
+  // whether a tagline is present, and how the filter chips wrap.
+  const headerRef = React.useRef<HTMLElement | null>(null)
+  const [headerHeight, setHeaderHeight] = React.useState(152)
+
+  React.useEffect(() => {
+    const node = headerRef.current
+    if (!node) return
+    const observer = new ResizeObserver(([entry]) => {
+      setHeaderHeight(Math.round(entry.contentRect.height))
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <div className="flex min-h-dvh flex-col pb-24">
-      <header className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur-xl">
+      <header
+        ref={headerRef}
+        className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur-xl"
+      >
         <div className="flex items-center gap-2 px-4 py-3">
           <Button variant="ghost" size="icon-sm" asChild aria-label="Back">
             <Link href="/order">
@@ -296,7 +315,10 @@ export function MenuBrowser({
         ) : (
           grouped.map(({ category: entry, items }) => (
             <section key={entry.id} className="border-b last:border-b-0">
-              <div className="sticky top-[152px] z-10 bg-background/90 px-4 py-2.5 backdrop-blur">
+              <div
+                style={{ top: headerHeight }}
+                className="sticky z-10 bg-background/90 px-4 py-2.5 backdrop-blur"
+              >
                 <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
                   {entry.name}
                   <span className="ml-2 font-normal normal-case">{items.length}</span>

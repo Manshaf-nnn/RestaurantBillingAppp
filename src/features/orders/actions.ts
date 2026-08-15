@@ -110,12 +110,16 @@ export async function placeGuestOrder(
     placeOrderSchema,
     input,
     async (data) => {
-      await enforceRateLimit('placeOrder')
-
       const restaurant = await resolvePublicTenant(slug)
       if (!restaurant) throw new NotFoundError('Restaurant')
 
       const guestSessionId = await getOrCreateGuestSessionId()
+
+      // Per phone, not per IP — a full dining room shares one wifi address, and
+      // an IP-keyed limit would block everyone once a handful of tables ordered.
+      await enforceRateLimit('placeOrder', `guest:${guestSessionId}`)
+      // Backstop against someone cycling cookies from the same connection.
+      await enforceRateLimit('placeOrderBurst')
 
       const order = await placeOrderService({
         restaurantId: restaurant.id,
@@ -302,10 +306,14 @@ export async function createServiceRequest(
     serviceRequestSchema,
     input,
     async (data) => {
-      await enforceRateLimit('serviceRequest')
-
       const restaurant = await resolvePublicTenant(slug)
       if (!restaurant) throw new NotFoundError('Restaurant')
+
+      // Keyed per phone for the same reason as placing an order: every table in
+      // the room shares the venue's IP.
+      const guestSessionId = await getOrCreateGuestSessionId()
+      await enforceRateLimit('serviceRequest', `guest:${guestSessionId}`)
+      await enforceRateLimit('serviceRequestBurst')
 
       const table = await prisma.restaurantTable.findFirst({
         where: { id: data.tableId, restaurantId: restaurant.id, isActive: true },

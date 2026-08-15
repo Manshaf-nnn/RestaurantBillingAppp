@@ -102,25 +102,45 @@ export default function CoverPage(props: Props) {
 
   return (
     /**
-     * h-dvh + overflow-hidden locks the layout to exactly one screen.
-     * All spacing is intentionally compact so nothing scrolls.
+     * `min-h-dvh`, not `h-dvh overflow-hidden`.
+     *
+     * The layout is tuned to fit one screen and on a normal phone it still
+     * does — `justify-between` fills the viewport exactly. But the content has
+     * a real minimum height (logo, name, hours, the glass card with its input
+     * and button, four tiles, footer), and on a short screen — a small phone, a
+     * landscape phone, or any device once the browser chrome and an on-screen
+     * keyboard are showing — it overflows. Clipping that overflow meant the
+     * guest's scroll snapped straight back and, worse, the "Continue" button
+     * could sit permanently out of reach. Letting it scroll costs nothing when
+     * everything already fits.
      */
     <div
-      className="relative flex h-dvh w-full flex-col items-center justify-between overflow-hidden px-4 py-3 text-center selection:bg-orange-500/30 selection:text-white"
+      className="relative isolate flex min-h-dvh w-full flex-col items-center justify-between px-4 py-3 text-center text-white selection:bg-orange-500/30 selection:text-white"
       style={{ ['--theme-r' as any]: theme.r, ['--theme-g' as any]: theme.g, ['--theme-b' as any]: theme.b }}
     >
-      {/* ── Background layers ─────────────────────────────────────────────────── */}
+      {/*
+        ── Background layers ───────────────────────────────────────────────────
+        `fixed` so the ambient cover keeps filling the viewport if the page does
+        scroll on a short screen, rather than sliding away with it.
+
+        Stacked with `isolate` on the wrapper and `z-0` here rather than negative
+        z-indexes: a negative z-index paints behind an ancestor's background, so
+        the moment the shared order layout carries an opaque background these
+        layers would vanish and the white text would land on white. `isolate`
+        creates a stacking context this page owns, and the content below sits at
+        `z-10`, above these.
+      */}
       <div
-        className="absolute inset-0 -z-30 bg-cover bg-center scale-105 pointer-events-none"
+        className="fixed inset-0 z-0 bg-cover bg-center scale-105 pointer-events-none"
         style={{ backgroundImage: `url(${bgImage})` }}
       />
       <div
-        className="absolute inset-0 -z-20 pointer-events-none"
+        className="fixed inset-0 z-0 pointer-events-none"
         style={{ background: 'linear-gradient(180deg,rgba(0,0,0,0.42) 0%,rgba(5,6,10,0.68) 45%,rgba(3,4,8,0.94) 100%)' }}
       />
-      <div className="absolute inset-0 -z-10 backdrop-blur-[12px] pointer-events-none" />
+      <div className="fixed inset-0 z-0 backdrop-blur-[12px] pointer-events-none" />
       <div
-        className="absolute inset-0 -z-10 pointer-events-none"
+        className="fixed inset-0 z-0 pointer-events-none"
         style={{ background: `radial-gradient(circle at 50% 55%,rgba(${rgb},0.22),transparent 55%)` }}
       />
 
