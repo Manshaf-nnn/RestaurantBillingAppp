@@ -74,17 +74,39 @@ export function QrPoster({
         }
       />
 
+      {/*
+        `min-w-0` on both columns.
+        A grid item defaults to `min-width: auto`, meaning it refuses to shrink
+        below its content's intrinsic width. The ordering URL is one long
+        unbreakable token, so it set the column's minimum — and therefore the
+        page's — well past a phone's width, no matter that the <code> element
+        itself truncates. Every card on the page inherited that width and the
+        whole page scrolled sideways.
+      */}
       <div className="grid gap-5 lg:grid-cols-2">
-        <SectionCard title="Your QR code">
+        <SectionCard title="Your QR code" className="min-w-0">
           <div ref={printRef} className="flex flex-col items-center gap-4 py-4">
-            <div className="rounded-2xl border bg-white p-4 shadow-soft">
-              <Image src={qrDataUrl} alt="Restaurant QR code" width={280} height={280} unoptimized />
+            {/*
+              The QR renders at 280 px, but that plus the card padding is wider
+              than a phone, and a fixed-width child sets the grid column's
+              min-content width — which pushed the whole page sideways. Cap it to
+              the available width and let it scale down instead.
+            */}
+            <div className="w-full max-w-[312px] rounded-2xl border bg-white p-4 shadow-soft">
+              <Image
+                src={qrDataUrl}
+                alt="Restaurant QR code"
+                width={280}
+                height={280}
+                unoptimized
+                className="h-auto w-full"
+              />
             </div>
             <p className="text-center text-sm font-medium">{restaurantName}</p>
           </div>
         </SectionCard>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           <SectionCard title="Ordering link">
             <p className="mb-2 text-sm text-muted-foreground">
               This is the address the QR code opens. Print it, or share it directly.

@@ -68,6 +68,7 @@ export function InventoryManager({
 }) {
   const [items, setItems] = React.useState(initial)
   const [search, setSearch] = React.useState('')
+  const [view, setView] = React.useState<'ALL' | 'LOW' | 'EXPIRING'>('ALL')
   const [editing, setEditing] = React.useState<InventoryRow | null>(null)
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [movementFor, setMovementFor] = React.useState<InventoryRow | null>(null)
@@ -75,19 +76,54 @@ export function InventoryManager({
 
   React.useEffect(() => setItems(initial), [initial])
 
+  const isLow = React.useCallback(
+    (item: InventoryRow) => item.quantity <= item.reorderLevel,
+    [],
+  )
+
+  /**
+   * Days until expiry, or null when the item has no date.
+   *
+   * Anchored to the UTC calendar day, not the local one. `setHours(0,0,0,0)`
+   * resolves against the machine's timezone, so the server and the browser would
+   * disagree by a day for much of the world and React would find different badge
+   * text than it rendered — the same hydration failure class fixed elsewhere in
+   * this app. UTC gives both sides the same answer.
+   */
+  const daysToExpiry = React.useCallback((item: InventoryRow): number | null => {
+    if (!item.expiryDate) return null
+    const now = new Date()
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    const expiry = new Date(item.expiryDate)
+    const expiryUtc = Date.UTC(
+      expiry.getUTCFullYear(),
+      expiry.getUTCMonth(),
+      expiry.getUTCDate(),
+    )
+    return Math.round((expiryUtc - todayUtc) / 86_400_000)
+  }, [])
+
+  const lowStock = items.filter(isLow)
+  const stockValue = items.reduce((sum, item) => sum + Math.round(item.quantity * item.costPerUnit), 0)
+  const expiringSoon = items.filter((item) => {
+    const days = daysToExpiry(item)
+    return days !== null && days <= 7
+  })
+
   const filtered = React.useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return items
-    return items.filter(
-      (item) => item.name.toLowerCase().includes(query) || item.category?.toLowerCase().includes(query),
-    )
-  }, [items, search])
-
-  const lowStock = items.filter((item) => item.quantity <= item.reorderLevel)
-  const stockValue = items.reduce((sum, item) => sum + Math.round(item.quantity * item.costPerUnit), 0)
-  const expiringSoon = items.filter(
-    (item) => item.expiryDate && new Date(item.expiryDate).getTime() < Date.now() + 7 * 86_400_000,
-  )
+    return items.filter((item) => {
+      if (view === 'LOW' && !isLow(item)) return false
+      if (view === 'EXPIRING') {
+        const days = daysToExpiry(item)
+        if (days === null || days > 7) return false
+      }
+      if (!query) return true
+      return (
+        item.name.toLowerCase().includes(query) || Boolean(item.category?.toLowerCase().includes(query))
+      )
+    })
+  }, [items, search, view, isLow, daysToExpiry])
 
   const remove = async () => {
     if (!deleteId) return
@@ -128,7 +164,12 @@ export function InventoryManager({
         <StatCard label="Expiring soon" value={expiringSoon.length} icon={<AlertTriangle />} tone={expiringSoon.length ? 'destructive' : 'default'} />
       </div>
 
-      <div className="mb-4">
+      {/*
+        The counts above are the reason someone opens this screen — "what do I
+        need to reorder" — so they need to lead somewhere rather than just being
+        read and then hunted for by eye down the table.
+      */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <Input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -136,15 +177,55 @@ export function InventoryManager({
           startIcon={<Search />}
           className="max-w-sm"
         />
+        <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-1">
+          {(
+            [
+              { key: 'ALL', label: `All${items.length ? ` · ${items.length}` : ''}` },
+              { key: 'LOW', label: `Low stock${lowStock.length ? ` · ${lowStock.length}` : ''}` },
+              {
+                key: 'EXPIRING',
+                label: `Expiring${expiringSoon.length ? ` · ${expiringSoon.length}` : ''}`,
+              },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setView(tab.key)}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                view === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState
           icon={<Package />}
-          title="No inventory items"
-          description="Add ingredients and supplies to track stock and get low-stock alerts."
+          title={
+            view === 'LOW'
+              ? 'Nothing to reorder'
+              : view === 'EXPIRING'
+                ? 'Nothing expiring soon'
+                : search
+                  ? 'No matching items'
+                  : 'No inventory items'
+          }
+          description={
+            view === 'LOW'
+              ? 'Every tracked item is above its reorder level.'
+              : view === 'EXPIRING'
+                ? 'No item is within seven days of its expiry date.'
+                : search
+                  ? 'Try a different name or category.'
+                  : 'Add ingredients and supplies to track stock and get low-stock alerts.'
+          }
           action={
-            canManage ? (
+            canManage && view === 'ALL' && !search ? (
               <Button
                 onClick={() => {
                   setEditing(null)
@@ -165,6 +246,7 @@ export function InventoryManager({
                 <TableHead>In stock</TableHead>
                 <TableHead className="hidden md:table-cell">Reorder at</TableHead>
                 <TableHead className="hidden lg:table-cell">Cost / unit</TableHead>
+                <TableHead className="hidden md:table-cell">Expiry</TableHead>
                 <TableHead className="hidden lg:table-cell">Supplier</TableHead>
                 {canManage ? <TableHead className="w-10" /> : null}
               </TableRow>
@@ -195,6 +277,23 @@ export function InventoryManager({
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {formatMoney(item.costPerUnit, currency, locale)}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {(() => {
+                        const days = daysToExpiry(item)
+                        if (days === null) return <span className="text-muted-foreground">—</span>
+                        if (days < 0) return <Badge variant="destructive" size="sm">Expired</Badge>
+                        if (days === 0) return <Badge variant="destructive" size="sm">Today</Badge>
+                        if (days <= 7)
+                          return (
+                            <Badge variant="warning" size="sm">
+                              {days}d left
+                            </Badge>
+                          )
+                        return (
+                          <span className="text-muted-foreground tabular-nums">{days}d</span>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {item.supplierName ?? '—'}
