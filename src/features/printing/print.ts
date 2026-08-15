@@ -190,10 +190,60 @@ export function printReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
     )
     .join('')
 
-  printDocument(
-    `Receipt ${receipt.orderNumber}`,
-    width,
-    `
+  printDocument(`Receipt ${receipt.orderNumber}`, width, receiptBody(receipt, lines, totals))
+}
+
+/**
+ * Save the receipt as a file instead of sending it to a printer.
+ *
+ * A cashier often needs a copy to keep or to send on — emailing it to a guest,
+ * filing it, or handing it over when there is no printer at the counter. The
+ * file is a self-contained HTML document with the same layout as the printed
+ * one, so opening it and choosing print gives an identical PDF.
+ */
+export function downloadReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
+  if (typeof window === 'undefined') return
+
+  const lines = receipt.lines
+    .map(
+      (line) =>
+        `<tr><td class="qty">${line.quantity}×</td><td>${escapeHtml(line.name)}${
+          line.optionsLabel ? `<div class="muted">${escapeHtml(line.optionsLabel)}</div>` : ''
+        }</td><td class="right">${escapeHtml(line.lineTotal)}</td></tr>`,
+    )
+    .join('')
+
+  const totals = receipt.totals
+    .map(
+      (total) =>
+        `<div class="row ${total.strong ? 'bold' : ''}"><span>${escapeHtml(total.label)}</span><span>${escapeHtml(total.value)}</span></div>`,
+    )
+    .join('')
+
+  const title = `Receipt ${receipt.orderNumber}`
+  const html =
+    `<!doctype html><html><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>${escapeHtml(title)}</title><style>${BASE_STYLES(width)}` +
+    // On screen the thermal width alone looks lost on a page; centre it.
+    `@media screen { body { margin: 24px auto; box-shadow: 0 0 0 1px #ddd; padding: 12px; background: #fff; } }` +
+    `</style></head><body>${receiptBody(receipt, lines, totals)}</body></html>`
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `receipt-${receipt.orderNumber}.html`
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  // Revoke on the next tick — revoking immediately can cancel the download.
+  setTimeout(() => URL.revokeObjectURL(url), 5_000)
+}
+
+/** Shared receipt markup so the printed and downloaded copies cannot drift. */
+function receiptBody(receipt: ReceiptInput, lines: string, totals: string): string {
+  return `
       <div class="center">
         <h1>${escapeHtml(receipt.restaurantName)}</h1>
         ${receipt.addressLine ? `<div class="muted">${escapeHtml(receipt.addressLine)}</div>` : ''}
@@ -213,6 +263,5 @@ export function printReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
       <div class="rule"></div>
       <div class="center">${escapeHtml(receipt.footer ?? 'Thank you — please come again!')}</div>
       <div class="center muted">Powered by TableFlow</div>
-    `,
-  )
+    `
 }

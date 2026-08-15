@@ -45,9 +45,15 @@ export function OpsShell({
 }) {
   const { connected } = useSocket()
   const realtimeOff = !isRealtimeEnabled()
-  const [clock, setClock] = React.useState(() => new Date())
+  // Starts null on purpose. Seeding this with `new Date()` meant the server
+  // rendered one second and the browser hydrated with another, so every ops
+  // screen threw a hydration mismatch on load and React re-rendered the whole
+  // header to recover. The clock is client-only information; it appears on the
+  // first tick after mount instead.
+  const [clock, setClock] = React.useState<Date | null>(null)
 
   React.useEffect(() => {
+    setClock(new Date())
     const timer = setInterval(() => setClock(new Date()), 1000)
     return () => clearInterval(timer)
   }, [])
@@ -80,8 +86,17 @@ export function OpsShell({
           <div className="ml-auto flex items-center gap-1.5">
             {actions}
 
-            <span className="hidden font-mono text-sm tabular-nums text-muted-foreground md:inline">
-              {clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            <span
+              suppressHydrationWarning
+              className="hidden font-mono text-sm tabular-nums text-muted-foreground md:inline"
+            >
+              {clock
+                ? clock.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })
+                : null}
             </span>
 
             {onToggleSound ? (

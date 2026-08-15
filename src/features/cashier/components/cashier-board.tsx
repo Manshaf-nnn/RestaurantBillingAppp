@@ -7,12 +7,18 @@ import {
   Banknote,
   Check,
   CreditCard,
+  Download,
+  Merge,
+  PauseCircle,
   Percent,
+  PlayCircle,
+  Plus,
   Printer,
   QrCode,
   Receipt,
   Search,
   Smartphone,
+  Split,
   Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -38,9 +44,15 @@ import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/rea
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { printReceipt } from '@/features/printing/print'
+import { downloadReceipt, printReceipt } from '@/features/printing/print'
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
+import {
+  holdBillAction,
+  mergeBillsAction,
+  resumeBillAction,
+  splitBillAction,
+} from '@/features/cashier/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 
 export interface CashierBill {
@@ -53,6 +65,8 @@ export interface CashierBill {
   customerName: string
   customerPhone: string
   placedAt: string
+  heldAt: string | null
+  holdReason: string | null
   subtotal: number
   discountTotal: number
   serviceCharge: number
@@ -62,7 +76,7 @@ export interface CashierBill {
   items: Array<{ id: string; name: string; optionsLabel: string; quantity: number; lineTotal: number }>
 }
 
-type CashierView = 'billing' | 'payment'
+type BillFilter = 'ACTIVE' | 'DINE_IN' | 'TAKEAWAY' | 'HELD'
 
 const METHODS = [
   { key: 'CASH' as const, label: 'Cash', icon: Banknote },
@@ -79,12 +93,14 @@ export function CashierBoard({
   user,
   restaurant,
   menu,
+  startInTakeaway = false,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
   todayCount: number
   user: { name: string; role: string }
   menu: PublicMenu
+  startInTakeaway?: boolean
   restaurant: {
     name: string
     currency: string
@@ -97,10 +113,9 @@ export function CashierBoard({
   const [bills, setBills] = React.useState(initialBills)
   const [search, setSearch] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
-  const [view, setView] = React.useState<CashierView>('billing')
-  const [filter, setFilter] = React.useState<'ALL' | 'TAKEAWAY' | 'DINE_IN' | 'DELIVERY'>('ALL')
+  const [filter, setFilter] = React.useState<BillFilter>('ACTIVE')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
-  const [takeawayOpen, setTakeawayOpen] = React.useState(false)
+  const [takeawayOpen, setTakeawayOpen] = React.useState(startInTakeaway)
   const [menuSearch, setMenuSearch] = React.useState('')
   const [customerName, setCustomerName] = React.useState('')
   const [customerPhone, setCustomerPhone] = React.useState('')
@@ -145,12 +160,20 @@ export function CashierBoard({
       )
     })
 
-    if (filter !== 'ALL') {
-      result = result.filter((bill) => bill.type === filter)
+    // Held bills are parked deliberately, so they stay out of every other view
+    // and only appear under "Held" — otherwise the queue a cashier works from
+    // fills up with bills they have already set aside.
+    if (filter === 'HELD') result = result.filter((bill) => bill.heldAt)
+    else {
+      result = result.filter((bill) => !bill.heldAt)
+      if (filter === 'DINE_IN') result = result.filter((bill) => bill.type === 'DINE_IN')
+      if (filter === 'TAKEAWAY') result = result.filter((bill) => bill.type === 'TAKEAWAY')
     }
 
     return result
   }, [bills, search, filter])
+
+  const heldCount = React.useMemo(() => bills.filter((bill) => bill.heldAt).length, [bills])
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
@@ -249,6 +272,8 @@ export function CashierBoard({
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         placedAt: new Date().toISOString(),
+        heldAt: null,
+        holdReason: null,
         subtotal: takeawayTotal,
         discountTotal: 0,
         serviceCharge: 0,
@@ -301,19 +326,30 @@ export function CashierBoard({
         ]}
       />
 
-      <div className="flex items-center justify-between gap-3 p-4 pb-0">
-        <div className="inline-flex rounded-lg border bg-muted/40 p-1">
-          {([
-            { key: 'billing', label: 'Billing' },
-            { key: 'payment', label: 'Payments' },
-          ] as const).map((tab) => (
+      {/*
+        One control row, not two.
+        There used to be a "Billing / Payments" toggle above a type filter, so
+        collecting money meant knowing to switch tabs first. The bill panel now
+        shows the items, the totals and the payment together, which leaves a
+        single question here: which bills am I looking at?
+      */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 pb-0">
+        <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-1">
+          {(
+            [
+              { key: 'ACTIVE', label: 'Open' },
+              { key: 'DINE_IN', label: 'Dine-in' },
+              { key: 'TAKEAWAY', label: 'Takeaway' },
+              { key: 'HELD', label: heldCount > 0 ? `Held · ${heldCount}` : 'Held' },
+            ] as const
+          ).map((tab) => (
             <button
               key={tab.key}
               type="button"
-              onClick={() => setView(tab.key)}
+              onClick={() => setFilter(tab.key)}
               className={cn(
                 'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                view === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
+                filter === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
               )}
             >
               {tab.label}
@@ -321,31 +357,9 @@ export function CashierBoard({
           ))}
         </div>
 
-        <div className="inline-flex items-center gap-2">
-          <div className="inline-flex rounded-lg border bg-muted/40 p-1">
-            {([
-              { key: 'ALL', label: 'All' },
-              { key: 'TAKEAWAY', label: 'Takeaway' },
-              { key: 'DINE_IN', label: 'Dine-in' },
-            ] as const).map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setFilter(t.key)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  filter === t.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <Button size="sm" onClick={() => setTakeawayOpen(true)}>
-            New takeaway
-          </Button>
-        </div>
+        <Button size="sm" onClick={() => setTakeawayOpen(true)}>
+          <Plus /> New takeaway
+        </Button>
       </div>
 
       <Dialog open={takeawayOpen} onOpenChange={setTakeawayOpen}>
@@ -542,22 +556,22 @@ export function CashierBoard({
         </section>
 
         {/* ── bill detail + payment ──────────────────────────────── */}
-        <section>
+        <section className="space-y-4">
           {selected ? (
-            view === 'billing' ? (
+            <>
               <BillingDetailPanel
-                key={selected.id}
+                key={`detail-${selected.id}`}
                 bill={selected}
                 restaurant={restaurant}
+                otherBills={bills.filter((bill) => bill.id !== selected.id && !bill.heldAt)}
               />
-            ) : (
               <BillPanel
-                key={selected.id}
+                key={`pay-${selected.id}`}
                 bill={selected}
                 restaurant={restaurant}
                 onSettled={onSettled}
               />
-            )
+            </>
           ) : (
             <EmptyState
               className="h-full"
@@ -622,6 +636,7 @@ function buildReceiptForBill(
 function BillingDetailPanel({
   bill,
   restaurant,
+  otherBills,
 }: {
   bill: CashierBill
   restaurant: {
@@ -632,25 +647,106 @@ function BillingDetailPanel({
     addressLine: string | null
     phone: string | null
   }
+  otherBills: CashierBill[]
 }) {
+  const [splitOpen, setSplitOpen] = React.useState(false)
+  const [mergeOpen, setMergeOpen] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+
   const print = () => {
-    printReceipt(buildReceiptForBill(bill, restaurant))
+    try {
+      printReceipt(buildReceiptForBill(bill, restaurant))
+    } catch {
+      toast.error('Unable to print receipt')
+    }
   }
+
+  const download = () => {
+    try {
+      downloadReceipt(buildReceiptForBill(bill, restaurant))
+      toast.success('Receipt saved')
+    } catch {
+      toast.error('Unable to save receipt')
+    }
+  }
+
+  const toggleHold = async () => {
+    setBusy(true)
+    const result = bill.heldAt
+      ? await resumeBillAction({ orderId: bill.id })
+      : await holdBillAction({ orderId: bill.id, reason: '' })
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(bill.heldAt ? 'Bill resumed' : 'Bill held — find it under Held')
+  }
+
+  const settled = bill.paymentStatus === 'PAID'
 
   return (
     <div className="rounded-xl border bg-card shadow-soft">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
-        <div>
-          <p className="text-xl font-bold leading-none">#{bill.orderNumber}</p>
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xl font-bold leading-none">#{bill.orderNumber}</p>
+            {bill.heldAt ? (
+              <Badge variant="warning">
+                <PauseCircle /> Held
+              </Badge>
+            ) : null}
+          </div>
           <p className="mt-1 text-sm text-muted-foreground">
             {bill.customerName} · {bill.customerPhone}
             {bill.tableNumber ? ` · Table ${bill.tableNumber}` : ''}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={print}>
-          <Printer /> Print bill
-        </Button>
+
+        {/* Everything a cashier can do to this bill, in one place. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={print}>
+            <Printer /> Print
+          </Button>
+          <Button variant="outline" size="sm" onClick={download}>
+            <Download /> Save
+          </Button>
+          {!settled ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setSplitOpen(true)}>
+                <Split /> Split
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={otherBills.length === 0}
+                title={otherBills.length === 0 ? 'No other open bill to merge in' : undefined}
+                onClick={() => setMergeOpen(true)}
+              >
+                <Merge /> Merge
+              </Button>
+              <Button variant="outline" size="sm" loading={busy} onClick={toggleHold}>
+                {bill.heldAt ? <PlayCircle /> : <PauseCircle />}
+                {bill.heldAt ? 'Resume' : 'Hold'}
+              </Button>
+            </>
+          ) : null}
+        </div>
       </header>
+
+      <SplitBillDialog
+        open={splitOpen}
+        onOpenChange={setSplitOpen}
+        bill={bill}
+        restaurant={restaurant}
+      />
+      <MergeBillsDialog
+        open={mergeOpen}
+        onOpenChange={setMergeOpen}
+        bill={bill}
+        otherBills={otherBills}
+        restaurant={restaurant}
+      />
 
       <div className="grid gap-4 p-4 md:grid-cols-[1.1fr_0.9fr]">
         <div>
@@ -807,83 +903,26 @@ function BillPanel({
 
   return (
     <div className="rounded-xl border bg-card shadow-soft">
+      {/*
+        Payment only.
+        The itemised bill and its totals are shown once, in the panel directly
+        above this one. Repeating them here made the cashier scroll past the
+        same numbers twice to reach the keypad.
+      */}
       <header className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div>
-          <p className="text-xl font-bold leading-none">#{bill.orderNumber}</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {bill.customerName} · {bill.customerPhone}
-            {bill.tableNumber ? ` · Table ${bill.tableNumber}` : ''}
+          <p className="text-sm font-semibold text-muted-foreground">Take payment</p>
+          <p className="mt-0.5 text-2xl font-bold leading-none tabular-nums">
+            {formatMoney(amountDue, restaurant.currency, restaurant.locale)}
+            <span className="ml-2 text-sm font-medium text-muted-foreground">due</span>
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setDiscountOpen(true)}>
-            <Percent /> Discount
-          </Button>
-          <Button variant="outline" size="sm" onClick={print}>
-            <Printer /> Print
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={() => setDiscountOpen(true)}>
+          <Percent /> Discount
+        </Button>
       </header>
 
-      <div className="grid gap-4 p-4 md:grid-cols-2">
-        <div>
-          <h3 className="mb-2 text-sm font-semibold">Items</h3>
-          <ul className="space-y-2 text-sm">
-            {bill.items.map((item) => (
-              <li key={item.id} className="flex justify-between gap-3">
-                <span className="min-w-0">
-                  <span className="font-medium">
-                    {item.quantity} × {item.name}
-                  </span>
-                  {item.optionsLabel ? (
-                    <span className="block text-xs text-muted-foreground">{item.optionsLabel}</span>
-                  ) : null}
-                </span>
-                <span className="shrink-0 tabular-nums">
-                  {formatMoney(item.lineTotal, restaurant.currency, restaurant.locale)}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <Separator className="my-3" />
-
-          <dl className="space-y-1 text-sm">
-            <SummaryRow label="Subtotal" value={formatMoney(bill.subtotal, restaurant.currency, restaurant.locale)} />
-            {bill.discountTotal > 0 ? (
-              <SummaryRow
-                label="Discount"
-                value={`− ${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}`}
-              />
-            ) : null}
-            {bill.serviceCharge > 0 ? (
-              <SummaryRow
-                label="Service charge"
-                value={formatMoney(bill.serviceCharge, restaurant.currency, restaurant.locale)}
-              />
-            ) : null}
-            {bill.taxTotal > 0 ? (
-              <SummaryRow
-                label={restaurant.taxLabel}
-                value={formatMoney(bill.taxTotal, restaurant.currency, restaurant.locale)}
-              />
-            ) : null}
-            {bill.paidTotal > 0 ? (
-              <SummaryRow
-                label="Already paid"
-                value={`− ${formatMoney(bill.paidTotal, restaurant.currency, restaurant.locale)}`}
-              />
-            ) : null}
-          </dl>
-
-          <Separator className="my-3" />
-
-          <div className="flex items-center justify-between text-lg font-bold">
-            <span>Amount due</span>
-            <span>{formatMoney(amountDue, restaurant.currency, restaurant.locale)}</span>
-          </div>
-        </div>
-
+      <div className="grid gap-4 p-4">
         <div className="space-y-4">
           <div>
             <h3 className="mb-2 text-sm font-semibold">Payment method</h3>
@@ -987,6 +1026,277 @@ function BillPanel({
         currentDiscount={bill.discountTotal}
       />
     </div>
+  )
+}
+
+/**
+ * Move part of a bill onto a new one.
+ *
+ * The cashier picks how many of each line go across using the same stepper they
+ * already use elsewhere, and the running totals for both sides are shown while
+ * they choose — the question at the counter is always "how much does each
+ * person owe", so answering it should not require doing the arithmetic.
+ */
+function SplitBillDialog({
+  open,
+  onOpenChange,
+  bill,
+  restaurant,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  bill: CashierBill
+  restaurant: { currency: string; locale: string }
+}) {
+  const [moves, setMoves] = React.useState<Record<string, number>>({})
+  const [pending, setPending] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) setMoves({})
+  }, [open])
+
+  const change = (itemId: string, max: number, delta: number) => {
+    setMoves((current) => {
+      const next = Math.max(0, Math.min(max, (current[itemId] ?? 0) + delta))
+      if (next === 0) {
+        const { [itemId]: _dropped, ...rest } = current
+        return rest
+      }
+      return { ...current, [itemId]: next }
+    })
+  }
+
+  const movedTotal = bill.items.reduce((sum, item) => {
+    const qty = moves[item.id] ?? 0
+    if (!qty) return sum
+    return sum + Math.round(item.lineTotal / item.quantity) * qty
+  }, 0)
+  const remainingTotal = bill.subtotal - movedTotal
+
+  const movedUnits = Object.values(moves).reduce((sum, qty) => sum + qty, 0)
+  const totalUnits = bill.items.reduce((sum, item) => sum + item.quantity, 0)
+  const movesEverything = movedUnits > 0 && movedUnits === totalUnits
+
+  const submit = async () => {
+    const selections = Object.entries(moves).map(([itemId, quantity]) => ({ itemId, quantity }))
+    setPending(true)
+    const result = await splitBillAction({ orderId: bill.id, selections })
+    setPending(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`Split into ${result.data.targetNumber}`)
+    onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Split bill #{bill.orderNumber}</DialogTitle>
+          <DialogDescription>
+            Choose what moves to a new bill. Everything else stays on this one.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+          {bill.items.map((item) => {
+            const moving = moves[item.id] ?? 0
+            return (
+              <div key={item.id} className="flex items-center gap-3 rounded-lg border p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{item.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.quantity} on this bill ·{' '}
+                    {formatMoney(
+                      Math.round(item.lineTotal / item.quantity),
+                      restaurant.currency,
+                      restaurant.locale,
+                    )}{' '}
+                    each
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={moving === 0}
+                    onClick={() => change(item.id, item.quantity, -1)}
+                    aria-label={`Move one fewer ${item.name}`}
+                  >
+                    −
+                  </Button>
+                  <span className="w-6 text-center text-sm font-semibold tabular-nums">{moving}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={moving >= item.quantity}
+                    onClick={() => change(item.id, item.quantity, 1)}
+                    aria-label={`Move one more ${item.name}`}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div>
+            <p className="text-xs text-muted-foreground">Stays on #{bill.orderNumber}</p>
+            <p className="font-semibold tabular-nums">
+              {formatMoney(remainingTotal, restaurant.currency, restaurant.locale)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Moves to the new bill</p>
+            <p className="font-semibold tabular-nums">
+              {formatMoney(movedTotal, restaurant.currency, restaurant.locale)}
+            </p>
+          </div>
+        </div>
+
+        {movesEverything ? (
+          <p className="text-sm font-medium text-destructive">
+            That moves the whole bill. Leave at least one item behind.
+          </p>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button loading={pending} disabled={movedUnits === 0 || movesEverything} onClick={submit}>
+            Split bill
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Fold other open bills into this one — the usual "we'll pay together" case. */
+function MergeBillsDialog({
+  open,
+  onOpenChange,
+  bill,
+  otherBills,
+  restaurant,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  bill: CashierBill
+  otherBills: CashierBill[]
+  restaurant: { currency: string; locale: string }
+}) {
+  const [picked, setPicked] = React.useState<string[]>([])
+  const [pending, setPending] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) setPicked([])
+  }, [open])
+
+  // A bill with a payment against it cannot be folded away without losing that
+  // payment's link to its items, so it is not offered.
+  const mergeable = otherBills.filter((entry) => entry.paymentStatus === 'UNPAID')
+
+  const combined =
+    bill.grandTotal +
+    mergeable
+      .filter((entry) => picked.includes(entry.id))
+      .reduce((sum, entry) => sum + entry.grandTotal, 0)
+
+  const submit = async () => {
+    setPending(true)
+    const result = await mergeBillsAction({ targetId: bill.id, sourceIds: picked })
+    setPending(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`Merged into ${result.data.targetNumber}`)
+    onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Merge into #{bill.orderNumber}</DialogTitle>
+          <DialogDescription>
+            Pick the bills to fold in. Their items move here and they are closed.
+          </DialogDescription>
+        </DialogHeader>
+
+        {mergeable.length === 0 ? (
+          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+            No other unpaid bill is open right now.
+          </p>
+        ) : (
+          <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+            {mergeable.map((entry) => {
+              const checked = picked.includes(entry.id)
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() =>
+                    setPicked((current) =>
+                      checked ? current.filter((id) => id !== entry.id) : [...current, entry.id],
+                    )
+                  }
+                  className={cn(
+                    'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                    checked ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'hover:bg-muted/40',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'flex size-5 shrink-0 items-center justify-center rounded border',
+                      checked ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
+                    )}
+                    aria-hidden="true"
+                  >
+                    {checked ? <Check className="size-3.5" /> : null}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold">#{entry.orderNumber}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {entry.tableNumber ? `Table ${entry.tableNumber}` : 'Takeaway'} · {entry.customerName}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold tabular-nums">
+                    {formatMoney(entry.grandTotal, restaurant.currency, restaurant.locale)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {picked.length > 0 ? (
+          <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3 text-sm">
+            <span className="text-muted-foreground">Combined bill</span>
+            <span className="font-semibold tabular-nums">
+              {formatMoney(combined, restaurant.currency, restaurant.locale)}
+            </span>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button loading={pending} disabled={picked.length === 0} onClick={submit}>
+            Merge {picked.length > 0 ? `${picked.length} bill${picked.length > 1 ? 's' : ''}` : ''}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -12,8 +12,17 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Cashier' }
 
-export default async function CashierPage() {
+export default async function CashierPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.PAYMENT_COLLECT, '/cashier')
+
+  // The sidebar's "Takeaway" entry links here with ?mode=takeaway. It used to
+  // be ignored, so that link just opened the ordinary cashier screen.
+  const params = await searchParams
+  const startInTakeaway = params.mode === 'takeaway'
 
   const startOfDay = new Date()
   startOfDay.setHours(0, 0, 0, 0)
@@ -37,6 +46,7 @@ export default async function CashierPage() {
   return (
     <CashierBoard
       menu={menu}
+      startInTakeaway={startInTakeaway}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       todayTotal={today._sum.amount ?? 0}
       todayCount={today._count}
@@ -58,6 +68,8 @@ export default async function CashierPage() {
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         placedAt: order.placedAt.toISOString(),
+        heldAt: order.heldAt ? order.heldAt.toISOString() : null,
+        holdReason: order.holdReason,
         subtotal: order.subtotal,
         discountTotal: order.discountTotal + order.loyaltyDiscount,
         serviceCharge: order.serviceCharge,
