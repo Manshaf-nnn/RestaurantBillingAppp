@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 
 import { getPublicMenu } from '@/features/menu/queries'
+import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
 import { resolvePublicTenant } from '@/server/db/tenant'
 
@@ -19,16 +20,19 @@ export default async function MenuPage() {
   const menu = await getPublicMenu(restaurant.id, restaurant.timezone)
 
   return (
-    <MenuBrowser
-      menu={menu}
-      restaurantName={restaurant.name}
-      currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-      loyalty={{
-        enabled: restaurant.loyaltyEnabled,
-        earnRateX100: restaurant.loyaltyEarnRateX100,
-        pointValue: restaurant.loyaltyPointValue,
-      }}
-    />
+    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
+      <MenuBrowser
+        menu={menu}
+        restaurantName={restaurant.name}
+        logoUrl={restaurant.logoUrl}
+        currency={restaurant.currency}
+        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        loyalty={{
+          enabled: restaurant.loyaltyEnabled,
+          earnRateX100: restaurant.loyaltyEarnRateX100,
+          pointValue: restaurant.loyaltyPointValue,
+        }}
+      />
+    </BrandTheme>
   )
 }

@@ -51,12 +51,14 @@ const SERVICE_ACTIONS = [
 export function MenuBrowser({
   menu,
   restaurantName,
+  logoUrl = null,
   currency,
   locale,
   loyalty,
 }: {
   menu: PublicMenu
   restaurantName: string
+  logoUrl?: string | null
   currency: string
   locale: string
   loyalty?: { enabled: boolean; earnRateX100: number; pointValue: number }
@@ -140,22 +142,34 @@ export function MenuBrowser({
   }, [])
 
   return (
-    <div className="flex min-h-dvh flex-col pb-24">
+    <div className="flex min-h-dvh flex-col pb-28 text-white">
+      {/* Glass chrome over the restaurant's own cover photo (see BrandTheme). */}
       <header
         ref={headerRef}
-        className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur-xl"
+        className="sticky top-0 z-30 border-b border-white/10 bg-black/35 backdrop-blur-2xl"
       >
-        <div className="flex items-center gap-2 px-4 py-3">
-          <Button variant="ghost" size="icon-sm" asChild aria-label="Back">
-            <Link href="/order">
-              <ArrowLeft />
-            </Link>
-          </Button>
+        <div className="flex items-center gap-2.5 px-4 py-3">
+          <Link
+            href="/order"
+            aria-label="Back"
+            className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors active:bg-white/20"
+          >
+            <ArrowLeft className="size-4" />
+          </Link>
+
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoUrl}
+              alt=""
+              className="size-9 shrink-0 rounded-xl border border-white/20 object-cover"
+            />
+          ) : null}
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold leading-tight">{restaurantName}</p>
+            <p className="truncate text-sm font-semibold leading-tight text-white">{restaurantName}</p>
             {state.table ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-white/60">
                 Table {state.table.tableNumber}
                 {state.table.label ? ` · ${state.table.label}` : ''}
               </p>
@@ -178,21 +192,21 @@ export function MenuBrowser({
                 </button>
               ) : undefined
             }
-            className="h-11 rounded-xl bg-muted/50"
+            className="h-11 rounded-xl border-white/15 bg-white/10 text-white placeholder:text-white/45 focus-visible:ring-[rgb(var(--brand-r),var(--brand-g),var(--brand-b))]"
           />
         </div>
 
         <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3">
           <Chip active={diet === 'VEG'} onClick={() => setDiet(diet === 'VEG' ? 'ALL' : 'VEG')}>
-            <span className="text-success">●</span> Veg
+            <span className="text-emerald-400">●</span> Veg
           </Chip>
           <Chip
             active={diet === 'NON_VEG'}
             onClick={() => setDiet(diet === 'NON_VEG' ? 'ALL' : 'NON_VEG')}
           >
-            <span className="text-destructive">●</span> Non-veg
+            <span className="text-red-400">●</span> Non-veg
           </Chip>
-          <span className="my-1 w-px shrink-0 bg-border" />
+          <span className="my-1 w-px shrink-0 bg-white/15" />
           <Chip active={category === 'ALL'} onClick={() => setCategory('ALL')}>
             All
           </Chip>
@@ -221,16 +235,22 @@ export function MenuBrowser({
         ) : null}
 
         {loyalty?.enabled && loyalty.earnRateX100 > 0 ? (
-          <div className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-lg">
+          <div
+            className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border p-3 backdrop-blur-xl"
+            style={{
+              borderColor: 'rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.35)',
+              backgroundColor: 'rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.12)',
+            }}
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-lg">
               🎁
             </span>
             <div className="min-w-0 text-xs leading-snug">
-              <p className="font-semibold text-foreground">
+              <p className="font-semibold text-white">
                 Earn {formatPoints(loyalty.earnRateX100 / 100)}{' '}
                 {loyalty.earnRateX100 === 100 ? 'point' : 'points'} for every {currency} 1 you spend
               </p>
-              <p className="text-muted-foreground">
+              <p className="text-white/60">
                 Collect points on every order
                 {loyalty.pointValue > 0 ? ` and redeem them for ${currency} off future visits` : ''}.
               </p>
@@ -239,14 +259,19 @@ export function MenuBrowser({
         ) : null}
 
         {showRecommended ? (
-          <section className="border-b bg-gradient-to-b from-primary/[0.07] to-transparent py-5">
+          <section className="py-5">
             <div className="mb-3 flex items-center gap-2.5 px-4">
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-chart-5 text-white shadow-soft">
+              <span
+                className="flex size-8 shrink-0 items-center justify-center rounded-xl text-white shadow-lg"
+                style={{ backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
+              >
                 <Sparkles className="size-4" />
               </span>
               <div>
-                <h2 className="text-sm font-bold leading-tight">Chef&rsquo;s picks &amp; favourites</h2>
-                <p className="text-[11px] text-muted-foreground">Our guests love these — tap to add</p>
+                <h2 className="text-sm font-bold leading-tight text-white">
+                  Chef&rsquo;s picks &amp; favourites
+                </h2>
+                <p className="text-[11px] text-white/55">Our guests love these — tap to add</p>
               </div>
             </div>
             <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-1">
@@ -256,9 +281,9 @@ export function MenuBrowser({
                   type="button"
                   onClick={() => setActive(item)}
                   style={{ animationDelay: `${index * 70}ms` }}
-                  className="group w-44 shrink-0 animate-fade-up overflow-hidden rounded-2xl border border-primary/15 bg-card text-left shadow-soft ring-1 ring-black/5 transition-transform active:scale-[0.97]"
+                  className="group w-44 shrink-0 animate-fade-up overflow-hidden rounded-2xl border border-white/12 bg-white/[0.07] text-left shadow-[0_10px_30px_rgba(0,0,0,0.4)] backdrop-blur-xl transition-transform active:scale-[0.97]"
                 >
-                  <div className="relative h-28 overflow-hidden bg-gradient-to-br from-amber-50 to-orange-100">
+                  <div className="relative h-28 overflow-hidden bg-white/[0.06]">
                     {item.imageUrl ? (
                       <Image
                         src={item.imageUrl}
@@ -268,11 +293,17 @@ export function MenuBrowser({
                         className="object-cover transition-transform duration-500 group-hover:scale-110"
                       />
                     ) : (
-                      <span className="flex size-full items-center justify-center text-orange-400">
+                      <span
+                        className="flex size-full items-center justify-center"
+                        style={{ color: 'rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.75)' }}
+                      >
                         <Utensils className="size-7" />
                       </span>
                     )}
-                    <span className="absolute left-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-bold text-primary shadow-soft backdrop-blur">
+                    <span
+                      className="absolute left-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-bold shadow-soft backdrop-blur"
+                      style={{ color: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
+                    >
                       {item.isPopular ? '🔥 Popular' : '⭐ Chef’s pick'}
                     </span>
                     <span className="absolute bottom-2 right-2 rounded-lg bg-black/65 px-2 py-0.5 text-xs font-bold text-white backdrop-blur">
@@ -281,7 +312,7 @@ export function MenuBrowser({
                   </div>
                   <div className="flex items-center gap-1.5 p-2.5">
                     <VegIndicator isVeg={item.isVeg} />
-                    <p className="line-clamp-1 text-sm font-semibold">{item.name}</p>
+                    <p className="line-clamp-1 text-sm font-semibold text-white">{item.name}</p>
                   </div>
                 </button>
               ))}
@@ -314,18 +345,18 @@ export function MenuBrowser({
           />
         ) : (
           grouped.map(({ category: entry, items }) => (
-            <section key={entry.id} className="border-b last:border-b-0">
+            <section key={entry.id}>
               <div
                 style={{ top: headerHeight }}
-                className="sticky z-10 bg-background/90 px-4 py-2.5 backdrop-blur"
+                className="sticky z-10 bg-black/35 px-4 py-2.5 backdrop-blur-xl"
               >
-                <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
+                <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-white/55">
                   {entry.name}
-                  <span className="ml-2 font-normal normal-case">{items.length}</span>
+                  <span className="ml-2 font-normal normal-case text-white/35">{items.length}</span>
                 </h2>
               </div>
 
-              <ul className="divide-y">
+              <ul className="space-y-2.5 px-4 py-3">
                 {items.map((item) => (
                   <li key={item.id}>
                     <button
@@ -333,8 +364,10 @@ export function MenuBrowser({
                       onClick={() => item.isAvailable && setActive(item)}
                       disabled={!item.isAvailable}
                       className={cn(
-                        'flex w-full items-start gap-3 px-4 py-4 text-left transition-colors',
-                        item.isAvailable ? 'active:bg-muted/50' : 'cursor-not-allowed opacity-55',
+                        'flex w-full items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.07] p-3 text-left shadow-[0_8px_28px_rgba(0,0,0,0.35)] backdrop-blur-xl transition-all',
+                        item.isAvailable
+                          ? 'active:scale-[0.985] active:bg-white/[0.12]'
+                          : 'cursor-not-allowed opacity-45',
                       )}
                     >
                       <div className="min-w-0 flex-1">
@@ -352,26 +385,31 @@ export function MenuBrowser({
                           ) : null}
                         </div>
 
-                        <h3 className="mt-1 text-[15px] font-semibold leading-tight">{item.name}</h3>
+                        <h3 className="mt-1 text-[15px] font-semibold leading-tight text-white">
+                          {item.name}
+                        </h3>
 
                         <div className="mt-1 flex items-center gap-2">
-                          <span className="text-[15px] font-semibold">
+                          <span
+                            className="text-[15px] font-bold"
+                            style={{ color: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
+                          >
                             {formatMoney(item.price, currency, locale)}
                           </span>
                           {item.compareAt ? (
-                            <span className="text-xs text-muted-foreground line-through">
+                            <span className="text-xs text-white/40 line-through">
                               {formatMoney(item.compareAt, currency, locale)}
                             </span>
                           ) : null}
                         </div>
 
                         {item.description ? (
-                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-white/55">
                             {item.description}
                           </p>
                         ) : null}
 
-                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/50">
                           <span className="flex items-center gap-1">
                             <Timer className="size-3" /> {item.prepTimeMinutes} min
                           </span>
@@ -384,12 +422,12 @@ export function MenuBrowser({
                             </span>
                           ) : null}
                           {!item.isAvailable ? (
-                            <span className="font-medium text-destructive">Sold out</span>
+                            <span className="font-semibold text-red-400">Sold out</span>
                           ) : null}
                         </div>
                       </div>
 
-                      <div className="relative size-24 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 to-orange-100 ring-1 ring-black/5">
+                      <div className="relative size-24 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/[0.06]">
                         {item.imageUrl ? (
                           <Image
                             src={item.imageUrl}
@@ -399,13 +437,21 @@ export function MenuBrowser({
                             className="object-cover"
                           />
                         ) : (
-                          <span className="flex size-full flex-col items-center justify-center gap-0.5 text-orange-400">
+                          <span
+                            className="flex size-full flex-col items-center justify-center gap-0.5"
+                            style={{ color: 'rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.75)' }}
+                          >
                             <Utensils className="size-6" />
                             <span className="text-[9px] font-medium uppercase tracking-wide">Photo soon</span>
                           </span>
                         )}
                         {item.isAvailable ? (
-                          <span className="absolute bottom-1 right-1 rounded-lg bg-background px-2 py-0.5 text-[11px] font-bold text-primary shadow-soft">
+                          <span
+                            className="absolute bottom-1 right-1 rounded-lg px-2 py-0.5 text-[11px] font-bold text-white shadow-lg"
+                            style={{
+                              backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
+                            }}
+                          >
                             ADD
                           </span>
                         ) : null}
@@ -423,11 +469,18 @@ export function MenuBrowser({
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-lg p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <Link
             href="/order/cart"
-            className="flex items-center gap-3 rounded-2xl bg-primary px-4 py-3.5 text-primary-foreground shadow-elevated transition-transform active:scale-[0.99]"
+            style={{
+              backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
+              boxShadow: '0 12px 34px rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.45)',
+            }}
+            className="flex items-center gap-3 rounded-2xl px-4 py-3.5 text-white transition-transform active:scale-[0.99]"
           >
             <span className="relative flex size-9 items-center justify-center rounded-xl bg-white/20">
               <ShoppingBag className="size-4.5" />
-              <span className="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-background text-[11px] font-bold text-primary">
+              <span
+                className="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-white text-[11px] font-bold"
+                style={{ color: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
+              >
                 {itemCount}
               </span>
             </span>
@@ -474,11 +527,20 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      style={
+        active
+          ? {
+              backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
+              borderColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
+              boxShadow: '0 6px 20px rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.35)',
+            }
+          : undefined
+      }
       className={cn(
         'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all active:scale-95',
         active
-          ? 'border-primary bg-primary text-primary-foreground shadow-soft'
-          : 'bg-background hover:bg-muted',
+          ? 'border-transparent text-white'
+          : 'border-white/15 bg-white/10 text-white/85 hover:bg-white/15',
       )}
     >
       {children}
@@ -507,9 +569,13 @@ function ServiceRequestDialog({ tableId }: { tableId: string | null }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="shrink-0 gap-1.5">
+        {/* Glass, not the default outline button — this sits on the dark chrome. */}
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm font-medium text-white transition-colors active:bg-white/20"
+        >
           <Bell className="size-3.5" /> Call
-        </Button>
+        </button>
       </DialogTrigger>
       <DialogContent size="sm">
         <DialogHeader>
