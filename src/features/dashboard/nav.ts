@@ -92,6 +92,12 @@ export const NAV_SECTIONS: NavSection[] = [
       // Categories are a fixed set (see default-categories.ts) — no management
       // screen; owners just pick one when adding a dish.
       { href: '/dashboard/menu', label: 'Menu items', icon: Utensils, permission: PERMISSIONS.MENU_VIEW },
+      {
+        href: '/dashboard/menu/import',
+        label: 'Add your menu',
+        icon: Sparkles,
+        permission: PERMISSIONS.MENU_MANAGE,
+      },
       { href: '/dashboard/loyalty', label: 'Loyalty', icon: Sparkles, permission: PERMISSIONS.SETTINGS_VIEW },
       { href: '/dashboard/coupons', label: 'Coupons', icon: Ticket, permission: PERMISSIONS.COUPON_MANAGE },
     ],
