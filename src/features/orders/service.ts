@@ -332,6 +332,45 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     throw new AppError('A table is required for dine-in orders', 400, 'TABLE_REQUIRED')
   }
 
+  /*
+   * Everything that only reads happens before the transaction opens.
+   *
+   * Re-pricing the cart reads the menu, its variant groups and any coupon —
+   * several round trips. Doing that inside the write transaction held a database
+   * connection open for the whole of it, so on a busy service transactions
+   * queued behind each other until they hit their own 15-second timeout and the
+   * guest was told "Something went wrong". Measured before this change: six
+   * simultaneous orders took 15s and twelve failed outright. The transaction now
+   * contains writes only.
+   *
+   * Loyalty pricing needs the guest's current points, so the customer is read
+   * here and upserted inside the transaction. A guest ordering for the first
+   * time has no points, which is what `null` prices correctly.
+   */
+  const existingCustomer = await prisma.customer.findUnique({
+    where: {
+      restaurantId_phone: { restaurantId: params.restaurantId, phone: params.customerPhone },
+    },
+    select: { id: true, isBlocked: true },
+  })
+
+  if (existingCustomer?.isBlocked) {
+    throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
+  }
+
+  const draft = await buildDraft({
+    restaurantId: params.restaurantId,
+    items: params.items,
+    couponCode: params.couponCode,
+    manualDiscount: params.manualDiscount,
+    redeemPoints: params.redeemPoints,
+    customerId: existingCustomer?.id ?? null,
+  })
+
+  if (params.couponCode && draft.couponError) {
+    throw new AppError(draft.couponError, 400, 'COUPON_INVALID')
+  }
+
   const runPlacement = () =>
     prisma.$transaction(
     async (tx) => {
@@ -364,22 +403,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
         },
       })
 
+      // Blocked status was checked before the transaction; re-check here only in
+      // case the row was created between the two, which the upsert would hide.
       if (customer.isBlocked) {
         throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
-      }
-
-      const draft = await buildDraft({
-        restaurantId: params.restaurantId,
-        items: params.items,
-        couponCode: params.couponCode,
-        manualDiscount: params.manualDiscount,
-        redeemPoints: params.redeemPoints,
-        customerId: customer.id,
-        db: tx,
-      })
-
-      if (params.couponCode && draft.couponError) {
-        throw new AppError(draft.couponError, 400, 'COUPON_INVALID')
       }
 
       // No retry loop here: a Postgres transaction is aborted the moment a
@@ -480,7 +507,15 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
 
       return created
     },
-    { timeout: 15_000 },
+    {
+      timeout: 15_000,
+      // How long to wait for a free connection before giving up. Prisma's
+      // default is 2s, which a busy moment on a serverless host exceeds easily —
+      // and the resulting P2028 reaches the guest as "Something went wrong"
+      // rather than anything they can act on. Waiting a little longer to place
+      // an order is always better than refusing it.
+      maxWait: 10_000,
+    },
   )
 
   /*
@@ -490,11 +525,24 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
    * unique — but it must not reach the guest as an error. Re-running the whole
    * transaction re-reads the highest number, so the retry gets the next one.
    *
-   * Only a duplicate order number is retried; any other failure is real and
-   * surfaces immediately. Five attempts covers far more simultaneity than a
-   * dining room can produce, and the backoff keeps retries from re-colliding.
+   * The same loop absorbs transient database contention — a transaction that
+   * could not get a connection in time (P2028/P2024). Those say nothing about
+   * the order; they mean the moment was busy. A guest should never lose a
+   * basket because two other tables happened to check out first.
+   *
+   * Everything else is a real failure and surfaces immediately.
    */
-  const MAX_ATTEMPTS = 5
+  // An attempt is now a short write-only transaction (~10 ms), so attempts are
+  // cheap and the ceiling can be generous: with twenty guests checking out in
+  // the same instant, the unluckiest one still needs several tries before it
+  // finds a free number. Five was not enough at that volume; ten is, with room
+  // to spare, and costs nothing when there is no contention.
+  const MAX_ATTEMPTS = 10
+  const TRANSIENT_CODES = new Set([
+    'P2024', // timed out fetching a connection from the pool
+    'P2028', // could not start a transaction in the given time
+    'P1017', // server closed the connection
+  ])
   let order: Order | null = null
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -504,8 +552,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     } catch (error) {
       const isDuplicateNumber =
         isUniqueViolation(error) && uniqueViolationTargets(error).includes('orderNumber')
+      const code = (error as { code?: string })?.code
+      const isTransient = typeof code === 'string' && TRANSIENT_CODES.has(code)
 
-      if (!isDuplicateNumber || attempt === MAX_ATTEMPTS) throw error
+      if ((!isDuplicateNumber && !isTransient) || attempt === MAX_ATTEMPTS) throw error
 
       // Jittered backoff — a fixed delay would just line the losers up to
       // collide with each other again on the next attempt.

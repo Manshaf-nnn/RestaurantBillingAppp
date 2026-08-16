@@ -124,8 +124,21 @@ function reducer(state: CartState, action: Action): CartState {
         ),
       }
 
-    case 'setTable':
-      return { ...state, table: action.table }
+    case 'setTable': {
+      // Changing table starts a new sitting.
+      //
+      // The basket is stored per restaurant, not per table, so on a shared
+      // device — the phone a member of staff uses to check the system, or one
+      // guest handing it to another — arriving at a different table used to show
+      // the previous table's items still in the cart. Whoever ordered next
+      // silently sent someone else's food to the kitchen against their own
+      // table. Re-entering the same table number is not a change and keeps the
+      // basket, so a guest who backs out to the entry screen loses nothing.
+      const sameTable = state.table?.tableId === action.table?.tableId
+      if (sameTable) return { ...state, table: action.table }
+
+      return { ...EMPTY, table: action.table }
+    }
 
     case 'setCoupon':
       return { ...state, couponCode: action.code }

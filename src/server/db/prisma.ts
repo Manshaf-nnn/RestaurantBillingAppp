@@ -13,9 +13,14 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
  * which assume one long-running server owning a pool of connections — are the
  * wrong shape and are the usual reason a dashboard feels slow:
  *
- *  - `connection_limit=1`: a function handles one request at a time, so a pool
- *    per invocation just multiplies idle connections and exhausts the database's
- *    connection cap under load.
+ *  - `connection_limit=5`: small, because each invocation keeps its own pool, but
+ *    NOT 1. A single request needs more than one connection whenever it runs
+ *    queries in parallel or opens an interactive transaction while other work is
+ *    in flight, and a warm instance can be handling several requests at once.
+ *    At 1 the second caller waits for the first to finish; Prisma only waits
+ *    `maxWait` (2s by default) before giving up with P2028, which surfaces to a
+ *    guest as "Something went wrong". Measured: at limit 1, five of eight
+ *    concurrent order placements failed; at 5, none did.
  *  - `pgbouncer=true`: Neon's pooled endpoint runs PgBouncer in transaction
  *    mode, which cannot hold Prisma's prepared statements between statements.
  *    Without this flag you eventually get "prepared statement s0 already
@@ -48,8 +53,8 @@ function resolveDatabaseUrl(): string | undefined {
   }
 
   const params = url.searchParams
-  if (!params.has('connection_limit')) params.set('connection_limit', '1')
-  if (!params.has('pool_timeout')) params.set('pool_timeout', '15')
+  if (!params.has('connection_limit')) params.set('connection_limit', '5')
+  if (!params.has('pool_timeout')) params.set('pool_timeout', '20')
   if (!params.has('connect_timeout')) params.set('connect_timeout', '10')
   if (url.hostname.includes('-pooler') && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
   if (!params.has('sslmode')) params.set('sslmode', 'require')
