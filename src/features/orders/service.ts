@@ -3,7 +3,12 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
-import { prisma, isUniqueViolation, type TxClient } from '@/server/db/prisma'
+import {
+  prisma,
+  isUniqueViolation,
+  uniqueViolationTargets,
+  type TxClient,
+} from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
@@ -25,29 +30,55 @@ import {
  * Human-friendly, per-restaurant, per-day sequence: `240724-014`.
  * Collisions under concurrency are resolved by retrying the insert.
  */
+/**
+ * The next order number for today, e.g. `260816-004`.
+ *
+ * Derived from the highest number already issued for the day, not from a count
+ * of today's orders. Counting was wrong in two ways:
+ *
+ *  - It counted rows created since *server-local* midnight while stamping the
+ *    date in the *restaurant's* timezone. On a UTC host serving a UTC+5:30
+ *    restaurant those roll over 5½ hours apart, so for that window each day the
+ *    counter resets while the stamp does not — and the sequence restarts at 001
+ *    over numbers already issued that morning.
+ *  - Cancelling an order lowers the count, so the next order reuses a number
+ *    that already exists.
+ *
+ * Reading the maximum instead makes the day's prefix the only thing that
+ * decides the window, so both problems disappear. Concurrent callers can still
+ * derive the same number — that race is settled by the unique index and the
+ * retry in `placeOrder`, which is the only way to settle it correctly.
+ */
 async function nextOrderNumber(
   tx: TxClient,
   restaurantId: string,
   timezone: string,
 ): Promise<string> {
-  const now = new Date()
   const stamp = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
     year: '2-digit',
     month: '2-digit',
     day: '2-digit',
   })
-    .format(now)
+    .format(new Date())
     .replace(/-/g, '')
 
-  const startOfDay = new Date(now)
-  startOfDay.setHours(0, 0, 0, 0)
+  const prefix = `${stamp}-`
 
-  const todayCount = await tx.order.count({
-    where: { restaurantId, createdAt: { gte: startOfDay } },
+  // Covered by the unique index on (restaurantId, orderNumber).
+  const issued = await tx.order.findMany({
+    where: { restaurantId, orderNumber: { startsWith: prefix } },
+    select: { orderNumber: true },
   })
 
-  return `${stamp}-${String(todayCount + 1).padStart(3, '0')}`
+  // Split bills add a letter suffix (`260816-004-A`); parseInt stops at it, so
+  // a split never inflates the sequence.
+  const highest = issued.reduce((max, row) => {
+    const sequence = Number.parseInt(row.orderNumber.slice(prefix.length), 10)
+    return Number.isFinite(sequence) && sequence > max ? sequence : max
+  }, 0)
+
+  return `${prefix}${String(highest + 1).padStart(3, '0')}`
 }
 
 // ── draft construction ───────────────────────────────────────────────────────
@@ -301,7 +332,8 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     throw new AppError('A table is required for dine-in orders', 400, 'TABLE_REQUIRED')
   }
 
-  const order = await prisma.$transaction(
+  const runPlacement = () =>
+    prisma.$transaction(
     async (tx) => {
       // Table must exist inside this tenant — never trust a submitted id.
       let table = null
@@ -350,11 +382,13 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
         throw new AppError(draft.couponError, 400, 'COUPON_INVALID')
       }
 
-      let created: Order | null = null
-      for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
-        const orderNumber = await nextOrderNumber(tx, params.restaurantId, restaurant.timezone)
-        try {
-          created = await tx.order.create({
+      // No retry loop here: a Postgres transaction is aborted the moment a
+      // statement violates a constraint, so every later statement in it fails
+      // with "current transaction is aborted". Retrying inside the transaction
+      // could never succeed — the retry lives around the whole transaction, in
+      // `placeOrder` below.
+      const orderNumber = await nextOrderNumber(tx, params.restaurantId, restaurant.timezone)
+      const created: Order = await tx.order.create({
             data: {
               restaurantId: params.restaurantId,
               orderNumber,
@@ -402,14 +436,6 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
               },
             },
           })
-        } catch (error) {
-          // Two guests checked out in the same millisecond — take the next number.
-          if (isUniqueViolation(error)) continue
-          throw error
-        }
-      }
-
-      if (!created) throw new ConflictError('Could not allocate an order number, please retry')
 
       // Coupon accounting.
       if (draft.couponId && draft.totals.discountTotal > 0) {
@@ -456,6 +482,38 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     },
     { timeout: 15_000 },
   )
+
+  /*
+   * Two guests tapping "Place order" at the same moment derive the same order
+   * number, and the unique index on (restaurantId, orderNumber) rejects the
+   * loser. That is the correct outcome — it is what guarantees numbers are
+   * unique — but it must not reach the guest as an error. Re-running the whole
+   * transaction re-reads the highest number, so the retry gets the next one.
+   *
+   * Only a duplicate order number is retried; any other failure is real and
+   * surfaces immediately. Five attempts covers far more simultaneity than a
+   * dining room can produce, and the backoff keeps retries from re-colliding.
+   */
+  const MAX_ATTEMPTS = 5
+  let order: Order | null = null
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      order = await runPlacement()
+      break
+    } catch (error) {
+      const isDuplicateNumber =
+        isUniqueViolation(error) && uniqueViolationTargets(error).includes('orderNumber')
+
+      if (!isDuplicateNumber || attempt === MAX_ATTEMPTS) throw error
+
+      // Jittered backoff — a fixed delay would just line the losers up to
+      // collide with each other again on the next attempt.
+      await new Promise((resolve) => setTimeout(resolve, attempt * 20 + Math.random() * 30))
+    }
+  }
+
+  if (!order) throw new ConflictError('Could not allocate an order number, please retry')
 
   await broadcastOrder(order.id, 'created')
   return order
