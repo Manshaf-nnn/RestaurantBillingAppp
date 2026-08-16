@@ -94,7 +94,15 @@ export default function CoverPage(props: Props) {
       const result = await resolveTable({ tableNumber: trimmed })
       if (!result.ok) { setError(result.error); setPending(false); return }
       setTable(result.data)
-      toast.success(`Table ${result.data.tableNumber} — welcome!`)
+      // Say so up front if the table is mid-service. Finding out only at the
+      // bill that it includes an earlier round is how arguments start.
+      if (result.data.openBill) {
+        toast.info(`Table ${result.data.tableNumber} already has an open bill`, {
+          description: 'Anything you order will be added to it.',
+        })
+      } else {
+        toast.success(`Table ${result.data.tableNumber} — welcome!`)
+      }
       router.push('/order/menu')
     } catch { setError('Something went wrong') }
     finally { setPending(false) }

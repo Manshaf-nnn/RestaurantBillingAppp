@@ -236,6 +236,30 @@ export function MenuBrowser({
           </div>
         ) : null}
 
+        {/*
+          Stays on screen while they browse. The toast at table entry is easy to
+          miss, and this is the kind of thing a guest should be able to re-read
+          before they commit to an order rather than discover on the bill.
+        */}
+        {state.table?.openBill ? (
+          <div className="guest-surface mx-4 mt-4 flex items-start gap-3 rounded-2xl border p-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-lg">
+              🧾
+            </span>
+            <div className="min-w-0 text-xs leading-snug">
+              <p className="guest-ink font-semibold">
+                Table {state.table.tableNumber} already has an open bill
+              </p>
+              <p className="guest-ink-muted">
+                {state.table.openBill.itemCount} item
+                {state.table.openBill.itemCount === 1 ? '' : 's'} ·{' '}
+                {formatMoney(state.table.openBill.outstanding, currency, locale)} unpaid. Anything
+                you add joins this bill. Ask our staff if this is not your table.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {loyalty?.enabled && loyalty.earnRateX100 > 0 ? (
           <div
             className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border p-3 backdrop-blur-xl"

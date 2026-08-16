@@ -38,7 +38,14 @@ import { computeTotals, estimatePrepMinutes } from './pricing'
 export async function resolveTable(
   input: unknown,
   slug?: string,
-): Promise<ActionResult<{ tableId: string; tableNumber: string; label: string | null }>> {
+): Promise<
+  ActionResult<{
+    tableId: string
+    tableNumber: string
+    label: string | null
+    openBill: { orders: number; itemCount: number; outstanding: number } | null
+  }>
+> {
   return runAction(tableEntrySchema, input, async (data) => {
     const restaurant = await resolvePublicTenant(slug)
     if (!restaurant) throw new NotFoundError('Restaurant')
@@ -63,7 +70,35 @@ export async function resolveTable(
       throw new AppError('This table is not in service. Please ask our staff for help.', 409, 'TABLE_CLOSED')
     }
 
-    return { tableId: table.id, tableNumber: table.number, label: table.label }
+    // A table can already be mid-service: an earlier round from the same party,
+    // or a previous group whose bill has not been settled. Either way the guest
+    // should be told, because their order joins that bill rather than starting a
+    // fresh one — and the total they eventually see will include it.
+    const openOrders = await prisma.order.findMany({
+      where: {
+        restaurantId: restaurant.id,
+        tableId: table.id,
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+        paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
+      },
+      select: { grandTotal: true, paidTotal: true, items: { select: { quantity: true } } },
+    })
+
+    const openBill = openOrders.length
+      ? {
+          orders: openOrders.length,
+          itemCount: openOrders.reduce(
+            (sum, order) => sum + order.items.reduce((n, item) => n + item.quantity, 0),
+            0,
+          ),
+          outstanding: openOrders.reduce(
+            (sum, order) => sum + Math.max(0, order.grandTotal - order.paidTotal),
+            0,
+          ),
+        }
+      : null
+
+    return { tableId: table.id, tableNumber: table.number, label: table.label, openBill }
   })
 }
 

@@ -38,6 +38,12 @@ export interface TableSession {
   tableId: string
   tableNumber: string
   label: string | null
+  /** Set when the table already has an unsettled bill the guest is joining. */
+  openBill?: {
+    orders: number
+    itemCount: number
+    outstanding: number
+  } | null
 }
 
 interface CartState {
