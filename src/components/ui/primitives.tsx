@@ -128,7 +128,11 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex h-10 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground',
+      // `max-w-full` + horizontal scroll: an `inline-flex` strip sizes to its
+      // triggers and pushes the page sideways once there are enough of them —
+      // Settings crossed that line at five tabs on a phone. Scrolling the strip
+      // keeps every tab reachable without shrinking the labels to nothing.
+      'no-scrollbar inline-flex h-10 max-w-full items-center justify-start overflow-x-auto rounded-lg bg-muted p-1 text-muted-foreground sm:justify-center',
       className,
     )}
     {...props}
@@ -143,7 +147,9 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all',
+      // `shrink-0` so triggers keep their width inside the scrolling strip
+      // rather than being squeezed until the labels are unreadable.
+      'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all',
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
       'disabled:pointer-events-none disabled:opacity-50',
       'data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-soft',

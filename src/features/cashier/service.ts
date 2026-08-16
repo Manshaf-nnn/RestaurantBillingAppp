@@ -52,6 +52,11 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
     loyaltyDiscount: order.loyaltyDiscount,
     tipAmount: order.tipAmount,
     currency: restaurant.currency,
+    // Must match how the bill was priced at checkout, which rounds the grand
+    // total to the nearest major unit. Recomputing without it made splitting or
+    // merging change what the guest owes by up to a rupee, and meant a split
+    // followed by a merge did not return the original total.
+    roundTotal: true,
   })
 
   return tx.order.update({
