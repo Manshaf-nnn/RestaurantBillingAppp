@@ -33,9 +33,20 @@ export const placeOrderSchema = z.object({
 })
 export type PlaceOrderInput = z.infer<typeof placeOrderSchema>
 
+/**
+ * Staff-entered orders.
+ *
+ * Customer name and phone are relaxed to optional here. A guest ordering by QR
+ * is identifying themselves, so the public schema rightly insists on both; a
+ * cashier ringing up a walk-in coffee has no phone number to type and should
+ * not have to invent one to take the money. The service fills a placeholder
+ * name when none is given.
+ */
 export const staffOrderSchema = placeOrderSchema.extend({
   type: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'COUNTER']).default('DINE_IN'),
   tableId: z.string().cuid().optional().or(z.literal('')),
+  customerName: z.string().trim().max(60).optional().or(z.literal('')),
+  customerPhone: z.string().trim().max(20).optional().or(z.literal('')),
   manualDiscount: z.coerce.number().int().min(0).default(0),
 })
 export type StaffOrderInput = z.infer<typeof staffOrderSchema>
