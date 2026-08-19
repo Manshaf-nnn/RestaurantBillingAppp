@@ -58,6 +58,15 @@ export const PERMISSIONS = {
   AUDIT_VIEW: 'audit.view',
   REVIEW_MANAGE: 'review.manage',
 
+  // inventory — moving stock and changing what it cost are separate powers
+  // from ordinary stock-keeping, so they are separate permissions.
+  INVENTORY_ADJUST: 'inventory.adjust',
+  INVENTORY_WASTAGE: 'inventory.wastage',
+  INVENTORY_TRANSFER: 'inventory.transfer',
+  INVENTORY_COUNT: 'inventory.count',
+  INVENTORY_COUNT_APPROVE: 'inventory.countApprove',
+  INVENTORY_COST_EDIT: 'inventory.costEdit',
+
   // branches
   BRANCH_VIEW: 'branch.view',
   BRANCH_MANAGE: 'branch.manage',
@@ -82,6 +91,8 @@ const KITCHEN: Permission[] = [
   PERMISSIONS.ORDER_UPDATE_STATUS,
   PERMISSIONS.MENU_VIEW,
   PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.INVENTORY_WASTAGE,
+  PERMISSIONS.INVENTORY_COUNT,
 ]
 
 const CASHIER: Permission[] = [

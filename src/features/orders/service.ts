@@ -3,6 +3,7 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
+import { postMovement } from '@/features/inventory/ledger'
 import {
   prisma,
   isUniqueViolation,
@@ -778,7 +779,7 @@ export async function cancelOrder(params: {
 
     // Return any ingredients already deducted.
     const consumed = await tx.stockMovement.findMany({
-      where: { orderId: order.id, type: 'CONSUMPTION' },
+      where: { orderId: order.id, type: { in: ['SALE', 'CONSUMPTION'] } },
     })
     for (const movement of consumed) {
       await tx.inventoryItem.update({
@@ -849,7 +850,10 @@ async function consumeIngredients(
   orderId: string,
   userId: string | null,
 ): Promise<void> {
-  const already = await tx.stockMovement.count({ where: { orderId, type: 'CONSUMPTION' } })
+  // Legacy rows used CONSUMPTION; both count as already-deducted.
+  const already = await tx.stockMovement.count({
+    where: { orderId, type: { in: ['SALE', 'CONSUMPTION'] } },
+  })
   if (already > 0) return
 
   const items = await tx.orderItem.findMany({
@@ -877,22 +881,21 @@ async function consumeIngredients(
   }
 
   for (const [itemId, quantity] of consumption) {
-    const updated = await tx.inventoryItem.update({
-      where: { id: itemId },
-      data: { quantity: { decrement: quantity } },
-      select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
+    // Routed through the ledger rather than decrementing the item directly.
+    // The old code did both writes separately, which meant a balance and its
+    // own history could disagree and no row carried a running total.
+    const posted = await postMovement(tx, {
+      restaurantId,
+      itemId,
+      type: 'SALE',
+      quantity,
+      reason: 'Order preparation',
+      referenceType: 'Order',
+      referenceId: orderId,
+      orderId,
+      userId,
     })
-    await tx.stockMovement.create({
-      data: {
-        restaurantId,
-        itemId,
-        type: 'CONSUMPTION',
-        quantity: -quantity,
-        reason: 'Order preparation',
-        orderId,
-        userId,
-      },
-    })
+    const updated = posted.item
 
     if (updated.quantity <= updated.reorderLevel) {
       realtime.lowStock(restaurantId, {

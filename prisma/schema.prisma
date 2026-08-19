@@ -167,15 +167,44 @@ enum StockUnit {
   PACK
   BOTTLE
   DOZEN
+  BOX
 }
 
 enum StockMovementType {
   PURCHASE
+  /// Legacy: superseded by SALE. Kept so existing rows still read.
   CONSUMPTION
+  /// Legacy: superseded by WASTAGE.
   WASTE
+  /// Legacy: superseded by ADJUSTMENT_IN / ADJUSTMENT_OUT.
   ADJUSTMENT
+  /// Legacy: superseded by RETURN_TO_SUPPLIER / CUSTOMER_RETURN.
   RETURN
   EXPIRY
+
+  SALE
+  WASTAGE
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  TRANSFER_IN
+  TRANSFER_OUT
+  RETURN_TO_SUPPLIER
+  CUSTOMER_RETURN
+  PRODUCTION
+  OPENING_BALANCE
+}
+
+enum StockCountStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  APPROVED
+  CANCELLED
+}
+
+enum StockAlertLevel {
+  OUT_OF_STOCK
+  LOW_STOCK
+  OVERSTOCK
 }
 
 enum PurchaseStatus {
@@ -287,33 +316,35 @@ model Restaurant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users           User[]
-  categories      Category[]
-  foods           Food[]
-  tables          RestaurantTable[]
-  customers       Customer[]
-  orders          Order[]
-  payments        Payment[]
-  invoices        Invoice[]
-  coupons         Coupon[]
-  reservations    Reservation[]
-  reviews         Review[]
-  feedback        Feedback[]
-  shiftNotes      ShiftNote[]
-  suppliers       Supplier[]
-  inventoryItems  InventoryItem[]
-  stockMovements  StockMovement[]
-  purchases       Purchase[]
-  notifications   Notification[]
-  auditLogs       AuditLog[]
-  serviceRequests ServiceRequest[]
-  shifts          StaffShift[]
-  mediaBackups    MediaBackup[]
-  mediaAssets     MediaAsset[]
-  invites         Invite[]
-  menuSnapshots   RestaurantMenuSnapshot[]
-  branches        Branch[]
-  cashDrawers     CashDrawerSession[]
+  users            User[]
+  categories       Category[]
+  foods            Food[]
+  tables           RestaurantTable[]
+  customers        Customer[]
+  orders           Order[]
+  payments         Payment[]
+  invoices         Invoice[]
+  coupons          Coupon[]
+  reservations     Reservation[]
+  reviews          Review[]
+  feedback         Feedback[]
+  shiftNotes       ShiftNote[]
+  suppliers        Supplier[]
+  inventoryItems   InventoryItem[]
+  stockMovements   StockMovement[]
+  purchases        Purchase[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  serviceRequests  ServiceRequest[]
+  shifts           StaffShift[]
+  mediaBackups     MediaBackup[]
+  mediaAssets      MediaAsset[]
+  invites          Invite[]
+  menuSnapshots    RestaurantMenuSnapshot[]
+  branches         Branch[]
+  cashDrawers      CashDrawerSession[]
+  storageLocations StorageLocation[]
+  stockCounts      StockCount[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -436,6 +467,8 @@ model User {
   drawersOpened    CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed    CashDrawerSession[] @relation("DrawerClosedBy")
   cashMovements    CashMovement[]      @relation("CashMovementBy")
+  countsCounted    StockCount[]        @relation("CountCountedBy")
+  countsApproved   StockCount[]        @relation("CountApprovedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -985,17 +1018,44 @@ model InventoryItem {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  name         String
-  sku          String?
-  category     String?
-  unit         StockUnit @default(PIECE)
-  quantity     Float     @default(0)
-  reorderLevel Float     @default(0)
-  /// cost per unit, minor units
-  costPerUnit  Int       @default(0)
+  name     String
+  sku      String?
+  barcode  String?
+  category String?
+
+  /// The unit the ledger is kept in. Every movement is converted to this
+  /// before it is posted, so a balance is never a mix of kg and grams.
+  unit                 StockUnit  @default(PIECE)
+  /// How the supplier sells it, e.g. BOX. Converted on receipt.
+  purchaseUnit         StockUnit?
+  /// How a recipe draws it down, e.g. GRAM. Converted on consumption.
+  consumptionUnit      StockUnit?
+  /// Base units in one purchase unit — "1 box = 10 kg" is 10 when the base
+  /// unit is KG. Only needed when the conversion is not a standard one
+  /// (kg↔g, litre↔ml, dozen↔piece are known); a box or packet is whatever
+  /// this restaurant's supplier says it is.
+  unitsPerPurchaseUnit Float?
+
+  /// Cached balance. The ledger is the source of truth; this is derived from
+  /// it on every post and must never be written to directly.
+  quantity     Float  @default(0)
+  reorderLevel Float  @default(0)
+  minStock     Float  @default(0)
+  /// Par level. Above this the item is flagged as overstocked.
+  maxStock     Float?
+
+  /// Weighted average cost per base unit, minor units. Recomputed on receipt.
+  costPerUnit      Int  @default(0)
+  /// What the last purchase actually cost per base unit, minor units.
+  lastPurchaseCost Int?
+
+  trackExpiry  Boolean          @default(false)
+  trackBatches Boolean          @default(false)
   expiryDate   DateTime?
   storageArea  String?
-  isActive     Boolean   @default(true)
+  locationId   String?
+  location     StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  isActive     Boolean          @default(true)
 
   supplierId String?
   supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
@@ -1009,9 +1069,12 @@ model InventoryItem {
   branch        Branch?         @relation(fields: [branchId], references: [id])
   branchId      String?
 
+  stockCountLines StockCountLine[]
+
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive])
   @@index([restaurantId, expiryDate])
+  @@index([restaurantId, branchId, isActive])
   @@map("inventory_items")
 }
 
@@ -1022,22 +1085,49 @@ model StockMovement {
   itemId       String
   item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  type       StockMovementType
-  /// signed: positive adds stock, negative removes it
-  quantity   Float
-  unitCost   Int               @default(0)
-  reason     String?
-  orderId    String?
-  order      Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  purchaseId String?
-  purchase   Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
-  userId     String?
-  user       User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  type            StockMovementType
+  /// Signed and always in the item's base unit: positive adds, negative removes.
+  quantity        Float
+  /// What the user actually entered, before conversion — kept so the ledger can
+  /// show "500 g" rather than "0.5" when the base unit is kg.
+  quantityEntered Float?
+  enteredUnit     StockUnit?
+  /// Running balance in base units immediately after this row was posted.
+  /// Written inside the same transaction that moves the stock, so the ledger
+  /// explains itself without replaying every earlier row.
+  balanceAfter    Float?
+  unitCost        Int               @default(0)
+  reason          String?
+  notes           String?
+
+  /// What caused this movement — 'Purchase', 'Order', 'StockCount',
+  /// 'Transfer' — plus the id of that record, so every row is traceable back
+  /// to its source.
+  referenceType String?
+  referenceId   String?
+
+  batchNo    String?
+  expiryDate DateTime?
+
+  branchId     String?
+  branch       Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  locationId   String?
+  location     StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  stockCountId String?
+  stockCount   StockCount?      @relation(fields: [stockCountId], references: [id], onDelete: SetNull)
+  orderId      String?
+  order        Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  purchaseId   String?
+  purchase     Purchase?        @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  userId       String?
+  user         User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   @@index([restaurantId, createdAt])
   @@index([itemId, createdAt])
+  @@index([restaurantId, type, createdAt])
+  @@index([referenceType, referenceId])
   @@map("stock_movements")
 }
 
@@ -1260,13 +1350,16 @@ model Branch {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  users          User[]
-  tables         RestaurantTable[]
-  orders         Order[]
-  inventoryItems InventoryItem[]
-  cashDrawers    CashDrawerSession[]
-  shifts         StaffShift[]
-  auditLogs      AuditLog[]
+  users            User[]
+  tables           RestaurantTable[]
+  orders           Order[]
+  inventoryItems   InventoryItem[]
+  cashDrawers      CashDrawerSession[]
+  shifts           StaffShift[]
+  auditLogs        AuditLog[]
+  stockMovements   StockMovement[]
+  storageLocations StorageLocation[]
+  stockCounts      StockCount[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1333,4 +1426,97 @@ model CashMovement {
 
   @@index([sessionId, createdAt])
   @@map("cash_movements")
+}
+
+/// A place stock physically sits — main store, bar fridge, kitchen line.
+///
+/// Separate from Branch: one branch can have several stores, and a transfer
+/// between two of them is a real movement that must show in the ledger.
+model StorageLocation {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  name      String
+  code      String
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  items       InventoryItem[]
+  movements   StockMovement[]
+  stockCounts StockCount[]
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, isActive])
+  @@map("storage_locations")
+}
+
+/// A physical stock take.
+///
+/// Counting is deliberately a two-step process. Typing a number records what
+/// was on the shelf; it does not move stock. Only an explicit approval by
+/// someone holding INVENTORY_ADJUST posts the variance to the ledger. That is
+/// what stops a mistyped count from quietly rewriting the balance, and it
+/// leaves a named person attached to every correction.
+model StockCount {
+  id           String           @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  branch       Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  locationId   String?
+  location     StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  reference String
+  status    StockCountStatus @default(DRAFT)
+  notes     String?
+
+  countedById String?
+  countedBy   User?    @relation("CountCountedBy", fields: [countedById], references: [id], onDelete: SetNull)
+  countedAt   DateTime @default(now())
+
+  approvedById String?
+  approvedBy   User?     @relation("CountApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+
+  lines     StockCountLine[]
+  movements StockMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, reference])
+  @@index([restaurantId, status, countedAt])
+  @@map("stock_counts")
+}
+
+/// One item on a stock take: what the system thought, what was on the shelf.
+model StockCountLine {
+  id           String        @id @default(cuid())
+  stockCountId String
+  stockCount   StockCount    @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  /// Snapshotted when the line is entered, in base units, so a later sale does
+  /// not change what the counter was comparing against.
+  systemQty   Float
+  countedQty  Float
+  /// countedQty - systemQty, in base units. Negative is a shortfall.
+  variance    Float
+  enteredUnit StockUnit?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([stockCountId, itemId])
+  @@index([stockCountId])
+  @@map("stock_count_lines")
 }

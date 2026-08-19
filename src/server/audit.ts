@@ -105,4 +105,13 @@ export const AUDIT_ACTIONS = {
   DRAWER_CLOSED: 'cashDrawer.closed',
   DRAWER_CASH_IN: 'cashDrawer.cash_in',
   DRAWER_CASH_OUT: 'cashDrawer.cash_out',
+
+  STOCK_RECEIVED: 'inventory.received',
+  STOCK_WASTAGE: 'inventory.wastage',
+  STOCK_TRANSFER: 'inventory.transfer',
+  STOCK_RETURN: 'inventory.return',
+  STOCK_OPENING: 'inventory.opening_balance',
+  STOCK_COUNT_OPENED: 'inventory.count_opened',
+  STOCK_COUNT_APPROVED: 'inventory.count_approved',
+  STOCK_COST_EDITED: 'inventory.cost_edited',
 } as const
