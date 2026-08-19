@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Save, Trash2 } from 'lucide-react'
+import { Copy, Plus, Power, Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -11,7 +11,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
-import { saveRecipeAction } from '../actions'
+import { duplicateRecipeAction, saveRecipeAction, setRecipeActiveAction } from '../actions'
 import type { RecipeEditorData } from '../queries'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
@@ -51,6 +51,7 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
   )
   const [notes, setNotes] = React.useState(data.prepNotes ?? '')
   const [busy, setBusy] = React.useState(false)
+  const [copyTo, setCopyTo] = React.useState('')
 
   const itemById = React.useMemo(() => new Map(data.items.map((i) => [i.id, i])), [data.items])
   // Cost per base unit comes from the last saved costing pass; good enough to
@@ -113,6 +114,33 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
       return
     }
     toast.success(`Saved as version ${result.data.version}`)
+    router.refresh()
+  }
+
+  const duplicate = async () => {
+    if (!data.recipeId || !copyTo) return
+    setBusy(true)
+    const result = await duplicateRecipeAction({ recipeId: data.recipeId, toFoodId: copyTo })
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    const target = data.otherFoods.find((f) => f.id === copyTo)
+    toast.success(`Copied to ${target?.name ?? 'the dish'}`)
+    setCopyTo('')
+  }
+
+  const toggleActive = async () => {
+    if (!data.recipeId) return
+    setBusy(true)
+    const result = await setRecipeActiveAction({ recipeId: data.recipeId, isActive: !data.isActive })
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(result.data.isActive ? 'Recipe active' : 'Recipe deactivated')
     router.refresh()
   }
 
@@ -248,6 +276,52 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
             {data.cost.problems.map((p, i) => <li key={i}>{p}</li>)}
           </ul>
         </div>
+      )}
+
+      {data.recipeId && (
+        <SectionCard
+          title="Manage this recipe"
+          description="Deactivating stops new orders depleting against it. Nothing is ever deleted — past orders still point at it."
+        >
+          <div className="flex flex-wrap items-end gap-2">
+            {data.otherFoods.length > 0 && (
+              <>
+                <div className="min-w-[14rem] flex-1 space-y-1">
+                  <Label htmlFor="copy-to" className="text-xs">Copy these ingredients to</Label>
+                  <select
+                    id="copy-to"
+                    className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                    value={copyTo}
+                    onChange={(e) => setCopyTo(e.target.value)}
+                  >
+                    <option value="">Choose a dish…</option>
+                    {data.otherFoods.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <Button variant="outline" onClick={duplicate} disabled={busy || !copyTo}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  Duplicate
+                </Button>
+              </>
+            )}
+
+            <Button
+              variant={data.isActive ? 'destructive' : 'outline'}
+              onClick={toggleActive}
+              disabled={busy}
+            >
+              <Power className="mr-2 h-4 w-4" />
+              {data.isActive ? 'Deactivate' : 'Activate'}
+            </Button>
+          </div>
+          {!data.isActive && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              This recipe is inactive, so selling this dish will not deplete stock.
+            </p>
+          )}
+        </SectionCard>
       )}
 
       <Button onClick={save} disabled={busy} size="lg">

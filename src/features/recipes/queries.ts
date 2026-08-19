@@ -99,6 +99,8 @@ export interface RecipeEditorData {
   cost: FoodCostBreakdown
   items: Array<{ id: string; name: string; unit: string; quantity: number }>
   prepRecipes: Array<{ id: string; name: string | null; yieldQty: number; yieldUnit: string | null }>
+  /** Other dishes this recipe can be copied onto. */
+  otherFoods: Array<{ id: string; name: string }>
   currency: string
 }
 
@@ -126,7 +128,7 @@ export async function getRecipeEditorData(params: {
     },
   })
 
-  const [items, prepRecipes, cost] = await Promise.all([
+  const [items, prepRecipes, cost, otherFoods] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId: params.restaurantId, isActive: true },
       select: { id: true, name: true, unit: true, quantity: true },
@@ -138,6 +140,11 @@ export async function getRecipeEditorData(params: {
       orderBy: { name: 'asc' },
     }),
     getFoodCost({ restaurantId: params.restaurantId, foodId: params.foodId }),
+    prisma.food.findMany({
+      where: { restaurantId: params.restaurantId, deletedAt: null, id: { not: params.foodId } },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
   ])
 
   return {
@@ -158,6 +165,7 @@ export async function getRecipeEditorData(params: {
     cost,
     items,
     prepRecipes,
+    otherFoods,
     currency: params.currency,
   }
 }
