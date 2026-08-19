@@ -29,6 +29,8 @@ export interface AuthUser {
   name: string
   role: UserRole
   restaurantId: string | null
+  /// Home branch, when the restaurant runs more than one location.
+  branchId: string | null
   avatarUrl: string | null
   permissions: string[]
   sessionId: string
@@ -150,6 +152,7 @@ export async function rotateSession(
     name: user.name,
     role: user.role,
     restaurantId: user.restaurantId,
+    branchId: user.branchId ?? null,
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
     sessionId: updated.id,
@@ -209,6 +212,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
           name: true,
           role: true,
           restaurantId: true,
+          branchId: true,
           avatarUrl: true,
           permissions: true,
           isActive: true,
@@ -229,6 +233,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
     name: session.user.name,
     role: session.user.role,
     restaurantId: session.user.restaurantId,
+    branchId: session.user.branchId ?? null,
     avatarUrl: session.user.avatarUrl,
     permissions: session.user.permissions,
     sessionId: session.id,

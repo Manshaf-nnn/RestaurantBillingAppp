@@ -96,4 +96,13 @@ export const AUDIT_ACTIONS = {
   SETTINGS_UPDATED: 'settings.updated',
   STAFF_INVITED: 'staff.invited',
   REPORT_EXPORTED: 'report.exported',
+
+  ORDER_ITEM_VOIDED: 'order.item_voided',
+  ORDER_PRICE_OVERRIDE: 'order.price_override',
+  INVOICE_REPRINTED: 'invoice.reprinted',
+
+  DRAWER_OPENED: 'cashDrawer.opened',
+  DRAWER_CLOSED: 'cashDrawer.closed',
+  DRAWER_CASH_IN: 'cashDrawer.cash_in',
+  DRAWER_CASH_OUT: 'cashDrawer.cash_out',
 } as const

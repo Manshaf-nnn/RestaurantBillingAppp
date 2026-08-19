@@ -22,8 +22,8 @@ export async function GET(request: NextRequest) {
       createdAt: i.createdAt,
     }))
     return NextResponse.json(response)
-  } catch (err: any) {
-    return NextResponse.json({ error: String(err?.message ?? err) }, { status: 403 })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 403 })
   }
 }
 
@@ -54,8 +54,8 @@ export async function POST(request: NextRequest) {
       expiresAt: invite.expiresAt,
       url: `${appUrl()}/api/invite/accept?token=${invite.token}&target=${encodeURIComponent(target)}`,
     })
-  } catch (err: any) {
-    return NextResponse.json({ error: String(err?.message ?? err) }, { status: 403 })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 403 })
   }
 }
 
@@ -67,7 +67,7 @@ export async function DELETE(request: NextRequest) {
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
     await prisma.invite.updateMany({ where: { id, restaurantId: user.restaurantId }, data: { isActive: false } })
     return NextResponse.json({ ok: true })
-  } catch (err: any) {
-    return NextResponse.json({ error: String(err?.message ?? err) }, { status: 403 })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 403 })
   }
 }

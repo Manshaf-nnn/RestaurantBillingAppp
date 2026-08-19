@@ -160,6 +160,7 @@ export async function placeGuestOrder(
         restaurantId: restaurant.id,
         tableId: data.tableId,
         type: 'DINE_IN',
+        channel: 'QR',
         customerName: data.customerName,
         customerPhone: data.customerPhone,
         customerEmail: data.customerEmail || null,
@@ -514,6 +515,10 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
         restaurantId: user.restaurantId,
         tableId: data.tableId || null,
         type: data.type,
+        // A counter sale is keyed in at the till; anything else a staff member
+        // enters is attributed to staff rather than to the guest's own device.
+        channel: data.type === 'COUNTER' ? 'COUNTER' : 'STAFF',
+        branchId: user.branchId ?? null,
         customerName: data.customerName,
         customerPhone: data.customerPhone,
         customerEmail: data.customerEmail || null,

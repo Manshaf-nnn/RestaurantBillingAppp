@@ -29,3 +29,9 @@ export const mergeBillsSchema = z.object({
 export type HoldBillInput = z.infer<typeof holdBillSchema>
 export type SplitBillInput = z.infer<typeof splitBillSchema>
 export type MergeBillsInput = z.infer<typeof mergeBillsSchema>
+
+export const voidItemSchema = z.object({
+  orderId: z.string().min(1),
+  itemId: z.string().min(1),
+  reason: z.string().trim().min(2, 'Give a reason').max(200),
+})

@@ -57,6 +57,15 @@ export const PERMISSIONS = {
   SETTINGS_MANAGE: 'settings.manage',
   AUDIT_VIEW: 'audit.view',
   REVIEW_MANAGE: 'review.manage',
+
+  // branches
+  BRANCH_VIEW: 'branch.view',
+  BRANCH_MANAGE: 'branch.manage',
+
+  // cash drawer — operating your own drawer is a cashier's job; seeing everyone's
+  // variance and force-closing a drawer someone left open is a manager's.
+  CASH_DRAWER_OPERATE: 'cashDrawer.operate',
+  CASH_DRAWER_MANAGE: 'cashDrawer.manage',
 } as const
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -87,6 +96,8 @@ const CASHIER: Permission[] = [
   PERMISSIONS.CUSTOMER_VIEW,
   PERMISSIONS.MENU_VIEW,
   PERMISSIONS.TABLE_VIEW,
+  PERMISSIONS.BRANCH_VIEW,
+  PERMISSIONS.CASH_DRAWER_OPERATE,
 ]
 
 const WAITER: Permission[] = [

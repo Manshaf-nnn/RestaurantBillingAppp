@@ -373,3 +373,68 @@ export async function mergeBills(
     return recalculateOrderTotals(tx, target.id)
   })
 }
+
+
+// ── void an item ─────────────────────────────────────────────────────────────
+
+/**
+ * Void a single line on an open bill.
+ *
+ * The line is marked CANCELLED rather than deleted, so a dish that was rung up
+ * by mistake, sent back, or comped still shows on the order's history and in
+ * the audit trail. `recalculateOrderTotals` then re-derives the bill from the
+ * surviving lines, which is what keeps a void from drifting the total the way
+ * subtracting a delta would.
+ *
+ * Paid bills are refused: money has already changed hands, so the correct
+ * instrument is a refund, not a quiet edit to what the guest was charged.
+ */
+export async function voidOrderItem(
+  params: ActorParams & { orderId: string; itemId: string; reason: string },
+): Promise<{ order: Order; itemName: string; lineTotal: number }> {
+  const reason = params.reason.trim()
+  if (reason.length < 2) {
+    throw new AppError('Give a reason for voiding this item', 400, 'VOID_NO_REASON')
+  }
+
+  const order = await loadOpenBill(params.restaurantId, params.orderId)
+
+  if (order.paymentStatus === 'PAID') {
+    throw new AppError('This bill is paid — refund it instead of voiding a line', 409, 'ORDER_PAID')
+  }
+
+  const item = order.items.find((entry) => entry.id === params.itemId)
+  if (!item) throw new NotFoundError('Item')
+  if (item.status === 'CANCELLED') {
+    throw new AppError('That item is already voided', 409, 'ITEM_ALREADY_VOID')
+  }
+
+  const active = order.items.filter((entry) => entry.status !== 'CANCELLED')
+  if (active.length === 1) {
+    throw new AppError(
+      'That is the only item left — cancel the whole bill instead',
+      400,
+      'VOID_LAST_ITEM',
+    )
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await tx.orderItem.update({
+      where: { id: item.id },
+      data: { status: 'CANCELLED' },
+    })
+
+    await tx.orderEvent.create({
+      data: {
+        orderId: order.id,
+        status: order.status,
+        note: `Voided ${item.quantity} × ${item.name} — ${reason}`,
+        actorId: params.actorId ?? null,
+        actorName: params.actorName ?? null,
+      },
+    })
+
+    const updated = await recalculateOrderTotals(tx, order.id)
+    return { order: updated, itemName: item.name, lineTotal: item.lineTotal }
+  })
+}

@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     // Redirect to the desired path within the app
     const dest = `${appUrl()}${target.startsWith('/') ? target : `/${target}`}`
     return NextResponse.redirect(dest)
-  } catch (err: any) {
-    return NextResponse.json({ error: String(err?.message ?? err) }, { status: 500 })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

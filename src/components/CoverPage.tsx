@@ -124,7 +124,15 @@ export default function CoverPage(props: Props) {
      */
     <div
       className="guest-ink relative isolate flex min-h-dvh w-full flex-col items-center justify-between px-4 py-3 text-center selection:bg-orange-500/30"
-      style={{ ['--theme-r' as any]: theme.r, ['--theme-g' as any]: theme.g, ['--theme-b' as any]: theme.b }}
+      // CSS custom properties are not in React's CSSProperties key type; the
+      // cast is on the object rather than each key so the values stay checked.
+      style={
+        {
+          '--theme-r': theme.r,
+          '--theme-g': theme.g,
+          '--theme-b': theme.b,
+        } as React.CSSProperties
+      }
     >
       {/*
         ── Background layers ───────────────────────────────────────────────────

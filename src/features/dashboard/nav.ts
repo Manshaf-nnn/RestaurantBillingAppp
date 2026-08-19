@@ -20,6 +20,7 @@ import {
   Truck,
   UsersRound,
   Utensils,
+  Wallet,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -54,6 +55,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Analytics',
         icon: BarChart3,
         permission: PERMISSIONS.ANALYTICS_VIEW,
+      },
+      {
+        href: '/dashboard/cash-drawer',
+        label: 'Cash drawer',
+        icon: Wallet,
+        permission: PERMISSIONS.CASH_DRAWER_OPERATE,
       },
       {
         href: '/dashboard/handover',

@@ -1,5 +1,6 @@
 'use server'
 
+import type { Prisma } from '@prisma/client'
 import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
@@ -56,7 +57,7 @@ async function syncRestaurantMenuSnapshot({
   categoryName?: string | null
   imageUrl?: string | null
   price?: number | null
-  snapshot: any
+  snapshot: Prisma.InputJsonValue
 }) {
   await prisma.restaurantMenuSnapshot.upsert({
     where: { restaurantId_entityType_entityId: { restaurantId, entityType, entityId } },

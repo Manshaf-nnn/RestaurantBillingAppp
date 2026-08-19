@@ -310,7 +310,11 @@ export async function buildDraft(params: {
 export interface PlaceOrderParams {
   restaurantId: string
   tableId?: string | null
-  type?: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
+  type?: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'COUNTER'
+  /// How the order reached the system. Defaults to STAFF; the guest QR flow
+  /// passes QR so reporting can separate self-service from keyed-in orders.
+  channel?: 'QR' | 'STAFF' | 'COUNTER' | 'PHONE' | 'ONLINE'
+  branchId?: string | null
   customerName: string
   customerPhone: string
   customerEmail?: string | null
@@ -420,6 +424,8 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
               restaurantId: params.restaurantId,
               orderNumber,
               type,
+              channel: params.channel ?? 'STAFF',
+              branchId: params.branchId ?? null,
               status: 'PENDING',
               paymentStatus: 'UNPAID',
               tableId: table?.id ?? null,

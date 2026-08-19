@@ -8,8 +8,14 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { realtime } from '@/server/realtime/emitter'
 import { toOrderPayload } from '@/features/orders/service'
-import { holdBillSchema, mergeBillsSchema, resumeBillSchema, splitBillSchema } from './schema'
-import { holdBill, mergeBills, resumeBill, splitBill } from './service'
+import {
+  holdBillSchema,
+  mergeBillsSchema,
+  resumeBillSchema,
+  splitBillSchema,
+  voidItemSchema,
+} from './schema'
+import { holdBill, mergeBills, resumeBill, splitBill, voidOrderItem } from './service'
 
 /** Counter screens that must reflect a bill moving. */
 function revalidateCounter() {
@@ -161,5 +167,50 @@ export async function mergeBillsAction(
       return { targetId: target.id, targetNumber: target.orderNumber }
     },
     'Bills merged.',
+  )
+}
+
+
+/**
+ * Void one line on an open bill.
+ *
+ * Gated on ORDER_CANCEL rather than PAYMENT_COLLECT: removing a dish a guest is
+ * no longer being charged for is the same class of authority as cancelling the
+ * bill, and is not something every cashier should be able to do unsupervised.
+ */
+export async function voidItemAction(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; grandTotal: number }>> {
+  return runAction(
+    voidItemSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.ORDER_CANCEL)
+
+      const { order, itemName, lineTotal } = await voidOrderItem({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        itemId: data.itemId,
+        reason: data.reason,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_ITEM_VOIDED,
+        entity: 'OrderItem',
+        entityId: data.itemId,
+        before: { name: itemName, lineTotal },
+        after: { reason: data.reason, orderId: data.orderId, grandTotal: order.grandTotal },
+      })
+
+      revalidateCounter()
+      await broadcast(order.id, user.restaurantId)
+      return { orderId: order.id, grandTotal: order.grandTotal }
+    },
+    'Item voided.',
   )
 }

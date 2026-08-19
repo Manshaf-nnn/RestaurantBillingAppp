@@ -5,6 +5,7 @@ import QRCode from 'qrcode'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { prisma } from '@/server/db/prisma'
+import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
@@ -188,6 +189,24 @@ export async function capturePayment(params: {
         ? Math.max(0, params.tenderedAmount - params.amount)
         : 0
 
+    // Attribute the takings to whichever drawer this cashier has open, so an
+    // end-of-shift count has something to reconcile against. Every method is
+    // attributed, not just cash — the close screen reports card and other
+    // takings for the same session as context. A cashier with no drawer open
+    // is never blocked from taking money; the payment simply carries no
+    // session and falls outside drawer reconciliation.
+    const drawer = params.receivedById
+      ? await tx.cashDrawerSession.findFirst({
+          where: {
+            restaurantId: params.restaurantId,
+            openedById: params.receivedById,
+            status: 'OPEN',
+          },
+          orderBy: { openedAt: 'desc' },
+          select: { id: true },
+        })
+      : null
+
     const payment = params.paymentId
       ? await tx.payment.update({
           where: { id: params.paymentId },
@@ -199,6 +218,7 @@ export async function capturePayment(params: {
             reference: params.reference || null,
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
+            cashDrawerSessionId: drawer?.id ?? null,
           },
         })
       : await tx.payment.create({
@@ -213,6 +233,7 @@ export async function capturePayment(params: {
             reference: params.reference || null,
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
+            cashDrawerSessionId: drawer?.id ?? null,
           },
         })
 
@@ -415,6 +436,20 @@ export async function refundPayment(params: {
         paymentStatus: paidTotal === 0 ? 'REFUNDED' : 'PARTIAL',
       },
     })
+
+    // Cash handed back leaves the drawer that is open right now, which is not
+    // necessarily the drawer that took the money — a bill paid this morning can
+    // be refunded tonight. Recording it as a movement against the current
+    // drawer is what keeps both sessions' counts honest.
+    if (payment.method === 'CASH') {
+      await recordRefundAgainstOpenDrawer({
+        tx,
+        restaurantId: params.restaurantId,
+        userId: params.actorId,
+        amount: payment.amount,
+        orderNumber: payment.order.orderNumber,
+      })
+    }
 
     return refunded
   })

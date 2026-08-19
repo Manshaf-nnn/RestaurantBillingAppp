@@ -34,7 +34,7 @@ export const placeOrderSchema = z.object({
 export type PlaceOrderInput = z.infer<typeof placeOrderSchema>
 
 export const staffOrderSchema = placeOrderSchema.extend({
-  type: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY']).default('DINE_IN'),
+  type: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'COUNTER']).default('DINE_IN'),
   tableId: z.string().cuid().optional().or(z.literal('')),
   manualDiscount: z.coerce.number().int().min(0).default(0),
 })
@@ -87,7 +87,7 @@ export const orderFilterSchema = z.object({
     .enum(['ALL', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED'])
     .default('ALL'),
   paymentStatus: z.enum(['ALL', 'UNPAID', 'PARTIAL', 'PAID', 'REFUNDED', 'FAILED']).default('ALL'),
-  type: z.enum(['ALL', 'DINE_IN', 'TAKEAWAY', 'DELIVERY']).default('ALL'),
+  type: z.enum(['ALL', 'DINE_IN', 'TAKEAWAY', 'DELIVERY', 'COUNTER']).default('ALL'),
   from: z.string().optional(),
   to: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
