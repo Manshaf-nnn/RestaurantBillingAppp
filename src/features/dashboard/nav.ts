@@ -21,6 +21,7 @@ import {
   UsersRound,
   Utensils,
   Wallet,
+  ClipboardCheck,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -115,6 +116,12 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Inventory',
     items: [
       { href: '/dashboard/inventory', label: 'Stock', icon: Package, permission: PERMISSIONS.INVENTORY_VIEW },
+      {
+        href: '/dashboard/inventory/counts',
+        label: 'Stock counts',
+        icon: ClipboardCheck,
+        permission: PERMISSIONS.INVENTORY_COUNT,
+      },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_MANAGE },
       {
         href: '/dashboard/purchases',
