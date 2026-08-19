@@ -103,6 +103,12 @@ export const NAV_SECTIONS: NavSection[] = [
       // screen; owners just pick one when adding a dish.
       { href: '/dashboard/menu', label: 'Menu items', icon: Utensils, permission: PERMISSIONS.MENU_VIEW },
       {
+        href: '/dashboard/recipes',
+        label: 'Recipes',
+        icon: ChefHat,
+        permission: PERMISSIONS.MENU_VIEW,
+      },
+      {
         href: '/dashboard/menu/import',
         label: 'Add your menu',
         icon: Sparkles,

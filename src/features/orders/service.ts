@@ -3,7 +3,7 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
-import { postMovement } from '@/features/inventory/ledger'
+import { pinRecipeVersions, reconcileOrderDepletion } from '@/features/inventory/depletion'
 import {
   prisma,
   isUniqueViolation,
@@ -669,9 +669,46 @@ export async function updateOrderStatus(params: {
       },
     })
 
-    // Ingredients leave stock once the kitchen commits to cooking.
+    // Ingredients leave stock once the kitchen commits to cooking, and go back
+    // if the order is later cancelled. Reconciliation is declarative — it posts
+    // the difference between what the order should have consumed and what it
+    // already has — so running it twice, or after a line changes, converges on
+    // the right answer instead of double-deducting.
     if (params.status === 'ACCEPTED' || params.status === 'PREPARING') {
-      await consumeIngredients(tx, order.restaurantId, order.id, params.actorId ?? null)
+      await pinRecipeVersions(tx, { restaurantId: order.restaurantId, orderId: order.id })
+      const depleted = await reconcileOrderDepletion(tx, {
+        restaurantId: order.restaurantId,
+        orderId: order.id,
+        userId: params.actorId ?? null,
+      })
+
+      // Warn the floor about anything this order pushed to its reorder level.
+      if (depleted.affectedItemIds.length > 0) {
+        const low = await tx.inventoryItem.findMany({
+          where: { id: { in: depleted.affectedItemIds }, restaurantId: order.restaurantId },
+          select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
+        })
+        for (const item of low) {
+          if (item.quantity <= item.reorderLevel) {
+            realtime.lowStock(order.restaurantId, {
+              itemId: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              reorderLevel: item.reorderLevel,
+              unit: item.unit,
+            })
+          }
+        }
+      }
+    }
+
+    if (params.status === 'CANCELLED') {
+      await reconcileOrderDepletion(tx, {
+        restaurantId: order.restaurantId,
+        orderId: order.id,
+        userId: params.actorId ?? null,
+        releaseAll: true,
+      })
     }
 
     // Free the table once everything on it is settled.
@@ -843,71 +880,7 @@ export async function cancelOrder(params: {
 
 // ── inventory coupling ───────────────────────────────────────────────────────
 
-/** Deducts recipe ingredients exactly once per order. */
-async function consumeIngredients(
-  tx: TxClient,
-  restaurantId: string,
-  orderId: string,
-  userId: string | null,
-): Promise<void> {
-  // Legacy rows used CONSUMPTION; both count as already-deducted.
-  const already = await tx.stockMovement.count({
-    where: { orderId, type: { in: ['SALE', 'CONSUMPTION'] } },
-  })
-  if (already > 0) return
-
-  const items = await tx.orderItem.findMany({
-    where: { orderId, status: { not: 'CANCELLED' } },
-    select: { foodId: true, quantity: true },
-  })
-  const foodIds = items.map((item) => item.foodId).filter((id): id is string => Boolean(id))
-  if (!foodIds.length) return
-
-  const recipes = await tx.recipeItem.findMany({
-    where: { foodId: { in: foodIds } },
-    include: { item: { select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true } } },
-  })
-  if (!recipes.length) return
-
-  const consumption = new Map<string, number>()
-  for (const line of items) {
-    for (const recipe of recipes) {
-      if (recipe.foodId !== line.foodId) continue
-      consumption.set(
-        recipe.itemId,
-        (consumption.get(recipe.itemId) ?? 0) + recipe.quantity * line.quantity,
-      )
-    }
-  }
-
-  for (const [itemId, quantity] of consumption) {
-    // Routed through the ledger rather than decrementing the item directly.
-    // The old code did both writes separately, which meant a balance and its
-    // own history could disagree and no row carried a running total.
-    const posted = await postMovement(tx, {
-      restaurantId,
-      itemId,
-      type: 'SALE',
-      quantity,
-      reason: 'Order preparation',
-      referenceType: 'Order',
-      referenceId: orderId,
-      orderId,
-      userId,
-    })
-    const updated = posted.item
-
-    if (updated.quantity <= updated.reorderLevel) {
-      realtime.lowStock(restaurantId, {
-        itemId: updated.id,
-        name: updated.name,
-        quantity: updated.quantity,
-        reorderLevel: updated.reorderLevel,
-        unit: updated.unit,
-      })
-    }
-  }
-}
+// Recipe-driven depletion now lives in @/features/inventory/depletion.
 
 // ── broadcasting ─────────────────────────────────────────────────────────────
 

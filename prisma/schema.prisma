@@ -192,6 +192,10 @@ enum StockMovementType {
   CUSTOMER_RETURN
   PRODUCTION
   OPENING_BALANCE
+  /// Ingredients put back because an order shrank or was cancelled after the
+  /// kitchen had already committed. Kept distinct from CUSTOMER_RETURN so a
+  /// report can tell "guest handed food back" from "we changed our mind".
+  SALE_REVERSAL
 }
 
 enum StockCountStatus {
@@ -345,6 +349,7 @@ model Restaurant {
   cashDrawers      CashDrawerSession[]
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
+  recipes          Recipe[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -469,6 +474,7 @@ model User {
   cashMovements    CashMovement[]      @relation("CashMovementBy")
   countsCounted    StockCount[]        @relation("CountCountedBy")
   countsApproved   StockCount[]        @relation("CountApprovedBy")
+  recipesCreated   Recipe[]            @relation("RecipeCreatedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -598,6 +604,7 @@ model Food {
   variantGroups VariantGroup[]
   recipe        RecipeItem[]
   orderItems    OrderItem[]
+  recipes       Recipe[]
 
   @@unique([restaurantId, slug])
   @@index([restaurantId, categoryId])
@@ -804,7 +811,8 @@ model Order {
   review         Review?
   redemptions    CouponRedemption[]
   stockMovements StockMovement[]
-  branch         Branch?            @relation(fields: [branchId], references: [id])
+  depletions     OrderStockDepletion[]
+  branch         Branch?               @relation(fields: [branchId], references: [id])
   branchId       String?
 
   @@unique([restaurantId, orderNumber])
@@ -833,6 +841,9 @@ model OrderItem {
   imageUrl        String?
   unitPrice       Int
   quantity        Int             @default(1)
+  /// The exact recipe version this line was depleted and costed against.
+  recipeId        String?
+  recipe          Recipe?         @relation(fields: [recipeId], references: [id], onDelete: SetNull)
   /// [SelectedOption[]] — [{ groupId, groupName, optionId, name, priceDelta, kind }]
   options         Json?
   optionsTotal    Int             @default(0)
@@ -1065,8 +1076,11 @@ model InventoryItem {
 
   movements     StockMovement[]
   recipeItems   RecipeItem[]
+  producedBy    Recipe[]              @relation("RecipeProduces")
+  recipeUsages  RecipeIngredient[]
+  depletions    OrderStockDepletion[]
   purchaseItems PurchaseItem[]
-  branch        Branch?         @relation(fields: [branchId], references: [id])
+  branch        Branch?               @relation(fields: [branchId], references: [id])
   branchId      String?
 
   stockCountLines StockCountLine[]
@@ -1519,4 +1533,115 @@ model StockCountLine {
   @@unique([stockCountId, itemId])
   @@index([stockCountId])
   @@map("stock_count_lines")
+}
+
+/// A versioned recipe.
+///
+/// A recipe belongs either to a menu item (`foodId`) or to an inventory item it
+/// produces (`producesItemId`) — the latter is a prep recipe, e.g. a batch of
+/// burger sauce. Both kinds are the same shape, which is what lets a menu
+/// recipe reference a prep recipe as though it were an ingredient.
+///
+/// ── Versioning ──────────────────────────────────────────────────────────────
+///
+/// Editing a recipe never rewrites the existing row. A new version is created
+/// and the old one is deactivated, because the old one is what historical sales
+/// were costed and depleted against. An order item pins the exact recipe id it
+/// used, so a burger sold in January still explains itself after March's recipe
+/// change.
+model Recipe {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// Set when this is a menu item's recipe.
+  foodId         String?
+  food           Food?          @relation(fields: [foodId], references: [id], onDelete: Cascade)
+  /// Set when this is a prep recipe producing stock.
+  producesItemId String?
+  producesItem   InventoryItem? @relation("RecipeProduces", fields: [producesItemId], references: [id], onDelete: Cascade)
+
+  name     String?
+  version  Int     @default(1)
+  /// Exactly one version per food/prep item is active at a time.
+  isActive Boolean @default(true)
+
+  /// How much one batch makes. A menu recipe makes one portion; a prep recipe
+  /// might make 2 kg of sauce, and 20 g of that is 1% of a batch.
+  yieldQty  Float      @default(1)
+  yieldUnit StockUnit?
+
+  prepNotes String?
+
+  createdById String?
+  createdBy   User?   @relation("RecipeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  archivedAt DateTime?
+
+  ingredients RecipeIngredient[]
+  usedIn      RecipeIngredient[] @relation("SubRecipe")
+  orderItems  OrderItem[]
+
+  @@index([restaurantId, foodId, isActive])
+  @@index([restaurantId, producesItemId, isActive])
+  @@map("recipes")
+}
+
+/// One line of a recipe: either a raw inventory item or a nested prep recipe.
+model RecipeIngredient {
+  id       String @id @default(cuid())
+  recipeId String
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  /// A raw ingredient drawn straight from stock.
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  /// A prep recipe used as an ingredient, e.g. burger sauce.
+  subRecipeId     String?
+  subRecipe       Recipe?        @relation("SubRecipe", fields: [subRecipeId], references: [id], onDelete: Cascade)
+
+  quantity       Float
+  unit           StockUnit
+  /// Trim, peel and spillage, as a percentage on top of the quantity. 5 means
+  /// 105 g must leave stock for a recipe that needs 100 g on the plate.
+  wastagePercent Float     @default(0)
+  sortOrder      Int       @default(0)
+  notes          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([recipeId])
+  @@index([inventoryItemId])
+  @@index([subRecipeId])
+  @@map("recipe_ingredients")
+}
+
+/// How much of each inventory item an order has actually taken from stock.
+///
+/// This is the idempotency record for depletion. Reconciliation computes what
+/// the order *should* have consumed from its current lines, compares it with
+/// what it *has* consumed according to this table, and posts only the
+/// difference. That single mechanism covers every case the spec asks for:
+/// running twice changes nothing, raising 2 burgers to 3 deducts one more,
+/// dropping 3 to 1 returns two, and cancelling returns everything.
+model OrderStockDepletion {
+  id           String        @id @default(cuid())
+  restaurantId String
+  orderId      String
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  /// Net base units taken from stock for this order so far. Positive means
+  /// stock has left; zero means everything has been returned.
+  appliedQty Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, itemId])
+  @@index([restaurantId, orderId])
+  @@map("order_stock_depletions")
 }

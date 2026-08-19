@@ -173,6 +173,24 @@ export function acceptableUnits(item: ConvertibleItem): StockUnit[] {
   return [...units]
 }
 
+/**
+ * Convert between two units with no item context.
+ *
+ * Only works within a standard family, which is exactly what recipe scaling
+ * needs: "15 g of a sauce that yields 2 kg" is a ratio question about mass, and
+ * both sides are known units. Packaging units have no universal size and are
+ * refused here — they need an item to say how big a box is.
+ */
+export function convertUnits(quantity: number, from: StockUnit, to: StockUnit): number {
+  if (from === to) return round(quantity)
+  if (!sameFamily(from, to)) {
+    throw new UnitConversionError(
+      `Cannot convert ${UNIT_LABELS[from]} to ${UNIT_LABELS[to]} without knowing the pack size.`,
+    )
+  }
+  return round((quantity * familyFactor(from)!) / familyFactor(to)!)
+}
+
 /** Float quantities drift; six places is far finer than any kitchen scale. */
 function round(value: number): number {
   return Math.round(value * 1e6) / 1e6
