@@ -213,9 +213,23 @@ enum StockAlertLevel {
 
 enum PurchaseStatus {
   DRAFT
+  PENDING_APPROVAL
+  APPROVED
   ORDERED
+  PARTIALLY_RECEIVED
   RECEIVED
   CANCELLED
+}
+
+enum PaymentTerms {
+  /// Paid when the goods arrive.
+  COD
+  NET_7
+  NET_15
+  NET_30
+  NET_60
+  /// Anything else; spelled out in Supplier.paymentTermsNote.
+  CUSTOM
 }
 
 enum ReservationStatus {
@@ -350,6 +364,8 @@ model Restaurant {
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
   recipes          Recipe[]
+  goodsReceipts    GoodsReceipt[]
+  purchaseReturns  PurchaseReturn[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -457,24 +473,28 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  sessions         Session[]
-  tokens           VerificationToken[]
-  auditLogs        AuditLog[]
-  notifications    Notification[]
-  createdOrders    Order[]             @relation("OrderCreatedBy")
-  receivedPayments Payment[]           @relation("PaymentReceivedBy")
-  stockMovements   StockMovement[]
-  shifts           StaffShift[]
-  handledRequests  ServiceRequest[]    @relation("RequestHandledBy")
-  createdInvites   Invite[]
-  branchId         String?
-  branch           Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  drawersOpened    CashDrawerSession[] @relation("DrawerOpenedBy")
-  drawersClosed    CashDrawerSession[] @relation("DrawerClosedBy")
-  cashMovements    CashMovement[]      @relation("CashMovementBy")
-  countsCounted    StockCount[]        @relation("CountCountedBy")
-  countsApproved   StockCount[]        @relation("CountApprovedBy")
-  recipesCreated   Recipe[]            @relation("RecipeCreatedBy")
+  sessions          Session[]
+  tokens            VerificationToken[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  createdOrders     Order[]             @relation("OrderCreatedBy")
+  receivedPayments  Payment[]           @relation("PaymentReceivedBy")
+  stockMovements    StockMovement[]
+  shifts            StaffShift[]
+  handledRequests   ServiceRequest[]    @relation("RequestHandledBy")
+  createdInvites    Invite[]
+  branchId          String?
+  branch            Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  drawersOpened     CashDrawerSession[] @relation("DrawerOpenedBy")
+  drawersClosed     CashDrawerSession[] @relation("DrawerClosedBy")
+  cashMovements     CashMovement[]      @relation("CashMovementBy")
+  countsCounted     StockCount[]        @relation("CountCountedBy")
+  countsApproved    StockCount[]        @relation("CountApprovedBy")
+  recipesCreated    Recipe[]            @relation("RecipeCreatedBy")
+  purchasesCreated  Purchase[]          @relation("PurchaseCreatedBy")
+  purchasesApproved Purchase[]          @relation("PurchaseApprovedBy")
+  receiptsReceived  GoodsReceipt[]      @relation("ReceiptReceivedBy")
+  returnsCreated    PurchaseReturn[]    @relation("ReturnCreatedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -1006,18 +1026,30 @@ model Supplier {
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   name        String
+  /// Registered company name, when it differs from the trading name.
+  company     String?
   contactName String?
   phone       String?
   email       String?
   address     String?
-  notes       String?
-  isActive    Boolean @default(true)
+
+  paymentTerms     PaymentTerms @default(COD)
+  /// Free text for CUSTOM terms, e.g. "half on delivery, half in 30 days".
+  paymentTermsNote String?
+  /// Tax registration number, printed on purchase paperwork.
+  taxNumber        String?
+
+  notes    String?
+  isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items     InventoryItem[]
-  purchases Purchase[]
+  items         InventoryItem[]
+  purchases     Purchase[]
+  suppliedItems SupplierItem[]
+  returns       PurchaseReturn[]
+  priceHistory  PurchasePriceHistory[] @relation("PriceHistorySupplier")
 
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive])
@@ -1076,11 +1108,15 @@ model InventoryItem {
 
   movements     StockMovement[]
   recipeItems   RecipeItem[]
-  producedBy    Recipe[]              @relation("RecipeProduces")
+  producedBy    Recipe[]               @relation("RecipeProduces")
   recipeUsages  RecipeIngredient[]
   depletions    OrderStockDepletion[]
+  supplierItems SupplierItem[]
+  receiptLines  GoodsReceiptLine[]
+  returnLines   PurchaseReturnLine[]
+  priceHistory  PurchasePriceHistory[]
   purchaseItems PurchaseItem[]
-  branch        Branch?               @relation(fields: [branchId], references: [id])
+  branch        Branch?                @relation(fields: [branchId], references: [id])
   branchId      String?
 
   stockCountLines StockCountLine[]
@@ -1152,18 +1188,41 @@ model Purchase {
   supplierId   String?
   supplier     Supplier?  @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
-  number     String
-  status     PurchaseStatus @default(DRAFT)
-  total      Int            @default(0)
+  number String
+  status PurchaseStatus @default(DRAFT)
+
+  branchId   String?
+  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  locationId String?
+  location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  /// Money, all in minor units. Subtotal is the sum of the lines; discount and
+  /// tax are order-level and applied after, matching how a supplier invoice
+  /// reads.
+  subtotal Int @default(0)
+  discount Int @default(0)
+  taxTotal Int @default(0)
+  total    Int @default(0)
+
   notes      String?
+  expectedAt DateTime?
   orderedAt  DateTime?
   receivedAt DateTime?
+
+  createdById  String?
+  createdBy    User?     @relation("PurchaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedById String?
+  approvedBy   User?     @relation("PurchaseApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  cancelReason String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   items     PurchaseItem[]
   movements StockMovement[]
+  receipts  GoodsReceipt[]
+  returns   PurchaseReturn[]
 
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
@@ -1177,9 +1236,18 @@ model PurchaseItem {
   itemId     String
   item       InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
 
+  /// Ordered quantity, in `unit`.
   quantity  Float
+  unit      StockUnit?
+  /// Cost per `unit`, minor units.
   unitCost  Int
   lineTotal Int
+
+  /// Running totals maintained as goods arrive, both in the line's own unit.
+  receivedQty Float @default(0)
+  rejectedQty Float @default(0)
+
+  receiptLines GoodsReceiptLine[]
 
   @@index([purchaseId])
   @@map("purchase_items")
@@ -1374,6 +1442,7 @@ model Branch {
   stockMovements   StockMovement[]
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
+  purchases        Purchase[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1465,6 +1534,7 @@ model StorageLocation {
   items       InventoryItem[]
   movements   StockMovement[]
   stockCounts StockCount[]
+  purchases   Purchase[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1644,4 +1714,172 @@ model OrderStockDepletion {
   @@unique([orderId, itemId])
   @@index([restaurantId, orderId])
   @@map("order_stock_depletions")
+}
+
+/// What a particular supplier charges for a particular item.
+///
+/// The link is many-to-many on purpose: one supplier sells many things, and any
+/// item worth buying usually has a second source for when the first runs out or
+/// puts its prices up. The purchase unit lives here rather than on the item
+/// because it is the supplier's packaging — one sells chicken by the 10 kg box,
+/// another by the kilo.
+model SupplierItem {
+  id           String        @id @default(cuid())
+  restaurantId String
+  supplierId   String
+  supplier     Supplier      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  /// The supplier's own code for it, quoted on their invoices.
+  supplierSku          String?
+  purchaseUnit         StockUnit?
+  /// Base units in one purchase unit, when the supplier's packaging differs
+  /// from how the item is stocked.
+  unitsPerPurchaseUnit Float?
+  /// Last agreed price per purchase unit, minor units.
+  price                Int        @default(0)
+  /// Days between ordering and delivery — drives reorder suggestions.
+  leadTimeDays         Int?
+  /// The supplier will not sell less than this, in purchase units.
+  minOrderQty          Float?
+  isPreferred          Boolean    @default(false)
+  isActive             Boolean    @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([supplierId, itemId])
+  @@index([restaurantId, itemId])
+  @@map("supplier_items")
+}
+
+/// A delivery against a purchase order — a goods received note.
+///
+/// Receiving is a separate record rather than a status flip because a single
+/// order is often delivered in instalments, and each arrival has its own date,
+/// its own receiver and its own rejected quantity. Those are facts about the
+/// delivery, not about the order.
+model GoodsReceipt {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  purchaseId   String
+  purchase     Purchase   @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  number      String
+  /// The supplier's own delivery note or invoice number.
+  supplierRef String?
+  notes       String?
+
+  receivedById String?
+  receivedBy   User?    @relation("ReceiptReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+  receivedAt   DateTime @default(now())
+
+  lines GoodsReceiptLine[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, purchaseId])
+  @@map("goods_receipts")
+}
+
+/// One item on a delivery: how much turned up, and how much was sent back.
+///
+/// Only `acceptedQty` reaches stock. Rejected goods are recorded but never
+/// posted to the ledger — they were never ours.
+model GoodsReceiptLine {
+  id             String        @id @default(cuid())
+  receiptId      String
+  receipt        GoodsReceipt  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  purchaseItemId String
+  purchaseItem   PurchaseItem  @relation(fields: [purchaseItemId], references: [id], onDelete: Cascade)
+  itemId         String
+  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// All in the purchase line's own unit.
+  acceptedQty  Float
+  rejectedQty  Float      @default(0)
+  unit         StockUnit?
+  /// What it actually cost on this delivery, per unit — suppliers change
+  /// prices between order and delivery, and the ledger records what was paid.
+  unitCost     Int        @default(0)
+  rejectReason String?
+  batchNo      String?
+  expiryDate   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([receiptId])
+  @@index([itemId])
+  @@map("goods_receipt_lines")
+}
+
+/// Goods sent back to a supplier after they were accepted into stock.
+///
+/// Distinct from rejecting on delivery: this stock was ours, counted and
+/// costed, so returning it is a real outward movement in the ledger.
+model PurchaseReturn {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  purchaseId   String?
+  purchase     Purchase?  @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  supplierId   String?
+  supplier     Supplier?  @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  number String
+  reason String
+  notes  String?
+
+  createdById String?
+  createdBy   User?    @relation("ReturnCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  lines PurchaseReturnLine[]
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, createdAt])
+  @@map("purchase_returns")
+}
+
+model PurchaseReturnLine {
+  id       String         @id @default(cuid())
+  returnId String
+  return   PurchaseReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  itemId   String
+  item     InventoryItem  @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  quantity Float
+  unit     StockUnit?
+  unitCost Int        @default(0)
+
+  @@index([returnId])
+  @@map("purchase_return_lines")
+}
+
+/// What an item cost, each time it was bought.
+///
+/// Written on every receipt so a price trend survives even after the purchase
+/// order is archived. This is the table behind "chicken has gone up 15% since
+/// January", which is the question an owner actually asks.
+model PurchasePriceHistory {
+  id           String        @id @default(cuid())
+  restaurantId String
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  supplierId   String?
+  supplier     Supplier?     @relation("PriceHistorySupplier", fields: [supplierId], references: [id], onDelete: SetNull)
+
+  /// Cost per base unit, minor units — normalised so prices quoted per box and
+  /// per kilo can be compared on one chart.
+  unitCost   Int
+  quantity   Float
+  unit       StockUnit?
+  receiptId  String?
+  recordedAt DateTime   @default(now())
+
+  @@index([restaurantId, itemId, recordedAt])
+  @@map("purchase_price_history")
 }

@@ -114,4 +114,12 @@ export const AUDIT_ACTIONS = {
   STOCK_COUNT_OPENED: 'inventory.count_opened',
   STOCK_COUNT_APPROVED: 'inventory.count_approved',
   STOCK_COST_EDITED: 'inventory.cost_edited',
+
+  PO_CREATED: 'purchase.created',
+  PO_APPROVED: 'purchase.approved',
+  PO_ORDERED: 'purchase.ordered',
+  PO_CANCELLED: 'purchase.cancelled',
+  PO_RECEIVED: 'purchase.received',
+  PO_RETURNED: 'purchase.returned',
+  SUPPLIER_UPDATED: 'supplier.updated',
 } as const

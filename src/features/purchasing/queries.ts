@@ -1,0 +1,162 @@
+import 'server-only'
+
+import type { PurchaseStatus } from '@prisma/client'
+
+import { NotFoundError } from '@/lib/errors'
+import { prisma } from '@/server/db/prisma'
+
+export interface PurchaseSummary {
+  id: string
+  number: string
+  status: PurchaseStatus
+  supplierName: string | null
+  total: number
+  expectedAt: string | null
+  createdAt: string
+  lineCount: number
+  /** 0–100; how much of the order has arrived. */
+  receivedPercent: number
+}
+
+export async function listPurchaseOrders(params: {
+  restaurantId: string
+  limit?: number
+}): Promise<PurchaseSummary[]> {
+  const orders = await prisma.purchase.findMany({
+    where: { restaurantId: params.restaurantId },
+    orderBy: { createdAt: 'desc' },
+    take: params.limit ?? 50,
+    include: {
+      supplier: { select: { name: true } },
+      items: { select: { quantity: true, receivedQty: true, rejectedQty: true } },
+    },
+  })
+
+  return orders.map((po) => {
+    const ordered = po.items.reduce((sum, l) => sum + l.quantity, 0)
+    const handled = po.items.reduce((sum, l) => sum + l.receivedQty + l.rejectedQty, 0)
+    return {
+      id: po.id,
+      number: po.number,
+      status: po.status,
+      supplierName: po.supplier?.name ?? null,
+      total: po.total,
+      expectedAt: po.expectedAt?.toISOString() ?? null,
+      createdAt: po.createdAt.toISOString(),
+      lineCount: po.items.length,
+      receivedPercent: ordered > 0 ? Math.min(100, Math.round((handled / ordered) * 100)) : 0,
+    }
+  })
+}
+
+export interface PurchaseDetail {
+  id: string
+  number: string
+  status: PurchaseStatus
+  supplierName: string | null
+  supplierId: string | null
+  subtotal: number
+  discount: number
+  taxTotal: number
+  total: number
+  notes: string | null
+  expectedAt: string | null
+  createdByName: string | null
+  approvedByName: string | null
+  approvedAt: string | null
+  currency: string
+  lines: Array<{
+    id: string
+    itemId: string
+    name: string
+    unit: string
+    baseUnit: string
+    quantity: number
+    receivedQty: number
+    rejectedQty: number
+    /** Still to arrive. */
+    outstanding: number
+    unitCost: number
+    lineTotal: number
+  }>
+  receipts: Array<{
+    id: string
+    number: string
+    supplierRef: string | null
+    receivedAt: string
+    receivedByName: string | null
+    lines: Array<{ name: string; acceptedQty: number; rejectedQty: number; unit: string | null }>
+  }>
+}
+
+export async function getPurchaseDetail(params: {
+  restaurantId: string
+  purchaseId: string
+  currency: string
+}): Promise<PurchaseDetail> {
+  const po = await prisma.purchase.findFirst({
+    where: { id: params.purchaseId, restaurantId: params.restaurantId },
+    include: {
+      supplier: { select: { id: true, name: true } },
+      createdBy: { select: { name: true } },
+      approvedBy: { select: { name: true } },
+      items: { include: { item: { select: { id: true, name: true, unit: true } } } },
+      receipts: {
+        orderBy: { receivedAt: 'desc' },
+        include: {
+          receivedBy: { select: { name: true } },
+          lines: { include: { item: { select: { name: true } } } },
+        },
+      },
+    },
+  })
+  if (!po) throw new NotFoundError('Purchase order')
+
+  return {
+    id: po.id,
+    number: po.number,
+    status: po.status,
+    supplierName: po.supplier?.name ?? null,
+    supplierId: po.supplier?.id ?? null,
+    subtotal: po.subtotal,
+    discount: po.discount,
+    taxTotal: po.taxTotal,
+    total: po.total,
+    notes: po.notes,
+    expectedAt: po.expectedAt?.toISOString() ?? null,
+    createdByName: po.createdBy?.name ?? null,
+    approvedByName: po.approvedBy?.name ?? null,
+    approvedAt: po.approvedAt?.toISOString() ?? null,
+    currency: params.currency,
+    lines: po.items.map((l) => ({
+      id: l.id,
+      itemId: l.itemId,
+      name: l.item.name,
+      unit: (l.unit ?? l.item.unit) as string,
+      baseUnit: l.item.unit as string,
+      quantity: l.quantity,
+      receivedQty: l.receivedQty,
+      rejectedQty: l.rejectedQty,
+      outstanding: Math.max(0, round(l.quantity - l.receivedQty - l.rejectedQty)),
+      unitCost: l.unitCost,
+      lineTotal: l.lineTotal,
+    })),
+    receipts: po.receipts.map((r) => ({
+      id: r.id,
+      number: r.number,
+      supplierRef: r.supplierRef,
+      receivedAt: r.receivedAt.toISOString(),
+      receivedByName: r.receivedBy?.name ?? null,
+      lines: r.lines.map((l) => ({
+        name: l.item.name,
+        acceptedQty: l.acceptedQty,
+        rejectedQty: l.rejectedQty,
+        unit: l.unit as string | null,
+      })),
+    })),
+  }
+}
+
+function round(v: number) {
+  return Math.round(v * 1e6) / 1e6
+}

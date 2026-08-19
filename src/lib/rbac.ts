@@ -67,6 +67,14 @@ export const PERMISSIONS = {
   INVENTORY_COUNT_APPROVE: 'inventory.countApprove',
   INVENTORY_COST_EDIT: 'inventory.costEdit',
 
+  // purchasing — creating an order and committing the restaurant's money to it
+  // are separate acts, so they are separate permissions.
+  PURCHASE_VIEW: 'purchase.view',
+  PURCHASE_CREATE: 'purchase.create',
+  PURCHASE_APPROVE: 'purchase.approve',
+  PURCHASE_RECEIVE: 'purchase.receive',
+  PURCHASE_RETURN: 'purchase.return',
+
   // branches
   BRANCH_VIEW: 'branch.view',
   BRANCH_MANAGE: 'branch.manage',
@@ -84,6 +92,9 @@ const ALL: Permission[] = Object.values(PERMISSIONS)
 const MANAGER: Permission[] = ALL.filter(
   (p) => p !== PERMISSIONS.SETTINGS_MANAGE && p !== PERMISSIONS.PAYMENT_REFUND,
 )
+
+// A cashier handles money at the till, not the restaurant's buying. They are
+// deliberately given none of the purchasing permissions.
 
 const KITCHEN: Permission[] = [
   PERMISSIONS.KITCHEN_VIEW,

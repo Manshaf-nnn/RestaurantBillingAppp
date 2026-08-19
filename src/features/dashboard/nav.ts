@@ -129,12 +129,7 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.INVENTORY_COUNT,
       },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_MANAGE },
-      {
-        href: '/dashboard/purchases',
-        label: 'Purchases',
-        icon: ScrollText,
-        permission: PERMISSIONS.PURCHASE_MANAGE,
-      },
+      { href: '/dashboard/purchases', label: 'Purchasing', icon: Truck, permission: PERMISSIONS.PURCHASE_VIEW },
     ],
   },
   {
