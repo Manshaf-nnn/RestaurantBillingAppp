@@ -52,6 +52,17 @@ export async function reconcileOrderDepletion(
     releaseAll?: boolean
   },
 ): Promise<ReconcileResult> {
+  // Serialise reconciliation per order. Without this, ten concurrent calls all
+  // read the same applied quantities, all compute the same delta, and all post
+  // it — measured before this fix: ten calls produced ten SALE rows and took
+  // sixty buns instead of six. The lock makes the "run twice, change nothing"
+  // guarantee hold under concurrency as well as in sequence.
+  await tx.$queryRaw`
+    SELECT id FROM orders
+    WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}
+    FOR UPDATE
+  `
+
   const desired = params.releaseAll
     ? { totals: new Map<string, number>(), problems: [] as string[] }
     : await resolveOrderConsumption(tx, {

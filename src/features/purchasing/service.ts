@@ -49,14 +49,44 @@ export interface PurchaseLineInput {
 }
 
 /** Next PO number for the restaurant, e.g. PO-000042. */
-async function nextNumber(tx: TxClient, restaurantId: string, prefix: string, table: 'purchase' | 'receipt' | 'return'): Promise<string> {
-  const count =
+/**
+ * Next document number for a restaurant.
+ *
+ * Derived from the highest number already issued rather than a row count: a
+ * count goes wrong the moment anything is deleted, and two concurrent callers
+ * both read the same count and both propose the same number. The unique
+ * constraint catches the collision, but the caller sees a database error rather
+ * than a clean retry, so the maximum is read under a lock on the restaurant row
+ * to serialise issuance.
+ */
+async function nextNumber(
+  tx: TxClient,
+  restaurantId: string,
+  prefix: string,
+  table: 'purchase' | 'receipt' | 'return',
+): Promise<string> {
+  // Serialise number issuance per restaurant. Cheap: held only for the moment
+  // between reading the last number and writing the new document.
+  await tx.$queryRaw`SELECT id FROM restaurants WHERE id = ${restaurantId} FOR UPDATE`
+
+  const rows =
     table === 'purchase'
-      ? await tx.purchase.count({ where: { restaurantId } })
+      ? await tx.purchase.findMany({
+          where: { restaurantId, number: { startsWith: `${prefix}-` } },
+          orderBy: { number: 'desc' }, take: 1, select: { number: true },
+        })
       : table === 'receipt'
-        ? await tx.goodsReceipt.count({ where: { restaurantId } })
-        : await tx.purchaseReturn.count({ where: { restaurantId } })
-  return `${prefix}-${String(count + 1).padStart(6, '0')}`
+        ? await tx.goodsReceipt.findMany({
+            where: { restaurantId, number: { startsWith: `${prefix}-` } },
+            orderBy: { number: 'desc' }, take: 1, select: { number: true },
+          })
+        : await tx.purchaseReturn.findMany({
+            where: { restaurantId, number: { startsWith: `${prefix}-` } },
+            orderBy: { number: 'desc' }, take: 1, select: { number: true },
+          })
+
+  const last = Number(rows[0]?.number?.split('-')[1] ?? 0)
+  return `${prefix}-${String((Number.isFinite(last) ? last : 0) + 1).padStart(6, '0')}`
 }
 
 function totalsFor(lines: PurchaseLineInput[], discount: number, taxTotal: number) {

@@ -52,9 +52,14 @@ export interface TransferLineInput {
   batchId?: string | null
 }
 
+/** Highest issued number under a lock — a count races and breaks on deletes. */
 async function nextNumber(tx: TxClient, restaurantId: string): Promise<string> {
-  const count = await tx.stockTransfer.count({ where: { restaurantId } })
-  return `TRF-${String(count + 1).padStart(6, '0')}`
+  await tx.$queryRaw`SELECT id FROM restaurants WHERE id = ${restaurantId} FOR UPDATE`
+  const rows = await tx.stockTransfer.findMany({
+    where: { restaurantId }, orderBy: { number: 'desc' }, take: 1, select: { number: true },
+  })
+  const last = Number(rows[0]?.number?.split('-')[1] ?? 0)
+  return `TRF-${String((Number.isFinite(last) ? last : 0) + 1).padStart(6, '0')}`
 }
 
 /** Both ends must belong to the caller's restaurant — never trust an id. */
@@ -389,7 +394,27 @@ export async function closeTransfer(params: {
   })
 }
 
+/**
+ * Load a transfer with its row locked for the rest of the transaction.
+ *
+ * The lock is the whole reason this is not a plain findFirst. Every state
+ * change here is read-modify-write — read the status, decide, write — and
+ * without a lock five simultaneous dispatches all read REQUESTED, all decide
+ * they may proceed, and all move the stock. Measured before this: five
+ * concurrent dispatches of 10 units took 50 from a balance of 30 and left it
+ * at −20, with 50 showing in transit at the far end.
+ *
+ * Postgres releases the lock on commit or rollback, so a crash cannot strand a
+ * transfer.
+ */
 async function load(tx: TxClient, restaurantId: string, transferId: string) {
+  const locked = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM stock_transfers
+    WHERE id = ${transferId} AND "restaurantId" = ${restaurantId}
+    FOR UPDATE
+  `
+  if (locked.length === 0) throw new NotFoundError('Transfer')
+
   const transfer = await tx.stockTransfer.findFirst({
     where: { id: transferId, restaurantId },
     include: {

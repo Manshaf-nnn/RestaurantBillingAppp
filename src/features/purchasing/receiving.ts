@@ -98,6 +98,35 @@ export async function receiveGoods(params: {
   }
 
   return prisma.$transaction(async (tx) => {
+    // Lock the order and re-check inside the transaction. The validation above
+    // runs on data read before this point, so on its own it is only advisory:
+    // four simultaneous deliveries of 50 against a 50-unit order each saw an
+    // empty order and each posted, receiving 200. Re-reading the received
+    // quantities under a lock is what makes the refusal actually hold.
+    await tx.$queryRaw`
+      SELECT id FROM purchases
+      WHERE id = ${po.id} AND "restaurantId" = ${params.restaurantId}
+      FOR UPDATE
+    `
+    const current = await tx.purchaseItem.findMany({
+      where: { purchaseId: po.id },
+      include: { item: { select: { name: true } } },
+    })
+    const handledById = new Map(current.map((l) => [l.id, l.receivedQty + l.rejectedQty]))
+
+    for (const line of params.lines) {
+      const already = handledById.get(line.purchaseItemId) ?? 0
+      const ordered = current.find((l) => l.id === line.purchaseItemId)?.quantity ?? 0
+      const incoming = (line.acceptedQty ?? 0) + (line.rejectedQty ?? 0)
+      if (already + incoming > ordered + 1e-6) {
+        throw new AppError(
+          `${current.find((l) => l.id === line.purchaseItemId)?.item.name ?? 'That item'}: that is more than the ${ordered} ordered`,
+          400,
+          'RECEIPT_OVER',
+        )
+      }
+    }
+
     const number = await nextNumber(tx, params.restaurantId, 'GRN', 'receipt')
 
     const receipt = await tx.goodsReceipt.create({

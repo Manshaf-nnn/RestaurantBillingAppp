@@ -634,6 +634,7 @@ model User {
   @@unique([email])
   @@index([restaurantId, role])
   @@index([restaurantId, isActive])
+  @@index([restaurantId, branchId])
   @@map("users")
 }
 
@@ -844,6 +845,7 @@ model RestaurantTable {
 
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
+  @@index([restaurantId, branchId])
   @@map("restaurant_tables")
 }
 
@@ -987,6 +989,7 @@ model Order {
   @@index([customerId])
   @@index([guestSessionId])
   @@index([restaurantId, heldAt])
+  @@index([restaurantId, branchId, placedAt])
   @@map("orders")
 }
 
@@ -1020,6 +1023,7 @@ model OrderItem {
 
   @@index([orderId])
   @@index([foodId])
+  @@index([orderId, status])
   @@map("order_items")
 }
 
@@ -1156,6 +1160,7 @@ model Coupon {
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
+  @@index([restaurantId, branchId, isActive])
   @@map("coupons")
 }
 
@@ -1294,6 +1299,7 @@ model InventoryItem {
   @@index([restaurantId, isActive])
   @@index([restaurantId, expiryDate])
   @@index([restaurantId, branchId, isActive])
+  @@index([restaurantId, supplierId])
   @@map("inventory_items")
 }
 
@@ -1349,6 +1355,9 @@ model StockMovement {
   @@index([itemId, createdAt])
   @@index([restaurantId, type, createdAt])
   @@index([referenceType, referenceId])
+  @@index([restaurantId, branchId, createdAt])
+  @@index([orderId])
+  @@index([purchaseId])
   @@map("stock_movements")
 }
 
@@ -1397,6 +1406,8 @@ model Purchase {
 
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
+  @@index([restaurantId, supplierId, createdAt])
+  @@index([restaurantId, branchId])
   @@map("purchases")
 }
 
@@ -1421,6 +1432,7 @@ model PurchaseItem {
   receiptLines GoodsReceiptLine[]
 
   @@index([purchaseId])
+  @@index([itemId])
   @@map("purchase_items")
 }
 
@@ -1558,6 +1570,8 @@ model AuditLog {
 
   @@index([restaurantId, createdAt])
   @@index([entity, entityId])
+  @@index([restaurantId, branchId, createdAt])
+  @@index([restaurantId, action, createdAt])
   @@map("audit_logs")
 }
 
@@ -1676,6 +1690,7 @@ model CashDrawerSession {
 
   @@index([restaurantId, status, openedAt])
   @@index([openedById, status])
+  @@index([restaurantId, branchId, openedAt])
   @@map("cash_drawer_sessions")
 }
 
@@ -1726,6 +1741,7 @@ model StorageLocation {
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
+  @@index([restaurantId, branchId])
   @@map("storage_locations")
 }
 
@@ -1765,6 +1781,7 @@ model StockCount {
 
   @@unique([restaurantId, reference])
   @@index([restaurantId, status, countedAt])
+  @@index([restaurantId, branchId, countedAt])
   @@map("stock_counts")
 }
 
@@ -2029,6 +2046,7 @@ model PurchaseReturn {
 
   @@unique([restaurantId, number])
   @@index([restaurantId, createdAt])
+  @@index([restaurantId, supplierId])
   @@map("purchase_returns")
 }
 
@@ -2116,6 +2134,7 @@ model StockBatch {
   @@unique([itemId, batchNo])
   @@index([restaurantId, expiryDate])
   @@index([itemId, remainingQty])
+  @@index([restaurantId, branchId])
   @@map("stock_batches")
 }
 
@@ -2172,6 +2191,8 @@ model WastageRecord {
   @@index([restaurantId, createdAt])
   @@index([restaurantId, reason, createdAt])
   @@index([restaurantId, status])
+  @@index([restaurantId, branchId, createdAt])
+  @@index([itemId, createdAt])
   @@map("wastage_records")
 }
 
@@ -2263,6 +2284,7 @@ model StockTransfer {
   @@index([restaurantId, status])
   @@index([restaurantId, fromBranchId])
   @@index([restaurantId, toBranchId])
+  @@index([restaurantId, requestedAt])
   @@map("stock_transfers")
 }
 
@@ -2421,6 +2443,7 @@ model ProductionConsumption {
   createdAt DateTime @default(now())
 
   @@index([orderId])
+  @@index([itemId])
   @@map("production_consumption")
 }
 
@@ -2441,6 +2464,7 @@ model ProductionOutput {
   createdAt DateTime @default(now())
 
   @@index([orderId])
+  @@index([itemId])
   @@map("production_outputs")
 }
 
@@ -2487,5 +2511,6 @@ model ApprovalRequest {
 
   @@index([restaurantId, status, requestedAt])
   @@index([restaurantId, kind, status])
+  @@index([restaurantId, branchId, status])
   @@map("approval_requests")
 }
