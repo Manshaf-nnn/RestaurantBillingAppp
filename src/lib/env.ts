@@ -9,6 +9,9 @@ import { z } from 'zod'
  */
 const serverSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  /// Un-pooled connection for migrations; optional so a local setup with no
+  /// pooler needs no extra configuration.
+  DIRECT_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),
 
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be >= 32 chars'),

@@ -20,6 +20,13 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Migrations run against the direct connection, never the pooler.
+  // PgBouncer cannot execute `ALTER TYPE ... ADD VALUE`, which is the first
+  // statement in the recipes migration and is why the production deploy failed
+  // while the same migration applied cleanly against a direct local connection.
+  // Falls back to DATABASE_URL when DIRECT_URL is unset, so a local setup with
+  // no pooler keeps working unchanged.
+  directUrl = env("DIRECT_URL")
 }
 
 // ─────────────────────────────────────────────────────────────── enums ─────
