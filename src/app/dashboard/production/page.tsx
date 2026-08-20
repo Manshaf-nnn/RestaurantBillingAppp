@@ -5,7 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
-import { getProductionDashboard } from '@/features/production/queries'
+import { getProductionConsoleData, getProductionDashboard } from '@/features/production/queries'
+import { ProductionConsole } from '@/features/production/components/production-console'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -17,7 +18,10 @@ export const metadata: Metadata = { title: 'Production' }
 export default async function ProductionPage() {
   const user = await requirePagePermission(PERMISSIONS.PRODUCTION_VIEW, '/dashboard/production')
   const restaurant = await requireRestaurant(user.restaurantId)
-  const data = await getProductionDashboard({ restaurantId: user.restaurantId })
+  const [data, console_] = await Promise.all([
+    getProductionDashboard({ restaurantId: user.restaurantId }),
+    getProductionConsoleData({ restaurantId: user.restaurantId, currency: restaurant.currency }),
+  ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
   if (!data.house) {
@@ -88,6 +92,12 @@ export default async function ProductionPage() {
             ))}
           </ul>
         </SectionCard>
+      )}
+
+      {user.permissions.includes(PERMISSIONS.PRODUCTION_MANAGE) && (
+        <div className="mb-5">
+          <ProductionConsole data={console_} />
+        </div>
       )}
 
       <SectionCard title="Completed runs" description="What was planned, what was made, and what it cost.">

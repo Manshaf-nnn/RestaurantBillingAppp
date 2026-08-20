@@ -12,6 +12,8 @@ const serverSchema = z.object({
   /// Un-pooled connection for migrations; optional so a local setup with no
   /// pooler needs no extra configuration.
   DIRECT_URL: z.string().optional(),
+  /// Override the Prisma connection limit if a host needs a different one.
+  DB_CONNECTION_LIMIT: z.string().optional(),
   REDIS_URL: z.string().optional(),
 
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be >= 32 chars'),

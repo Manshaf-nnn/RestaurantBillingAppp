@@ -147,3 +147,45 @@ export async function getProductionDashboard(params: {
     })),
   }
 }
+
+
+/** Everything the production console needs to define recipes and start runs. */
+export async function getProductionConsoleData(params: {
+  restaurantId: string
+  currency: string
+}) {
+  const [houses, items, specs, pending] = await Promise.all([
+    prisma.branch.findMany({
+      where: { restaurantId: params.restaurantId, type: 'PRODUCTION_HOUSE', deletedAt: null, isActive: true },
+      select: { id: true, name: true }, orderBy: { name: 'asc' },
+    }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      select: { id: true, name: true, unit: true, quantity: true }, orderBy: { name: 'asc' },
+    }),
+    prisma.productionSpec.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      include: { outputItem: { select: { name: true } } }, orderBy: { name: 'asc' },
+    }),
+    prisma.productionOrder.findMany({
+      where: {
+        restaurantId: params.restaurantId,
+        status: { in: ['DRAFT', 'PLANNED', 'APPROVED', 'IN_PROGRESS'] },
+      },
+      include: { spec: { select: { name: true } } }, orderBy: { createdAt: 'desc' },
+    }),
+  ])
+
+  return {
+    currency: params.currency,
+    houses,
+    items: items.map((i) => ({ ...i, unit: i.unit as string })),
+    specs: specs.map((s) => ({
+      id: s.id, name: s.name, outputName: s.outputItem.name, outputQty: s.outputQty,
+    })),
+    pending: pending.map((p) => ({
+      id: p.id, number: p.number, status: p.status,
+      specName: p.spec?.name ?? null, plannedQty: p.plannedQty,
+    })),
+  }
+}

@@ -53,10 +53,31 @@ function resolveDatabaseUrl(): string | undefined {
   }
 
   const params = url.searchParams
-  if (!params.has('connection_limit')) params.set('connection_limit', '5')
-  if (!params.has('pool_timeout')) params.set('pool_timeout', '20')
+  const pooled = url.hostname.includes('-pooler')
+
+  /*
+   * Connection limit.
+   *
+   * A back-office page fans out: the inventory report alone issues five
+   * queries in parallel and several of those issue more. With a limit of 5 the
+   * sixth waited on the pool, and since the pool timeout was longer than the
+   * serverless function timeout the request died before the query ever ran —
+   * which surfaced as "a server-side exception has occurred" on exactly the
+   * data-heavy pages while simple ones were fine.
+   *
+   * Behind PgBouncer a higher client limit is cheap: the pooler multiplexes
+   * onto far fewer real Postgres connections, which is the entire point of it.
+   * Direct connections stay conservative because there the limit is per
+   * instance against a real server.
+   */
+  if (!params.has('connection_limit')) {
+    params.set('connection_limit', process.env.DB_CONNECTION_LIMIT ?? (pooled ? '15' : '5'))
+  }
+  // Fail faster than the function times out, so a saturated pool surfaces as a
+  // clear database error rather than an opaque platform timeout.
+  if (!params.has('pool_timeout')) params.set('pool_timeout', '8')
   if (!params.has('connect_timeout')) params.set('connect_timeout', '10')
-  if (url.hostname.includes('-pooler') && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
+  if (pooled && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
   if (!params.has('sslmode')) params.set('sslmode', 'require')
 
   return url.toString()
