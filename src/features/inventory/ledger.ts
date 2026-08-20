@@ -81,6 +81,8 @@ export interface PostMovementParams {
   locationId?: string | null
   userId?: string | null
   batchNo?: string | null
+  /** Ties the movement to a specific lot when the item is batch-tracked. */
+  batchId?: string | null
   expiryDate?: Date | null
   stockCountId?: string | null
   orderId?: string | null
@@ -158,6 +160,7 @@ export async function postMovement(
       locationId: params.locationId ?? item.locationId ?? null,
       userId: params.userId ?? null,
       batchNo: params.batchNo ?? null,
+      batchId: params.batchId ?? null,
       expiryDate: params.expiryDate ?? null,
       stockCountId: params.stockCountId ?? null,
       orderId: params.orderId ?? null,

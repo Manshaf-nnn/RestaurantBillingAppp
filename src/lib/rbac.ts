@@ -66,6 +66,8 @@ export const PERMISSIONS = {
   INVENTORY_COUNT: 'inventory.count',
   INVENTORY_COUNT_APPROVE: 'inventory.countApprove',
   INVENTORY_COST_EDIT: 'inventory.costEdit',
+  INVENTORY_WASTAGE_APPROVE: 'inventory.wastageApprove',
+  INVENTORY_EXPIRY_VIEW: 'inventory.expiryView',
 
   // purchasing — creating an order and committing the restaurant's money to it
   // are separate acts, so they are separate permissions.
@@ -104,6 +106,7 @@ const KITCHEN: Permission[] = [
   PERMISSIONS.INVENTORY_VIEW,
   PERMISSIONS.INVENTORY_WASTAGE,
   PERMISSIONS.INVENTORY_COUNT,
+  PERMISSIONS.INVENTORY_EXPIRY_VIEW,
 ]
 
 const CASHIER: Permission[] = [

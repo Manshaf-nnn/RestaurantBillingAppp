@@ -22,6 +22,9 @@ import {
   Utensils,
   Wallet,
   ClipboardCheck,
+  Trash2,
+  CalendarClock,
+  Scale,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -127,6 +130,24 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Stock counts',
         icon: ClipboardCheck,
         permission: PERMISSIONS.INVENTORY_COUNT,
+      },
+      {
+        href: '/dashboard/inventory/wastage',
+        label: 'Wastage',
+        icon: Trash2,
+        permission: PERMISSIONS.INVENTORY_WASTAGE,
+      },
+      {
+        href: '/dashboard/inventory/expiry',
+        label: 'Expiry',
+        icon: CalendarClock,
+        permission: PERMISSIONS.INVENTORY_EXPIRY_VIEW,
+      },
+      {
+        href: '/dashboard/reports/variance',
+        label: 'Stock variance',
+        icon: Scale,
+        permission: PERMISSIONS.REPORT_VIEW,
       },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_MANAGE },
       { href: '/dashboard/purchases', label: 'Purchasing', icon: Truck, permission: PERMISSIONS.PURCHASE_VIEW },

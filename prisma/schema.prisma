@@ -205,6 +205,25 @@ enum StockCountStatus {
   CANCELLED
 }
 
+enum WastageReason {
+  EXPIRED
+  SPOILED
+  BURNT
+  DAMAGED
+  DROPPED
+  PREPARATION
+  CUSTOMER_RETURN
+  OTHER
+}
+
+enum WastageStatus {
+  /// Recorded, stock already gone. Approval is a review, not a gate — see
+  /// WastageRecord for why.
+  RECORDED
+  APPROVED
+  REJECTED
+}
+
 enum StockAlertLevel {
   OUT_OF_STOCK
   LOW_STOCK
@@ -366,6 +385,8 @@ model Restaurant {
   recipes          Recipe[]
   goodsReceipts    GoodsReceipt[]
   purchaseReturns  PurchaseReturn[]
+  stockBatches     StockBatch[]
+  wastageRecords   WastageRecord[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -495,6 +516,8 @@ model User {
   purchasesApproved Purchase[]          @relation("PurchaseApprovedBy")
   receiptsReceived  GoodsReceipt[]      @relation("ReceiptReceivedBy")
   returnsCreated    PurchaseReturn[]    @relation("ReturnCreatedBy")
+  wastageCreated    WastageRecord[]     @relation("WastageCreatedBy")
+  wastageApproved   WastageRecord[]     @relation("WastageApprovedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -1094,6 +1117,10 @@ model InventoryItem {
 
   trackExpiry  Boolean          @default(false)
   trackBatches Boolean          @default(false)
+  /// Draw the oldest-expiring batch first. Opt-in per item — most stock
+  /// does not need it, and forcing it everywhere makes ordinary receiving
+  /// slower for no benefit.
+  useFefo      Boolean          @default(false)
   expiryDate   DateTime?
   storageArea  String?
   locationId   String?
@@ -1106,18 +1133,20 @@ model InventoryItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  movements     StockMovement[]
-  recipeItems   RecipeItem[]
-  producedBy    Recipe[]               @relation("RecipeProduces")
-  recipeUsages  RecipeIngredient[]
-  depletions    OrderStockDepletion[]
-  supplierItems SupplierItem[]
-  receiptLines  GoodsReceiptLine[]
-  returnLines   PurchaseReturnLine[]
-  priceHistory  PurchasePriceHistory[]
-  purchaseItems PurchaseItem[]
-  branch        Branch?                @relation(fields: [branchId], references: [id])
-  branchId      String?
+  movements      StockMovement[]
+  recipeItems    RecipeItem[]
+  producedBy     Recipe[]               @relation("RecipeProduces")
+  recipeUsages   RecipeIngredient[]
+  depletions     OrderStockDepletion[]
+  supplierItems  SupplierItem[]
+  receiptLines   GoodsReceiptLine[]
+  returnLines    PurchaseReturnLine[]
+  priceHistory   PurchasePriceHistory[]
+  batches        StockBatch[]
+  wastageRecords WastageRecord[]
+  purchaseItems  PurchaseItem[]
+  branch         Branch?                @relation(fields: [branchId], references: [id])
+  branchId       String?
 
   stockCountLines StockCountLine[]
 
@@ -1157,6 +1186,8 @@ model StockMovement {
   referenceId   String?
 
   batchNo    String?
+  batchId    String?
+  batch      StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   expiryDate DateTime?
 
   branchId     String?
@@ -1443,6 +1474,8 @@ model Branch {
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
   purchases        Purchase[]
+  stockBatches     StockBatch[]
+  wastageRecords   WastageRecord[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1531,10 +1564,12 @@ model StorageLocation {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  items       InventoryItem[]
-  movements   StockMovement[]
-  stockCounts StockCount[]
-  purchases   Purchase[]
+  items          InventoryItem[]
+  movements      StockMovement[]
+  stockCounts    StockCount[]
+  purchases      Purchase[]
+  batches        StockBatch[]
+  wastageRecords WastageRecord[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1882,4 +1917,105 @@ model PurchasePriceHistory {
 
   @@index([restaurantId, itemId, recordedAt])
   @@map("purchase_price_history")
+}
+
+/// A batch or lot of stock, with its own expiry.
+///
+/// Only created for items with `trackBatches` on. Most restaurant stock does
+/// not need it — nobody lots their salt — but anything with a short life or a
+/// recall risk does, and for those the batch is what makes "which delivery was
+/// this from?" answerable.
+///
+/// `remainingQty` is decremented as the batch is drawn down. It is a cache of
+/// the batch's own movements in the same way an item balance is, and is written
+/// only alongside them.
+model StockBatch {
+  id           String        @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  batchNo      String
+  expiryDate   DateTime?
+  /// Base units received into this batch.
+  receivedQty  Float
+  /// Base units left. Zero means the batch is used up, not that it never was.
+  remainingQty Float
+  /// Cost per base unit for this batch specifically — the groundwork FIFO and
+  /// batch-accurate costing would need.
+  unitCost     Int       @default(0)
+
+  locationId String?
+  location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  branchId   String?
+  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  receivedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  movements StockMovement[]
+  wastage   WastageRecord[] @relation("WastageBatch")
+
+  @@unique([itemId, batchNo])
+  @@index([restaurantId, expiryDate])
+  @@index([itemId, remainingQty])
+  @@map("stock_batches")
+}
+
+/// Something thrown away.
+///
+/// Wastage is recorded as a movement immediately, not on approval. The food is
+/// already in the bin — refusing to write it down until a manager signs off
+/// would leave the system claiming stock that visibly does not exist, and the
+/// person who threw it away is rarely the person who can approve it. Approval
+/// is therefore a review of a fact, not permission for it, which is also what
+/// makes the approval queue honest: it is a list of things that happened, not
+/// a list of things waiting to happen.
+model WastageRecord {
+  id           String        @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// Base units removed from stock.
+  quantity        Float
+  /// What the user typed, before conversion.
+  quantityEntered Float?
+  enteredUnit     StockUnit?
+  /// quantity × average cost at the time, minor units. Snapshotted because the
+  /// cost of what was wasted is a fact about that day, not today's price.
+  costValue       Int        @default(0)
+
+  reason     WastageReason
+  reasonNote String?
+  notes      String?
+  /// Optional photograph, stored like every other image via /api/media.
+  photoUrl   String?
+
+  branchId   String?
+  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  locationId String?
+  location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  batchId    String?
+  batch      StockBatch?      @relation("WastageBatch", fields: [batchId], references: [id], onDelete: SetNull)
+
+  status       WastageStatus @default(RECORDED)
+  createdById  String?
+  createdBy    User?         @relation("WastageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedById String?
+  approvedBy   User?         @relation("WastageApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+
+  movementId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, reason, createdAt])
+  @@index([restaurantId, status])
+  @@map("wastage_records")
 }
