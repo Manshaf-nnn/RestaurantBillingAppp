@@ -191,6 +191,10 @@ enum StockMovementType {
   RETURN_TO_SUPPLIER
   CUSTOMER_RETURN
   PRODUCTION
+  /// Raw materials consumed by a production run.
+  PRODUCTION_CONSUMPTION
+  /// Finished goods a production run created.
+  PRODUCTION_OUTPUT
   OPENING_BALANCE
   /// Ingredients put back because an order shrank or was cancelled after the
   /// kitchen had already committed. Kept distinct from CUSTOMER_RETURN so a
@@ -203,6 +207,55 @@ enum StockCountStatus {
   AWAITING_APPROVAL
   APPROVED
   CANCELLED
+}
+
+/// What kind of place a Branch is.
+///
+/// Branch is reused as the generic Location model rather than introducing a
+/// parallel one: it already carries the restaurant link, storage locations,
+/// users, orders and stock, and duplicating that would split the tenancy rules
+/// across two tables. A production house and a warehouse are branches that do
+/// not serve guests.
+enum LocationType {
+  BRANCH
+  PRODUCTION_HOUSE
+  CENTRAL_WAREHOUSE
+}
+
+enum TransferStatus {
+  REQUESTED
+  APPROVED
+  DISPATCHED
+  IN_TRANSIT
+  RECEIVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum ProductionStatus {
+  DRAFT
+  PLANNED
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  PARTIALLY_COMPLETED
+  CANCELLED
+}
+
+enum ProductionVarianceReason {
+  PRODUCTION_LOSS
+  DAMAGED
+  INGREDIENT_SHORTAGE
+  QUALITY_ISSUE
+  OTHER
+}
+
+enum TransferVarianceReason {
+  DAMAGED_IN_TRANSIT
+  MISSING
+  REJECTED_ON_ARRIVAL
+  OTHER
 }
 
 enum WastageReason {
@@ -387,6 +440,10 @@ model Restaurant {
   purchaseReturns  PurchaseReturn[]
   stockBatches     StockBatch[]
   wastageRecords   WastageRecord[]
+  inventoryStock   InventoryStock[]
+  stockTransfers   StockTransfer[]
+  productionOrders ProductionOrder[]
+  productionSpecs  ProductionSpec[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -494,30 +551,37 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  sessions          Session[]
-  tokens            VerificationToken[]
-  auditLogs         AuditLog[]
-  notifications     Notification[]
-  createdOrders     Order[]             @relation("OrderCreatedBy")
-  receivedPayments  Payment[]           @relation("PaymentReceivedBy")
-  stockMovements    StockMovement[]
-  shifts            StaffShift[]
-  handledRequests   ServiceRequest[]    @relation("RequestHandledBy")
-  createdInvites    Invite[]
-  branchId          String?
-  branch            Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  drawersOpened     CashDrawerSession[] @relation("DrawerOpenedBy")
-  drawersClosed     CashDrawerSession[] @relation("DrawerClosedBy")
-  cashMovements     CashMovement[]      @relation("CashMovementBy")
-  countsCounted     StockCount[]        @relation("CountCountedBy")
-  countsApproved    StockCount[]        @relation("CountApprovedBy")
-  recipesCreated    Recipe[]            @relation("RecipeCreatedBy")
-  purchasesCreated  Purchase[]          @relation("PurchaseCreatedBy")
-  purchasesApproved Purchase[]          @relation("PurchaseApprovedBy")
-  receiptsReceived  GoodsReceipt[]      @relation("ReceiptReceivedBy")
-  returnsCreated    PurchaseReturn[]    @relation("ReturnCreatedBy")
-  wastageCreated    WastageRecord[]     @relation("WastageCreatedBy")
-  wastageApproved   WastageRecord[]     @relation("WastageApprovedBy")
+  sessions            Session[]
+  tokens              VerificationToken[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  createdOrders       Order[]             @relation("OrderCreatedBy")
+  receivedPayments    Payment[]           @relation("PaymentReceivedBy")
+  stockMovements      StockMovement[]
+  shifts              StaffShift[]
+  handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
+  createdInvites      Invite[]
+  branchId            String?
+  branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
+  drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
+  cashMovements       CashMovement[]      @relation("CashMovementBy")
+  countsCounted       StockCount[]        @relation("CountCountedBy")
+  countsApproved      StockCount[]        @relation("CountApprovedBy")
+  recipesCreated      Recipe[]            @relation("RecipeCreatedBy")
+  purchasesCreated    Purchase[]          @relation("PurchaseCreatedBy")
+  purchasesApproved   Purchase[]          @relation("PurchaseApprovedBy")
+  receiptsReceived    GoodsReceipt[]      @relation("ReceiptReceivedBy")
+  returnsCreated      PurchaseReturn[]    @relation("ReturnCreatedBy")
+  wastageCreated      WastageRecord[]     @relation("WastageCreatedBy")
+  wastageApproved     WastageRecord[]     @relation("WastageApprovedBy")
+  locationsManaged    Branch[]            @relation("LocationManager")
+  transfersRequested  StockTransfer[]     @relation("TransferRequestedBy")
+  transfersApproved   StockTransfer[]     @relation("TransferApprovedBy")
+  transfersDispatched StockTransfer[]     @relation("TransferDispatchedBy")
+  transfersReceived   StockTransfer[]     @relation("TransferReceivedBy")
+  productionRequested ProductionOrder[]   @relation("ProductionRequestedBy")
+  productionApproved  ProductionOrder[]   @relation("ProductionApprovedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -1133,20 +1197,26 @@ model InventoryItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  movements      StockMovement[]
-  recipeItems    RecipeItem[]
-  producedBy     Recipe[]               @relation("RecipeProduces")
-  recipeUsages   RecipeIngredient[]
-  depletions     OrderStockDepletion[]
-  supplierItems  SupplierItem[]
-  receiptLines   GoodsReceiptLine[]
-  returnLines    PurchaseReturnLine[]
-  priceHistory   PurchasePriceHistory[]
-  batches        StockBatch[]
-  wastageRecords WastageRecord[]
-  purchaseItems  PurchaseItem[]
-  branch         Branch?                @relation(fields: [branchId], references: [id])
-  branchId       String?
+  movements          StockMovement[]
+  recipeItems        RecipeItem[]
+  producedBy         Recipe[]                @relation("RecipeProduces")
+  recipeUsages       RecipeIngredient[]
+  depletions         OrderStockDepletion[]
+  supplierItems      SupplierItem[]
+  receiptLines       GoodsReceiptLine[]
+  returnLines        PurchaseReturnLine[]
+  priceHistory       PurchasePriceHistory[]
+  batches            StockBatch[]
+  wastageRecords     WastageRecord[]
+  locationStock      InventoryStock[]
+  transferLines      StockTransferLine[]
+  productionConsumed ProductionConsumption[]
+  productionOutputs  ProductionOutput[]
+  producedBySpec     ProductionSpec[]        @relation("ProductionSpecOutput")
+  specIngredients    ProductionSpecItem[]
+  purchaseItems      PurchaseItem[]
+  branch             Branch?                 @relation(fields: [branchId], references: [id])
+  branchId           String?
 
   stockCountLines StockCountLine[]
 
@@ -1450,14 +1520,20 @@ model Branch {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  name      String
+  name         String
   /// Short code used on order numbers and reports, e.g. "MAIN", "KANDY".
-  code      String
-  address   String?
-  phone     String?
-  isActive  Boolean @default(true)
+  code         String
+  /// BRANCH by default, so every existing row keeps its meaning untouched.
+  type         LocationType @default(BRANCH)
+  managerId    String?
+  manager      User?        @relation("LocationManager", fields: [managerId], references: [id], onDelete: SetNull)
+  /// [OpeningHours] — same shape as the restaurant's own.
+  openingHours Json?
+  address      String?
+  phone        String?
+  isActive     Boolean      @default(true)
   /// Exactly one per restaurant; where unassigned records are counted.
-  isDefault Boolean @default(false)
+  isDefault    Boolean      @default(false)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1476,6 +1552,10 @@ model Branch {
   purchases        Purchase[]
   stockBatches     StockBatch[]
   wastageRecords   WastageRecord[]
+  stock            InventoryStock[]
+  transfersOut     StockTransfer[]     @relation("TransferFrom")
+  transfersIn      StockTransfer[]     @relation("TransferTo")
+  productionOrders ProductionOrder[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1570,6 +1650,7 @@ model StorageLocation {
   purchases      Purchase[]
   batches        StockBatch[]
   wastageRecords WastageRecord[]
+  stock          InventoryStock[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1955,8 +2036,10 @@ model StockBatch {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  movements StockMovement[]
-  wastage   WastageRecord[] @relation("WastageBatch")
+  movements         StockMovement[]
+  wastage           WastageRecord[]     @relation("WastageBatch")
+  transferLines     StockTransferLine[]
+  productionOutputs ProductionOutput[]
 
   @@unique([itemId, batchNo])
   @@index([restaurantId, expiryDate])
@@ -2018,4 +2101,273 @@ model WastageRecord {
   @@index([restaurantId, reason, createdAt])
   @@index([restaurantId, status])
   @@map("wastage_records")
+}
+
+/// Stock of one item at one location.
+///
+/// The existing `InventoryItem.quantity` stays as the restaurant-wide available
+/// total, so every existing query, recipe deduction and alert keeps working
+/// untouched. This table adds the location breakdown underneath it, and the
+/// two are written together inside the same transaction.
+///
+/// The three quantities are deliberately separate and never summed into one
+/// number by the schema:
+///
+///   available — on the shelf, sellable now
+///   reserved  — spoken for by an approved transfer that has not left yet
+///   inTransit — dispatched from somewhere else and not yet received here
+///
+/// Mixing them is the classic multi-location bug: stock that is physically in a
+/// van gets counted as available at both ends, and the branch that is about to
+/// run out looks fine.
+model InventoryStock {
+  id                String           @id @default(cuid())
+  restaurantId      String
+  restaurant        Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  itemId            String
+  item              InventoryItem    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// The operational location — branch, production house or warehouse.
+  branchId          String
+  branch            Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  /// Optional shelf within that location.
+  storageLocationId String?
+  storageLocation   StorageLocation? @relation(fields: [storageLocationId], references: [id], onDelete: SetNull)
+
+  available Float @default(0)
+  reserved  Float @default(0)
+  inTransit Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([itemId, branchId])
+  @@index([restaurantId, branchId])
+  @@index([restaurantId, itemId])
+  @@map("inventory_stock")
+}
+
+/// A movement of stock between two locations.
+///
+/// Stock leaves the source when the transfer is DISPATCHED, not when it is
+/// requested or approved — a promise to send something does not move it. It
+/// arrives at the destination only when RECEIVED. Between those two points it
+/// belongs to neither location's available figure and sits in the destination's
+/// inTransit, which is what makes a van full of chicken visible instead of
+/// invisible.
+model StockTransfer {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  number       String
+  fromBranchId String
+  fromBranch   Branch @relation("TransferFrom", fields: [fromBranchId], references: [id], onDelete: Restrict)
+  toBranchId   String
+  toBranch     Branch @relation("TransferTo", fields: [toBranchId], references: [id], onDelete: Restrict)
+
+  status TransferStatus @default(REQUESTED)
+  notes  String?
+
+  requestedById  String?
+  requestedBy    User?     @relation("TransferRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt    DateTime  @default(now())
+  approvedById   String?
+  approvedBy     User?     @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt     DateTime?
+  dispatchedById String?
+  dispatchedBy   User?     @relation("TransferDispatchedBy", fields: [dispatchedById], references: [id], onDelete: SetNull)
+  dispatchedAt   DateTime?
+  receivedById   String?
+  receivedBy     User?     @relation("TransferReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+  receivedAt     DateTime?
+  rejectReason   String?
+
+  lines StockTransferLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, status])
+  @@index([restaurantId, fromBranchId])
+  @@index([restaurantId, toBranchId])
+  @@map("stock_transfers")
+}
+
+/// One item on a transfer.
+///
+/// `sentQty` is never overwritten by what turned up. A dispatch of 30 that
+/// arrives as 28 keeps both numbers and records the difference, because
+/// quietly turning 30 into 28 destroys the only evidence that two went missing.
+model StockTransferLine {
+  id         String        @id @default(cuid())
+  transferId String
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// Asked for at request time, in base units.
+  requestedQty   Float
+  /// Actually sent. Set at dispatch and never changed afterwards.
+  sentQty        Float?
+  /// Actually accepted at the far end.
+  receivedQty    Float?
+  /// receivedQty - sentQty. Negative means stock went missing on the way.
+  variance       Float?
+  varianceReason TransferVarianceReason?
+  varianceNote   String?
+
+  unit     StockUnit?
+  batchId  String?
+  batch    StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  unitCost Int         @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([transferId])
+  @@index([itemId])
+  @@map("stock_transfer_lines")
+}
+
+/// A production recipe: raw materials in, finished stock out.
+///
+/// Deliberately separate from the menu `Recipe`. A menu recipe turns stock into
+/// a plate for a guest; a production spec turns stock into different stock. The
+/// chain is raw material → production spec → finished product → menu recipe →
+/// sale, and collapsing the two middle steps would make a burger patty both an
+/// ingredient and a dish.
+model ProductionSpec {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name          String
+  /// The inventory item one batch produces.
+  outputItemId  String
+  outputItem    InventoryItem @relation("ProductionSpecOutput", fields: [outputItemId], references: [id], onDelete: Cascade)
+  /// How much one batch yields, in the output item's base unit.
+  outputQty     Float
+  /// Days the finished product keeps; drives the batch expiry date.
+  shelfLifeDays Int?
+
+  isActive Boolean @default(true)
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items  ProductionSpecItem[]
+  orders ProductionOrder[]
+
+  @@index([restaurantId, isActive])
+  @@map("production_specs")
+}
+
+model ProductionSpecItem {
+  id     String         @id @default(cuid())
+  specId String
+  spec   ProductionSpec @relation(fields: [specId], references: [id], onDelete: Cascade)
+  itemId String
+  item   InventoryItem  @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// Consumed per batch, in `unit`.
+  quantity Float
+  unit     StockUnit?
+
+  @@unique([specId, itemId])
+  @@map("production_spec_items")
+}
+
+/// One production run at a production house.
+model ProductionOrder {
+  id           String          @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// The production house doing the work.
+  branchId     String
+  branch       Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  specId       String?
+  spec         ProductionSpec? @relation(fields: [specId], references: [id], onDelete: SetNull)
+
+  number      String
+  batchNumber String?
+  status      ProductionStatus @default(DRAFT)
+
+  /// Batches planned, and what was actually achieved.
+  plannedQty     Float
+  actualQty      Float?
+  unit           StockUnit?
+  variance       Float?
+  varianceReason ProductionVarianceReason?
+  varianceNote   String?
+
+  /// Sum of what the raw materials actually cost, minor units.
+  totalCost Int @default(0)
+  /// totalCost / actualQty, minor units. The finished item's cost, not a price.
+  unitCost  Int @default(0)
+
+  productionDate DateTime?
+  expiryDate     DateTime?
+  notes          String?
+
+  requestedById String?
+  requestedBy   User?     @relation("ProductionRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedById  String?
+  approvedBy    User?     @relation("ProductionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt    DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  consumption ProductionConsumption[]
+  outputs     ProductionOutput[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, status])
+  @@index([restaurantId, branchId, createdAt])
+  @@map("production_orders")
+}
+
+/// A raw material actually consumed by a run.
+model ProductionConsumption {
+  id      String          @id @default(cuid())
+  orderId String
+  order   ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    InventoryItem   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// Base units taken out of stock.
+  quantity Float
+  unit     StockUnit?
+  /// Cost per base unit at the time, minor units. Snapshotted so the run's cost
+  /// does not drift when supplier prices change afterwards.
+  unitCost Int        @default(0)
+  lineCost Int        @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@map("production_consumption")
+}
+
+/// Finished goods a run produced.
+model ProductionOutput {
+  id      String          @id @default(cuid())
+  orderId String
+  order   ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    InventoryItem   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  quantity Float
+  unit     StockUnit?
+  unitCost Int         @default(0)
+  batchId  String?
+  batch    StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@map("production_outputs")
 }

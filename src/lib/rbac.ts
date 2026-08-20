@@ -81,6 +81,17 @@ export const PERMISSIONS = {
   BRANCH_VIEW: 'branch.view',
   BRANCH_MANAGE: 'branch.manage',
 
+  // transfers and production — requesting stock and releasing it are different
+  // acts, so dispatch is not implied by request.
+  TRANSFER_VIEW: 'transfer.view',
+  TRANSFER_REQUEST: 'transfer.request',
+  TRANSFER_APPROVE: 'transfer.approve',
+  TRANSFER_DISPATCH: 'transfer.dispatch',
+  TRANSFER_RECEIVE: 'transfer.receive',
+  PRODUCTION_VIEW: 'production.view',
+  PRODUCTION_MANAGE: 'production.manage',
+  PRODUCTION_APPROVE: 'production.approve',
+
   // cash drawer — operating your own drawer is a cashier's job; seeing everyone's
   // variance and force-closing a drawer someone left open is a manager's.
   CASH_DRAWER_OPERATE: 'cashDrawer.operate',

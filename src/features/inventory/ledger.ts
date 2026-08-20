@@ -5,6 +5,7 @@ import type { InventoryItem, StockMovement, StockMovementType, StockUnit } from 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
+import { applyLocationDelta } from './location-stock'
 
 /**
  * The stock ledger.
@@ -42,6 +43,9 @@ const INBOUND: StockMovementType[] = [
   'TRANSFER_IN',
   'CUSTOMER_RETURN',
   'PRODUCTION',
+  'PRODUCTION_OUTPUT',
+  // Puts stock back when an order shrinks or is cancelled.
+  'SALE_REVERSAL',
   'OPENING_BALANCE',
   'RETURN',
 ]
@@ -55,12 +59,27 @@ const OUTBOUND: StockMovementType[] = [
   'EXPIRY',
   'CONSUMPTION',
   'WASTE',
+  'PRODUCTION_CONSUMPTION',
 ]
 
+/**
+ * Which way a movement type moves stock.
+ *
+ * Only the legacy `ADJUSTMENT` type carries its own sign; everything else must
+ * be listed explicitly. An unlisted type throws rather than defaulting to
+ * signed, because a new type silently falling through to "add stock" is exactly
+ * the bug this guard exists to prevent — it reads as a plausible balance and is
+ * invisible until a stock take.
+ */
 export function directionOf(type: StockMovementType): 1 | -1 | 0 {
   if (INBOUND.includes(type)) return 1
   if (OUTBOUND.includes(type)) return -1
-  return 0 // legacy ADJUSTMENT carries its own sign
+  if (type === 'ADJUSTMENT') return 0
+  throw new AppError(
+    `Movement type ${type} has no direction defined`,
+    500,
+    'STOCK_UNKNOWN_DIRECTION',
+  )
 }
 
 export interface PostMovementParams {
@@ -173,6 +192,18 @@ export async function postMovement(
   const updated = await tx.inventoryItem.update({
     where: { id: item.id },
     data: { quantity: balanceAfter, ...costing },
+  })
+
+  // Mirror the change onto the location that owns it. The item total above is
+  // the restaurant-wide figure every existing query relies on; this records
+  // where the stock actually sits, in the same transaction so the two cannot
+  // disagree.
+  await applyLocationDelta(tx, {
+    restaurantId: params.restaurantId,
+    itemId: item.id,
+    branchId: params.branchId ?? item.branchId ?? null,
+    storageLocationId: params.locationId ?? item.locationId ?? null,
+    available: signed,
   })
 
   return {

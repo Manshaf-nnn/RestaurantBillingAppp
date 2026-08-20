@@ -25,6 +25,7 @@ import {
   Trash2,
   CalendarClock,
   Scale,
+  Building2,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -65,6 +66,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Cash drawer',
         icon: Wallet,
         permission: PERMISSIONS.CASH_DRAWER_OPERATE,
+      },
+      {
+        href: '/dashboard/locations',
+        label: 'Locations',
+        icon: Building2,
+        permission: PERMISSIONS.BRANCH_VIEW,
       },
       {
         href: '/dashboard/handover',

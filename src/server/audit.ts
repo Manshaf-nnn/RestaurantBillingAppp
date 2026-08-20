@@ -122,4 +122,13 @@ export const AUDIT_ACTIONS = {
   PO_RECEIVED: 'purchase.received',
   PO_RETURNED: 'purchase.returned',
   SUPPLIER_UPDATED: 'supplier.updated',
+
+  TRANSFER_REQUESTED: 'transfer.requested',
+  TRANSFER_APPROVED: 'transfer.approved',
+  TRANSFER_DISPATCHED: 'transfer.dispatched',
+  TRANSFER_RECEIVED: 'transfer.received',
+  TRANSFER_CLOSED: 'transfer.closed',
+  PRODUCTION_CREATED: 'production.created',
+  PRODUCTION_APPROVED: 'production.approved',
+  PRODUCTION_COMPLETED: 'production.completed',
 } as const
