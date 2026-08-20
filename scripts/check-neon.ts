@@ -47,7 +47,26 @@ async function main() {
     if (!r.finished_at && r.logs) console.log(`      error: ${r.logs.split('\n')[0].slice(0, 160)}`)
   }
 
-  console.log(`\nVERDICT: ${found.length === EXPECTED.length ? 'fully applied — mark as APPLIED' : found.length === 0 ? 'nothing applied — mark as ROLLED BACK and re-run' : 'PARTIAL — do not guess, send me this output'}\n`)
+  // The verdict has to account for a *retry*: a failed attempt followed by a
+  // successful one leaves two rows for the same migration. In that case the
+  // schema is already correct and the fix is to mark the failed attempt rolled
+  // back — marking it applied would collide with the row that already says so.
+  const stuck = rows.filter((r) => !r.finished_at && !r.rolled_back_at)
+  const alsoApplied = new Set(rows.filter((r) => r.finished_at).map((r) => r.migration_name))
+  const retried = stuck.some((r) => alsoApplied.has(r.migration_name))
+
+  const verdict =
+    stuck.length === 0
+      ? 'nothing stuck — no action needed'
+      : retried
+        ? 'a later attempt already succeeded and the schema is correct — mark the FAILED ATTEMPT as ROLLED BACK'
+        : found.length === EXPECTED.length
+          ? 'objects exist and there is no successful row — mark as APPLIED'
+          : found.length === 0
+            ? 'nothing landed — mark as ROLLED BACK, then re-run'
+            : 'PARTIAL — do not guess, send this output to someone who can read it'
+
+  console.log(`\nVERDICT: ${verdict}\n`)
   await prisma.$disconnect()
 }
 main().catch(async (e) => { console.error(e.message); await prisma.$disconnect(); process.exit(1) })
