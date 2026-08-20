@@ -149,9 +149,44 @@ export async function getLocationDetail(params: {
           reorderLevel: true, minStock: true, maxStock: true,
         },
       },
+      storageLocation: { select: { id: true, name: true } },
     },
     orderBy: { item: { name: 'asc' } },
   })
+
+  /*
+   * One row per shelf now, so an item stored in two places appears twice. The
+   * table needs the item's position at this location, not one line per shelf,
+   * so the shelves are folded together here and listed underneath.
+   *
+   * Alert level is judged on the branch total. A kitchen store holding two of
+   * something is not "low" when the cold room next door holds forty.
+   */
+  const byItem = new Map<string, {
+    item: (typeof stock)[number]['item']
+    available: number
+    reserved: number
+    inTransit: number
+    shelves: Array<{ name: string; available: number }>
+  }>()
+
+  for (const row of stock) {
+    const entry = byItem.get(row.item.id) ?? {
+      item: row.item, available: 0, reserved: 0, inTransit: 0, shelves: [],
+    }
+    entry.available += row.available
+    entry.reserved += row.reserved
+    entry.inTransit += row.inTransit
+    if (row.available !== 0 || row.storageLocation) {
+      entry.shelves.push({
+        name: row.storageLocation?.name ?? 'Unassigned',
+        available: row.available,
+      })
+    }
+    byItem.set(row.item.id, entry)
+  }
+
+  const merged = [...byItem.values()]
 
   return {
     branch: {
@@ -164,7 +199,7 @@ export async function getLocationDetail(params: {
       managerName: branch.manager?.name ?? null,
       storageLocations: branch.storageLocations,
     },
-    stock: stock.map((s) => ({
+    stock: merged.map((s) => ({
       itemId: s.item.id,
       name: s.item.name,
       unit: s.item.unit as string,
@@ -179,6 +214,8 @@ export async function getLocationDetail(params: {
         minStock: s.item.minStock,
         maxStock: s.item.maxStock,
       }),
+      // Only worth showing when it is actually split across more than one.
+      shelves: s.shelves.length > 1 ? s.shelves : [],
     })),
   }
 }

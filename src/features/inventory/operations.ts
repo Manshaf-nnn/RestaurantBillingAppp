@@ -67,6 +67,13 @@ export async function receiveStock(
 export async function recordWastage(
   params: Simple & { reason: string },
 ): Promise<{ id: string; quantity: number }> {
+  // Checked here rather than left to the enum mapping below, which would turn a
+  // blank into OTHER and then complain about a missing note — technically a
+  // refusal, but for the wrong reason and with the wrong message.
+  if (params.reason.trim().length < 2) {
+    throw new AppError('Give a reason for the wastage', 400, 'WASTAGE_NO_REASON')
+  }
+
   const KNOWN = [
     'EXPIRED', 'SPOILED', 'BURNT', 'DAMAGED', 'DROPPED',
     'PREPARATION', 'CUSTOMER_RETURN', 'OTHER',

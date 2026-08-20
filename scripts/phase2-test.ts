@@ -208,6 +208,10 @@ async function main() {
   ok('a supplier return removes stock', afterReturn === beforeReturn - 2, `${beforeReturn} -> ${afterReturn}`)
 
   // cleanup
+  // Wastage records reference the item with onDelete: Restrict, and this suite
+  // creates them now that recordWastage writes a full record.
+  await prisma.wastageRecord.deleteMany({ where: { itemId: { in: madeItems } } })
+  await prisma.inventoryStock.deleteMany({ where: { itemId: { in: madeItems } } })
   await prisma.stockMovement.deleteMany({ where: { itemId: { in: madeItems } } })
   await prisma.stockCountLine.deleteMany({ where: { stockCountId: { in: madeCounts } } })
   await prisma.stockCount.deleteMany({ where: { id: { in: madeCounts } } })
@@ -220,6 +224,10 @@ async function main() {
 
 main().catch(async (e) => {
   console.error('\nCRASHED:', e)
+  // Wastage records reference the item with onDelete: Restrict, and this suite
+  // creates them now that recordWastage writes a full record.
+  await prisma.wastageRecord.deleteMany({ where: { itemId: { in: madeItems } } })
+  await prisma.inventoryStock.deleteMany({ where: { itemId: { in: madeItems } } })
   await prisma.stockMovement.deleteMany({ where: { itemId: { in: madeItems } } }).catch(() => {})
   await prisma.stockCountLine.deleteMany({ where: { stockCountId: { in: madeCounts } } }).catch(() => {})
   await prisma.stockCount.deleteMany({ where: { id: { in: madeCounts } } }).catch(() => {})

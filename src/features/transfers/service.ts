@@ -82,26 +82,66 @@ async function nextNumber(tx: TxClient, restaurantId: string): Promise<string> {
   return `TRF-${String((Number.isFinite(last) ? last : 0) + 1).padStart(6, '0')}`
 }
 
-/** Both ends must belong to the caller's restaurant — never trust an id. */
-async function requireLocations(restaurantId: string, fromId: string, toId: string) {
-  if (fromId === toId) {
-    throw new AppError('Choose two different locations', 400, 'TRANSFER_SAME_LOCATION')
+/**
+ * Both ends must belong to the caller's restaurant — never trust an id.
+ *
+ * The two ends may be the same location provided the shelves differ: moving
+ * stock from the main store to the cold room is a real movement worth
+ * recording, even though the branch total does not change.
+ */
+async function requireLocations(
+  restaurantId: string,
+  fromId: string,
+  toId: string,
+  fromStorageId?: string | null,
+  toStorageId?: string | null,
+) {
+  if (fromId === toId && (!fromStorageId || !toStorageId || fromStorageId === toStorageId)) {
+    throw new AppError(
+      'Choose two different places — either another location, or another storage area within this one',
+      400,
+      'TRANSFER_SAME_LOCATION',
+    )
   }
+
+  const branchIds = fromId === toId ? [fromId] : [fromId, toId]
   const locations = await prisma.branch.findMany({
-    where: { id: { in: [fromId, toId] }, restaurantId, deletedAt: null },
+    where: { id: { in: branchIds }, restaurantId, deletedAt: null },
     select: { id: true, name: true, type: true },
   })
-  if (locations.length !== 2) throw new NotFoundError('Location')
-  return {
-    from: locations.find((l) => l.id === fromId)!,
-    to: locations.find((l) => l.id === toId)!,
+  if (locations.length !== branchIds.length) throw new NotFoundError('Location')
+
+  // A shelf must belong to the location it is named for, or stock would move to
+  // a store that is not there.
+  const storageIds = [fromStorageId, toStorageId].filter((id): id is string => Boolean(id))
+  if (storageIds.length > 0) {
+    const stores = await prisma.storageLocation.findMany({
+      where: { id: { in: storageIds }, restaurantId, deletedAt: null },
+      select: { id: true, branchId: true },
+    })
+    if (stores.length !== new Set(storageIds).size) throw new NotFoundError('Storage area')
+
+    const fromStore = stores.find((s) => s.id === fromStorageId)
+    const toStore = stores.find((s) => s.id === toStorageId)
+    if (fromStore && fromStore.branchId !== fromId) {
+      throw new AppError('That storage area is not at the source location', 400, 'TRANSFER_BAD_STORAGE')
+    }
+    if (toStore && toStore.branchId !== toId) {
+      throw new AppError('That storage area is not at the destination', 400, 'TRANSFER_BAD_STORAGE')
+    }
   }
+
+  const from = locations.find((l) => l.id === fromId)!
+  return { from, to: locations.find((l) => l.id === toId) ?? from }
 }
 
 export async function requestTransfer(params: {
   restaurantId: string
   fromBranchId: string
   toBranchId: string
+  /** Optional shelves. Same branch on both sides makes it a store-to-store move. */
+  fromStorageId?: string | null
+  toStorageId?: string | null
   lines: TransferLineInput[]
   notes?: string | null
   userId?: string | null
@@ -115,7 +155,13 @@ export async function requestTransfer(params: {
     }
   }
 
-  await requireLocations(params.restaurantId, params.fromBranchId, params.toBranchId)
+  await requireLocations(
+    params.restaurantId,
+    params.fromBranchId,
+    params.toBranchId,
+    params.fromStorageId,
+    params.toStorageId,
+  )
 
   const items = await prisma.inventoryItem.findMany({
     where: { id: { in: params.lines.map((l) => l.itemId) }, restaurantId: params.restaurantId },
@@ -134,6 +180,8 @@ export async function requestTransfer(params: {
         number,
         fromBranchId: params.fromBranchId,
         toBranchId: params.toBranchId,
+        fromStorageId: params.fromStorageId ?? null,
+        toStorageId: params.toStorageId ?? null,
         status: 'REQUESTED',
         notes: params.notes?.trim() || null,
         requestedById: params.userId ?? null,
@@ -172,6 +220,7 @@ export async function approveTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
+        storageLocationId: transfer.fromStorageId,
         quantity: line.requestedQty,
         itemName: line.item.name,
       })
@@ -179,6 +228,7 @@ export async function approveTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
+        storageLocationId: transfer.fromStorageId,
         reserved: line.requestedQty,
       })
     }
@@ -226,6 +276,7 @@ export async function dispatchTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
+        storageLocationId: transfer.fromStorageId,
         reserved: -line.requestedQty,
       })
 
@@ -233,6 +284,7 @@ export async function dispatchTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
+        storageLocationId: transfer.fromStorageId,
         quantity: sentQty,
         itemName: line.item.name,
       })
@@ -246,6 +298,7 @@ export async function dispatchTransfer(params: {
         referenceType: 'StockTransfer',
         referenceId: transfer.id,
         branchId: transfer.fromBranchId,
+        locationId: transfer.fromStorageId,
         batchId: line.batchId,
         userId: params.userId,
       })
@@ -256,6 +309,7 @@ export async function dispatchTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.toBranchId,
+        storageLocationId: transfer.toStorageId,
         inTransit: sentQty,
       })
 
@@ -343,6 +397,7 @@ export async function receiveTransfer(params: {
           referenceType: 'StockTransfer',
           referenceId: transfer.id,
           branchId: transfer.toBranchId,
+          locationId: transfer.toStorageId,
           batchId: line.batchId,
           userId: params.userId,
         })
@@ -355,6 +410,7 @@ export async function receiveTransfer(params: {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.toBranchId,
+        storageLocationId: transfer.toStorageId,
         inTransit: -sentQty,
       })
 
@@ -402,6 +458,7 @@ export async function closeTransfer(params: {
           restaurantId: params.restaurantId,
           itemId: line.itemId,
           branchId: transfer.fromBranchId,
+          storageLocationId: transfer.fromStorageId,
           reserved: -line.requestedQty,
         })
       }

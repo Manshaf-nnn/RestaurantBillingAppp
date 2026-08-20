@@ -1756,6 +1756,8 @@ model StorageLocation {
   batches        StockBatch[]
   wastageRecords WastageRecord[]
   stock          InventoryStock[]
+  transfersFrom  StockTransfer[]  @relation("TransferFromStorage")
+  transfersTo    StockTransfer[]  @relation("TransferToStorage")
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -2251,7 +2253,18 @@ model InventoryStock {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([itemId, branchId])
+  // Uniqueness is enforced by two PARTIAL indexes created in the migration, not
+  // by @@unique here. A plain unique on the three columns would not work:
+  // Postgres treats NULLs as distinct, so every posting for stock with no shelf
+  // assigned would insert another row rather than finding the existing one.
+  // The migration therefore declares:
+  //
+  //   unique (itemId, branchId)                    where storageLocationId is null
+  //   unique (itemId, branchId, storageLocationId) where storageLocationId is not null
+  //
+  // Prisma cannot upsert against a partial index, so applyLocationDelta reads
+  // then writes under the item row lock instead.
+  @@index([itemId, branchId, storageLocationId])
   @@index([restaurantId, branchId])
   @@index([restaurantId, itemId])
   // Prisma's nested include emits `WHERE branchId IN (...)` with no tenant
@@ -2280,6 +2293,16 @@ model StockTransfer {
   fromBranch   Branch @relation("TransferFrom", fields: [fromBranchId], references: [id], onDelete: Restrict)
   toBranchId   String
   toBranch     Branch @relation("TransferTo", fields: [toBranchId], references: [id], onDelete: Restrict)
+
+  /// Which shelf it leaves and which it lands on. Optional, because a
+  /// restaurant that has never defined a storage area still transfers between
+  /// locations. When both branches are the same these turn the transfer into a
+  /// move between two stores inside one site — the branch total is unchanged
+  /// and only the shelf positions differ.
+  fromStorageId String?
+  fromStorage   StorageLocation? @relation("TransferFromStorage", fields: [fromStorageId], references: [id], onDelete: SetNull)
+  toStorageId   String?
+  toStorage     StorageLocation? @relation("TransferToStorage", fields: [toStorageId], references: [id], onDelete: SetNull)
 
   status TransferStatus @default(REQUESTED)
   notes  String?
