@@ -17,12 +17,15 @@ export const receiveStockSchema = z.object({
   notes: z.string().trim().max(200).optional().or(z.literal('')),
 })
 
-export const wastageSchema = z.object({
-  itemId: z.string().min(1),
-  quantity,
-  unit: z.enum(UNITS).optional(),
-  reason: z.string().trim().min(2, 'Give a reason').max(200),
-})
+/*
+ * There is no wastageSchema here.
+ *
+ * One lived here with a free-text reason and another in wastage-actions.ts with
+ * the reason enum, feeding two different code paths for the same event — and
+ * the path through this file wrote no WastageRecord, so wastage logged that way
+ * never reached the wastage report. The enum version in wastage-actions.ts is
+ * the only one.
+ */
 
 export const adjustStockSchema = z.object({
   itemId: z.string().min(1),

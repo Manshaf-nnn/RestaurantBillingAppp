@@ -9,14 +9,14 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import {
-  adjustStock, receiveStock, recordWastage, setOpeningBalance, transferStock,
+  adjustStock, receiveStock, setOpeningBalance, transferStock,
 } from './operations'
 import {
   approveStockCount, openStockCount, recordCountLines, submitStockCount,
 } from './stock-count'
 import {
   adjustStockSchema, approveCountSchema, countLinesSchema, openingBalanceSchema,
-  receiveStockSchema, transferStockSchema, wastageSchema,
+  receiveStockSchema, transferStockSchema,
 } from './stock-schema'
 
 /**
@@ -65,23 +65,13 @@ export async function receiveStockAction(input: unknown): Promise<ActionResult<{
   }, 'Stock received.')
 }
 
-export async function recordWastageAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
-  return runAction(wastageSchema, input, async (data) => {
-    const user = await requirePermission(PERMISSIONS.INVENTORY_WASTAGE)
-    const posted = await recordWastage({
-      restaurantId: user.restaurantId, itemId: data.itemId, quantity: data.quantity,
-      unit: data.unit, reason: data.reason, userId: user.id,
-    })
-    await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-      action: AUDIT_ACTIONS.STOCK_WASTAGE, entity: 'InventoryItem', entityId: data.itemId,
-      before: { balance: posted.balanceBefore },
-      after: { balance: posted.balanceAfter, quantity: data.quantity, reason: data.reason },
-    })
-    revalidateInventory(data.itemId)
-    return { balance: posted.balanceAfter }
-  }, 'Wastage recorded.')
-}
+/*
+ * recordWastageAction lives in wastage-actions.ts, not here.
+ *
+ * There were two, and they behaved differently: this one wrote only a stock
+ * movement, so wastage logged through it never reached the wastage report.
+ * One event should have one way in.
+ */
 
 export async function adjustStockAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
   return runAction(adjustStockSchema, input, async (data) => {

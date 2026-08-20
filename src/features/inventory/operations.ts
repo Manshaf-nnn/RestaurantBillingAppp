@@ -5,6 +5,7 @@ import type { StockUnit } from '@prisma/client'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { postMovement, type PostedMovement } from './ledger'
+import { recordWastage as recordWastageDetailed } from './wastage'
 
 /**
  * Named stock operations.
@@ -52,16 +53,42 @@ export async function receiveStock(
 }
 
 /**
- * Stock thrown away. A reason is required — "wastage" with no explanation is
- * indistinguishable from theft when the month's figures are reviewed.
+ * Stock thrown away.
+ *
+ * Delegates to the wastage module rather than posting a bare movement. Both
+ * used to exist: this one moved stock and wrote nothing else, so anything
+ * recorded through it left the balance correct while never appearing in the
+ * wastage report, in "by reason", or in the cost of waste. Two ways to record
+ * the same event, one of which quietly lost half the record.
+ *
+ * A free-text reason maps to OTHER with the text kept as the note, since the
+ * report groups by the enum.
  */
-export async function recordWastage(params: Simple & { reason: string }): Promise<PostedMovement> {
-  if (params.reason.trim().length < 2) {
-    throw new AppError('Give a reason for the wastage', 400, 'WASTAGE_NO_REASON')
-  }
-  return prisma.$transaction((tx) =>
-    postMovement(tx, { ...params, type: 'WASTAGE', enteredUnit: params.unit, reason: params.reason.trim() }),
-  )
+export async function recordWastage(
+  params: Simple & { reason: string },
+): Promise<{ id: string; quantity: number }> {
+  const KNOWN = [
+    'EXPIRED', 'SPOILED', 'BURNT', 'DAMAGED', 'DROPPED',
+    'PREPARATION', 'CUSTOMER_RETURN', 'OTHER',
+  ] as const
+  const raw = params.reason.trim().toUpperCase().replace(/ /g, '_')
+  const matched = (KNOWN as readonly string[]).includes(raw)
+    ? (raw as (typeof KNOWN)[number])
+    : 'OTHER'
+
+  const record = await recordWastageDetailed({
+    restaurantId: params.restaurantId,
+    itemId: params.itemId,
+    quantity: params.quantity,
+    unit: params.unit,
+    reason: matched,
+    reasonNote: matched === 'OTHER' ? params.reason.trim() : null,
+    notes: params.notes ?? null,
+    branchId: params.branchId,
+    locationId: params.locationId,
+    userId: params.userId,
+  })
+  return { id: record.id, quantity: record.quantity }
 }
 
 /** Stock sent back to the supplier — damaged delivery, wrong item. */
