@@ -28,6 +28,8 @@ import {
   Building2,
   ArrowLeftRight,
   Factory,
+  TrendingUp,
+  PiggyBank,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -198,6 +200,8 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Back office',
     items: [
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, permission: PERMISSIONS.REPORT_VIEW },
+      { href: '/dashboard/reports/sales', label: 'Sales report', icon: TrendingUp, permission: PERMISSIONS.REPORT_VIEW },
+      { href: '/dashboard/reports/profit', label: 'Gross profit', icon: PiggyBank, permission: PERMISSIONS.REPORT_VIEW },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.SETTINGS_VIEW },
       {
         href: '/dashboard/audit-logs',
