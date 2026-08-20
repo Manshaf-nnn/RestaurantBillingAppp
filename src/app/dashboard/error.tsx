@@ -46,12 +46,22 @@ export default function DashboardError({
         </pre>
       )}
 
-      <p className="mt-4 text-sm">
-        <a href="/api/health/db" className="text-primary underline underline-offset-2">
-          Check the database matches this build
-        </a>{' '}
-        <span className="text-muted-foreground">— the usual cause is a deploy that shipped ahead of its migration.</span>
-      </p>
+      <div className="mt-4 space-y-1.5 text-sm">
+        <p>
+          <a href="/api/health/pages" className="text-primary underline underline-offset-2">
+            Find which query failed
+          </a>{' '}
+          <span className="text-muted-foreground">
+            — runs every dashboard query and names the one that throws, with its error.
+          </span>
+        </p>
+        <p>
+          <a href="/api/health/db" className="text-primary underline underline-offset-2">
+            Check the database matches this build
+          </a>{' '}
+          <span className="text-muted-foreground">— for a deploy that shipped ahead of its migration.</span>
+        </p>
+      </div>
 
       {error.digest && (
         <p className="mt-4 text-xs text-muted-foreground">
