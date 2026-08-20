@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
+import { StorageForm } from '@/features/branches/components/storage-form'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -54,6 +55,12 @@ export default async function LocationPage({
         <Figure label="Items held" value={String(stock.filter((s) => s.available !== 0).length)} />
         <Figure label="Inbound lines" value={String(inbound.length)} />
       </div>
+
+      {user.permissions.includes(PERMISSIONS.BRANCH_MANAGE) && (
+        <div className="mb-5">
+          <StorageForm branchId={branch.id} existing={branch.storageLocations} />
+        </div>
+      )}
 
       <SectionCard
         title="Stock here"
