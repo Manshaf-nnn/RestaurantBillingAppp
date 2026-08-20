@@ -164,6 +164,25 @@ enum CouponType {
   FREE_ITEM
 }
 
+/// What a discount applies to. A percentage off the whole bill and the same
+/// percentage off one category are different offers, and conflating them is
+/// how a "10% off desserts" promotion quietly discounts the wine.
+enum DiscountScope {
+  BILL
+  ITEM
+  CATEGORY
+}
+
+/// Loose segmentation, set by the restaurant. Deliberately not a hierarchy —
+/// a small restaurant wants "regulars" and "staff", not a CRM.
+enum CustomerGroup {
+  GENERAL
+  REGULAR
+  VIP
+  STAFF
+  CORPORATE
+}
+
 enum StockUnit {
   KG
   GRAM
@@ -840,12 +859,18 @@ model Customer {
   email String?
   notes String?
 
-  loyaltyPoints Int       @default(0)
+  loyaltyPoints      Int           @default(0)
   /// lifetime spend, minor units
-  totalSpent    Int       @default(0)
-  totalOrders   Int       @default(0)
-  lastOrderAt   DateTime?
-  isBlocked     Boolean   @default(false)
+  totalSpent         Int           @default(0)
+  totalOrders        Int           @default(0)
+  lastOrderAt        DateTime?
+  isBlocked          Boolean       @default(false)
+  group              CustomerGroup @default(GENERAL)
+  /// Explicit opt-in to marketing. Absent means no — consent is never assumed,
+  /// and `marketingConsentAt` records when it was actually given.
+  marketingConsent   Boolean       @default(false)
+  marketingConsentAt DateTime?
+  birthday           DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1095,17 +1120,33 @@ model Coupon {
 
   code             String
   description      String?
-  type             CouponType @default(PERCENT)
+  type             CouponType     @default(PERCENT)
   /// PERCENT → basis points, FIXED → minor units
   value            Int
-  minOrderAmount   Int        @default(0)
+  minOrderAmount   Int            @default(0)
   maxDiscount      Int?
   startsAt         DateTime?
   endsAt           DateTime?
   usageLimit       Int?
-  usedCount        Int        @default(0)
+  usedCount        Int            @default(0)
   perCustomerLimit Int?
-  isActive         Boolean    @default(true)
+  scope            DiscountScope  @default(BILL)
+  /// [String[]] — food ids this applies to, when scope is ITEM.
+  itemIds          Json?
+  /// [String[]] — category ids, when scope is CATEGORY.
+  categoryIds      Json?
+  /// Confine an offer to one location.
+  branchId         String?
+  branch           Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  /// Hours of the day the offer runs, 0-23. Null means any time. Used for
+  /// happy hour, where an all-day discount would be a costly mistake.
+  startHour        Int?
+  endHour          Int?
+  /// [Int[]] — days of the week, 0 = Sunday. Null means every day.
+  daysOfWeek       Json?
+  /// Restrict to a customer segment.
+  customerGroup    CustomerGroup?
+  isActive         Boolean        @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1586,6 +1627,7 @@ model Branch {
   transfersIn      StockTransfer[]     @relation("TransferTo")
   productionOrders ProductionOrder[]
   approvalRequests ApprovalRequest[]
+  coupons          Coupon[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
