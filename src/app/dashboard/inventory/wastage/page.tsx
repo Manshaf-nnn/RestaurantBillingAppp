@@ -4,7 +4,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { WastageBoard, type WastageRow } from '@/features/inventory/components/wastage-board'
 import { getWastageReport, WASTAGE_REASON_LABELS } from '@/features/inventory/wastage'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -23,7 +23,7 @@ export default async function WastagePage({
 
   const params = await searchParams
   const period = params.period === 'WEEK' || params.period === 'MONTH' ? params.period : 'DAY'
-  const canApprove = user.permissions.includes(PERMISSIONS.INVENTORY_WASTAGE_APPROVE)
+  const canApprove = can(user, PERMISSIONS.INVENTORY_WASTAGE_APPROVE)
 
   const [items, records, report] = await Promise.all([
     prisma.inventoryItem.findMany({

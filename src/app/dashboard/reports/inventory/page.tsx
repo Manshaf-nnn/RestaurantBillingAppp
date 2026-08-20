@@ -10,7 +10,7 @@ import { listExpiringStock } from '@/features/inventory/batches'
 import { getVarianceReport } from '@/features/inventory/variance-report'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -46,7 +46,7 @@ export default async function InventoryReportPage({
       restaurantId: user.restaurantId,
       period: days <= 1 ? 'DAY' : days <= 7 ? 'WEEK' : 'MONTH',
       branchId: chosen,
-      includeEmployees: user.permissions.includes(PERMISSIONS.INVENTORY_WASTAGE_APPROVE),
+      includeEmployees: can(user, PERMISSIONS.INVENTORY_WASTAGE_APPROVE),
     }),
     listExpiringStock({ restaurantId: user.restaurantId, branchId: chosen, periodDays: 30 }),
     getVarianceReport({ restaurantId: user.restaurantId, days, branchId: chosen }),

@@ -8,7 +8,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { getProductionConsoleData, getProductionDashboard } from '@/features/production/queries'
 import { ProductionConsole } from '@/features/production/components/production-console'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -94,7 +94,7 @@ export default async function ProductionPage() {
         </SectionCard>
       )}
 
-      {user.permissions.includes(PERMISSIONS.PRODUCTION_MANAGE) && (
+      {can(user, PERMISSIONS.PRODUCTION_MANAGE) && (
         <div className="mb-5">
           <ProductionConsole data={console_} />
         </div>

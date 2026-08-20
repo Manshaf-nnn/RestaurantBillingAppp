@@ -8,7 +8,7 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
 import { StorageForm } from '@/features/branches/components/storage-form'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -56,7 +56,7 @@ export default async function LocationPage({
         <Figure label="Inbound lines" value={String(inbound.length)} />
       </div>
 
-      {user.permissions.includes(PERMISSIONS.BRANCH_MANAGE) && (
+      {can(user, PERMISSIONS.BRANCH_MANAGE) && (
         <div className="mb-5">
           <StorageForm branchId={branch.id} existing={branch.storageLocations} />
         </div>

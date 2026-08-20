@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation'
 import { DashboardShell } from '@/features/dashboard/components/dashboard-shell'
 import { appUrl } from '@/lib/env'
 import { prisma } from '@/server/db/prisma'
+import { listLocations } from '@/features/transfers/queries'
+import { visibleBranchIds } from '@/lib/rbac'
 import { requirePageUser } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -43,9 +45,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
     }),
   ])
 
+  // The switcher only offers what this user is allowed to see, so a branch
+  // manager cannot reach another site's figures by picking it from a menu.
+  const allowedBranchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const locations = (await listLocations(restaurant.id))
+    .filter((l) => allowedBranchIds === null || allowedBranchIds.includes(l.id))
+    .map((l) => ({ id: l.id, name: l.name, type: l.type as 'BRANCH' | 'PRODUCTION_HOUSE' | 'CENTRAL_WAREHOUSE' }))
+
+
   return (
     <DashboardShell
-      restaurantName={restaurant.name}
+locations={locations}
+            restaurantName={restaurant.name}
       orderUrl={`${appUrl()}/order?r=${restaurant.slug}`}
       trialDaysLeft={trialDaysLeft}
       user={{

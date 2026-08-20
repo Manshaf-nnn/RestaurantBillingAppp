@@ -1,6 +1,7 @@
 'use client'
 
 import type { UserRole } from '@prisma/client'
+import { BranchSwitcher, type SwitchableLocation } from './branch-switcher'
 import * as React from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -65,6 +66,7 @@ export interface ShellNotification {
 
 export function DashboardShell({
   user,
+  locations,
   restaurantName,
   orderUrl,
   trialDaysLeft,
@@ -72,6 +74,8 @@ export function DashboardShell({
   children,
 }: {
   user: ShellUser
+  /** Locations this user may see; the switcher hides itself below two. */
+  locations?: SwitchableLocation[]
   restaurantName: string
   orderUrl: string
   trialDaysLeft?: number | null
@@ -184,6 +188,11 @@ export function DashboardShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="glass-chrome sticky top-0 z-30 flex h-16 items-center gap-2 border-b px-4">
+          {locations && locations.length > 1 && (
+            <div className="ml-1 hidden sm:block">
+              <BranchSwitcher locations={locations} />
+            </div>
+          )}
           <Button
             variant="ghost"
             size="icon"

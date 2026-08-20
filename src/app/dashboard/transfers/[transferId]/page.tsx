@@ -5,7 +5,7 @@ import { ArrowLeft } from 'lucide-react'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { TransferPanel } from '@/features/transfers/components/transfer-panel'
 import { getTransferDetail } from '@/features/transfers/queries'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 
 export const dynamic = 'force-dynamic'
@@ -33,9 +33,9 @@ export default async function TransferPage({
       <TransferPanel
         detail={detail}
         can={{
-          approve: user.permissions.includes(PERMISSIONS.TRANSFER_APPROVE),
-          dispatch: user.permissions.includes(PERMISSIONS.TRANSFER_DISPATCH),
-          receive: user.permissions.includes(PERMISSIONS.TRANSFER_RECEIVE),
+          approve: can(user, PERMISSIONS.TRANSFER_APPROVE),
+          dispatch: can(user, PERMISSIONS.TRANSFER_DISPATCH),
+          receive: can(user, PERMISSIONS.TRANSFER_RECEIVE),
         }}
       />
     </>

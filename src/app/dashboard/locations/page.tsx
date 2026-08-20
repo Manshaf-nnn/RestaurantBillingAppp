@@ -8,7 +8,7 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { listLocations } from '@/features/transfers/queries'
 import { LocationForm } from '@/features/branches/components/location-form'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -34,7 +34,7 @@ export default async function LocationsPage() {
       <PageHeader
         title="Locations"
         description="Branches, production houses and warehouses. Every one holds its own stock and shares one ledger."
-        actions={user.permissions.includes(PERMISSIONS.BRANCH_MANAGE) ? <LocationForm /> : null}
+        actions={can(user, PERMISSIONS.BRANCH_MANAGE) ? <LocationForm /> : null}
       />
 
       {locations.length === 0 ? (

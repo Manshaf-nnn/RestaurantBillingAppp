@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { DrawerConsole } from '@/features/cashdrawer/components/drawer-console'
 import { getDrawerPageData } from '@/features/cashdrawer/queries'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -24,7 +24,7 @@ export default async function CashDrawerPage() {
     currency: restaurant.currency,
     // A manager reconciling the day needs everyone's drawers; a cashier only
     // ever sees their own, so one till's shortfall is not floor gossip.
-    canSeeAll: user.permissions.includes(PERMISSIONS.CASH_DRAWER_MANAGE),
+    canSeeAll: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
   })
 
   return (

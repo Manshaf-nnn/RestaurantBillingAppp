@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ApprovalQueue, type ApprovalRow } from '@/features/approvals/components/approval-queue'
 import { listApprovals } from '@/features/approvals/service'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -46,7 +46,7 @@ export default async function ApprovalsPage() {
       <ApprovalQueue
         rows={rows}
         currency={restaurant.currency}
-        canDecide={user.permissions.includes(PERMISSIONS.SETTINGS_MANAGE)}
+        canDecide={can(user, PERMISSIONS.SETTINGS_MANAGE)}
       />
     </>
   )

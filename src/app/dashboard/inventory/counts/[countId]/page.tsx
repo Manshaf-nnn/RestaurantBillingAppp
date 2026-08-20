@@ -5,7 +5,7 @@ import { ArrowLeft } from 'lucide-react'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { CountSheet } from '@/features/inventory/components/count-sheet'
 import { getStockCountDetail } from '@/features/inventory/count-queries'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -50,7 +50,7 @@ export default async function StockCountPage({
 
       <CountSheet
         detail={detail}
-        canApprove={user.permissions.includes(PERMISSIONS.INVENTORY_COUNT_APPROVE)}
+        canApprove={can(user, PERMISSIONS.INVENTORY_COUNT_APPROVE)}
       />
     </>
   )

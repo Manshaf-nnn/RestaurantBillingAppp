@@ -5,7 +5,7 @@ import { ArrowLeft } from 'lucide-react'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ReceivePanel } from '@/features/purchasing/components/receive-panel'
 import { getPurchaseDetail } from '@/features/purchasing/queries'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -43,8 +43,8 @@ export default async function PurchaseOrderPage({
       />
       <ReceivePanel
         detail={detail}
-        canApprove={user.permissions.includes(PERMISSIONS.PURCHASE_APPROVE)}
-        canReceive={user.permissions.includes(PERMISSIONS.PURCHASE_RECEIVE)}
+        canApprove={can(user, PERMISSIONS.PURCHASE_APPROVE)}
+        canReceive={can(user, PERMISSIONS.PURCHASE_RECEIVE)}
       />
     </>
   )

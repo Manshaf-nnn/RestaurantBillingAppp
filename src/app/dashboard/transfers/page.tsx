@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { listTransfers } from '@/features/transfers/queries'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 
 export const dynamic = 'force-dynamic'
@@ -42,7 +42,7 @@ export default async function TransfersPage() {
         title="Transfers"
         description="Stock moving between locations. It leaves on dispatch and arrives on receipt — never both at once."
         actions={
-          user.permissions.includes(PERMISSIONS.TRANSFER_REQUEST) ? (
+          can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
             <Button asChild>
               <Link href="/dashboard/transfers/new">New transfer</Link>
             </Button>
