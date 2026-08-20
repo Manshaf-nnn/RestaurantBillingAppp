@@ -1,5 +1,6 @@
 'use client'
 
+import type { UserRole } from '@prisma/client'
 import * as React from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -47,7 +48,9 @@ export interface ShellUser {
   id: string
   name: string
   email: string
-  role: 'SUPER_ADMIN' | 'OWNER' | 'MANAGER' | 'KITCHEN' | 'CASHIER' | 'WAITER'
+  // Derived from the enum rather than spelled out, so a new role cannot
+  // compile here while being invisible to the shell.
+  role: UserRole
   permissions: string[]
   avatarUrl: string | null
 }

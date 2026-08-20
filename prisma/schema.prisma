@@ -31,6 +31,12 @@ enum UserRole {
   KITCHEN
   CASHIER
   WAITER
+  /// Full access to one restaurant, short of platform administration.
+  ADMIN
+  INVENTORY_MANAGER
+  PURCHASING_MANAGER
+  WAREHOUSE_STAFF
+  ACCOUNTANT
 }
 
 enum SubscriptionPlan {
@@ -216,6 +222,23 @@ enum StockCountStatus {
 /// users, orders and stock, and duplicating that would split the tenancy rules
 /// across two tables. A production house and a warehouse are branches that do
 /// not serve guests.
+enum ApprovalKind {
+  REFUND
+  DISCOUNT
+  STOCK_ADJUSTMENT
+  PURCHASE_ORDER
+  STOCK_TRANSFER
+  PRICE_OVERRIDE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Cancelled by whoever asked, before anyone ruled on it.
+  WITHDRAWN
+}
+
 enum LocationType {
   BRANCH
   PRODUCTION_HOUSE
@@ -444,6 +467,10 @@ model Restaurant {
   stockTransfers   StockTransfer[]
   productionOrders ProductionOrder[]
   productionSpecs  ProductionSpec[]
+  approvalRequests ApprovalRequest[]
+  /// [ApprovalPolicy] — thresholds above which an action needs a second
+  /// pair of eyes. Null means the built-in defaults apply.
+  approvalPolicy   Json?
 
   @@index([isActive])
   @@map("restaurants")
@@ -582,6 +609,8 @@ model User {
   transfersReceived   StockTransfer[]     @relation("TransferReceivedBy")
   productionRequested ProductionOrder[]   @relation("ProductionRequestedBy")
   productionApproved  ProductionOrder[]   @relation("ProductionApprovedBy")
+  approvalsRequested  ApprovalRequest[]   @relation("ApprovalRequestedBy")
+  approvalsDecided    ApprovalRequest[]   @relation("ApprovalDecidedBy")
 
   @@unique([email])
   @@index([restaurantId, role])
@@ -1556,6 +1585,7 @@ model Branch {
   transfersOut     StockTransfer[]     @relation("TransferFrom")
   transfersIn      StockTransfer[]     @relation("TransferTo")
   productionOrders ProductionOrder[]
+  approvalRequests ApprovalRequest[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -2370,4 +2400,50 @@ model ProductionOutput {
 
   @@index([orderId])
   @@map("production_outputs")
+}
+
+/// A request for someone senior to authorise something.
+///
+/// Approvals exist for actions that are legitimate but worth a second pair of
+/// eyes — a large refund, a deep discount, a stock adjustment that writes off
+/// value. The threshold is per restaurant, because Rs 10,000 is a rounding
+/// error to one owner and a day's takings to another.
+///
+/// The request records what was *asked for*, never mutating the thing it is
+/// about. Nothing happens on the underlying record until it is approved, which
+/// is what stops "pending" and "done" being the same state.
+model ApprovalRequest {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  kind   ApprovalKind
+  status ApprovalStatus @default(PENDING)
+
+  /// What the request is about, e.g. 'Order' + the order id.
+  entity   String
+  entityId String?
+  /// The value that triggered the threshold, in minor units where money.
+  amount   Int?
+  reason   String
+  /// [ApprovalPayload] — what to apply if approved.
+  payload  Json?
+
+  requestedById String?
+  requestedBy   User?    @relation("ApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt   DateTime @default(now())
+
+  decidedById  String?
+  decidedBy    User?     @relation("ApprovalDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
+  decisionNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, status, requestedAt])
+  @@index([restaurantId, kind, status])
+  @@map("approval_requests")
 }

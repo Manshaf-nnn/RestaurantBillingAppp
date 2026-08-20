@@ -147,7 +147,98 @@ const WAITER: Permission[] = [
   PERMISSIONS.CUSTOMER_VIEW,
 ]
 
+/**
+ * A restaurant administrator: everything an owner can do except platform
+ * concerns. Distinct from OWNER so a trusted employee can run the business
+ * without inheriting whatever the owner's account is used for outside it.
+ */
+const ADMIN: Permission[] = ALL
+
+/** Runs stock: counts, adjustments, wastage, transfers, recipes. Not money. */
+const INVENTORY_MANAGER: Permission[] = [
+  PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.INVENTORY_MANAGE,
+  PERMISSIONS.INVENTORY_ADJUST,
+  PERMISSIONS.INVENTORY_WASTAGE,
+  PERMISSIONS.INVENTORY_WASTAGE_APPROVE,
+  PERMISSIONS.INVENTORY_TRANSFER,
+  PERMISSIONS.INVENTORY_COUNT,
+  PERMISSIONS.INVENTORY_COUNT_APPROVE,
+  PERMISSIONS.INVENTORY_EXPIRY_VIEW,
+  PERMISSIONS.INVENTORY_COST_EDIT,
+  PERMISSIONS.TRANSFER_VIEW,
+  PERMISSIONS.TRANSFER_REQUEST,
+  PERMISSIONS.TRANSFER_APPROVE,
+  PERMISSIONS.TRANSFER_DISPATCH,
+  PERMISSIONS.TRANSFER_RECEIVE,
+  PERMISSIONS.PRODUCTION_VIEW,
+  PERMISSIONS.PRODUCTION_MANAGE,
+  PERMISSIONS.MENU_VIEW,
+  PERMISSIONS.SUPPLIER_MANAGE,
+  PERMISSIONS.PURCHASE_VIEW,
+  PERMISSIONS.REPORT_VIEW,
+  PERMISSIONS.BRANCH_VIEW,
+]
+
+/** Buys. Can raise and receive orders; approving their own is the one thing
+ *  they cannot do, since that is the control the approval step exists for. */
+const PURCHASING_MANAGER: Permission[] = [
+  PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.PURCHASE_VIEW,
+  PERMISSIONS.PURCHASE_CREATE,
+  PERMISSIONS.PURCHASE_RECEIVE,
+  PERMISSIONS.PURCHASE_RETURN,
+  PERMISSIONS.SUPPLIER_MANAGE,
+  PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.INVENTORY_EXPIRY_VIEW,
+  PERMISSIONS.TRANSFER_VIEW,
+  PERMISSIONS.REPORT_VIEW,
+  PERMISSIONS.BRANCH_VIEW,
+]
+
+/** Moves boxes. Receives and dispatches, counts, but never adjusts a balance
+ *  or edits a cost — those are the two ways stock discrepancies get hidden. */
+const WAREHOUSE_STAFF: Permission[] = [
+  PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.INVENTORY_COUNT,
+  PERMISSIONS.INVENTORY_WASTAGE,
+  PERMISSIONS.INVENTORY_EXPIRY_VIEW,
+  PERMISSIONS.TRANSFER_VIEW,
+  PERMISSIONS.TRANSFER_REQUEST,
+  PERMISSIONS.TRANSFER_DISPATCH,
+  PERMISSIONS.TRANSFER_RECEIVE,
+  PERMISSIONS.PURCHASE_VIEW,
+  PERMISSIONS.PURCHASE_RECEIVE,
+  PERMISSIONS.BRANCH_VIEW,
+]
+
+/** Reads the money. Deliberately read-only: an accountant who can edit the
+ *  figures they audit is not an audit. */
+const ACCOUNTANT: Permission[] = [
+  PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.ANALYTICS_VIEW,
+  PERMISSIONS.REPORT_VIEW,
+  PERMISSIONS.REPORT_EXPORT,
+  PERMISSIONS.PAYMENT_VIEW,
+  PERMISSIONS.INVOICE_VIEW,
+  PERMISSIONS.ORDER_VIEW,
+  PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.PURCHASE_VIEW,
+  PERMISSIONS.TRANSFER_VIEW,
+  PERMISSIONS.PRODUCTION_VIEW,
+  PERMISSIONS.AUDIT_VIEW,
+  PERMISSIONS.BRANCH_VIEW,
+  PERMISSIONS.CUSTOMER_VIEW,
+]
+
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
+  ADMIN,
+  INVENTORY_MANAGER,
+  PURCHASING_MANAGER,
+  WAREHOUSE_STAFF,
+  ACCOUNTANT,
   SUPER_ADMIN: ALL,
   OWNER: ALL,
   MANAGER,
@@ -157,6 +248,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
 }
 
 export const ROLE_LABELS: Record<UserRole, string> = {
+  ADMIN: 'Administrator',
+  INVENTORY_MANAGER: 'Inventory manager',
+  PURCHASING_MANAGER: 'Purchasing manager',
+  WAREHOUSE_STAFF: 'Warehouse staff',
+  ACCOUNTANT: 'Accountant',
   SUPER_ADMIN: 'Super Admin',
   OWNER: 'Owner',
   MANAGER: 'Manager',
@@ -168,6 +264,13 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 /** Where each role lands after signing in. */
 export const ROLE_HOME: Record<UserRole, string> = {
   SUPER_ADMIN: '/admin',
+  ADMIN: '/dashboard',
+  // Back-office roles land on the dashboard rather than a service screen —
+  // none of them work the floor.
+  INVENTORY_MANAGER: '/dashboard/inventory',
+  PURCHASING_MANAGER: '/dashboard/purchases',
+  WAREHOUSE_STAFF: '/dashboard/locations',
+  ACCOUNTANT: '/dashboard/reports',
   OWNER: '/dashboard',
   MANAGER: '/dashboard',
   KITCHEN: '/kitchen',
@@ -219,4 +322,59 @@ export function assignableRoles(role: UserRole): UserRole[] {
     default:
       return []
   }
+}
+
+
+/**
+ * Which locations a user may see.
+ *
+ * Roles that run the whole business see everything; anyone with a home branch
+ * is confined to it. This is the server-side half of the permission model —
+ * hiding a branch in the UI while the query still returns it is not access
+ * control, it is decoration.
+ *
+ * Returning `null` means "no restriction", which callers spread into a `where`
+ * clause. That is deliberately different from an empty array, which would mean
+ * "no locations at all" and silently return nothing.
+ */
+const CROSS_LOCATION_ROLES: UserRole[] = [
+  'SUPER_ADMIN',
+  'OWNER',
+  'ADMIN',
+  'MANAGER',
+  'INVENTORY_MANAGER',
+  'PURCHASING_MANAGER',
+  'ACCOUNTANT',
+]
+
+export function seesAllLocations(role: UserRole): boolean {
+  return CROSS_LOCATION_ROLES.includes(role)
+}
+
+export function visibleBranchIds(subject: {
+  role: UserRole
+  branchId?: string | null
+}): string[] | null {
+  if (seesAllLocations(subject.role)) return null
+  // Someone tied to a location with none assigned yet sees nothing rather than
+  // everything — failing closed is the only safe default here.
+  return subject.branchId ? [subject.branchId] : []
+}
+
+/** Spread into a Prisma `where` to confine a query to what the user may see. */
+export function branchScope(subject: {
+  role: UserRole
+  branchId?: string | null
+}): { branchId?: { in: string[] } } {
+  const ids = visibleBranchIds(subject)
+  return ids === null ? {} : { branchId: { in: ids } }
+}
+
+/** True when this user may act on that specific location. */
+export function canAccessBranch(
+  subject: { role: UserRole; branchId?: string | null },
+  branchId: string,
+): boolean {
+  const ids = visibleBranchIds(subject)
+  return ids === null || ids.includes(branchId)
 }

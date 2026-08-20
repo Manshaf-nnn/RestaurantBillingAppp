@@ -6,6 +6,8 @@ import { requestContext } from '@/server/auth/session'
 
 export interface AuditInput {
   restaurantId?: string | null
+  /// Which location the action happened at, where that is meaningful.
+  branchId?: string | null
   userId?: string | null
   actorName?: string | null
   action: string
@@ -52,6 +54,7 @@ export async function audit(input: AuditInput): Promise<void> {
     await prisma.auditLog.create({
       data: {
         restaurantId: input.restaurantId ?? null,
+        branchId: input.branchId ?? null,
         userId: input.userId ?? null,
         actorName: input.actorName ?? null,
         action: input.action,
@@ -131,4 +134,29 @@ export const AUDIT_ACTIONS = {
   PRODUCTION_CREATED: 'production.created',
   PRODUCTION_APPROVED: 'production.approved',
   PRODUCTION_COMPLETED: 'production.completed',
+
+  ROLE_CHANGED: 'user.role_changed',
+  USER_DISABLED: 'user.disabled',
+  PRICE_CHANGED: 'menu.price_changed',
+  RECIPE_CHANGED: 'recipe.changed',
+  APPROVAL_REQUESTED: 'approval.requested',
+  APPROVAL_DECIDED: 'approval.decided',
 } as const
+
+
+/**
+ * Audit logs are append-only for everyone below platform level.
+ *
+ * There is no update or delete path through the application: nothing in the
+ * codebase calls `auditLog.update` or `auditLog.delete`, and this guard exists
+ * so that stays true. A log an ordinary user can edit is not an audit trail,
+ * it is a diary.
+ *
+ * Retention pruning, if it is ever needed, belongs in a platform-level job that
+ * runs outside a user session — not behind a button.
+ */
+export function assertAuditImmutable(operation: 'update' | 'delete'): never {
+  throw new Error(
+    `Audit logs are append-only; ${operation} is not permitted from application code`,
+  )
+}
