@@ -3,7 +3,7 @@ import 'server-only'
 import type { InventoryItem, StockMovement, StockMovementType, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
 import { applyLocationDelta } from './location-stock'
 
@@ -143,6 +143,7 @@ export async function postMovement(
 
   // Lock the row for the rest of the transaction. Postgres releases it on
   // commit or rollback, so a crash cannot leave an item locked.
+  await guardLocks(tx)
   const locked = await tx.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM inventory_items
     WHERE id = ${params.itemId} AND "restaurantId" = ${params.restaurantId}

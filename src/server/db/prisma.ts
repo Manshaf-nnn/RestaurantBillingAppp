@@ -32,7 +32,16 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
  * left exactly as configured.
  */
 function resolveDatabaseUrl(): string | undefined {
-  const raw = process.env.DATABASE_URL
+  return buildConnectionUrl(process.env.DATABASE_URL)
+}
+
+/**
+ * Exported so the connection string can be asserted directly in a test. The
+ * Neon-specific branch below never runs against a local database, so without a
+ * test that calls this with a Neon-shaped URL it is entirely unexercised — and
+ * a change there once took production down while every test passed.
+ */
+export function buildConnectionUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined
 
   let url: URL
@@ -86,22 +95,19 @@ function resolveDatabaseUrl(): string | undefined {
   if (!params.has('connect_timeout')) params.set('connect_timeout', '5')
   if (pooled && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
   /*
-   * Never let a query wait forever.
+   * Statement and lock timeouts are NOT set here.
    *
-   * Prisma has no per-query timeout, and pool_timeout only bounds the wait for
-   * a free client-side slot — a query that already holds a connection and is
-   * blocked inside Postgres is never interrupted. That is how a single
-   * contended row lock turned into a server action that hung indefinitely with
-   * nothing returned to the caller at all.
+   * They were, briefly, as `options=-c lock_timeout=...` on the connection
+   * string — and that took the whole site down. PgBouncer rejects unknown
+   * startup parameters, and because this block only runs for neon.tech hosts
+   * the local test suite never exercised it: every test passed against
+   * localhost while production could not open a single connection.
    *
-   * lock_timeout aborts a statement waiting on a row lock; statement_timeout
-   * bounds the query itself. Both sit under the serverless function budget, so
-   * a stuck query surfaces as a real database error the app can report rather
-   * than a silent timeout with no response.
+   * The timeouts still matter, so they are applied with `SET LOCAL` inside the
+   * transactions that actually take locks. `SET LOCAL` is plain SQL over an
+   * established connection, scoped to the transaction, and reverts on commit —
+   * so it works behind a pooler and cannot leak into another tenant's session.
    */
-  if (!params.has('options')) {
-    params.set('options', '-c lock_timeout=4000 -c statement_timeout=9000')
-  }
   if (!params.has('sslmode')) params.set('sslmode', 'require')
 
   return url.toString()
@@ -157,4 +163,20 @@ export function uniqueViolationTargets(error: unknown): string[] {
   const target = error.meta?.target
   if (Array.isArray(target)) return target as string[]
   return typeof target === 'string' ? [target] : []
+}
+
+
+/**
+ * Bound how long a transaction may wait on a lock, and how long any single
+ * statement may run.
+ *
+ * `SET LOCAL` is scoped to the current transaction and reverts on commit, so it
+ * is safe behind a connection pooler and cannot leak into another request's
+ * session. Called at the top of every transaction that takes a row lock, so a
+ * contended lock fails with a clear database error instead of hanging until
+ * the serverless function is killed with nothing returned to the caller.
+ */
+export async function guardLocks(tx: TxClient): Promise<void> {
+  await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '4s'")
+  await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '9s'")
 }

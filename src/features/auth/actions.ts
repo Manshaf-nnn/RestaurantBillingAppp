@@ -176,8 +176,10 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
         },
       })
 
+      // The owner is W-0001 of their own restaurant.
       const created = await tx.user.create({
         data: {
+          staffCode: 'W-0001',
           restaurantId: restaurant.id,
           email: data.email,
           name: data.ownerName,

@@ -616,6 +616,10 @@ model User {
   handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
   createdInvites      Invite[]
   branchId            String?
+  /// Short human code a member of staff can be identified by — on a waiter
+  /// link, a printed docket, or when an owner asks "who served table 4?".
+  /// Unique within a restaurant, never across restaurants.
+  staffCode           String?
   branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
@@ -640,6 +644,7 @@ model User {
   approvalsDecided    ApprovalRequest[]   @relation("ApprovalDecidedBy")
 
   @@unique([email])
+  @@unique([restaurantId, staffCode])
   @@index([restaurantId, role])
   @@index([restaurantId, isActive])
   @@index([restaurantId, branchId])

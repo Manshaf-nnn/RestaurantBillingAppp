@@ -18,6 +18,8 @@ import { loginSchema, type LoginInput } from '../schema'
 export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }) {
   const params = useSearchParams()
   const nextPath = params.get('next')
+  const staffCode = params.get('staff')
+  const [staffName, setStaffName] = React.useState<string | null>(null)
   const [showPassword, setShowPassword] = React.useState(false)
   const [formError, setFormError] = React.useState<string | null>(null)
   const isAdmin = variant === 'admin'
@@ -26,6 +28,28 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '', remember: true },
   })
+
+  /*
+   * A staff link carries the person's code. Looking it up fills in their email
+   * and greets them by name, so the only thing they type is their password.
+   * It is a convenience, never a credential — the lookup returns nothing that
+   * grants access, and a failure leaves the ordinary form untouched.
+   */
+  React.useEffect(() => {
+    if (!staffCode) return
+    let cancelled = false
+    fetch(`/api/staff/lookup?code=${encodeURIComponent(staffCode)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || !data?.found) return
+        setStaffName(data.name)
+        form.setValue('email', data.email)
+      })
+      .catch(() => {
+        // Signing in by hand still works.
+      })
+    return () => { cancelled = true }
+  }, [staffCode, form])
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
@@ -66,6 +90,12 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
             : 'Sign in to continue to your account'}
         </p>
       </header>
+
+      {staffName ? (
+        <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
+          Welcome back, <strong>{staffName}</strong> — enter your password to continue.
+        </p>
+      ) : null}
 
       {formError ? <Alert variant="destructive">{formError}</Alert> : null}
 

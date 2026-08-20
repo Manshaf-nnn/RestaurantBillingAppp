@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { resolveOrderConsumption } from './recipe-resolver'
 
@@ -57,6 +57,7 @@ export async function reconcileOrderDepletion(
   // it — measured before this fix: ten calls produced ten SALE rows and took
   // sixty buns instead of six. The lock makes the "run twice, change nothing"
   // guarantee hold under concurrency as well as in sequence.
+  await guardLocks(tx)
   await tx.$queryRaw`
     SELECT id FROM orders
     WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}

@@ -3,7 +3,7 @@ import 'server-only'
 import type { StockTransfer, TransferStatus, TransferVarianceReason } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { applyLocationDelta, assertSufficient } from '@/features/inventory/location-stock'
 
@@ -428,6 +428,7 @@ export async function closeTransfer(params: {
  * transfer.
  */
 async function load(tx: TxClient, restaurantId: string, transferId: string) {
+  await guardLocks(tx)
   const locked = await tx.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM stock_transfers
     WHERE id = ${transferId} AND "restaurantId" = ${restaurantId}

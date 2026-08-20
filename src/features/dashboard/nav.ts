@@ -31,6 +31,7 @@ import {
   TrendingUp,
   PiggyBank,
   UserSearch,
+  BadgeCheck,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -194,6 +195,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/customers/analytics', label: 'Customer insights', icon: UserSearch, permission: PERMISSIONS.CUSTOMER_VIEW },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
+      { href: '/dashboard/staff/codes', label: 'Staff codes', icon: BadgeCheck, permission: PERMISSIONS.STAFF_VIEW },
       { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
       { href: '/dashboard/feedback', label: 'Feedback', icon: Smile, permission: PERMISSIONS.REVIEW_MANAGE },
     ],

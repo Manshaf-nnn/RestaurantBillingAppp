@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { nextStaffCode } from './codes'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
@@ -43,6 +44,8 @@ export async function inviteStaff(
       const temporaryPassword = `${generateToken(4)}A1!`
       const passwordHash = await hashPassword(temporaryPassword)
 
+      // Issued here so a new hire can be handed a code immediately.
+      const staffCode = await nextStaffCode(prisma, admin.restaurantId)
       const user = await prisma.user.create({
         data: {
           restaurantId: admin.restaurantId,
@@ -50,6 +53,7 @@ export async function inviteStaff(
           name: data.name,
           phone: data.phone || null,
           role: data.role,
+          staffCode,
           passwordHash,
           emailVerifiedAt: new Date(),
         },

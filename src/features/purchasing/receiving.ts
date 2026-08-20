@@ -3,7 +3,7 @@ import 'server-only'
 import type { GoodsReceipt, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma } from '@/server/db/prisma'
+import { prisma, guardLocks} from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { toBaseUnits } from '@/features/inventory/units'
 import { upsertBatch } from '@/features/inventory/batches'
@@ -103,6 +103,7 @@ export async function receiveGoods(params: {
     // four simultaneous deliveries of 50 against a 50-unit order each saw an
     // empty order and each posted, receiving 200. Re-reading the received
     // quantities under a lock is what makes the refusal actually hold.
+    await guardLocks(tx)
     await tx.$queryRaw`
       SELECT id FROM purchases
       WHERE id = ${po.id} AND "restaurantId" = ${params.restaurantId}
