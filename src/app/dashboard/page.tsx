@@ -30,7 +30,9 @@ import {
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { LocationSwitcher } from '@/features/dashboard/components/location-switcher'
+import { listLocations } from '@/features/transfers/queries'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -40,8 +42,24 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Dashboard' }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard')
+
+  // The chosen location comes from the URL, and is checked against what this
+  // user may actually see — a branch id typed into the address bar must not
+  // widen anyone's access.
+  const params = await searchParams
+  const requested = typeof params.branch === 'string' ? params.branch : null
+  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const locations = (await listLocations(user.restaurantId)).filter(
+    (l) => allowed === null || allowed.includes(l.id),
+  )
+  const activeBranchId =
+    requested && locations.some((l) => l.id === requested) ? requested : null
   const restaurant = await requireRestaurant(user.restaurantId)
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
 
@@ -79,6 +97,7 @@ export default async function DashboardPage() {
         description={`Here is how ${restaurant.name} is doing today.`}
         actions={
           <>
+            <LocationSwitcher locations={locations} current={activeBranchId} />
             <Button variant="outline" asChild>
               <Link href="/dashboard/reports">
                 <TrendingUp /> Reports

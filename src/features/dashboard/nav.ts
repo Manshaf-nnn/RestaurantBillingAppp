@@ -26,6 +26,8 @@ import {
   CalendarClock,
   Scale,
   Building2,
+  ArrowLeftRight,
+  Factory,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -72,6 +74,24 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Locations',
         icon: Building2,
         permission: PERMISSIONS.BRANCH_VIEW,
+      },
+      {
+        href: '/dashboard/transfers',
+        label: 'Transfers',
+        icon: ArrowLeftRight,
+        permission: PERMISSIONS.TRANSFER_VIEW,
+      },
+      {
+        href: '/dashboard/production',
+        label: 'Production',
+        icon: Factory,
+        permission: PERMISSIONS.PRODUCTION_VIEW,
+      },
+      {
+        href: '/dashboard/approvals',
+        label: 'Approvals',
+        icon: ShieldCheck,
+        permission: PERMISSIONS.DASHBOARD_VIEW,
       },
       {
         href: '/dashboard/handover',

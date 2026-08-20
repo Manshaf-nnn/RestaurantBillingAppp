@@ -182,3 +182,84 @@ export async function getLocationDetail(params: {
     })),
   }
 }
+
+
+/** One transfer with everything the detail screen shows. */
+export async function getTransferDetail(params: {
+  restaurantId: string
+  transferId: string
+}) {
+  const t = await prisma.stockTransfer.findFirst({
+    where: { id: params.transferId, restaurantId: params.restaurantId },
+    include: {
+      fromBranch: { select: { name: true } },
+      toBranch: { select: { name: true } },
+      requestedBy: { select: { name: true } },
+      approvedBy: { select: { name: true } },
+      dispatchedBy: { select: { name: true } },
+      receivedBy: { select: { name: true } },
+      lines: { include: { item: { select: { name: true, unit: true } } } },
+    },
+  })
+  if (!t) throw new NotFoundError('Transfer')
+
+  return {
+    id: t.id,
+    number: t.number,
+    status: t.status as string,
+    fromName: t.fromBranch.name,
+    toName: t.toBranch.name,
+    notes: t.notes,
+    requestedByName: t.requestedBy?.name ?? null,
+    approvedByName: t.approvedBy?.name ?? null,
+    dispatchedByName: t.dispatchedBy?.name ?? null,
+    receivedByName: t.receivedBy?.name ?? null,
+    requestedAt: t.requestedAt.toISOString(),
+    approvedAt: t.approvedAt?.toISOString() ?? null,
+    dispatchedAt: t.dispatchedAt?.toISOString() ?? null,
+    receivedAt: t.receivedAt?.toISOString() ?? null,
+    lines: t.lines.map((l) => ({
+      id: l.id,
+      name: l.item.name,
+      unit: (l.unit ?? l.item.unit) as string,
+      requestedQty: l.requestedQty,
+      sentQty: l.sentQty,
+      receivedQty: l.receivedQty,
+      variance: l.variance,
+      varianceReason: (l.varianceReason as string | null) ?? null,
+    })),
+  }
+}
+
+/** Locations and items for the "new transfer" form. */
+export async function getTransferBuilderData(restaurantId: string) {
+  const [locations, items] = await Promise.all([
+    prisma.branch.findMany({
+      where: { restaurantId, deletedAt: null, isActive: true },
+      select: { id: true, name: true, type: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.inventoryStock.findMany({
+      where: { restaurantId, available: { gt: 0 } },
+      include: { item: { select: { id: true, name: true, unit: true } } },
+    }),
+  ])
+
+  return {
+    locations,
+    // Only what a location actually holds can be sent from it.
+    stockByBranch: locations.map((l) => ({
+      branchId: l.id,
+      items: items
+        .filter((s) => s.branchId === l.id)
+        .map((s) => ({
+          itemId: s.item.id,
+          name: s.item.name,
+          unit: s.item.unit as string,
+          free: Math.round((s.available - s.reserved) * 1e6) / 1e6,
+        }))
+        .filter((i) => i.free > 0)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    })),
+  }
+}
