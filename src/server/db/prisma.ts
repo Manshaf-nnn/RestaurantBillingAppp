@@ -73,10 +73,17 @@ function resolveDatabaseUrl(): string | undefined {
   if (!params.has('connection_limit')) {
     params.set('connection_limit', process.env.DB_CONNECTION_LIMIT ?? (pooled ? '15' : '5'))
   }
-  // Fail faster than the function times out, so a saturated pool surfaces as a
-  // clear database error rather than an opaque platform timeout.
-  if (!params.has('pool_timeout')) params.set('pool_timeout', '8')
-  if (!params.has('connect_timeout')) params.set('connect_timeout', '10')
+  /*
+   * Every timeout here must be comfortably shorter than the serverless function
+   * timeout, which on Netlify is 10 seconds by default.
+   *
+   * connect_timeout was 10 — exactly the function budget. A slow connect
+   * therefore consumed the whole invocation and the caller saw nothing at all:
+   * a server action that never responded and a button stuck on "Adding…".
+   * Failing at 5 leaves the request time to return a real error instead.
+   */
+  if (!params.has('pool_timeout')) params.set('pool_timeout', '5')
+  if (!params.has('connect_timeout')) params.set('connect_timeout', '5')
   if (pooled && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
   if (!params.has('sslmode')) params.set('sslmode', 'require')
 
@@ -88,6 +95,13 @@ const databaseUrl = resolveDatabaseUrl()
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
+    /*
+     * An interactive transaction that cannot get a connection used to wait
+     * longer than the request that opened it, so the work was abandoned
+     * mid-flight and the client hung. These bounds make a contended
+     * transaction fail loudly and quickly instead.
+     */
+    transactionOptions: { maxWait: 4_000, timeout: 8_000 },
     ...(databaseUrl ? { datasources: { db: { url: databaseUrl } } } : {}),
     log:
       process.env.NODE_ENV === 'development'

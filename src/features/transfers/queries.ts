@@ -263,3 +263,22 @@ export async function getTransferBuilderData(restaurantId: string) {
     })),
   }
 }
+
+
+/**
+ * Just enough to render the location switcher.
+ *
+ * Deliberately separate from listLocations, which joins every stock row and
+ * every item to compute values and alert counts. That is right for the
+ * locations page and badly wrong for the dashboard layout, where it would run
+ * on every single page load to populate a dropdown that needs three fields.
+ */
+export async function listSwitchableLocations(restaurantId: string): Promise<
+  Array<{ id: string; name: string; type: LocationType }>
+> {
+  return prisma.branch.findMany({
+    where: { restaurantId, deletedAt: null, isActive: true },
+    select: { id: true, name: true, type: true },
+    orderBy: [{ type: 'asc' }, { name: 'asc' }],
+  })
+}
