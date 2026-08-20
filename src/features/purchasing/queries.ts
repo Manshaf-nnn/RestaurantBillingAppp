@@ -246,3 +246,132 @@ export async function getPoBuilderData(params: {
     })),
   }
 }
+
+
+export interface SupplierPricingData {
+  supplier: {
+    id: string
+    name: string
+    company: string | null
+    contactName: string | null
+    phone: string | null
+    email: string | null
+    paymentTerms: string
+    taxNumber: string | null
+  }
+  /** Items this supplier already quotes for. */
+  priced: Array<{
+    itemId: string
+    name: string
+    baseUnit: string
+    supplierSku: string | null
+    purchaseUnit: string | null
+    unitsPerPurchaseUnit: number | null
+    price: number
+    leadTimeDays: number | null
+    minOrderQty: number | null
+    isPreferred: boolean
+    /** How many other suppliers also quote for it. */
+    alternativeCount: number
+    /** The cheapest price anyone quotes, for comparison. */
+    bestPrice: number | null
+  }>
+  /** Everything else, for adding a new line. */
+  available: Array<{ id: string; name: string; unit: string }>
+  currency: string
+}
+
+/**
+ * One supplier's price list.
+ *
+ * Each row carries how many other suppliers quote the same item and the best
+ * price among them, because the question worth answering on this screen is not
+ * "what does this supplier charge?" but "should I still be buying it here?".
+ */
+export async function getSupplierPricing(params: {
+  restaurantId: string
+  supplierId: string
+  currency: string
+}): Promise<SupplierPricingData> {
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: params.supplierId, restaurantId: params.restaurantId },
+    select: {
+      id: true, name: true, company: true, contactName: true,
+      phone: true, email: true, paymentTerms: true, taxNumber: true,
+    },
+  })
+  if (!supplier) throw new NotFoundError('Supplier')
+
+  const [links, allItems] = await Promise.all([
+    prisma.supplierItem.findMany({
+      where: { supplierId: supplier.id, restaurantId: params.restaurantId },
+      include: { item: { select: { id: true, name: true, unit: true } } },
+      orderBy: { item: { name: 'asc' } },
+    }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      select: { id: true, name: true, unit: true },
+      orderBy: { name: 'asc' },
+    }),
+  ])
+
+  const itemIds = links.map((l) => l.itemId)
+  const competing = itemIds.length
+    ? await prisma.supplierItem.findMany({
+        where: { itemId: { in: itemIds }, restaurantId: params.restaurantId, isActive: true },
+        select: { itemId: true, supplierId: true, price: true },
+      })
+    : []
+
+  const byItem = new Map<string, Array<{ supplierId: string; price: number }>>()
+  for (const row of competing) {
+    const list = byItem.get(row.itemId) ?? []
+    list.push({ supplierId: row.supplierId, price: row.price })
+    byItem.set(row.itemId, list)
+  }
+
+  const pricedIds = new Set(itemIds)
+
+  return {
+    supplier,
+    currency: params.currency,
+    priced: links.map((l) => {
+      const others = (byItem.get(l.itemId) ?? []).filter((o) => o.supplierId !== supplier.id)
+      const prices = (byItem.get(l.itemId) ?? []).map((o) => o.price).filter((p) => p > 0)
+      return {
+        itemId: l.itemId,
+        name: l.item.name,
+        baseUnit: l.item.unit as string,
+        supplierSku: l.supplierSku,
+        purchaseUnit: l.purchaseUnit as string | null,
+        unitsPerPurchaseUnit: l.unitsPerPurchaseUnit,
+        price: l.price,
+        leadTimeDays: l.leadTimeDays,
+        minOrderQty: l.minOrderQty,
+        isPreferred: l.isPreferred,
+        alternativeCount: others.length,
+        bestPrice: prices.length ? Math.min(...prices) : null,
+      }
+    }),
+    available: allItems.filter((i) => !pricedIds.has(i.id)),
+  }
+}
+
+/** Suppliers with a count of what they quote for, for the list page. */
+export async function listSuppliersWithCounts(restaurantId: string) {
+  const suppliers = await prisma.supplier.findMany({
+    where: { restaurantId },
+    orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+    include: { _count: { select: { suppliedItems: true, purchases: true } } },
+  })
+  return suppliers.map((s) => ({
+    id: s.id,
+    name: s.name,
+    company: s.company,
+    phone: s.phone,
+    paymentTerms: s.paymentTerms as string,
+    isActive: s.isActive,
+    itemCount: s._count.suppliedItems,
+    orderCount: s._count.purchases,
+  }))
+}
