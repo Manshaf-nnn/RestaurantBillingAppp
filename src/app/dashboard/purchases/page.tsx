@@ -5,6 +5,7 @@ import { TrendingDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
+import { Button } from '@/components/ui/button'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { listPurchaseOrders } from '@/features/purchasing/queries'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
@@ -40,13 +41,25 @@ export default async function PurchasesPage() {
       <PageHeader
         title="Purchasing"
         description="Orders to suppliers, and what still needs buying. Stock only moves when goods arrive."
+        actions={
+          <Button asChild>
+            <Link href="/dashboard/purchases/new">New order</Link>
+          </Button>
+        }
       />
 
       {suggestions.length > 0 && (
         <SectionCard
           title="Needs ordering"
           description="Items at or below their reorder level, with a suggested quantity to bring them back to par."
-          actions={<Badge variant="warning">{suggestions.length}</Badge>}
+          actions={
+            <div className="flex items-center gap-2">
+              <Badge variant="warning">{suggestions.length}</Badge>
+              <Button size="sm" asChild>
+                <Link href="/dashboard/purchases/new?from=low">Order these</Link>
+              </Button>
+            </div>
+          }
         >
           <div className="-mx-2 overflow-x-auto px-2">
             <table className="w-full min-w-[38rem] text-sm">

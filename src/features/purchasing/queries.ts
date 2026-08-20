@@ -160,3 +160,78 @@ export async function getPurchaseDetail(params: {
 function round(v: number) {
   return Math.round(v * 1e6) / 1e6
 }
+
+
+export interface PoBuilderData {
+  suppliers: Array<{ id: string; name: string; paymentTerms: string }>
+  items: Array<{
+    id: string
+    name: string
+    unit: string
+    quantity: number
+    /** Supplier-specific pricing, best/preferred first. */
+    sources: Array<{
+      supplierId: string
+      supplierName: string
+      price: number
+      purchaseUnit: string | null
+      leadTimeDays: number | null
+      minOrderQty: number | null
+      isPreferred: boolean
+    }>
+    /** Falls back to the item's own average cost when no supplier price exists. */
+    fallbackCost: number
+  }>
+  currency: string
+}
+
+/** Everything the "new purchase order" form needs in one read. */
+export async function getPoBuilderData(params: {
+  restaurantId: string
+  currency: string
+}): Promise<PoBuilderData> {
+  const [suppliers, items] = await Promise.all([
+    prisma.supplier.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      select: { id: true, name: true, paymentTerms: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true, name: true, unit: true, quantity: true, costPerUnit: true,
+        supplierItems: {
+          where: { isActive: true },
+          orderBy: [{ isPreferred: 'desc' }, { price: 'asc' }],
+          select: {
+            price: true, purchaseUnit: true, leadTimeDays: true,
+            minOrderQty: true, isPreferred: true,
+            supplier: { select: { id: true, name: true } },
+          },
+        },
+      },
+    }),
+  ])
+
+  return {
+    currency: params.currency,
+    suppliers: suppliers.map((s) => ({ id: s.id, name: s.name, paymentTerms: s.paymentTerms })),
+    items: items.map((i) => ({
+      id: i.id,
+      name: i.name,
+      unit: i.unit,
+      quantity: i.quantity,
+      fallbackCost: i.costPerUnit,
+      sources: i.supplierItems.map((si) => ({
+        supplierId: si.supplier.id,
+        supplierName: si.supplier.name,
+        price: si.price,
+        purchaseUnit: si.purchaseUnit,
+        leadTimeDays: si.leadTimeDays,
+        minOrderQty: si.minOrderQty,
+        isPreferred: si.isPreferred,
+      })),
+    })),
+  }
+}
