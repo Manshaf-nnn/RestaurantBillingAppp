@@ -46,6 +46,13 @@ export default function DashboardError({
         </pre>
       )}
 
+      <p className="mt-4 text-sm">
+        <a href="/api/health/db" className="text-primary underline underline-offset-2">
+          Check the database matches this build
+        </a>{' '}
+        <span className="text-muted-foreground">— the usual cause is a deploy that shipped ahead of its migration.</span>
+      </p>
+
       {error.digest && (
         <p className="mt-4 text-xs text-muted-foreground">
           Reference <code className="rounded bg-muted px-1.5 py-0.5">{error.digest}</code> — search
