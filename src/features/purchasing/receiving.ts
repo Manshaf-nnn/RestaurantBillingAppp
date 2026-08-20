@@ -6,6 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { toBaseUnits } from '@/features/inventory/units'
+import { upsertBatch } from '@/features/inventory/batches'
 import { nextNumber, requirePurchase } from './service'
 
 /**
@@ -151,7 +152,7 @@ export async function receiveGoods(params: {
         const acceptedBase = toBaseUnits(accepted, unit, purchaseItem.item)
         const costPerBase = acceptedBase > 0 ? Math.round((accepted * unitCost) / acceptedBase) : unitCost
 
-        await postMovement(tx, {
+        const movement = await postMovement(tx, {
           restaurantId: params.restaurantId,
           itemId: purchaseItem.itemId,
           type: 'PURCHASE',
@@ -168,6 +169,35 @@ export async function receiveGoods(params: {
           expiryDate: line.expiryDate ?? null,
           userId: params.userId,
         })
+
+        // Batch-tracked items get a lot record so the stock can be traced back
+        // to this delivery, and so expiry and FEFO have something to work with.
+        // Without this the batch tables stay empty however many deliveries
+        // arrive, and the expiry board is permanently blank.
+        if (purchaseItem.item.trackBatches) {
+          const batchNo =
+            line.batchNo?.trim().toUpperCase() ||
+            // A tracked item delivered without a supplier lot number still needs
+            // one, or its stock cannot be traced at all. Falling back to the GRN
+            // is honest — that is genuinely which delivery it came from.
+            `${receipt.number}-${purchaseItem.item.sku ?? purchaseItem.itemId.slice(-4).toUpperCase()}`
+
+          const batch = await upsertBatch(tx, {
+            restaurantId: params.restaurantId,
+            itemId: purchaseItem.itemId,
+            batchNo,
+            quantity: acceptedBase,
+            unitCost: costPerBase,
+            expiryDate: line.expiryDate ?? null,
+            locationId: po.locationId,
+            branchId: po.branchId,
+          })
+
+          await tx.stockMovement.update({
+            where: { id: movement.movement.id },
+            data: { batchId: batch.id, batchNo },
+          })
+        }
 
         await tx.purchasePriceHistory.create({
           data: {

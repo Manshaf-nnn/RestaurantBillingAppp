@@ -129,6 +129,7 @@ const receiveSchema = z.object({
     unitCost: z.coerce.number().min(0).max(100_000_000).optional(),
     rejectReason: z.string().trim().max(200).optional().or(z.literal('')),
     batchNo: z.string().trim().max(60).optional().or(z.literal('')),
+    expiryDate: z.string().trim().max(30).optional().or(z.literal('')),
   })).min(1),
 })
 
@@ -154,6 +155,7 @@ export async function receiveGoodsAction(
           unitCost: l.unitCost === undefined ? undefined : Math.round(l.unitCost * f),
           rejectReason: l.rejectReason || null,
           batchNo: l.batchNo || null,
+          expiryDate: l.expiryDate ? new Date(l.expiryDate) : null,
         })),
     })
 

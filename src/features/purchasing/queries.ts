@@ -78,6 +78,9 @@ export interface PurchaseDetail {
     outstanding: number
     unitCost: number
     lineTotal: number
+    /** Batch-tracked items must carry a lot number and expiry on receipt. */
+    trackBatches: boolean
+    trackExpiry: boolean
   }>
   receipts: Array<{
     id: string
@@ -100,7 +103,13 @@ export async function getPurchaseDetail(params: {
       supplier: { select: { id: true, name: true } },
       createdBy: { select: { name: true } },
       approvedBy: { select: { name: true } },
-      items: { include: { item: { select: { id: true, name: true, unit: true } } } },
+      items: {
+        include: {
+          item: {
+            select: { id: true, name: true, unit: true, trackBatches: true, trackExpiry: true },
+          },
+        },
+      },
       receipts: {
         orderBy: { receivedAt: 'desc' },
         include: {
@@ -140,6 +149,8 @@ export async function getPurchaseDetail(params: {
       outstanding: Math.max(0, round(l.quantity - l.receivedQty - l.rejectedQty)),
       unitCost: l.unitCost,
       lineTotal: l.lineTotal,
+      trackBatches: l.item.trackBatches,
+      trackExpiry: l.item.trackExpiry,
     })),
     receipts: po.receipts.map((r) => ({
       id: r.id,

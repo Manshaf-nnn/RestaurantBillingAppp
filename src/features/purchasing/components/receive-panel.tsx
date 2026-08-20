@@ -54,6 +54,8 @@ export function ReceivePanel({
     Object.fromEntries(detail.lines.map((l) => [l.id, l.outstanding > 0 ? String(l.outstanding) : ''])),
   )
   const [rejected, setRejected] = React.useState<Record<string, string>>({})
+  const [batchNo, setBatchNo] = React.useState<Record<string, string>>({})
+  const [expiry, setExpiry] = React.useState<Record<string, string>>({})
   const [supplierRef, setSupplierRef] = React.useState('')
   const [busy, setBusy] = React.useState(false)
 
@@ -72,10 +74,23 @@ export function ReceivePanel({
         purchaseItemId: l.id,
         acceptedQty: Number(accepted[l.id] ?? 0) || 0,
         rejectedQty: Number(rejected[l.id] ?? 0) || 0,
+        batchNo: batchNo[l.id] ?? '',
+        expiryDate: expiry[l.id] ?? '',
       }))
       .filter((l) => l.acceptedQty > 0 || l.rejectedQty > 0)
 
     if (lines.length === 0) { toast.error('Enter what arrived'); return }
+
+    // An expiry-tracked item received without a date can never appear on the
+    // expiry board, which is the one place it would have been useful. Better to
+    // stop here than to accept it and quietly lose the ability to track it.
+    const missing = detail.lines.filter(
+      (l) => l.trackExpiry && !expiry[l.id] && (Number(accepted[l.id] ?? 0) || 0) > 0,
+    )
+    if (missing.length > 0) {
+      toast.error(`Enter an expiry date for ${missing.map((m) => m.name).join(', ')}`)
+      return
+    }
 
     setBusy(true)
     const result = await receiveGoodsAction({ purchaseId: detail.id, supplierRef, lines })
@@ -83,6 +98,8 @@ export function ReceivePanel({
     if (!result.ok) { toast.error(result.error); return }
     toast.success(`${result.data.number} received — stock updated`)
     setRejected({})
+    setBatchNo({})
+    setExpiry({})
     setSupplierRef('')
     router.refresh()
   }
@@ -190,6 +207,36 @@ export function ReceivePanel({
                     onChange={(e) => setRejected((c) => ({ ...c, [l.id]: e.target.value }))}
                   />
                 </div>
+
+                {(l.trackBatches || l.trackExpiry) && (
+                  <>
+                    {l.trackBatches && (
+                      <div className="col-span-6 space-y-1 sm:col-span-3 sm:col-start-6">
+                        <Label className="text-xs">Batch / lot number</Label>
+                        <Input
+                          placeholder="e.g. CHK-2026-0819"
+                          value={batchNo[l.id] ?? ''}
+                          onChange={(e) => setBatchNo((c) => ({ ...c, [l.id]: e.target.value }))}
+                        />
+                      </div>
+                    )}
+                    {l.trackExpiry && (
+                      <div className="col-span-6 space-y-1 sm:col-span-3">
+                        <Label className="text-xs">Expiry date</Label>
+                        <Input
+                          type="date"
+                          value={expiry[l.id] ?? ''}
+                          onChange={(e) => setExpiry((c) => ({ ...c, [l.id]: e.target.value }))}
+                        />
+                      </div>
+                    )}
+                    <p className="col-span-12 -mt-1 text-xs text-muted-foreground">
+                      {l.trackBatches && !batchNo[l.id]
+                        ? 'Leave the batch blank and it will be numbered after this delivery note.'
+                        : 'Tracked stock — this appears on the expiry board.'}
+                    </p>
+                  </>
+                )}
               </li>
             ))}
           </ul>

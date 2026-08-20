@@ -5,6 +5,7 @@ import {
 } from '../src/features/purchasing/service'
 import { receiveGoods, createPurchaseReturn } from '../src/features/purchasing/receiving'
 import { getReorderSuggestions, getPriceTrend } from '../src/features/purchasing/suggestions'
+import { allocateFefo, listExpiringStock } from '../src/features/inventory/batches'
 import { setOpeningBalance } from '../src/features/inventory/operations'
 import { recomputeBalance } from '../src/features/inventory/ledger'
 
@@ -189,7 +190,72 @@ async function main() {
   ok('an estimated cost is given', (onion?.estimatedCost ?? 0) > 0)
   ok('healthy stock is not suggested', !suggestions.some((s) => s.itemId === chicken.id))
 
-  console.log('\n── 11. Tenant isolation ─────────────────────────────────')
+  console.log('\n── 11. Receiving creates batches ────────────────────────')
+  const milk = await prisma.inventoryItem.create({
+    data: { restaurantId: shop.id, name: `Milk ${S}`, unit: 'LITRE', trackBatches: true, trackExpiry: true, useFefo: true },
+  })
+  items.push(milk.id)
+  const po3 = await createPurchaseOrder({
+    restaurantId: shop.id, supplierId: supplier.id, userId: user.id,
+    lines: [{ itemId: milk.id, quantity: 50, unit: 'LITRE', unitCost: 300_00 }],
+  })
+  pos.push(po3.id)
+  await setPurchaseStatus({ restaurantId: shop.id, purchaseId: po3.id, status: 'APPROVED', userId: user.id })
+  const line3 = await prisma.purchaseItem.findFirstOrThrow({ where: { purchaseId: po3.id } })
+
+  const expiry = new Date(Date.now() + 5 * 86_400_000)
+  await receiveGoods({
+    restaurantId: shop.id, purchaseId: po3.id, userId: user.id,
+    lines: [{ purchaseItemId: line3.id, acceptedQty: 30, batchNo: 'MLK-A', expiryDate: expiry }],
+  })
+  const batchA = await prisma.stockBatch.findFirst({ where: { itemId: milk.id, batchNo: 'MLK-A' } })
+  ok('receiving a tracked item creates its batch', batchA !== null)
+  ok('the batch carries the expiry', batchA?.expiryDate?.toDateString() === expiry.toDateString())
+  ok('the batch holds the received quantity', batchA?.remainingQty === 30, `got ${batchA?.remainingQty}`)
+  ok('batch cost is per base unit', batchA?.unitCost === 300_00, `got ${batchA?.unitCost}`)
+
+  const mv3 = await prisma.stockMovement.findFirstOrThrow({
+    where: { itemId: milk.id, type: 'PURCHASE' }, orderBy: { createdAt: 'desc' },
+  })
+  ok('the ledger row is linked to the batch', mv3.batchId === batchA?.id && mv3.batchNo === 'MLK-A')
+
+  // A second delivery, dated sooner, must be drawn first by FEFO.
+  const sooner = new Date(Date.now() + 2 * 86_400_000)
+  await receiveGoods({
+    restaurantId: shop.id, purchaseId: po3.id, userId: user.id,
+    lines: [{ purchaseItemId: line3.id, acceptedQty: 20, batchNo: 'MLK-B', expiryDate: sooner }],
+  })
+  const alloc = await allocateFefo(prisma, { restaurantId: shop.id, itemId: milk.id, quantity: 25 })
+  ok('FEFO draws the sooner-expiring delivery first', alloc.allocations[0].batchNo === 'MLK-B', alloc.allocations[0].batchNo)
+  ok('then falls through to the later one', alloc.allocations[1].batchNo === 'MLK-A')
+
+  const expiring = await listExpiringStock({ restaurantId: shop.id, periodDays: 30 })
+  ok('both batches reach the expiry board', expiring.filter((e) => e.itemId === milk.id).length === 2)
+
+  // A tracked item with no supplier lot still gets a traceable number.
+  const cream = await prisma.inventoryItem.create({
+    data: { restaurantId: shop.id, name: `Cream ${S}`, unit: 'LITRE', trackBatches: true },
+  })
+  items.push(cream.id)
+  const po4 = await createPurchaseOrder({
+    restaurantId: shop.id, userId: user.id,
+    lines: [{ itemId: cream.id, quantity: 10, unit: 'LITRE', unitCost: 500_00 }],
+  })
+  pos.push(po4.id)
+  await setPurchaseStatus({ restaurantId: shop.id, purchaseId: po4.id, status: 'APPROVED', userId: user.id })
+  const line4 = await prisma.purchaseItem.findFirstOrThrow({ where: { purchaseId: po4.id } })
+  const r4 = await receiveGoods({
+    restaurantId: shop.id, purchaseId: po4.id, userId: user.id,
+    lines: [{ purchaseItemId: line4.id, acceptedQty: 10 }],
+  })
+  const fallback = await prisma.stockBatch.findFirst({ where: { itemId: cream.id } })
+  ok('an unlabelled tracked delivery is numbered after its GRN',
+    Boolean(fallback?.batchNo.startsWith(r4.receipt.number)), fallback?.batchNo)
+
+  const untracked = await prisma.stockBatch.count({ where: { itemId: rice.id } })
+  ok('an untracked item creates no batches', untracked === 0)
+
+  console.log('\n── 12. Tenant isolation ─────────────────────────────────')
   await throws('creating a PO for another tenant’s item is refused',
     () => createPurchaseOrder({ restaurantId: other.id, lines: [{ itemId: chicken.id, quantity: 1, unitCost: 1 }] }))
   await throws('receiving another tenant’s PO is refused',
@@ -200,6 +266,7 @@ async function main() {
   ok('a PO id from another tenant does not resolve', leak === null)
 
   // cleanup
+  await prisma.stockBatch.deleteMany({ where: { itemId: { in: items } } })
   await prisma.purchasePriceHistory.deleteMany({ where: { itemId: { in: items } } })
   await prisma.purchaseReturnLine.deleteMany({ where: { itemId: { in: items } } })
   await prisma.purchaseReturn.deleteMany({ where: { restaurantId: shop.id, supplierId: { in: suppliers } } })
