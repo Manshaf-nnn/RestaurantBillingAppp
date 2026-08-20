@@ -327,6 +327,7 @@ export interface PlaceOrderParams {
   redeemPoints?: number
   guestSessionId?: string | null
   createdById?: string | null
+  servedById?: string | null
 }
 
 export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
@@ -436,6 +437,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
               customerEmail: params.customerEmail || null,
               guestSessionId: params.guestSessionId ?? null,
               createdById: params.createdById ?? null,
+              servedById: params.servedById ?? null,
               guestCount: params.guestCount ?? null,
               notes: params.notes || null,
               couponId: draft.couponId,

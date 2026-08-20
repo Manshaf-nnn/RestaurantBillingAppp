@@ -519,6 +519,9 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
         // enters is attributed to staff rather than to the guest's own device.
         channel: data.type === 'COUNTER' ? 'COUNTER' : 'STAFF',
         branchId: user.branchId ?? null,
+        // Falls back to whoever is signed in, so a waiter taking their own
+        // order is attributed without having to pick themselves from a list.
+        servedById: data.servedById || user.id,
         // A walk-in has no name to give; the bill still needs one to print.
         customerName: data.customerName?.trim() || 'Walk-in',
         customerPhone: data.customerPhone?.trim() || '',

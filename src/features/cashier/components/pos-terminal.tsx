@@ -26,9 +26,10 @@ import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
  * on the floor plan where the table is chosen first.
  */
 
-type OrderType = 'TAKEAWAY' | 'DELIVERY' | 'COUNTER'
+type OrderType = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'COUNTER'
 
 const TYPES: Array<{ value: OrderType; label: string; hint: string }> = [
+  { value: 'DINE_IN', label: 'Dine in', hint: 'Ordered at the counter, eating at a table' },
   { value: 'COUNTER', label: 'Counter', hint: 'Walk-in paying at the till' },
   { value: 'TAKEAWAY', label: 'Takeaway', hint: 'Collected later' },
   { value: 'DELIVERY', label: 'Delivery', hint: 'Sent to an address' },
@@ -43,10 +44,18 @@ export function PosTerminal({
   menu,
   currency,
   initialType = 'COUNTER',
+  tables = [],
+  servers = [],
+  currentUserId,
 }: {
   menu: PublicMenu
   currency: string
   initialType?: OrderType
+  /** Free tables, so a counter order can be seated. */
+  tables?: Array<{ id: string; number: string; area: string | null; status: string }>
+  /** Who can be credited with serving it. */
+  servers?: Array<{ id: string; name: string; role: string }>
+  currentUserId?: string
 }) {
   const [type, setType] = React.useState<OrderType>(initialType)
   const [categoryId, setCategoryId] = React.useState<string | null>(null)
@@ -57,6 +66,10 @@ export function PosTerminal({
   const [notes, setNotes] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [cartOpen, setCartOpen] = React.useState(false)
+  const [tableId, setTableId] = React.useState('')
+  // Defaults to whoever is signed in: a waiter taking their own order should
+  // not have to find themselves in a list before they can start.
+  const [servedById, setServedById] = React.useState(currentUserId ?? '')
 
   const money = (minor: number) => formatMoney(minor, currency)
 
@@ -108,10 +121,18 @@ export function PosTerminal({
       toast.error('A delivery needs a phone number')
       return
     }
+    // A dine-in order with no table cannot be delivered to anyone — the
+    // kitchen would have nowhere to send it.
+    if (type === 'DINE_IN' && !tableId) {
+      toast.error('Choose a table for a dine-in order')
+      return
+    }
 
     setBusy(true)
     const result = await createStaffOrder({
       type,
+      tableId: type === 'DINE_IN' ? tableId : '',
+      servedById,
       customerName: name,
       customerPhone: phone,
       notes,
@@ -128,6 +149,7 @@ export function PosTerminal({
     setName('')
     setPhone('')
     setNotes('')
+    setTableId('')
     setCartOpen(false)
   }
 
@@ -270,6 +292,53 @@ export function PosTerminal({
             </p>
 
             <div className="grid gap-2">
+              {type === 'DINE_IN' && (
+                <div className="space-y-1">
+                  <Label htmlFor="pos-table" className="text-xs">Table</Label>
+                  <select
+                    id="pos-table"
+                    className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                    value={tableId}
+                    onChange={(e) => setTableId(e.target.value)}
+                  >
+                    <option value="">Choose a table…</option>
+                    {tables.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        Table {t.number}
+                        {t.area ? ` · ${t.area}` : ''}
+                        {t.status !== 'AVAILABLE' ? ` · ${t.status.toLowerCase()}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {tables.length === 0 && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      No tables set up yet — add them under Tables.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {servers.length > 0 && (
+                <div className="space-y-1">
+                  <Label htmlFor="pos-server" className="text-xs">Served by</Label>
+                  <select
+                    id="pos-server"
+                    className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                    value={servedById}
+                    onChange={(e) => setServedById(e.target.value)}
+                  >
+                    {servers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} · {s.role.toLowerCase()}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Credited with the sale in staff reports.
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-1">
                 <Label htmlFor="pos-name" className="text-xs">
                   Customer {type === 'COUNTER' && <span className="text-muted-foreground">(optional)</span>}

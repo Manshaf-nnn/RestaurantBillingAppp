@@ -47,6 +47,8 @@ export const staffOrderSchema = placeOrderSchema.extend({
   tableId: z.string().cuid().optional().or(z.literal('')),
   customerName: z.string().trim().max(60).optional().or(z.literal('')),
   customerPhone: z.string().trim().max(20).optional().or(z.literal('')),
+  /// Whose table it is, when a cashier rings up on a waiter's behalf.
+  servedById: z.string().min(1).optional().or(z.literal('')),
   manualDiscount: z.coerce.number().int().min(0).default(0),
 })
 export type StaffOrderInput = z.infer<typeof staffOrderSchema>

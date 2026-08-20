@@ -18,8 +18,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   // Migrations run against the direct connection, never the pooler.
   // PgBouncer cannot execute `ALTER TYPE ... ADD VALUE`, which is the first
   // statement in the recipes migration and is why the production deploy failed
@@ -609,6 +609,7 @@ model User {
   auditLogs           AuditLog[]
   notifications       Notification[]
   createdOrders       Order[]             @relation("OrderCreatedBy")
+  servedOrders        Order[]             @relation("OrderServedBy")
   receivedPayments    Payment[]           @relation("PaymentReceivedBy")
   stockMovements      StockMovement[]
   shifts              StaffShift[]
@@ -923,6 +924,11 @@ model Order {
   guestSessionId String?
 
   createdById String?
+  /// Whose table this is. Distinct from createdById, which is whoever keyed the
+  /// order in — a cashier ringing up a waiter's table is the normal case, and
+  /// collapsing the two would credit the till instead of the person serving.
+  servedById  String?
+  servedBy    User?   @relation("OrderServedBy", fields: [servedById], references: [id], onDelete: SetNull)
   createdBy   User?   @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   // ── money, all minor units ───────────────────────────────

@@ -77,6 +77,7 @@ export async function getSalesReport(params: {
       placedAt: true,
       branch: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
+      servedBy: { select: { id: true, name: true } },
       items: {
         where: { status: { not: 'CANCELLED' } },
         select: {
@@ -131,9 +132,12 @@ export async function getSalesReport(params: {
     bump(type, o.type, () => ({ sales: 0, orders: 0 }), lineValue)
     bump(branch, o.branch?.id ?? 'none',
       () => ({ label: o.branch?.name ?? 'Unassigned', sales: 0, orders: 0 }), lineValue)
-    if (o.createdBy) {
-      bump(employee, o.createdBy.id,
-        () => ({ label: o.createdBy!.name, sales: 0, orders: 0 }), lineValue)
+    // Credit the person serving the table, not whoever keyed it in. A cashier
+    // ringing up a waiter's order should not appear as the top seller.
+    const attributed = o.servedBy ?? o.createdBy
+    if (attributed) {
+      bump(employee, attributed.id,
+        () => ({ label: attributed.name, sales: 0, orders: 0 }), lineValue)
     }
 
     for (const line of o.items) {
