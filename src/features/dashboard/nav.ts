@@ -30,6 +30,7 @@ import {
   Factory,
   TrendingUp,
   PiggyBank,
+  UserSearch,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -191,6 +192,7 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: UsersRound,
         permission: PERMISSIONS.CUSTOMER_VIEW,
       },
+      { href: '/dashboard/customers/analytics', label: 'Customer insights', icon: UserSearch, permission: PERMISSIONS.CUSTOMER_VIEW },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
       { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
       { href: '/dashboard/feedback', label: 'Feedback', icon: Smile, permission: PERMISSIONS.REVIEW_MANAGE },
@@ -202,6 +204,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, permission: PERMISSIONS.REPORT_VIEW },
       { href: '/dashboard/reports/sales', label: 'Sales report', icon: TrendingUp, permission: PERMISSIONS.REPORT_VIEW },
       { href: '/dashboard/reports/profit', label: 'Gross profit', icon: PiggyBank, permission: PERMISSIONS.REPORT_VIEW },
+      { href: '/dashboard/reports/inventory', label: 'Inventory report', icon: Package, permission: PERMISSIONS.REPORT_VIEW },
+      { href: '/dashboard/reports/purchasing', label: 'Purchasing report', icon: Truck, permission: PERMISSIONS.REPORT_VIEW },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.SETTINGS_VIEW },
       {
         href: '/dashboard/audit-logs',
