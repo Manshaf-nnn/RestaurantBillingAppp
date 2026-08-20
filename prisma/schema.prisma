@@ -2249,6 +2249,11 @@ model InventoryStock {
   @@unique([itemId, branchId])
   @@index([restaurantId, branchId])
   @@index([restaurantId, itemId])
+  // Prisma's nested include emits `WHERE branchId IN (...)` with no tenant
+  // predicate, so without an index leading on branchId every dashboard render
+  // sequentially scanned this shared table — cost scaling with total platform
+  // rows rather than one restaurant's.
+  @@index([branchId])
   @@map("inventory_stock")
 }
 

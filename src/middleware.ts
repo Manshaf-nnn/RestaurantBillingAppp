@@ -161,8 +161,33 @@ export async function middleware(request: NextRequest) {
 
   if (!isProtected(pathname)) return NextResponse.next()
 
+  /*
+   * A Server Action arrives as a POST carrying a `Next-Action` header, and the
+   * client expects an RSC Flight payload back. Redirecting one is fatal: a 307
+   * preserves the method and the header, the browser replays the POST against
+   * a route whose bundle does not contain that action id, and the response is
+   * HTML. Next cannot parse HTML as a Flight payload, so it treats the reply as
+   * an MPA navigation and leaves the action promise pending forever — a button
+   * stuck on "Adding…" with no error, ever.
+   *
+   * This is reachable in ordinary use because the access JWT lasts 15 minutes
+   * while its cookie lasts 60, leaving a 45-minute window where the token is
+   * expired but the refresh cookie is still present. Any action submitted in
+   * that window used to hang.
+   *
+   * Answering 401 instead lets the client surface a real error and the user
+   * sign in again, rather than watching a spinner.
+   */
+  const isServerAction = request.method === 'POST' && request.headers.has('next-action')
+
   // ── 5. staff protected routes ─────────────────────────────────────────────
   if (!staffClaims) {
+    if (isServerAction) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Your session expired. Sign in again to continue.' }),
+        { status: 401, headers: { 'content-type': 'application/json' } },
+      )
+    }
     if (request.cookies.has(REFRESH_COOKIE)) {
       const refreshUrl = new URL('/api/auth/refresh', request.url)
       refreshUrl.searchParams.set('next', `${pathname}${search}`)
@@ -174,6 +199,12 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!roleAllowed(pathname, String(staffClaims.role))) {
+    if (isServerAction) {
+      return new NextResponse(
+        JSON.stringify({ error: 'You do not have permission to do that.' }),
+        { status: 403, headers: { 'content-type': 'application/json' } },
+      )
+    }
     return NextResponse.redirect(new URL('/forbidden', request.url))
   }
 

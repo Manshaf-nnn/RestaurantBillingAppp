@@ -85,6 +85,23 @@ function resolveDatabaseUrl(): string | undefined {
   if (!params.has('pool_timeout')) params.set('pool_timeout', '5')
   if (!params.has('connect_timeout')) params.set('connect_timeout', '5')
   if (pooled && !params.has('pgbouncer')) params.set('pgbouncer', 'true')
+  /*
+   * Never let a query wait forever.
+   *
+   * Prisma has no per-query timeout, and pool_timeout only bounds the wait for
+   * a free client-side slot — a query that already holds a connection and is
+   * blocked inside Postgres is never interrupted. That is how a single
+   * contended row lock turned into a server action that hung indefinitely with
+   * nothing returned to the caller at all.
+   *
+   * lock_timeout aborts a statement waiting on a row lock; statement_timeout
+   * bounds the query itself. Both sit under the serverless function budget, so
+   * a stuck query surfaces as a real database error the app can report rather
+   * than a silent timeout with no response.
+   */
+  if (!params.has('options')) {
+    params.set('options', '-c lock_timeout=4000 -c statement_timeout=9000')
+  }
   if (!params.has('sslmode')) params.set('sslmode', 'require')
 
   return url.toString()

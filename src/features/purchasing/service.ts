@@ -67,7 +67,27 @@ async function nextNumber(
 ): Promise<string> {
   // Serialise number issuance per restaurant. Cheap: held only for the moment
   // between reading the last number and writing the new document.
-  await tx.$queryRaw`SELECT id FROM restaurants WHERE id = ${restaurantId} FOR UPDATE`
+  /*
+   * Serialise numbering per tenant with an advisory lock, not a row lock.
+   *
+   * This used to be `SELECT id FROM restaurants ... FOR UPDATE`, which looked
+   * like a cheap per-tenant mutex and was in fact a site-wide outage waiting to
+   * happen. `restaurants` is the parent of thirty-odd foreign keys, and every
+   * INSERT into any child table makes Postgres take `FOR KEY SHARE` on the
+   * parent row to check referential integrity. `FOR KEY SHARE` conflicts with
+   * exactly one mode — `FOR UPDATE`. So for as long as one purchase order or
+   * transfer was being numbered, every insert belonging to that restaurant
+   * blocked: branches, orders, order items, stock movements, audit rows,
+   * everything. With no lock_timeout those waits never ended.
+   *
+   * An advisory lock takes no row lock at all, so no referential-integrity
+   * check ever contends with it. `pg_advisory_xact_lock` is transaction-scoped
+   * and released on commit or rollback, which also makes it safe behind a
+   * transaction-mode pooler — unlike the session-scoped variety.
+   */
+  // $executeRaw, not $queryRaw: the function returns void and Prisma cannot
+  // deserialise a void column into a row.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${restaurantId}))`
 
   const rows =
     table === 'purchase'
