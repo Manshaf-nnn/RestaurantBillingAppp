@@ -31,6 +31,7 @@ import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { deleteFood, duplicateFood, toggleFoodAvailability } from '../actions'
 import { FoodDialog, type FoodFormData } from './food-dialog'
+import { callAction } from '@/lib/use-action'
 
 export interface ManagedFood {
   id: string
@@ -94,7 +95,7 @@ export function MenuManager({
     setFoods((current) =>
       current.map((entry) => (entry.id === food.id ? { ...entry, isAvailable: next } : entry)),
     )
-    const result = await toggleFoodAvailability({ id: food.id, isAvailable: next })
+    const result = await callAction(() => toggleFoodAvailability({ id: food.id, isAvailable: next }))
     if (!result.ok) {
       setFoods((current) =>
         current.map((entry) => (entry.id === food.id ? { ...entry, isAvailable: !next } : entry)),
@@ -107,7 +108,7 @@ export function MenuManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteFood(id)
+    const result = await callAction(() => deleteFood(id))
     if (result.ok) {
       setFoods((current) => current.filter((food) => food.id !== id))
       toast.success('Menu item removed')
@@ -117,7 +118,7 @@ export function MenuManager({
   }
 
   const duplicate = async (id: string) => {
-    const result = await duplicateFood(id)
+    const result = await callAction(() => duplicateFood(id))
     if (result.ok) toast.success('Duplicated — the copy starts unavailable')
     else toast.error(result.error)
   }

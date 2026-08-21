@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { openStockCountAction } from '../stock-actions'
+import { callAction } from '@/lib/use-action'
 
 /** Starts a count and drops the counter straight onto the sheet. */
 export function StartCountButton() {
@@ -15,7 +16,7 @@ export function StartCountButton() {
 
   const start = async () => {
     setBusy(true)
-    const result = await openStockCountAction()
+    const result = await callAction(() => openStockCountAction())
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)

@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils'
 import { register as registerAction } from '../actions'
 import { registerSchema, type RegisterInput } from '../schema'
+import { callAction } from '@/lib/use-action'
 
 const CURRENCIES = [
   { code: 'INR', label: 'Indian Rupee (₹)' },
@@ -78,7 +79,7 @@ export function RegisterForm() {
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
-    const result = await registerAction(values)
+    const result = await callAction(() => registerAction(values))
 
     if (!result.ok) {
       setFormError(result.error)

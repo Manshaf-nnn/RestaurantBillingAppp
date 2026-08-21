@@ -20,6 +20,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { deleteSupplier, saveSupplier } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface SupplierRow {
   id: string
@@ -44,7 +45,7 @@ export function SuppliersManager({ suppliers: initial }: { suppliers: SupplierRo
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteSupplier(id)
+    const result = await callAction(() => deleteSupplier(id))
     if (result.ok) {
       setSuppliers((current) => current.filter((supplier) => supplier.id !== id))
       toast.success('Supplier removed')
@@ -189,7 +190,7 @@ function SupplierDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await saveSupplier({ id: supplier?.id, isActive: true, ...form })
+    const result = await callAction(() => saveSupplier({ id: supplier?.id, isActive: true, ...form }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
+import { callAction } from '@/lib/use-action'
 import {
   completeProductionAction, createProductionOrderAction,
   createProductionSpecAction, setProductionStatusAction,
@@ -62,10 +63,10 @@ export function ProductionConsole({ data }: { data: ProductionConsoleData }) {
       return
     }
     setBusy(true)
-    const r = await createProductionSpecAction({
+    const r = await callAction(() => createProductionSpecAction({
       name: specName, outputItemId: outputId, outputQty: Number(outputQty),
       shelfLifeDays: shelfLife ? Number(shelfLife) : undefined, items,
-    })
+    }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
     toast.success('Recipe saved')
@@ -80,7 +81,7 @@ export function ProductionConsole({ data }: { data: ProductionConsoleData }) {
 
   const startRun = async () => {
     setBusy(true)
-    const r = await createProductionOrderAction({ branchId: houseId, specId, plannedQty: Number(batches) })
+    const r = await callAction(() => createProductionOrderAction({ branchId: houseId, specId, plannedQty: Number(batches) }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
     toast.success(`${r.data.number} planned — nothing consumed yet`)
@@ -90,7 +91,7 @@ export function ProductionConsole({ data }: { data: ProductionConsoleData }) {
 
   const move = async (orderId: string, status: string) => {
     setBusy(true)
-    const r = await setProductionStatusAction({ orderId, status })
+    const r = await callAction(() => setProductionStatusAction({ orderId, status }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
     toast.success('Updated')
@@ -109,10 +110,10 @@ export function ProductionConsole({ data }: { data: ProductionConsoleData }) {
       return
     }
     setBusy(true)
-    const r = await completeProductionAction({
+    const r = await callAction(() => completeProductionAction({
       orderId, actualQty: actual,
       varianceReason: actual < planned ? reason[orderId] : undefined,
-    })
+    }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
     toast.success(`${r.data.produced} produced at ${money(r.data.unitCost)} each`)

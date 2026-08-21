@@ -13,6 +13,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { recordWastageAction, reviewWastageAction } from '../wastage-actions'
+import { callAction } from '@/lib/use-action'
 
 const REASONS = [
   { value: 'EXPIRED', label: 'Expired' },
@@ -83,9 +84,9 @@ export function WastageBoard({
     }
 
     setBusy(true)
-    const result = await recordWastageAction({
+    const result = await callAction(() => recordWastageAction({
       itemId, quantity: q, unit: unit || undefined, reason, reasonNote, notes,
-    })
+    }))
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
     toast.success(`Recorded — ${money(result.data.costValue)} written off`)
@@ -95,7 +96,7 @@ export function WastageBoard({
 
   const review = async (id: string, approve: boolean) => {
     setBusy(true)
-    const result = await reviewWastageAction({ wastageId: id, approve })
+    const result = await callAction(() => reviewWastageAction({ wastageId: id, approve }))
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
     toast.success(approve ? 'Approved' : 'Marked as disputed')

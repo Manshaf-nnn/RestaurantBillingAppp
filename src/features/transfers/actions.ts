@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
-import { runAction, type ActionResult } from '@/lib/action'
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
@@ -57,15 +57,17 @@ export async function requestTransferAction(
 
 /** Approve reserves stock at the source; dispatch is what actually sends it. */
 export async function approveTransferAction(transferId: string): Promise<ActionResult<{ id: string }>> {
-  const user = await requirePermission(PERMISSIONS.TRANSFER_APPROVE)
-  const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
-  await audit({
-    restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-    action: AUDIT_ACTIONS.TRANSFER_APPROVED, entity: 'StockTransfer', entityId: transfer.id,
-    after: { number: transfer.number },
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.TRANSFER_APPROVE)
+    const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
+    await audit({
+      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      action: AUDIT_ACTIONS.TRANSFER_APPROVED, entity: 'StockTransfer', entityId: transfer.id,
+      after: { number: transfer.number },
+    })
+    touch(transferId)
+    return { id: transfer.id }
   })
-  touch(transferId)
-  return { ok: true, data: { id: transfer.id } }
 }
 
 export async function dispatchTransferAction(input: unknown): Promise<ActionResult<{ id: string }>> {

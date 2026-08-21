@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useAction } from '@/lib/use-action'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { requestTransferAction } from '../actions'
 
@@ -33,7 +34,7 @@ export function TransferBuilder({
   const [toId, setToId] = React.useState('')
   const [notes, setNotes] = React.useState('')
   const [lines, setLines] = React.useState<Line[]>([])
-  const [busy, setBusy] = React.useState(false)
+  const { busy, run } = useAction()
 
   const available = React.useMemo(
     () => stockByBranch.find((s) => s.branchId === fromId)?.items ?? [],
@@ -58,14 +59,13 @@ export function TransferBuilder({
       return
     }
 
-    setBusy(true)
-    const result = await requestTransferAction({
-      fromBranchId: fromId, toBranchId: toId, notes, lines: payload,
-    })
-    setBusy(false)
-    if (!result.ok) { toast.error(result.error); return }
-    toast.success(`${result.data.number} requested`)
-    router.push(`/dashboard/transfers/${result.data.id}`)
+    await run(
+      () => requestTransferAction({ fromBranchId: fromId, toBranchId: toId, notes, lines: payload }),
+      {
+        success: (data) => `${data.number} requested`,
+        onDone: (data) => router.push(`/dashboard/transfers/${data.id}`),
+      },
+    )
   }
 
   return (

@@ -128,6 +128,34 @@ export async function middleware(request: NextRequest) {
   const isAdminLogin = pathname === '/admin/login'
   const isAdminArea = pathname === '/admin' || pathname.startsWith('/admin/')
 
+  /*
+   * A Server Action is a POST carrying a `Next-Action` header, and the client
+   * will only accept an RSC Flight payload in reply. Anything else is fatal in
+   * one of two ways, and this app has now shipped both:
+   *
+   *   A redirect — a 307 preserves the method and the header, the browser
+   *   replays the POST against a route whose bundle has no such action id, and
+   *   the reply is HTML. Next cannot parse HTML as Flight, so the action promise
+   *   stays pending forever: a button stuck on "Adding…" with no error.
+   *
+   *   A JSON body — server-action-reducer.js checks for `text/x-component` and
+   *   throws on anything else, so the promise REJECTS instead of resolving. Same
+   *   stuck button, because the callers were not catching it.
+   *
+   * So middleware must not answer a Server Action at all. It lets them through
+   * and lets the Node-side guards decide: `requirePermission` throws, `runAction`
+   * turns that into `{ok:false}`, and that IS a Flight payload the client can
+   * read. Authorisation is unaffected — those guards were always the authority
+   * here, and every action calls one.
+   *
+   * Computed before the admin and auth-page branches below, because those return
+   * redirects too. The previous version declared it after them, so /admin/* and
+   * /login kept the original hang.
+   */
+  const isServerAction = request.method === 'POST' && request.headers.has('next-action')
+
+  if (isServerAction) return NextResponse.next()
+
   // ── 2. admin login page ───────────────────────────────────────────────────
   if (isAdminLogin) {
     if (adminClaims) return NextResponse.redirect(new URL('/admin', request.url))
@@ -161,33 +189,9 @@ export async function middleware(request: NextRequest) {
 
   if (!isProtected(pathname)) return NextResponse.next()
 
-  /*
-   * A Server Action arrives as a POST carrying a `Next-Action` header, and the
-   * client expects an RSC Flight payload back. Redirecting one is fatal: a 307
-   * preserves the method and the header, the browser replays the POST against
-   * a route whose bundle does not contain that action id, and the response is
-   * HTML. Next cannot parse HTML as a Flight payload, so it treats the reply as
-   * an MPA navigation and leaves the action promise pending forever — a button
-   * stuck on "Adding…" with no error, ever.
-   *
-   * This is reachable in ordinary use because the access JWT lasts 15 minutes
-   * while its cookie lasts 60, leaving a 45-minute window where the token is
-   * expired but the refresh cookie is still present. Any action submitted in
-   * that window used to hang.
-   *
-   * Answering 401 instead lets the client surface a real error and the user
-   * sign in again, rather than watching a spinner.
-   */
-  const isServerAction = request.method === 'POST' && request.headers.has('next-action')
-
   // ── 5. staff protected routes ─────────────────────────────────────────────
+  // Server Actions already returned above; everything from here is a navigation.
   if (!staffClaims) {
-    if (isServerAction) {
-      return new NextResponse(
-        JSON.stringify({ error: 'Your session expired. Sign in again to continue.' }),
-        { status: 401, headers: { 'content-type': 'application/json' } },
-      )
-    }
     if (request.cookies.has(REFRESH_COOKIE)) {
       const refreshUrl = new URL('/api/auth/refresh', request.url)
       refreshUrl.searchParams.set('next', `${pathname}${search}`)
@@ -199,12 +203,6 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!roleAllowed(pathname, String(staffClaims.role))) {
-    if (isServerAction) {
-      return new NextResponse(
-        JSON.stringify({ error: 'You do not have permission to do that.' }),
-        { status: 403, headers: { 'content-type': 'application/json' } },
-      )
-    }
     return NextResponse.redirect(new URL('/forbidden', request.url))
   }
 

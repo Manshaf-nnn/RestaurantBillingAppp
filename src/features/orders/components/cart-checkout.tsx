@@ -28,6 +28,7 @@ import { formatMoney } from '@/lib/money'
 import { placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
 import { pointsEarned, type OrderTotals } from '../pricing'
+import { callAction } from '@/lib/use-action'
 
 interface Props {
   currency: string
@@ -73,7 +74,7 @@ export function CartCheckout({
         return
       }
       startQuote(async () => {
-        const result = await quoteCart({
+        const result = await callAction(() => quoteCart({
           items: state.lines.map((line) => ({
             foodId: line.foodId,
             quantity: line.quantity,
@@ -81,7 +82,7 @@ export function CartCheckout({
           })),
           couponCode: code || undefined,
           phone: state.customer.phone || undefined,
-        })
+        }))
 
         if (result.ok) {
           setTotals(result.data.totals)
@@ -109,14 +110,17 @@ export function CartCheckout({
     setFormError(null)
     setFieldErrors({})
 
-    if (!state.table) {
+    // Captured rather than read inside the closure below: narrowing does not
+    // survive into a callback, since `state` could change before it runs.
+    const table = state.table
+    if (!table) {
       router.replace('/order')
       return
     }
 
     setPlacing(true)
-    const result = await placeGuestOrder({
-      tableId: state.table.tableId,
+    const result = await callAction(() => placeGuestOrder({
+      tableId: table.tableId,
       customerName: state.customer.name,
       customerPhone: state.customer.phone,
       customerEmail: state.customer.email || '',
@@ -129,7 +133,7 @@ export function CartCheckout({
         optionIds: line.options.map((option) => option.optionId),
         notes: line.notes || '',
       })),
-    })
+    }))
     setPlacing(false)
 
     if (!result.ok) {

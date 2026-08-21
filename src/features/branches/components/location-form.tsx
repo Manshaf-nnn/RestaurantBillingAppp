@@ -3,11 +3,11 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Factory, Plus, Store, Warehouse } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useAction } from '@/lib/use-action'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { createLocationAction } from '../actions'
 
@@ -33,17 +33,16 @@ export function LocationForm() {
   const [code, setCode] = React.useState('')
   const [address, setAddress] = React.useState('')
   const [phone, setPhone] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
+  const { busy, run } = useAction()
 
-  const submit = async () => {
-    setBusy(true)
-    const result = await createLocationAction({ name, code, type, address, phone })
-    setBusy(false)
-    if (!result.ok) { toast.error(result.error); return }
-    toast.success(`${result.data.name} added`)
-    setName(''); setCode(''); setAddress(''); setPhone(''); setOpen(false)
-    router.refresh()
-  }
+  const submit = () =>
+    run(() => createLocationAction({ name, code, type, address, phone }), {
+      success: (data) => `${data.name} added`,
+      onDone: () => {
+        setName(''); setCode(''); setAddress(''); setPhone(''); setOpen(false)
+        router.refresh()
+      },
+    })
 
   if (!open) {
     return (

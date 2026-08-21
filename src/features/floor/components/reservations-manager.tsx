@@ -37,6 +37,7 @@ import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { deleteReservation, saveReservation } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 const STATUSES: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'SEATED', 'COMPLETED', 'CANCELLED', 'NO_SHOW']
 
@@ -71,7 +72,7 @@ export function ReservationsManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteReservation(id)
+    const result = await callAction(() => deleteReservation(id))
     if (result.ok) {
       setReservations((current) => current.filter((r) => r.id !== id))
       toast.success('Reservation removed')
@@ -241,7 +242,7 @@ function ReservationDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await saveReservation({ id: reservation?.id, ...form })
+    const result = await callAction(() => saveReservation({ id: reservation?.id, ...form }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)

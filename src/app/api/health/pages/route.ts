@@ -4,6 +4,7 @@ import { toAppError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { prisma } from '@/server/db/prisma'
 import { resolveRange } from '@/features/reports/range'
 
 /**
@@ -26,14 +27,68 @@ export const maxDuration = 60
 export async function GET() {
   try {
     const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
-    const restaurant = await requireRestaurant(user.restaurantId)
     const rid = user.restaurantId
+
+    /*
+     * The tenant's own flags come first, and deliberately not via
+     * `requireRestaurant`.
+     *
+     * That helper filters on `isActive` and throws when it misses, so calling it
+     * up here would make this route die of exactly the condition it exists to
+     * detect — reporting nothing, on the one tenant that most needs an answer.
+     * The raw row cannot throw, and the flags are usually the answer by
+     * themselves: `status` and `isActive` disagreeing is what breaks the
+     * dashboard layout, and an elapsed `trialEndsAt` locks the owner out with no
+     * error at all.
+     */
+    const row = await prisma.restaurant.findUnique({
+      where: { id: rid },
+      select: { name: true, status: true, isActive: true, plan: true, trialEndsAt: true, currency: true, timezone: true },
+    })
+
+    const trialExpired =
+      row?.plan === 'TRIAL' && row.trialEndsAt !== null && row.trialEndsAt.getTime() < Date.now()
+
+    const tenant = {
+      name: row?.name ?? null,
+      status: row?.status ?? null,
+      isActive: row?.isActive ?? null,
+      plan: row?.plan ?? null,
+      trialEndsAt: row?.trialEndsAt?.toISOString() ?? null,
+      trialExpired,
+      // The two conditions that lock a working account out of every page.
+      blocksDashboard:
+        !row
+          ? 'the restaurant row is missing'
+          : row.status !== 'ACTIVE' || !row.isActive
+            ? `status=${row.status} isActive=${row.isActive} — the dashboard layout requires both`
+            : trialExpired
+              ? 'the free trial has ended'
+              : null,
+    }
+
     const branchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const range = resolveRange({ preset: 'THIS_MONTH' })
-    const currency = restaurant.currency
+    const currency = row?.currency ?? 'LKR'
 
     // Imported lazily so one broken module cannot stop the others being tested.
     const checks: Array<[string, () => Promise<unknown>]> = [
+      /*
+       * The layout runs before any page and outside their error boundary, so a
+       * failure here breaks all 45 screens at once with a single reference code.
+       * These three were missing from this list, which would have let it report
+       * every page green while the dashboard was entirely unreachable.
+       */
+      ['LAYOUT: restaurant', async () => requireRestaurant(rid)],
+      ['LAYOUT: notifications', async () =>
+        prisma.notification.findMany({
+          where: { restaurantId: rid, OR: [{ userId: user.id }, { userId: null }] },
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: { id: true, title: true, createdAt: true },
+        })],
+      ['LAYOUT: branch switcher', async () =>
+        (await import('@/features/transfers/queries')).listSwitchableLocations(rid)],
       ['dashboard: stats', async () =>
         (await import('@/features/analytics/queries')).getDashboardStats(rid)],
       ['dashboard: locations', async () =>
@@ -87,7 +142,7 @@ export async function GET() {
           restaurantId: rid, userId: user.id, currency, canSeeAll: true,
         })],
       ['menu: public', async () =>
-        (await import('@/features/menu/queries')).getPublicMenu(rid, restaurant.timezone)],
+        (await import('@/features/menu/queries')).getPublicMenu(rid, row?.timezone ?? 'Asia/Colombo')],
     ]
 
     const failing: Array<{ check: string; message: string; code?: string; kind: string }> = []
@@ -113,14 +168,17 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        healthy: failing.length === 0,
-        summary: failing.length === 0
+        healthy: failing.length === 0 && tenant.blocksDashboard === null,
+        tenant,
+        summary: tenant.blocksDashboard
+          ? `Every dashboard page is blocked because ${tenant.blocksDashboard}.`
+          : failing.length === 0
           ? 'Every dashboard query succeeded. If a page still fails, the fault is in rendering rather than data.'
           : `${failing.length} of ${checks.length} queries failed — see failing[] below.`,
         failing,
         passed: okChecks,
       },
-      { status: failing.length === 0 ? 200 : 500 },
+      { status: failing.length === 0 && tenant.blocksDashboard === null ? 200 : 500 },
     )
   } catch (error) {
     const app = toAppError(error)

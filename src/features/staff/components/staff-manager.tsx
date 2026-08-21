@@ -42,6 +42,7 @@ import { PageHeader } from '@/features/dashboard/components/page-header'
 import { initials } from '@/lib/utils'
 import { ROLE_LABELS } from '@/lib/rbac'
 import { inviteStaff, removeStaff, updateStaff } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface StaffMember {
   id: string
@@ -75,7 +76,7 @@ export function StaffManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await removeStaff(id)
+    const result = await callAction(() => removeStaff(id))
     if (result.ok) {
       setStaff((current) => current.filter((member) => member.id !== id))
       toast.success('Staff member removed')
@@ -222,7 +223,7 @@ function InviteDialog({
   const invite = async () => {
     setSaving(true)
     setError(null)
-    const result = await inviteStaff(form)
+    const result = await callAction(() => inviteStaff(form))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -334,7 +335,7 @@ function EditDialog({
   const save = async () => {
     if (!member) return
     setSaving(true)
-    const result = await updateStaff({ id: member.id, ...form })
+    const result = await callAction(() => updateStaff({ id: member.id, ...form }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)

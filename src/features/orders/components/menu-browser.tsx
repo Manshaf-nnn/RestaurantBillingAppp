@@ -39,6 +39,7 @@ import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { createServiceRequest } from '../actions'
 import { useCart } from '../cart-store'
 import { ItemSheet } from './item-sheet'
+import { callAction } from '@/lib/use-action'
 
 type DietFilter = 'ALL' | 'VEG' | 'NON_VEG'
 
@@ -582,7 +583,7 @@ function ServiceRequestDialog({ tableId }: { tableId: string | null }) {
 
   const request = (type: (typeof SERVICE_ACTIONS)[number]['type']) => {
     startTransition(async () => {
-      const result = await createServiceRequest({ tableId, type })
+      const result = await callAction(() => createServiceRequest({ tableId, type }))
       if (result.ok) {
         toast.success('Our staff have been notified')
         setOpen(false)

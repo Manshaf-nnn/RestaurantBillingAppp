@@ -38,6 +38,7 @@ import { PageHeader, StatCard } from '@/features/dashboard/components/page-heade
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { deleteInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 const UNITS: StockUnit[] = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN']
 
@@ -129,7 +130,7 @@ export function InventoryManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteInventoryItem(id)
+    const result = await callAction(() => deleteInventoryItem(id))
     if (result.ok) {
       setItems((current) => current.filter((item) => item.id !== id))
       toast.success('Item removed')
@@ -392,7 +393,7 @@ function ItemDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await saveInventoryItem({
+    const result = await callAction(() => saveInventoryItem({
       id: item?.id,
       name: form.name,
       category: form.category,
@@ -402,7 +403,7 @@ function ItemDialog({
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
       supplierId: form.supplierId,
       expiryDate: form.expiryDate,
-    })
+    }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -500,12 +501,12 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
   const save = async () => {
     if (!item) return
     setSaving(true)
-    const result = await recordStockMovement({
+    const result = await callAction(() => recordStockMovement({
       itemId: item.id,
       type,
       quantity: Number(quantity),
       reason,
-    })
+    }))
     setSaving(false)
     if (result.ok) {
       toast.success(`New quantity: ${result.data.quantity}`)

@@ -29,6 +29,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { formatBps, formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { deleteCoupon, saveCoupon } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface CouponRow {
   id: string
@@ -72,7 +73,7 @@ export function CouponsManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteCoupon(id)
+    const result = await callAction(() => deleteCoupon(id))
     if (result.ok) {
       setCoupons((current) => current.filter((coupon) => coupon.id !== id))
       toast.success('Coupon deleted')
@@ -249,7 +250,7 @@ function CouponDialog({
     const value =
       form.type === 'PERCENT' ? Math.round(Number(form.value) * 100) : parseMoney(form.value, currency)
 
-    const result = await saveCoupon({
+    const result = await callAction(() => saveCoupon({
       id: coupon?.id,
       code: form.code,
       description: form.description,
@@ -261,7 +262,7 @@ function CouponDialog({
       perCustomerLimit: form.perCustomerLimit ? Number(form.perCustomerLimit) : null,
       endsAt: form.endsAt || '',
       isActive: form.isActive,
-    })
+    }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)

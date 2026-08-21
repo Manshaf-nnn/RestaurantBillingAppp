@@ -14,6 +14,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { formatMoney } from '@/lib/money'
 import { receiveGoodsAction, setPurchaseStatusAction } from '../actions'
 import type { PurchaseDetail } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' | 'success' | 'destructive' }> = {
   DRAFT: { label: 'Draft', variant: 'secondary' },
@@ -61,7 +62,7 @@ export function ReceivePanel({
 
   const move = async (next: string, reason?: string) => {
     setBusy(true)
-    const result = await setPurchaseStatusAction({ purchaseId: detail.id, status: next, reason })
+    const result = await callAction(() => setPurchaseStatusAction({ purchaseId: detail.id, status: next, reason }))
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
     toast.success('Order updated')
@@ -93,7 +94,7 @@ export function ReceivePanel({
     }
 
     setBusy(true)
-    const result = await receiveGoodsAction({ purchaseId: detail.id, supplierRef, lines })
+    const result = await callAction(() => receiveGoodsAction({ purchaseId: detail.id, supplierRef, lines }))
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
     toast.success(`${result.data.number} received — stock updated`)

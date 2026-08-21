@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { formatMoney } from '@/lib/money'
 import { createStaffOrder } from '@/features/orders/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
+import { callAction } from '@/lib/use-action'
 
 /**
  * Counter order terminal — takeaway, delivery and walk-in sales.
@@ -129,7 +130,7 @@ export function PosTerminal({
     }
 
     setBusy(true)
-    const result = await createStaffOrder({
+    const result = await callAction(() => createStaffOrder({
       type,
       tableId: type === 'DINE_IN' ? tableId : '',
       servedById,
@@ -137,7 +138,7 @@ export function PosTerminal({
       customerPhone: phone,
       notes,
       items: lines.map((l) => ({ foodId: l.item.id, quantity: l.quantity, optionIds: [] })),
-    })
+    }))
     setBusy(false)
 
     if (!result.ok) {

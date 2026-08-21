@@ -9,6 +9,7 @@ import { Field } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { changePassword, signOutEverywhereElse, updateProfile } from '@/features/auth/actions'
+import { callAction } from '@/lib/use-action'
 
 export interface SessionInfo {
   id: string
@@ -36,7 +37,7 @@ export function ProfileView({
 
   const saveProfile = async () => {
     setSavingProfile(true)
-    const result = await updateProfile({ name, phone, avatarUrl: '' })
+    const result = await callAction(() => updateProfile({ name, phone, avatarUrl: '' }))
     setSavingProfile(false)
     if (result.ok) toast.success('Profile updated')
     else toast.error(result.error)
@@ -44,7 +45,7 @@ export function ProfileView({
 
   const savePassword = async () => {
     setSavingPassword(true)
-    const result = await changePassword({ currentPassword: current, password: next, confirmPassword: confirm })
+    const result = await callAction(() => changePassword({ currentPassword: current, password: next, confirmPassword: confirm }))
     setSavingPassword(false)
     if (result.ok) {
       toast.success('Password changed')
@@ -107,7 +108,7 @@ export function ProfileView({
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  const result = await signOutEverywhereElse()
+                  const result = await callAction(() => signOutEverywhereElse())
                   if (result.ok) toast.success(`Signed out ${result.data.revoked} other device(s)`)
                   else toast.error(result.error)
                 }}

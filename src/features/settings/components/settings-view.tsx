@@ -18,6 +18,7 @@ import {
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { cn } from '@/lib/utils'
 import { updatePaymentSettings, updatePrinterSettings, updateRestaurantSettings } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
 const TIMEZONES = [
@@ -85,7 +86,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
 
   const saveProfile = async () => {
     setSavingProfile(true)
-    const result = await updateRestaurantSettings(form)
+    const result = await callAction(() => updateRestaurantSettings(form))
     setSavingProfile(false)
     if (result.ok) toast.success('Settings saved')
     else toast.error(result.error)
@@ -93,7 +94,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
 
   const savePayments = async () => {
     setSavingPayments(true)
-    const result = await updatePaymentSettings(payment)
+    const result = await callAction(() => updatePaymentSettings(payment))
     setSavingPayments(false)
     if (result.ok) toast.success('Payment settings saved')
     else toast.error(result.error)
@@ -101,7 +102,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
 
   const savePrinter = async () => {
     setSavingPrinter(true)
-    const result = await updatePrinterSettings(printer)
+    const result = await callAction(() => updatePrinterSettings(printer))
     setSavingPrinter(false)
     if (result.ok) toast.success('Printer settings saved')
     else toast.error(result.error)

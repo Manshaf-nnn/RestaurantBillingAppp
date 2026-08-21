@@ -14,6 +14,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { closeDrawerAction, openDrawerAction, recordCashMovementAction } from '../actions'
 import type { DrawerPageData } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 /**
  * The cashier's drawer screen.
@@ -51,7 +52,7 @@ function OpenForm({ data }: { data: DrawerPageData }) {
       return
     }
     setBusy(true)
-    const result = await openDrawerAction({ openingFloat: value, branchId, note })
+    const result = await callAction(() => openDrawerAction({ openingFloat: value, branchId, note }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -141,11 +142,11 @@ function OpenDrawerPanel({
       return
     }
     setBusy(true)
-    const result = await closeDrawerAction({
+    const result = await callAction(() => closeDrawerAction({
       sessionId: open.session.id,
       countedCash: value,
       note: closeNote,
-    })
+    }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -271,7 +272,7 @@ function MovementForm({ sessionId }: { sessionId: string }) {
       return
     }
     setBusy(true)
-    const result = await recordCashMovementAction({ sessionId, type, amount: value, reason })
+    const result = await callAction(() => recordCashMovementAction({ sessionId, type, amount: value, reason }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)

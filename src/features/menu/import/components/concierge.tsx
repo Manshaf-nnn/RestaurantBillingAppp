@@ -9,6 +9,7 @@ import { Field } from '@/components/ui/label'
 import { Input, Textarea } from '@/components/ui/input'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { requestConciergeSetup } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 /**
  * Hand the whole job over.
@@ -34,7 +35,7 @@ export function Concierge({ defaultName }: { defaultName: string }) {
 
   const submit = async () => {
     setSending(true)
-    const result = await requestConciergeSetup(form)
+    const result = await callAction(() => requestConciergeSetup(form))
     setSending(false)
 
     if (!result.ok) {

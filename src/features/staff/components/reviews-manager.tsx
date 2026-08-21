@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/primitives'
 import { PageHeader, StatCard } from '@/features/dashboard/components/page-header'
 import { cn } from '@/lib/utils'
 import { replyToReview, toggleReviewPublished } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface ReviewRow {
   id: string
@@ -43,7 +44,7 @@ export function ReviewsManager({
   }))
 
   const reply = async (id: string, text: string) => {
-    const result = await replyToReview({ id, reply: text })
+    const result = await callAction(() => replyToReview({ id, reply: text }))
     if (result.ok) {
       setReviews((current) =>
         current.map((review) => (review.id === id ? { ...review, reply: text } : review)),
@@ -58,7 +59,7 @@ export function ReviewsManager({
     setReviews((current) =>
       current.map((review) => (review.id === id ? { ...review, isPublished: next } : review)),
     )
-    await toggleReviewPublished(id, next)
+    await callAction(() => toggleReviewPublished(id, next))
   }
 
   return (

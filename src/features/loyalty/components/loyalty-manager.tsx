@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { updateLoyaltySettings } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export function LoyaltyManager({
   currency,
@@ -27,7 +28,7 @@ export function LoyaltyManager({
 
   const save = async () => {
     setSaving(true)
-    const result = await updateLoyaltySettings(form)
+    const result = await callAction(() => updateLoyaltySettings(form))
     setSaving(false)
     if (result.ok) toast.success('Loyalty settings saved')
     else toast.error(result.error)

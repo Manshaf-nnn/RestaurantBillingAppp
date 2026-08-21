@@ -193,13 +193,78 @@ export async function revokeAllSessions(userId: string, exceptSessionId?: string
  * so revoking a session takes effect immediately rather than after the JWT
  * expires.
  */
+/**
+ * Mint a replacement access token from a still-valid refresh token.
+ *
+ * Deliberately NOT `rotateSession`. That one revokes the old refresh token and
+ * issues a new one, which is correct for the refresh endpoint but unsafe here:
+ * this runs during page renders and Server Actions, and Next forbids writing
+ * cookies during a render. A rotation whose cookie write is refused would
+ * revoke the session in the database while the browser kept the dead token —
+ * signing the user out for good.
+ *
+ * Issuing only a new access token has no such failure mode. The refresh token
+ * is read, never changed, so a refused cookie write costs nothing: the next
+ * request simply tries again, and navigations still get full rotation via
+ * /api/auth/refresh.
+ *
+ * This is what closes the 45-minute window where the 15-minute JWT had expired
+ * but its 60-minute cookie had not — the window in which every Server Action
+ * failed.
+ */
+async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | null> {
+  const store = await cookies()
+  const refreshToken = store.get(refreshCookieName(scope))?.value
+  if (!refreshToken) return null
+
+  const session = await prisma.session.findUnique({
+    where: { refreshTokenHash: hashToken(refreshToken) },
+    include: { user: true },
+  })
+
+  if (!session || session.revokedAt || session.expiresAt < new Date()) return null
+  if (!session.user.isActive || session.user.deletedAt) return null
+  if (scopeForRole(session.user.role) !== scope) return null
+
+  const user = session.user
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    rid: user.restaurantId,
+    role: user.role,
+    name: user.name,
+    email: user.email,
+    sid: session.id,
+  })
+
+  try {
+    store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
+  } catch {
+    // Rendering a page — Next refuses cookie writes there. The user is still
+    // authenticated for this request; only the saving of the new token is lost.
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    restaurantId: user.restaurantId,
+    branchId: user.branchId ?? null,
+    avatarUrl: user.avatarUrl,
+    permissions: user.permissions,
+    sessionId: session.id,
+  }
+}
+
 async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
   const store = await cookies()
   const token = store.get(accessCookieName(scope))?.value
-  if (!token) return null
 
-  const claims = await verifyAccessToken(token)
-  if (!claims?.sub || !claims.sid) return null
+  // Expired or absent access token, but the session behind it may still be
+  // live. Falling straight through to null here is what used to strand a
+  // Server Action mid-click.
+  const claims = token ? await verifyAccessToken(token) : null
+  if (!claims?.sub || !claims.sid) return renewFromRefreshToken(scope)
 
   const session = await prisma.session.findFirst({
     where: { id: claims.sid, revokedAt: null, expiresAt: { gt: new Date() } },
@@ -222,7 +287,11 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
     },
   })
 
-  if (!session || !session.user.isActive || session.user.deletedAt) return null
+  // The session the token names is gone — usually because a concurrent refresh
+  // rotated it. The refresh cookie will name the live one, so try that before
+  // declaring the visitor signed out.
+  if (!session) return renewFromRefreshToken(scope)
+  if (!session.user.isActive || session.user.deletedAt) return null
   // A token from the wrong namespace (e.g. an admin token used as staff) is
   // rejected — the scope and the user's role must agree.
   if (scopeForRole(session.user.role) !== scope) return null

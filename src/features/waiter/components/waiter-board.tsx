@@ -31,6 +31,7 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { resolveServiceRequest, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
+import { callAction } from '@/lib/use-action'
 
 const TABLE_STATUSES: Array<{ value: TableStatus; label: string }> = [
   { value: 'AVAILABLE', label: 'Empty' },
@@ -197,7 +198,7 @@ export function WaiterBoard({
   // the whole order to SERVED, so we drop the card once every item is served.
   const serveItem = async (orderId: string, itemId: string) => {
     setBusyId(itemId)
-    const result = await updateItemStatus({ orderId, itemId, status: 'SERVED' })
+    const result = await callAction(() => updateItemStatus({ orderId, itemId, status: 'SERVED' }))
     setBusyId(null)
 
     if (!result.ok) {
@@ -222,7 +223,7 @@ export function WaiterBoard({
 
   const markDelivered = async (order: WaiterOrder) => {
     setBusyId(order.id)
-    const result = await updateOrderStatus({ orderId: order.id, status: 'SERVED' })
+    const result = await callAction(() => updateOrderStatus({ orderId: order.id, status: 'SERVED' }))
     setBusyId(null)
 
     if (!result.ok) {
@@ -235,13 +236,13 @@ export function WaiterBoard({
 
   const setTableStatus = async (tableId: string, status: TableStatus) => {
     setTables((current) => current.map((t) => (t.id === tableId ? { ...t, status } : t)))
-    const result = await setServiceTableStatus({ id: tableId, status })
+    const result = await callAction(() => setServiceTableStatus({ id: tableId, status }))
     if (!result.ok) toast.error(result.error)
   }
 
   const clearRequest = async (request: WaiterRequest) => {
     setBusyId(request.id)
-    const result = await resolveServiceRequest(request.id)
+    const result = await callAction(() => resolveServiceRequest(request.id))
     setBusyId(null)
 
     if (!result.ok) {

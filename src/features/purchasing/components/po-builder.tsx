@@ -13,6 +13,7 @@ import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { createPurchaseOrderAction } from '../actions'
 import type { PoBuilderData } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 
@@ -116,14 +117,14 @@ export function PoBuilder({
     }
 
     setBusy(true)
-    const result = await createPurchaseOrderAction({
+    const result = await callAction(() => createPurchaseOrderAction({
       supplierId,
       expectedAt,
       notes,
       discount: Number(discount) || 0,
       taxTotal: Number(taxTotal) || 0,
       lines: payload,
-    })
+    }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)

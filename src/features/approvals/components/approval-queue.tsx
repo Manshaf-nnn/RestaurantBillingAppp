@@ -13,6 +13,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { decideApprovalAction } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface ApprovalRow {
   id: string
@@ -61,7 +62,7 @@ export function ApprovalQueue({
 
   const decide = async (id: string, approve: boolean) => {
     setBusy(id)
-    const result = await decideApprovalAction({ approvalId: id, approve, note: notes[id] ?? '' })
+    const result = await callAction(() => decideApprovalAction({ approvalId: id, approve, note: notes[id] ?? '' }))
     setBusy(null)
     if (!result.ok) { toast.error(result.error); return }
     toast.success(approve ? 'Approved' : 'Rejected')

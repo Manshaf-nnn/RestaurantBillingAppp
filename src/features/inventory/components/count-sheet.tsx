@@ -15,6 +15,7 @@ import {
   approveStockCountAction, recordCountLinesAction, submitStockCountAction,
 } from '../stock-actions'
 import type { StockCountDetail } from '../count-queries'
+import { callAction } from '@/lib/use-action'
 
 /**
  * The counting sheet.
@@ -79,7 +80,7 @@ export function CountSheet({
       return
     }
     setBusy(true)
-    const result = await recordCountLinesAction({ stockCountId: detail.id, lines })
+    const result = await callAction(() => recordCountLinesAction({ stockCountId: detail.id, lines }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -91,7 +92,7 @@ export function CountSheet({
 
   const submit = async () => {
     setBusy(true)
-    const result = await submitStockCountAction(detail.id)
+    const result = await callAction(() => submitStockCountAction(detail.id))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -103,10 +104,10 @@ export function CountSheet({
 
   const approve = async () => {
     setBusy(true)
-    const result = await approveStockCountAction({
+    const result = await callAction(() => approveStockCountAction({
       stockCountId: detail.id,
       notes: approveNote,
-    })
+    }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)

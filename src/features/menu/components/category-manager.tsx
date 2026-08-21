@@ -20,6 +20,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Switch } from '@/components/ui/primitives'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
+import { callAction } from '@/lib/use-action'
 import {
   deleteCategory,
   reorderCategories,
@@ -67,7 +68,7 @@ export function CategoryManager({
     setCategories((current) =>
       current.map((entry) => (entry.id === category.id ? { ...entry, isVisible: next } : entry)),
     )
-    const result = await toggleCategoryVisibility(category.id, next)
+    const result = await callAction(() => toggleCategoryVisibility(category.id, next))
     if (!result.ok) {
       setCategories(initial)
       toast.error(result.error)
@@ -78,7 +79,7 @@ export function CategoryManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteCategory(id)
+    const result = await callAction(() => deleteCategory(id))
     if (result.ok) {
       setCategories((current) => current.filter((category) => category.id !== id))
       toast.success('Category deleted')
@@ -97,7 +98,7 @@ export function CategoryManager({
     reordered.splice(targetIndex, 0, moved)
     setCategories(reordered)
 
-    const result = await reorderCategories({ ids: reordered.map((category) => category.id) })
+    const result = await callAction(() => reorderCategories({ ids: reordered.map((category) => category.id) }))
     if (!result.ok) {
       setCategories(initial)
       toast.error(result.error)
@@ -243,14 +244,14 @@ function CategoryDialog({
   const save = async () => {
     setError(null)
     setSaving(true)
-    const result = await saveCategory({
+    const result = await callAction(() => saveCategory({
       id: category?.id,
       name,
       description,
       icon,
       isVisible,
       sortOrder: category?.sortOrder ?? nextSortOrder,
-    })
+    }))
     setSaving(false)
 
     if (!result.ok) {

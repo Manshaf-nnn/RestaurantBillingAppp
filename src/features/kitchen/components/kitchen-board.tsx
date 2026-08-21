@@ -19,6 +19,7 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
+import { callAction } from '@/lib/use-action'
 
 export interface KitchenTicket {
   id: string
@@ -172,7 +173,7 @@ export function KitchenBoard({
 
   const advance = async (ticket: KitchenTicket, status: OrderStatus) => {
     setPendingId(ticket.id)
-    const result = await updateOrderStatus({ orderId: ticket.id, status })
+    const result = await callAction(() => updateOrderStatus({ orderId: ticket.id, status }))
     setPendingId(null)
 
     if (!result.ok) {

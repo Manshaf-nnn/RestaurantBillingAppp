@@ -36,6 +36,7 @@ import {
 } from '../actions'
 
 import type { TableStatus } from '@prisma/client'
+import { callAction } from '@/lib/use-action'
 
 export interface ManagedTable {
   id: string
@@ -71,7 +72,7 @@ export function TablesManager({
     setTables((current) =>
       current.map((entry) => (entry.id === table.id ? { ...entry, status } : entry)),
     )
-    const result = await updateTableStatus({ id: table.id, status })
+    const result = await callAction(() => updateTableStatus({ id: table.id, status }))
     if (!result.ok) {
       setTables(initial)
       toast.error(result.error)
@@ -82,7 +83,7 @@ export function TablesManager({
     if (!deleteId) return
     const id = deleteId
     setDeleteId(null)
-    const result = await deleteTable(id)
+    const result = await callAction(() => deleteTable(id))
     if (result.ok) {
       setTables((current) => current.filter((table) => table.id !== id))
       toast.success('Table deleted')
@@ -264,7 +265,7 @@ function TableDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await saveTable({
+    const result = await callAction(() => saveTable({
       id: table?.id,
       number: form.number,
       label: form.label,
@@ -272,7 +273,7 @@ function TableDialog({
       capacity: Number(form.capacity),
       status: table?.status ?? 'AVAILABLE',
       notes: form.notes,
-    })
+    }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -345,12 +346,12 @@ function BulkDialog({
 
   const create = async () => {
     setSaving(true)
-    const result = await createTablesBulk({
+    const result = await callAction(() => createTablesBulk({
       count: Number(count),
       startFrom: Number(startFrom),
       capacity: Number(capacity),
       area,
-    })
+    }))
     setSaving(false)
     if (result.ok) {
       toast.success(`${result.data.created} tables created`)

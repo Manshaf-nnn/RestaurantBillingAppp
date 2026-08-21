@@ -54,6 +54,7 @@ import {
   splitBillAction,
 } from '@/features/cashier/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
+import { callAction } from '@/lib/use-action'
 
 export interface CashierBill {
   id: string
@@ -238,7 +239,7 @@ export function CashierBoard({
     setCreatingTakeaway(true)
     setTakeawayError(null)
 
-    const result = await createStaffOrder({
+    const result = await callAction(() => createStaffOrder({
       type: 'TAKEAWAY',
       tableId: '',
       customerName: customerName.trim(),
@@ -246,7 +247,7 @@ export function CashierBoard({
       customerEmail: '',
       notes,
       items,
-    })
+    }))
 
     setCreatingTakeaway(false)
 
@@ -679,8 +680,8 @@ function BillingDetailPanel({
   const toggleHold = async () => {
     setBusy(true)
     const result = bill.heldAt
-      ? await resumeBillAction({ orderId: bill.id })
-      : await holdBillAction({ orderId: bill.id, reason: '' })
+      ? await callAction(() => resumeBillAction({ orderId: bill.id }))
+      : await callAction(() => holdBillAction({ orderId: bill.id, reason: '' }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -870,14 +871,14 @@ function BillPanel({
 
   const settle = async () => {
     setPending(true)
-    const result = await collectPayment({
+    const result = await callAction(() => collectPayment({
       orderId: bill.id,
       method,
       amount: amountDue,
       tenderedAmount: method === 'CASH' ? tenderedMinor || amountDue : undefined,
       reference: reference || '',
       tipAmount: tipMinor,
-    })
+    }))
     setPending(false)
 
     if (!result.ok) {
@@ -897,7 +898,7 @@ function BillPanel({
   }
 
   const showQr = async () => {
-    const result = await createStaffPaymentQr({ orderId: bill.id, method: 'QR' })
+    const result = await callAction(() => createStaffPaymentQr({ orderId: bill.id, method: 'QR' }))
     if (!result.ok) {
       toast.error(result.error)
       return
@@ -1088,7 +1089,7 @@ function SplitBillDialog({
   const submit = async () => {
     const selections = Object.entries(moves).map(([itemId, quantity]) => ({ itemId, quantity }))
     setPending(true)
-    const result = await splitBillAction({ orderId: bill.id, selections })
+    const result = await callAction(() => splitBillAction({ orderId: bill.id, selections }))
     setPending(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -1220,7 +1221,7 @@ function MergeBillsDialog({
 
   const submit = async () => {
     setPending(true)
-    const result = await mergeBillsAction({ targetId: bill.id, sourceIds: picked })
+    const result = await callAction(() => mergeBillsAction({ targetId: bill.id, sourceIds: picked }))
     setPending(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -1338,11 +1339,11 @@ function DiscountDialog({
 
   const apply = async () => {
     setPending(true)
-    const result = await applyManualDiscount({
+    const result = await callAction(() => applyManualDiscount({
       orderId,
       amount: parseMoney(amount, currency),
       reason,
-    })
+    }))
     setPending(false)
 
     if (!result.ok) {

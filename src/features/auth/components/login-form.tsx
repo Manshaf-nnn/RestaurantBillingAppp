@@ -14,6 +14,7 @@ import { Field } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { login } from '../actions'
 import { loginSchema, type LoginInput } from '../schema'
+import { callAction } from '@/lib/use-action'
 
 export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }) {
   const params = useSearchParams()
@@ -53,7 +54,7 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
-    const result = await login(values)
+    const result = await callAction(() => login(values))
 
     if (!result.ok) {
       setFormError(result.error)

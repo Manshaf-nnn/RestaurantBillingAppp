@@ -33,6 +33,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatCard } from '@/features/dashboard/components/page-header'
 import type { PlatformFeedbackItem, PlatformRestaurant, PlatformStats } from '../queries'
+import { callAction } from '@/lib/use-action'
 import {
   approveRestaurant,
   reactivateRestaurant,
@@ -99,7 +100,7 @@ export function PlatformConsole({
 
   const approve = async (restaurant: PlatformRestaurant) => {
     setBusyId(restaurant.id)
-    const result = await approveRestaurant({ restaurantId: restaurant.id })
+    const result = await callAction(() => approveRestaurant({ restaurantId: restaurant.id }))
     setBusyId(null)
     if (result.ok) {
       patch(restaurant.id, 'ACTIVE')
@@ -109,7 +110,7 @@ export function PlatformConsole({
 
   const reactivate = async (restaurant: PlatformRestaurant) => {
     setBusyId(restaurant.id)
-    const result = await reactivateRestaurant({ restaurantId: restaurant.id })
+    const result = await callAction(() => reactivateRestaurant({ restaurantId: restaurant.id }))
     setBusyId(null)
     if (result.ok) {
       patch(restaurant.id, 'ACTIVE')
@@ -305,7 +306,7 @@ export function PlatformConsole({
         destructive
         onConfirm={async () => {
           if (!suspendFor) return
-          const result = await suspendRestaurant({ restaurantId: suspendFor.id })
+          const result = await callAction(() => suspendRestaurant({ restaurantId: suspendFor.id }))
           if (result.ok) {
             patch(suspendFor.id, 'SUSPENDED')
             toast.success('Restaurant suspended')
@@ -336,7 +337,7 @@ function RejectDialog({
   const submit = async () => {
     if (!restaurant) return
     setSaving(true)
-    const result = await rejectRestaurant({ restaurantId: restaurant.id, reason })
+    const result = await callAction(() => rejectRestaurant({ restaurantId: restaurant.id, reason }))
     setSaving(false)
     if (result.ok) {
       onDone(restaurant.id)

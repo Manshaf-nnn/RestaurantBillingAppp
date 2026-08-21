@@ -28,6 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { adjustLoyalty, saveCustomer } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface CustomerRow {
   id: string
@@ -204,7 +205,7 @@ function CustomerDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await saveCustomer({ id: customer?.id, ...form })
+    const result = await callAction(() => saveCustomer({ id: customer?.id, ...form }))
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -266,7 +267,7 @@ function LoyaltyDialog({ customer, onClose }: { customer: CustomerRow | null; on
   const save = async () => {
     if (!customer) return
     setSaving(true)
-    const result = await adjustLoyalty({ customerId: customer.id, points: Number(points), reason })
+    const result = await callAction(() => adjustLoyalty({ customerId: customer.id, points: Number(points), reason }))
     setSaving(false)
     if (result.ok) {
       toast.success(`Balance is now ${result.data.points} points`)

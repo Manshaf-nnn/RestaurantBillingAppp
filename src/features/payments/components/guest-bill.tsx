@@ -34,6 +34,7 @@ import { AutoRefresh } from '@/components/auto-refresh'
 import { submitFeedback } from '@/features/feedback/actions'
 import type { PaymentConfig } from '../service'
 import { declareGuestPayment, emailReceipt, requestPaymentQr } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface BillView {
   id: string
@@ -119,7 +120,7 @@ export function GuestBill({
 
   const showQr = async () => {
     setLoadingQr(true)
-    const result = await requestPaymentQr({ orderId: bill.id, method: 'QR' })
+    const result = await callAction(() => requestPaymentQr({ orderId: bill.id, method: 'QR' }))
     setLoadingQr(false)
 
     if (!result.ok) {
@@ -130,7 +131,7 @@ export function GuestBill({
   }
 
   const declarePaid = async (reference?: string) => {
-    const result = await declareGuestPayment({ orderId: bill.id, reference })
+    const result = await callAction(() => declareGuestPayment({ orderId: bill.id, reference }))
     if (result.ok) {
       setDeclared(true)
       toast.success('Our cashier will confirm shortly')
@@ -158,7 +159,7 @@ export function GuestBill({
 
   const sendReceipt = async () => {
     setEmailing(true)
-    const result = await emailReceipt({ orderId: bill.id, email })
+    const result = await callAction(() => emailReceipt({ orderId: bill.id, email }))
     setEmailing(false)
     if (result.ok) toast.success(result.data.sent ? 'Receipt sent' : 'Receipt queued')
     else toast.error(result.error)
@@ -166,12 +167,12 @@ export function GuestBill({
 
   const sendSystemFeedback = async (rating: number) => {
     setFeedbackBusy(rating)
-    const result = await submitFeedback({
+    const result = await callAction(() => submitFeedback({
       category: 'SYSTEM',
       rating,
       comment: feedbackComment,
       tableNumber: '',
-    })
+    }))
     setFeedbackBusy(null)
 
     if (result.ok) {

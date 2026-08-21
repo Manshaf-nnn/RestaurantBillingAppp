@@ -13,6 +13,7 @@ import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { upsertSupplierItemAction } from '../actions'
 import type { SupplierPricingData } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 
@@ -47,7 +48,7 @@ export function SupplierPricing({ data }: { data: SupplierPricingData }) {
 
   const save = async (itemId: string, values: PriceValues) => {
     setBusy(itemId)
-    const result = await upsertSupplierItemAction({
+    const result = await callAction(() => upsertSupplierItemAction({
       supplierId: data.supplier.id,
       itemId,
       supplierSku: values.supplierSku ?? '',
@@ -57,7 +58,7 @@ export function SupplierPricing({ data }: { data: SupplierPricingData }) {
       leadTimeDays: values.leadTimeDays ? Number(values.leadTimeDays) : undefined,
       minOrderQty: values.minOrderQty ? Number(values.minOrderQty) : undefined,
       isPreferred: values.isPreferred ?? false,
-    })
+    }))
     setBusy(null)
     if (!result.ok) { toast.error(result.error); return }
     toast.success('Saved')

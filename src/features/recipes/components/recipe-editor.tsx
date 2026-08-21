@@ -13,6 +13,7 @@ import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { duplicateRecipeAction, saveRecipeAction, setRecipeActiveAction } from '../actions'
 import type { RecipeEditorData } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 
@@ -102,12 +103,12 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
     }
 
     setBusy(true)
-    const result = await saveRecipeAction({
+    const result = await callAction(() => saveRecipeAction({
       foodId: data.food.id,
       yieldQty: 1,
       prepNotes: notes,
       ingredients: payload,
-    })
+    }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -120,7 +121,7 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
   const duplicate = async () => {
     if (!data.recipeId || !copyTo) return
     setBusy(true)
-    const result = await duplicateRecipeAction({ recipeId: data.recipeId, toFoodId: copyTo })
+    const result = await callAction(() => duplicateRecipeAction({ recipeId: data.recipeId, toFoodId: copyTo }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -134,7 +135,7 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
   const toggleActive = async () => {
     if (!data.recipeId) return
     setBusy(true)
-    const result = await setRecipeActiveAction({ recipeId: data.recipeId, isActive: !data.isActive })
+    const result = await callAction(() => setRecipeActiveAction({ recipeId: data.recipeId, isActive: !data.isActive }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)

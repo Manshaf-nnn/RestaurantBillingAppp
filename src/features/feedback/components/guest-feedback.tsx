@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { submitFeedback, submitSystemFeedback } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 const FACES = [
   { r: 1, e: '😞', l: 'Bad' },
@@ -22,7 +23,7 @@ export function GuestFeedback({ tableNumber }: { tableNumber?: string | null }) 
 
   const send = async (rating: number) => {
     setBusy(rating)
-    const result = await submitFeedback({ category: 'FOOD', rating, comment, tableNumber: tableNumber ?? '' })
+    const result = await callAction(() => submitFeedback({ category: 'FOOD', rating, comment, tableNumber: tableNumber ?? '' }))
     setBusy(null)
     if (result.ok) setSent(true)
     else toast.error(result.error)
@@ -77,7 +78,7 @@ export function SystemFeedback({ title = 'How was the system?', subtitle = 'Quic
 
   const send = async (rating: number) => {
     setBusy(rating)
-    const result = await submitSystemFeedback({ category: 'SYSTEM', rating, comment })
+    const result = await callAction(() => submitSystemFeedback({ category: 'SYSTEM', rating, comment }))
     setBusy(null)
     if (result.ok) setSent(true)
     else toast.error(result.error)

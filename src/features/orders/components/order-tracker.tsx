@@ -32,6 +32,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { createServiceRequest, updateGuestOrderItems } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 /** What the guest is told when their order reaches each stage. */
 const STATUS_MESSAGES: Partial<Record<OrderStatus, string>> = {
@@ -151,7 +152,7 @@ export function OrderTracker({
       return
     }
 
-    const result = await updateGuestOrderItems({ orderId: initial.id, items })
+    const result = await callAction(() => updateGuestOrderItems({ orderId: initial.id, items }))
     if (result.ok) {
       setEditing(false)
       toast.success('Order updated. The kitchen has the new list.')
@@ -414,7 +415,7 @@ function CallWaiter({ tableId }: { tableId: string }) {
       loading={pending}
       onClick={() =>
         startTransition(async () => {
-          const result = await createServiceRequest({ tableId, type: 'HELP' })
+          const result = await callAction(() => createServiceRequest({ tableId, type: 'HELP' }))
           if (result.ok) toast.success('A waiter is on the way')
           else toast.error(result.error)
         })

@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/input'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { addShiftNote, resolveShiftNote } from '../actions'
 import type { ShiftNoteView } from '../queries'
+import { callAction } from '@/lib/use-action'
 
 export function HandoverBoard({ initial }: { initial: ShiftNoteView[] }) {
   const [notes, setNotes] = React.useState(initial)
@@ -22,7 +23,7 @@ export function HandoverBoard({ initial }: { initial: ShiftNoteView[] }) {
   const add = async () => {
     if (!body.trim()) return
     setBusy(true)
-    const result = await addShiftNote({ body })
+    const result = await callAction(() => addShiftNote({ body }))
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -38,7 +39,7 @@ export function HandoverBoard({ initial }: { initial: ShiftNoteView[] }) {
 
   const done = async (id: string) => {
     setResolving(id)
-    const result = await resolveShiftNote(id)
+    const result = await callAction(() => resolveShiftNote(id))
     setResolving(null)
     if (!result.ok) {
       toast.error(result.error)

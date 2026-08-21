@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 
-import { runAction, type ActionResult } from '@/lib/action'
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
@@ -146,7 +146,9 @@ export async function closeDrawerAction(
 
 /** Used by the counter screen to decide whether to prompt for an open drawer. */
 export async function getMyOpenDrawerAction(): Promise<ActionResult<{ id: string } | null>> {
-  const user = await requirePermission(PERMISSIONS.CASH_DRAWER_OPERATE)
-  const session = await getOpenDrawer(user.restaurantId, user.id)
-  return { ok: true, data: session ? { id: session.id } : null }
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.CASH_DRAWER_OPERATE)
+    const session = await getOpenDrawer(user.restaurantId, user.id)
+    return session ? { id: session.id } : null
+  })
 }

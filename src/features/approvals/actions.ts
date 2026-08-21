@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
-import { runAction, type ActionResult } from '@/lib/action'
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
@@ -48,12 +48,14 @@ export async function decideApprovalAction(
 }
 
 export async function withdrawApprovalAction(approvalId: string): Promise<ActionResult<{ status: string }>> {
-  const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
-  const request = await withdrawApproval({
-    restaurantId: user.restaurantId,
-    approvalId,
-    userId: user.id,
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
+    const request = await withdrawApproval({
+      restaurantId: user.restaurantId,
+      approvalId,
+      userId: user.id,
+    })
+    revalidatePath('/dashboard/approvals')
+    return { status: request.status }
   })
-  revalidatePath('/dashboard/approvals')
-  return { ok: true, data: { status: request.status } }
 }

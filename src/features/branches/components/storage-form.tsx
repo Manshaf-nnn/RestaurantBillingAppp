@@ -3,11 +3,11 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useAction } from '@/lib/use-action'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { createStorageLocationAction } from '../actions'
 
@@ -22,17 +22,16 @@ export function StorageForm({
   const router = useRouter()
   const [name, setName] = React.useState('')
   const [code, setCode] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
+  const { busy, run } = useAction()
 
-  const submit = async () => {
-    setBusy(true)
-    const result = await createStorageLocationAction({ branchId, name, code })
-    setBusy(false)
-    if (!result.ok) { toast.error(result.error); return }
-    toast.success(`${name} added`)
-    setName(''); setCode('')
-    router.refresh()
-  }
+  const submit = () =>
+    run(() => createStorageLocationAction({ branchId, name, code }), {
+      success: `${name} added`,
+      onDone: () => {
+        setName(''); setCode('')
+        router.refresh()
+      },
+    })
 
   return (
     <SectionCard
@@ -57,7 +56,7 @@ export function StorageForm({
         </div>
         <Button variant="outline" onClick={submit} disabled={busy || !name.trim() || !code.trim()}>
           <Plus className="mr-1.5 h-4 w-4" />
-          Add
+          {busy ? 'Adding…' : 'Add'}
         </Button>
       </div>
     </SectionCard>

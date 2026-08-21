@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils'
 import { saveFood } from '../actions'
 import { fetchFoodForEdit } from '../actions-fetch'
 import type { CategoryOption } from './menu-manager'
+import { callAction } from '@/lib/use-action'
 
 export interface FoodFormData {
   id?: string
@@ -292,7 +293,7 @@ export function FoodDialog({
       recipe: form.recipe.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
     }
 
-    const result = await saveFood(payload)
+    const result = await callAction(() => saveFood(payload))
     setSaving(false)
 
     if (!result.ok) {

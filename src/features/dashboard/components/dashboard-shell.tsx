@@ -44,6 +44,7 @@ import { logout } from '@/features/auth/actions'
 import { LocalTime } from '@/components/local-time'
 import { markAllRead } from '../actions'
 import { NAV_SECTIONS } from '../nav'
+import { callAction } from '@/lib/use-action'
 
 export interface ShellUser {
   id: string
@@ -240,7 +241,7 @@ export function DashboardShell({
                       variant="ghost"
                       size="sm"
                       onClick={async () => {
-                        await markAllRead()
+                        await callAction(() => markAllRead())
                         setNotifications((current) =>
                           current.map((entry) => ({ ...entry, readAt: new Date().toISOString() })),
                         )

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { requestPasswordReset, resetPassword } from '../actions'
+import { callAction } from '@/lib/use-action'
 import {
   forgotPasswordSchema,
   resetPasswordSchema,
@@ -31,7 +32,7 @@ export function ForgotPasswordForm() {
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
-    const result = await requestPasswordReset(values)
+    const result = await callAction(() => requestPasswordReset(values))
     if (!result.ok) {
       setFormError(result.error)
       return
@@ -115,7 +116,7 @@ export function ResetPasswordForm() {
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
-    const result = await resetPassword(values)
+    const result = await callAction(() => resetPassword(values))
     if (!result.ok) {
       setFormError(result.error)
       return

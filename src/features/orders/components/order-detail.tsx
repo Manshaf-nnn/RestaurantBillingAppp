@@ -25,6 +25,7 @@ import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
 import { cancelOrder, updateOrderStatus } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
   PENDING: { status: 'ACCEPTED', label: 'Accept order' },
@@ -96,7 +97,7 @@ export function OrderDetail({
     const next = NEXT_STATUS[status]
     if (!next) return
     setPending(true)
-    const result = await updateOrderStatus({ orderId: order.id, status: next.status })
+    const result = await callAction(() => updateOrderStatus({ orderId: order.id, status: next.status }))
     setPending(false)
     if (!result.ok) {
       toast.error(result.error)
@@ -109,7 +110,7 @@ export function OrderDetail({
 
   const doCancel = async () => {
     setPending(true)
-    const result = await cancelOrder({ orderId: order.id, reason })
+    const result = await callAction(() => cancelOrder({ orderId: order.id, reason }))
     setPending(false)
     if (!result.ok) {
       toast.error(result.error)

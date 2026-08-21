@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
-import { runAction, type ActionResult } from '@/lib/action'
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
@@ -122,8 +122,10 @@ export async function createStorageLocationAction(
 }
 
 export async function setDefaultLocationAction(branchId: string): Promise<ActionResult<{ ok: true }>> {
-  const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
-  await setDefaultBranch(user.restaurantId, branchId)
-  revalidatePath('/dashboard/locations')
-  return { ok: true, data: { ok: true } }
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+    await setDefaultBranch(user.restaurantId, branchId)
+    revalidatePath('/dashboard/locations')
+    return { ok: true } as const
+  })
 }

@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { importMenuRows } from '../actions'
 import type { ImportRow } from '../schema'
+import { callAction } from '@/lib/use-action'
 
 /**
  * The review step every import route lands in.
@@ -47,7 +48,7 @@ export function ReviewTable({
   const save = async () => {
     if (!draft.length) return
     setSaving(true)
-    const result = await importMenuRows({ rows: draft, overwriteExisting: overwrite })
+    const result = await callAction(() => importMenuRows({ rows: draft, overwriteExisting: overwrite }))
     setSaving(false)
 
     if (!result.ok) {

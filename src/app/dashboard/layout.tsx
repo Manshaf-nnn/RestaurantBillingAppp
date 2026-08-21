@@ -15,13 +15,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (user.role === 'SUPER_ADMIN') redirect('/admin')
   if (!user.restaurantId) redirect('/onboarding')
 
-  // An owner whose tenant is still pending/suspended waits on a dedicated screen
-  // (the restaurant is disabled, so requireRestaurant would 404).
+  /*
+   * An owner whose tenant is pending or suspended waits on a dedicated screen.
+   *
+   * `isActive` is checked as well as `status`, and that is not belt-and-braces:
+   * `requireRestaurant` below filters on `isActive` alone and throws
+   * "Restaurant was not found" when it misses. Guarding only on `status` left a
+   * tenant with status ACTIVE and isActive false passing this line and then
+   * throwing four lines later — in a *layout*, so dashboard/error.tsx could not
+   * catch it and every single page failed with the same reference code and no
+   * message. Both columns must agree with the query that follows.
+   */
   const tenant = await prisma.restaurant.findUnique({
     where: { id: user.restaurantId },
-    select: { status: true, plan: true, trialEndsAt: true },
+    select: { status: true, plan: true, trialEndsAt: true, isActive: true },
   })
-  if (!tenant || tenant.status !== 'ACTIVE') redirect('/pending-approval')
+  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.isActive) redirect('/pending-approval')
 
   // Free trial ran out — send them to the trial-ended screen.
   const onTrial = tenant.plan === 'TRIAL' && tenant.trialEndsAt !== null

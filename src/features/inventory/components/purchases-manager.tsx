@@ -28,6 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { formatMoney, parseMoney } from '@/lib/money'
 import { createPurchase } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface PurchaseRow {
   id: string
@@ -171,7 +172,7 @@ function PurchaseDialog({
 
   const save = async () => {
     setSaving(true)
-    const result = await createPurchase({
+    const result = await callAction(() => createPurchase({
       supplierId,
       items: lines
         .filter((line) => line.itemId && Number(line.quantity) > 0)
@@ -180,7 +181,7 @@ function PurchaseDialog({
           quantity: Number(line.quantity),
           unitCost: parseMoney(line.unitCost || '0', currency),
         })),
-    })
+    }))
     setSaving(false)
     if (result.ok) {
       toast.success(`Purchase ${result.data.number} recorded`)

@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { attachMenuPhotos } from '../actions'
+import { callAction } from '@/lib/use-action'
 
 export interface PhotoTarget {
   id: string
@@ -112,7 +113,7 @@ export function BulkPhotos({ targets }: { targets: PhotoTarget[] }) {
 
       if (!matches.length) return
 
-      const result = await attachMenuPhotos({ matches })
+      const result = await callAction(() => attachMenuPhotos({ matches }))
       if (!result.ok) {
         toast.error(result.error)
         return
