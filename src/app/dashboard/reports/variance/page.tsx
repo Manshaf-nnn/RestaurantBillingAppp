@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getVarianceReport } from '@/features/inventory/variance-report'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -27,7 +28,16 @@ export default async function VarianceReportPage({
   const raw = Number(typeof params.days === 'string' ? params.days : '')
   const days = Number.isFinite(raw) && raw > 0 && raw <= 365 ? raw : 30
 
-  const report = await getVarianceReport({ restaurantId: user.restaurantId, days })
+  /*
+   * Every other report scopes to the chosen location; this one did not, and it
+   * is the report that says where stock went missing. A manager confined to
+   * Kandy could read the whole group's shortfalls here, including the ones
+   * their own site had nothing to do with.
+   */
+  const selection = await selectedBranch(user, params)
+  const branchId = scopeToOne(selection)
+
+  const report = await getVarianceReport({ restaurantId: user.restaurantId, days, branchId })
 
   return (
     <>
@@ -36,17 +46,24 @@ export default async function VarianceReportPage({
         description="The gap between what the system held and what was actually on the shelf, from approved stock counts."
       />
 
+      {/*
+        <Link>, not <a>. A bare anchor here tore down the whole application and
+        rebuilt it — socket, shell and all — to change one number in the query
+        string. That is the "it reloads by itself" people report.
+      */}
       <div className="mb-5 flex gap-2">
         {[7, 30, 90].map((d) => (
-          <a
+          <Link
             key={d}
-            href={`/dashboard/reports/variance?days=${d}`}
+            href={`/dashboard/reports/variance?days=${d}${
+              selection.branchId ? `&branch=${selection.branchId}` : ''
+            }`}
             className={`rounded-lg border px-3 py-1.5 text-sm ${
               days === d ? 'border-primary bg-primary text-primary-foreground' : 'border-border hover:bg-muted'
             }`}
           >
             {d} days
-          </a>
+          </Link>
         ))}
       </div>
 

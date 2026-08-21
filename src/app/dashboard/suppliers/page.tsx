@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Suppliers' }
 
 export default async function SuppliersPage() {
-  const user = await requirePagePermission(PERMISSIONS.SUPPLIER_MANAGE, '/dashboard/suppliers')
+  const user = await requirePagePermission(PERMISSIONS.SUPPLIER_VIEW, '/dashboard/suppliers')
 
   const [suppliers, withCounts] = await Promise.all([
     prisma.supplier.findMany({

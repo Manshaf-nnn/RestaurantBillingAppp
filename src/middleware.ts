@@ -30,11 +30,37 @@ const PROTECTED_PREFIXES = [
   '/trial-ended',
 ] as const
 
+/*
+ * The coarse gate at the edge. Fine-grained rights live in `rbac.ts` and are
+ * enforced per page; this list only answers "may this role open this area at
+ * all".
+ *
+ * The back-office roles were missing from `/dashboard` entirely. ADMIN,
+ * INVENTORY_MANAGER, PURCHASING_MANAGER, WAREHOUSE_STAFF and ACCOUNTANT all
+ * have full permission sets in `rbac.ts`, and `ROLE_HOME` sends each of them to
+ * a dashboard page — which this line then bounced to /forbidden. Every one of
+ * them could sign in and reach nothing. The permission model was built for
+ * them; the edge gate was never told.
+ *
+ * Anything not listed here is unrestricted at the edge, so a new role must be
+ * added deliberately rather than inheriting access by omission.
+ */
 const ROLE_ALLOWED: Record<string, string[]> = {
-  '/kitchen': ['OWNER', 'MANAGER', 'KITCHEN'],
-  '/waiter': ['OWNER', 'MANAGER', 'WAITER'],
-  '/cashier': ['OWNER', 'MANAGER', 'CASHIER'],
-  '/dashboard': ['OWNER', 'MANAGER', 'CASHIER', 'KITCHEN', 'WAITER'],
+  '/kitchen': ['OWNER', 'MANAGER', 'ADMIN', 'KITCHEN'],
+  '/waiter': ['OWNER', 'MANAGER', 'ADMIN', 'WAITER'],
+  '/cashier': ['OWNER', 'MANAGER', 'ADMIN', 'CASHIER'],
+  '/dashboard': [
+    'OWNER',
+    'MANAGER',
+    'ADMIN',
+    'CASHIER',
+    'KITCHEN',
+    'WAITER',
+    'INVENTORY_MANAGER',
+    'PURCHASING_MANAGER',
+    'WAREHOUSE_STAFF',
+    'ACCOUNTANT',
+  ],
 }
 
 const AUTH_PAGES = ['/login', '/register', '/forgot-password', '/reset-password']

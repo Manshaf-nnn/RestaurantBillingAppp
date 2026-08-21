@@ -19,7 +19,7 @@ export default async function SupplierPricingPage({
 }) {
   const { supplierId } = await params
   const user = await requirePagePermission(
-    PERMISSIONS.SUPPLIER_MANAGE,
+    PERMISSIONS.SUPPLIER_VIEW,
     `/dashboard/suppliers/${supplierId}`,
   )
   const restaurant = await requireRestaurant(user.restaurantId)

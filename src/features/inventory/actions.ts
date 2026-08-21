@@ -44,6 +44,8 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
         category: data.category || null,
         unit: data.unit,
         reorderLevel: data.reorderLevel,
+        minStock: data.minStock,
+        maxStock: data.maxStock && data.maxStock > 0 ? data.maxStock : null,
         costPerUnit: data.costPerUnit,
         supplierId: data.supplierId || null,
         storageArea: data.storageArea || null,

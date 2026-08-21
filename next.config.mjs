@@ -15,6 +15,24 @@ const nextConfig = {
     '/**': ['./node_modules/.prisma/client/**/*', './node_modules/@prisma/client/**/*'],
   },
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'exceljs', 'nodemailer', 'ioredis'],
+  experimental: {
+    /*
+     * Keep a visited page in the client router cache for half a minute.
+     *
+     * Next 15 defaults `dynamic` to 0, so every dynamic page — which here means
+     * every page — is refetched from the server on re-visit, including on the
+     * back button. Stepping from Inventory to Purchasing and back re-rendered
+     * Inventory from scratch, and that instant blank is a large part of what
+     * people describe as the app reloading.
+     *
+     * Thirty seconds is chosen against how this data actually behaves: stock,
+     * purchases and suppliers do not change second to second, and the screens
+     * that DO — kitchen, cashier, the dashboard — carry `<AutoRefresh>`, which
+     * calls `router.refresh()` on a real change and blows the cache away. So
+     * live screens stay live and static ones stop flickering.
+     */
+    staleTimes: { dynamic: 30, static: 180 },
+  },
   images: {
     // Allow any HTTPS image URL owners paste for menu photos/logos.
     remotePatterns: [{ protocol: 'https', hostname: '**' }],

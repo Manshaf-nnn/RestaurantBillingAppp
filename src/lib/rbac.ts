@@ -47,6 +47,7 @@ export const PERMISSIONS = {
   // supply chain
   INVENTORY_VIEW: 'inventory.view',
   INVENTORY_MANAGE: 'inventory.manage',
+  SUPPLIER_VIEW: 'supplier.view',
   SUPPLIER_MANAGE: 'supplier.manage',
   PURCHASE_MANAGE: 'purchase.manage',
 
@@ -175,6 +176,7 @@ const INVENTORY_MANAGER: Permission[] = [
   PERMISSIONS.PRODUCTION_VIEW,
   PERMISSIONS.PRODUCTION_MANAGE,
   PERMISSIONS.MENU_VIEW,
+  PERMISSIONS.SUPPLIER_VIEW,
   PERMISSIONS.SUPPLIER_MANAGE,
   PERMISSIONS.PURCHASE_VIEW,
   PERMISSIONS.REPORT_VIEW,
@@ -189,6 +191,7 @@ const PURCHASING_MANAGER: Permission[] = [
   PERMISSIONS.PURCHASE_CREATE,
   PERMISSIONS.PURCHASE_RECEIVE,
   PERMISSIONS.PURCHASE_RETURN,
+  PERMISSIONS.SUPPLIER_VIEW,
   PERMISSIONS.SUPPLIER_MANAGE,
   PERMISSIONS.INVENTORY_VIEW,
   PERMISSIONS.INVENTORY_EXPIRY_VIEW,
@@ -217,6 +220,9 @@ const WAREHOUSE_STAFF: Permission[] = [
 /** Reads the money. Deliberately read-only: an accountant who can edit the
  *  figures they audit is not an audit. */
 const ACCOUNTANT: Permission[] = [
+  // Read-only on suppliers: an accountant reconciles what is owed and never
+  // edits a supplier record.
+  PERMISSIONS.SUPPLIER_VIEW,
   PERMISSIONS.DASHBOARD_VIEW,
   PERMISSIONS.ANALYTICS_VIEW,
   PERMISSIONS.REPORT_VIEW,
@@ -321,15 +327,43 @@ export function canManageLocation(subject: PermissionSubject): boolean {
   return can(subject, PERMISSIONS.BRANCH_MANAGE)
 }
 
-/** Roles a given role is allowed to create or edit — prevents privilege escalation. */
+/** Roles that work the floor — every restaurant has them. */
+const FLOOR_ROLES: UserRole[] = ['KITCHEN', 'CASHIER', 'WAITER']
+
+/**
+ * The back-office roles. Fully defined above and, until now, impossible to
+ * assign: `assignableRoles` listed only the five original roles, so nobody
+ * could ever be made an inventory manager or an accountant from any screen.
+ * The permission sets existed and no user could hold them.
+ */
+const BACK_OFFICE_ROLES: UserRole[] = [
+  'INVENTORY_MANAGER',
+  'PURCHASING_MANAGER',
+  'WAREHOUSE_STAFF',
+  'ACCOUNTANT',
+]
+
+/**
+ * Roles a given role is allowed to create or edit — prevents privilege
+ * escalation.
+ *
+ * Nobody may create their own rank or above: an owner cannot mint another
+ * owner, a manager cannot mint a manager. That rule is what stops a stolen
+ * manager account from becoming a permanent one.
+ *
+ * ADMIN previously fell through to `default: []`, so an admin — who holds every
+ * permission including STAFF_MANAGE — could add nobody at all.
+ */
 export function assignableRoles(role: UserRole): UserRole[] {
   switch (role) {
     case 'SUPER_ADMIN':
-      return ['OWNER', 'MANAGER', 'KITCHEN', 'CASHIER', 'WAITER']
+      return ['OWNER', 'ADMIN', 'MANAGER', ...BACK_OFFICE_ROLES, ...FLOOR_ROLES]
     case 'OWNER':
-      return ['MANAGER', 'KITCHEN', 'CASHIER', 'WAITER']
+      return ['ADMIN', 'MANAGER', ...BACK_OFFICE_ROLES, ...FLOOR_ROLES]
+    case 'ADMIN':
+      return ['MANAGER', ...BACK_OFFICE_ROLES, ...FLOOR_ROLES]
     case 'MANAGER':
-      return ['KITCHEN', 'CASHIER', 'WAITER']
+      return [...BACK_OFFICE_ROLES, ...FLOOR_ROLES]
     default:
       return []
   }

@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { Metadata } from 'next'
 
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
@@ -73,9 +74,10 @@ export default async function WastagePage({
         description="What went in the bin, why, and what it cost. Never counted as a sale."
       />
 
+      {/* <Link>, not <a> — see the note on the variance report's chips. */}
       <div className="mb-5 flex gap-2">
         {(['DAY', 'WEEK', 'MONTH'] as const).map((p) => (
-          <a
+          <Link
             key={p}
             href={`/dashboard/inventory/wastage?period=${p}`}
             className={`rounded-lg border px-3 py-1.5 text-sm ${
@@ -83,7 +85,7 @@ export default async function WastagePage({
             }`}
           >
             {p === 'DAY' ? 'Today' : p === 'WEEK' ? 'Last 7 days' : 'Last month'}
-          </a>
+          </Link>
         ))}
       </div>
 

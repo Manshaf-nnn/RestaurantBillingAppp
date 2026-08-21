@@ -72,14 +72,19 @@ export default async function InventoryPage({
       items={items.map((item) => ({
         id: item.id,
         name: item.name,
+        sku: item.sku,
         category: item.category,
         unit: item.unit,
         purchaseUnit: item.purchaseUnit,
         unitsPerPurchaseUnit: item.unitsPerPurchaseUnit,
         quantity: quantityAt(item),
         reorderLevel: item.reorderLevel,
+        minStock: item.minStock,
+        maxStock: item.maxStock,
         costPerUnit: item.costPerUnit,
+        supplierId: item.supplierId,
         supplierName: item.supplier?.name ?? null,
+        storageArea: item.storageArea,
         expiryDate: item.expiryDate?.toISOString() ?? null,
       }))}
     />

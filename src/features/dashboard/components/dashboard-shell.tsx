@@ -5,7 +5,7 @@ import { BranchSwitcher, type SwitchableLocation } from './branch-switcher'
 import * as React from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import {
   Bell,
   ExternalLink,
@@ -91,6 +91,7 @@ export function DashboardShell({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const { connected } = useSocket()
   const [mobileOpen, setMobileOpen] = React.useState(false)
   const [notifications, setNotifications] = React.useState(initialNotifications)
@@ -120,6 +121,21 @@ export function DashboardShell({
 
   const unread = notifications.filter((notification) => !notification.readAt).length
 
+  /*
+   * Sidebar links carry the chosen location forward.
+   *
+   * The hrefs in `nav.ts` are plain strings, so clicking any of them dropped
+   * `?branch=`. The page then fell back to the cookie and stayed scoped to the
+   * branch, while the switcher — which reads the URL — snapped back to "All
+   * locations". Label and figures disagreed after every single navigation, and
+   * the figures were the ones telling the truth.
+   */
+  const branchParam = searchParams.get('branch')
+  const withBranch = React.useCallback(
+    (href: string) => (branchParam ? `${href}?branch=${encodeURIComponent(branchParam)}` : href),
+    [branchParam],
+  )
+
   const nav = (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
       {sections.map((section) => (
@@ -136,7 +152,7 @@ export function DashboardShell({
               return (
                 <li key={item.href}>
                   <Link
-                    href={item.href}
+                    href={withBranch(item.href)}
                     className={cn(
                       'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                       active

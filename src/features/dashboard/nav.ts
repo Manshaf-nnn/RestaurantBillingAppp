@@ -198,7 +198,7 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Scale,
         permission: PERMISSIONS.REPORT_VIEW,
       },
-      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_MANAGE },
+      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_VIEW },
       { href: '/dashboard/purchases', label: 'Purchasing', icon: Truck, permission: PERMISSIONS.PURCHASE_VIEW },
     ],
   },

@@ -42,7 +42,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     ? Math.max(0, Math.ceil((tenant.trialEndsAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
     : null
 
-  const [restaurant, notifications, openTasks] = await Promise.all([
+  const [restaurant, notifications, openTasks, allLocations] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.notification.findMany({
       where: {
@@ -54,12 +54,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
       select: { id: true, title: true, body: true, createdAt: true, readAt: true },
     }),
     countOpenInstructions({ restaurantId: user.restaurantId, user }),
+    // In the same batch, not after it. This was awaited on its own line, adding
+    // a fourth serial round trip to a layout that runs on every refresh.
+    listSwitchableLocations(user.restaurantId),
   ])
 
   // The switcher only offers what this user is allowed to see, so a branch
   // manager cannot reach another site's figures by picking it from a menu.
   const allowedBranchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
-  const locations = (await listSwitchableLocations(restaurant.id))
+  const locations = allLocations
     .filter((l) => allowedBranchIds === null || allowedBranchIds.includes(l.id))
     .map((l) => ({ id: l.id, name: l.name, type: l.type as 'BRANCH' | 'PRODUCTION_HOUSE' | 'CENTRAL_WAREHOUSE' }))
 

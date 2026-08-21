@@ -10,6 +10,18 @@ export const inventoryItemSchema = z.object({
   unit: z.enum(UNITS),
   quantity: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).default(0),
+  /*
+   * The other two thresholds.
+   *
+   * Both have been in the schema and read by live logic since the beginning,
+   * and nothing ever wrote them. `alerts.ts` takes `max(reorderLevel, minStock)`
+   * as the floor and flags OVERSTOCK above `maxStock` — so the OVERSTOCK alert
+   * could never fire, and `suggestions.ts` always fell back to `floor * 2`
+   * because the par-level branch was unreachable. Two features were dead for
+   * want of a form input.
+   */
+  minStock: z.coerce.number().min(0).default(0),
+  maxStock: z.coerce.number().min(0).nullable().optional(),
   costPerUnit: z.coerce.number().int().min(0).default(0),
   supplierId: z.string().cuid().optional().or(z.literal('')),
   storageArea: z.string().trim().max(40).optional().or(z.literal('')),

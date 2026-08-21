@@ -45,12 +45,26 @@ const UNITS: StockUnit[] = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTL
 export interface InventoryRow {
   id: string
   name: string
+  /*
+   * Everything the edit form writes must also be readable here.
+   *
+   * It was not: `sku`, `storageArea`, `minStock`, `maxStock` and `supplierId`
+   * were all absent, while the save payload sent them anyway — as blanks. So
+   * opening Edit on any item and pressing Save silently erased its SKU, its
+   * shelf and its supplier. The damage was invisible because nothing on this
+   * screen displays those fields.
+   */
+  sku: string | null
   category: string | null
   unit: StockUnit
   quantity: number
   reorderLevel: number
+  minStock: number
+  maxStock: number | null
   costPerUnit: number
+  supplierId: string | null
   supplierName: string | null
+  storageArea: string | null
   expiryDate: string | null
   purchaseUnit: StockUnit | null
   unitsPerPurchaseUnit: number | null
@@ -374,12 +388,16 @@ function ItemDialog({
 }) {
   const [form, setForm] = React.useState({
     name: '',
+    sku: '',
     category: '',
     unit: 'PIECE' as StockUnit,
     quantity: '0',
     reorderLevel: '0',
+    minStock: '0',
+    maxStock: '',
     costPerUnit: '',
     supplierId: '',
+    storageArea: '',
     expiryDate: '',
     purchaseUnit: '' as StockUnit | '',
     unitsPerPurchaseUnit: '',
@@ -392,12 +410,17 @@ function ItemDialog({
     setError(null)
     setForm({
       name: item?.name ?? '',
+      sku: item?.sku ?? '',
       category: item?.category ?? '',
       unit: item?.unit ?? 'PIECE',
       quantity: String(item?.quantity ?? 0),
       reorderLevel: String(item?.reorderLevel ?? 0),
+      minStock: String(item?.minStock ?? 0),
+      maxStock: item?.maxStock ? String(item.maxStock) : '',
       costPerUnit: item ? String(toMajor(item.costPerUnit, currency)) : '',
-      supplierId: '',
+      // Was hard-coded to '' regardless of the item — the supplier-wiping bug.
+      supplierId: item?.supplierId ?? '',
+      storageArea: item?.storageArea ?? '',
       expiryDate: item?.expiryDate ? item.expiryDate.slice(0, 10) : '',
       purchaseUnit: item?.purchaseUnit ?? '',
       unitsPerPurchaseUnit: item?.unitsPerPurchaseUnit ? String(item.unitsPerPurchaseUnit) : '',
@@ -409,12 +432,16 @@ function ItemDialog({
     const result = await callAction(() => saveInventoryItem({
       id: item?.id,
       name: form.name,
+      sku: form.sku,
       category: form.category,
       unit: form.unit,
       quantity: Number(form.quantity),
       reorderLevel: Number(form.reorderLevel),
+      minStock: Number(form.minStock) || 0,
+      maxStock: form.maxStock ? Number(form.maxStock) : null,
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
       supplierId: form.supplierId,
+      storageArea: form.storageArea,
       expiryDate: form.expiryDate,
       purchaseUnit: form.purchaseUnit,
       unitsPerPurchaseUnit: Number(form.unitsPerPurchaseUnit) || 0,
@@ -439,6 +466,13 @@ function ItemDialog({
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name" required className="sm:col-span-2">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Mozzarella" />
+          </Field>
+          <Field label="Item code / SKU">
+            <Input
+              value={form.sku}
+              onChange={(e) => setForm({ ...form, sku: e.target.value })}
+              placeholder="Optional — e.g. MOZ-1KG"
+            />
           </Field>
           <Field label="Category">
             <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Dairy" />
@@ -504,6 +538,34 @@ function ItemDialog({
           </Field>
           <Field label="Reorder level">
             <Input type="number" step="any" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              At or below this, the item is flagged low and appears in reorder suggestions.
+            </p>
+          </Field>
+          <Field label="Minimum stock">
+            <Input type="number" step="any" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              A hard floor. Whichever of these two is higher is the one that triggers.
+            </p>
+          </Field>
+          <Field label="Maximum stock (par level)">
+            <Input
+              type="number"
+              step="any"
+              value={form.maxStock}
+              onChange={(e) => setForm({ ...form, maxStock: e.target.value })}
+              placeholder="Optional"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Reorder suggestions top up to here. Above it, the item shows as overstocked.
+            </p>
+          </Field>
+          <Field label="Storage area">
+            <Input
+              value={form.storageArea}
+              onChange={(e) => setForm({ ...form, storageArea: e.target.value })}
+              placeholder="Cold room"
+            />
           </Field>
           <Field label={`Cost per unit (${currency})`}>
             <Input type="number" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: e.target.value })} />
