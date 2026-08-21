@@ -30,9 +30,8 @@ import {
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
-import { LocationSwitcher } from '@/features/dashboard/components/location-switcher'
-import { listLocations } from '@/features/transfers/queries'
+import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -49,31 +48,37 @@ export default async function DashboardPage({
 }) {
   const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard')
 
-  // The chosen location comes from the URL, and is checked against what this
-  // user may actually see — a branch id typed into the address bar must not
-  // widen anyone's access.
-  const params = await searchParams
-  const requested = typeof params.branch === 'string' ? params.branch : null
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
-  const locations = (await listLocations(user.restaurantId)).filter(
-    (l) => allowed === null || allowed.includes(l.id),
-  )
-  const activeBranchId =
-    requested && locations.some((l) => l.id === requested) ? requested : null
+  /*
+   * One switcher for the whole app, in the top bar, read here through the shared
+   * helper. This page used to carry a second dropdown of its own whose only
+   * effect was to change its own value — every figure below it was
+   * restaurant-wide. Two controls that disagree is worse than one that works.
+   */
+  const selection = await selectedBranch(user, await searchParams)
+  const branchId = scopeToOne(selection)
   const restaurant = await requireRestaurant(user.restaurantId)
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+
+  // Name the location in the greeting, so nobody reads one branch's takings as
+  // the whole group's.
+  const branch = selection.branchId
+    ? await prisma.branch.findFirst({
+        where: { id: selection.branchId, restaurantId: user.restaurantId },
+        select: { name: true },
+      })
+    : null
 
   // Smart alert: orders still not ready after 20 minutes.
   const waitCutoff = new Date(Date.now() - 20 * 60 * 1000)
 
   const [stats, series, popular, categories, paymentMix, recentOrders, longWaiting] = await Promise.all([
-    getDashboardStats(user.restaurantId),
-    getCachedSalesSeries(user.restaurantId, 14),
-    getCachedPopularItems(user.restaurantId, 30, 6),
-    getCachedCategoryBreakdown(user.restaurantId, 30),
-    getCachedPaymentMix(user.restaurantId, 30),
+    getDashboardStats(user.restaurantId, branchId),
+    getCachedSalesSeries(user.restaurantId, 14, branchId),
+    getCachedPopularItems(user.restaurantId, 30, 6, branchId),
+    getCachedCategoryBreakdown(user.restaurantId, 30, branchId),
+    getCachedPaymentMix(user.restaurantId, 30, branchId),
     prisma.order.findMany({
-      where: { restaurantId: user.restaurantId },
+      where: { restaurantId: user.restaurantId, ...(branchId ? { branchId } : {}) },
       orderBy: { placedAt: 'desc' },
       take: 8,
       include: { table: { select: { number: true } }, items: { select: { quantity: true } } },
@@ -81,6 +86,7 @@ export default async function DashboardPage({
     prisma.order.count({
       where: {
         restaurantId: user.restaurantId,
+        ...(branchId ? { branchId } : {}),
         status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] },
         placedAt: { lt: waitCutoff },
       },
@@ -94,10 +100,13 @@ export default async function DashboardPage({
       <AutoRefresh intervalMs={10000} />
       <PageHeader
         title={`Good ${greeting()}, ${user.name.split(' ')[0]}`}
-        description={`Here is how ${restaurant.name} is doing today.`}
+        description={
+          branch
+            ? `Here is how ${branch.name} is doing today.`
+            : `Here is how ${restaurant.name} is doing today.`
+        }
         actions={
           <>
-            <LocationSwitcher locations={locations} current={activeBranchId} />
             <Button variant="outline" asChild>
               <Link href="/dashboard/reports">
                 <TrendingUp /> Reports

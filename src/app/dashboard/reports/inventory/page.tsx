@@ -10,7 +10,8 @@ import { listExpiringStock } from '@/features/inventory/batches'
 import { getVarianceReport } from '@/features/inventory/variance-report'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -30,12 +31,17 @@ export default async function InventoryReportPage({
   const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '')
   const range = resolveRange({ preset: str('preset') || 'LAST_30', from: str('from'), to: str('to') })
 
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  /*
+   * Resolved through the shared helper so the top-bar switcher and this page's
+   * own picker always agree, and so a remembered choice survives arriving here
+   * from the nav rather than from a link that carries `?branch=`.
+   */
+  const selection = await selectedBranch(user, p)
+  const allowed = selection.branchIds
   const locations = (await listLocations(user.restaurantId)).filter(
     (l) => allowed === null || allowed.includes(l.id),
   )
-  const requested = str('branch')
-  const chosen = requested && locations.some((l) => l.id === requested) ? requested : null
+  const chosen = scopeToOne(selection)
 
   const days = Math.max(1, Math.ceil((range.to.getTime() - range.from.getTime()) / 86_400_000))
 

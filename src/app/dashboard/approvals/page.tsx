@@ -3,23 +3,29 @@ import type { Metadata } from 'next'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ApprovalQueue, type ApprovalRow } from '@/features/approvals/components/approval-queue'
 import { listApprovals } from '@/features/approvals/service'
-import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Approvals' }
 
-export default async function ApprovalsPage() {
+export default async function ApprovalsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard/approvals')
   const restaurant = await requireRestaurant(user.restaurantId)
 
-  // Someone confined to a location only sees requests raised there.
-  const branchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  // Someone confined to a location only sees requests raised there; anyone can
+  // narrow to one location with the switcher.
+  const selection = await selectedBranch(user, await searchParams)
 
   const approvals = await listApprovals({
     restaurantId: user.restaurantId,
-    branchIds,
+    branchIds: selection.branchIds,
     limit: 60,
   })
 

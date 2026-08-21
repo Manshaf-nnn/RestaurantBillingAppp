@@ -156,6 +156,8 @@ export interface OrderListFilter {
   to?: string
   page?: number
   perPage?: number
+  /** Restrict to one location. Null or absent means every location. */
+  branchId?: string | null
 }
 
 /** Paginated order search for the management console. */
@@ -165,6 +167,7 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
 
   const where: Prisma.OrderWhereInput = {
     restaurantId,
+    ...(filter.branchId ? { branchId: filter.branchId } : {}),
     ...(filter.status && filter.status !== 'ALL'
       ? { status: filter.status as OrderStatus }
       : {}),

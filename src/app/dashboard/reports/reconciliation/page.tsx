@@ -8,7 +8,8 @@ import { getReconciliationReport } from '@/features/reports/reconciliation'
 import { resolveRange } from '@/features/reports/range'
 import { listSwitchableLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -34,9 +35,14 @@ export default async function ReconciliationPage({
   const preset = typeof params.range === 'string' ? params.range : 'THIS_MONTH'
   const range = resolveRange({ preset: preset as never })
 
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
-  const requested = typeof params.branch === 'string' ? params.branch : null
-  const branchId = requested && (allowed === null || allowed.includes(requested)) ? requested : null
+  /*
+   * Resolved through the shared helper so the top-bar switcher and this page's
+   * own picker always agree, and so a remembered choice survives arriving here
+   * from the nav rather than from a link that carries `?branch=`.
+   */
+  const selection = await selectedBranch(user, params)
+  const allowed = selection.branchIds
+  const branchId = scopeToOne(selection)
 
   const locations = (await listSwitchableLocations(user.restaurantId)).filter(
     (l) => allowed === null || allowed.includes(l.id),

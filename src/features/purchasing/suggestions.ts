@@ -33,15 +33,29 @@ export async function getReorderSuggestions(params: {
   restaurantId: string
   branchId?: string | null
 }): Promise<ReorderSuggestion[]> {
+  /*
+   * `branchId` scopes the QUANTITY, not the item list.
+   *
+   * This used to filter on `InventoryItem.branchId` — the item's notional home
+   * location, which no screen ever writes, so it is null for every item. Any
+   * branch selection therefore returned an empty list and the page silently
+   * claimed there was nothing to reorder. Items are defined once for the whole
+   * restaurant; it is the stock that lives somewhere, so the comparison against
+   * the reorder level has to use that location's shelf.
+   */
   const items = await prisma.inventoryItem.findMany({
-    where: {
-      restaurantId: params.restaurantId,
-      isActive: true,
-      ...(params.branchId ? { branchId: params.branchId } : {}),
-    },
+    where: { restaurantId: params.restaurantId, isActive: true },
     select: {
       id: true, name: true, unit: true, quantity: true, reorderLevel: true,
       minStock: true, maxStock: true, costPerUnit: true,
+      ...(params.branchId
+        ? {
+            locationStock: {
+              where: { branchId: params.branchId },
+              select: { available: true },
+            },
+          }
+        : {}),
       supplierItems: {
         where: { isActive: true },
         orderBy: [{ isPreferred: 'desc' }, { price: 'asc' }],
@@ -57,11 +71,18 @@ export async function getReorderSuggestions(params: {
   const suggestions: ReorderSuggestion[] = []
 
   for (const item of items) {
+    const quantity = params.branchId
+      ? ('locationStock' in item ? item.locationStock : []).reduce(
+          (sum, row) => sum + row.available,
+          0,
+        )
+      : item.quantity
+
     const floor = Math.max(item.reorderLevel, item.minStock)
-    if (floor <= 0 || item.quantity > floor) continue
+    if (floor <= 0 || quantity > floor) continue
 
     const target = item.maxStock && item.maxStock > floor ? item.maxStock : floor * 2
-    let suggested = round(target - item.quantity)
+    let suggested = round(target - quantity)
     if (suggested <= 0) continue
 
     const source = item.supplierItems[0]
@@ -72,7 +93,7 @@ export async function getReorderSuggestions(params: {
       itemId: item.id,
       name: item.name,
       unit: item.unit,
-      currentQty: item.quantity,
+      currentQty: quantity,
       reorderLevel: item.reorderLevel,
       maxStock: item.maxStock,
       suggestedQty: suggested,

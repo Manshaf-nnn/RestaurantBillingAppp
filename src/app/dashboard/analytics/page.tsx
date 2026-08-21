@@ -17,6 +17,7 @@ import {
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ROLE_LABELS, PERMISSIONS } from '@/lib/rbac'
 import { formatMoney } from '@/lib/money'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -24,16 +25,21 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Analytics' }
 
-export default async function AnalyticsPage() {
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.ANALYTICS_VIEW, '/dashboard/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const branchId = scopeToOne(await selectedBranch(user, await searchParams))
 
   const [series, peak, popular, staff] = await Promise.all([
-    getSalesSeries(user.restaurantId, 30),
-    getPeakHours(user.restaurantId, 30),
-    getPopularItems(user.restaurantId, 30, 10),
-    getStaffPerformance(user.restaurantId, 30),
+    getSalesSeries(user.restaurantId, 30, branchId),
+    getPeakHours(user.restaurantId, 30, branchId),
+    getPopularItems(user.restaurantId, 30, 10, branchId),
+    getStaffPerformance(user.restaurantId, 30, branchId),
   ])
 
   const money = (value: number) => formatMoney(value, restaurant.currency, locale)

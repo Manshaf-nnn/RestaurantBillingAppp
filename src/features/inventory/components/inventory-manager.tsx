@@ -62,12 +62,15 @@ export function InventoryManager({
   currency,
   locale,
   canManage,
+  branchName = null,
 }: {
   items: InventoryRow[]
   suppliers: Array<{ id: string; name: string }>
   currency: string
   locale: string
   canManage: boolean
+  /** Set when a single location is selected, so the quantities can say whose they are. */
+  branchName?: string | null
 }) {
   const [items, setItems] = React.useState(initial)
   const [search, setSearch] = React.useState('')
@@ -145,7 +148,11 @@ export function InventoryManager({
     <>
       <PageHeader
         title="Inventory"
-        description="Track stock, get low-stock alerts, watch expiries"
+        description={
+          branchName
+            ? `Quantities shown are what is on the shelf at ${branchName}.`
+            : 'Track stock, get low-stock alerts, watch expiries'
+        }
         actions={
           canManage ? (
             <Button

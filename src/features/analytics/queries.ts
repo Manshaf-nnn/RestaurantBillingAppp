@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { unstable_cache } from 'next/cache'
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import { percentChange } from '@/lib/utils'
@@ -51,9 +51,28 @@ export interface DashboardStats {
  * work is trivial for Postgres — it is the round trips that cost — so every
  * figure is gathered as a scalar subquery in a single statement.
  */
-export async function getDashboardStats(restaurantId: string): Promise<DashboardStats> {
+/**
+ * The headline figures, for one location or the whole restaurant.
+ *
+ * `branchId` used to be absent entirely, so the switcher at the top of the page
+ * changed which location was named and not one number beneath it. Passing null
+ * keeps the old restaurant-wide behaviour, which is what a single-site
+ * restaurant wants.
+ *
+ * Tables, customers and low stock stay restaurant-wide even when a branch is
+ * chosen where they have no branch dimension of their own — filtering those on
+ * an unrelated column would be worse than not filtering them.
+ */
+export async function getDashboardStats(
+  restaurantId: string,
+  branchId?: string | null,
+): Promise<DashboardStats> {
   const today = dayRange(0)
   const yesterday = dayRange(1)
+
+  // Interpolated as a Prisma fragment so the parameter stays bound rather than
+  // concatenated into the SQL string.
+  const atBranch = branchId ? Prisma.sql`AND "branchId" = ${branchId}` : Prisma.empty
 
   const [row] = await prisma.$queryRaw<
     Array<{
@@ -72,16 +91,16 @@ export async function getDashboardStats(restaurantId: string): Promise<Dashboard
   >`
     SELECT
       (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS revenue_today,
       (SELECT COUNT(*) FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS orders_today,
       (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${yesterday.start} AND "placedAt" < ${yesterday.end})::bigint AS revenue_yesterday,
       (SELECT COUNT(*) FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${yesterday.start} AND "placedAt" < ${yesterday.end})::bigint AS orders_yesterday,
       (SELECT COUNT(*) FROM restaurant_tables
         WHERE "restaurantId" = ${restaurantId} AND "isActive" = true)::bigint          AS tables_total,
@@ -89,16 +108,16 @@ export async function getDashboardStats(restaurantId: string): Promise<Dashboard
         WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
           AND status = 'OCCUPIED')::bigint                                             AS tables_occupied,
       (SELECT COUNT(DISTINCT "customerId") FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND "customerId" IS NOT NULL
+        WHERE "restaurantId" = ${restaurantId} AND "customerId" IS NOT NULL ${atBranch}
           AND "placedAt" >= ${today.start} AND "placedAt" < ${today.end})::bigint      AS customers_today,
       (SELECT COUNT(*) FROM customers
         WHERE "restaurantId" = ${restaurantId}
           AND "createdAt" >= ${today.start} AND "createdAt" < ${today.end})::bigint    AS new_customers,
       (SELECT COUNT(*) FROM orders
-        WHERE "restaurantId" = ${restaurantId}
+        WHERE "restaurantId" = ${restaurantId} ${atBranch}
           AND status IN ('PENDING', 'ACCEPTED', 'PREPARING'))::bigint                  AS pending_orders,
       (SELECT COALESCE(SUM("grandTotal" - "paidTotal"), 0) FROM orders
-        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED'
+        WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "paymentStatus" IN ('UNPAID', 'PARTIAL'))::bigint                        AS unpaid_total,
       (SELECT COUNT(*) FROM inventory_items
         WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
@@ -145,11 +164,31 @@ export interface SalesPoint {
   orders: number
 }
 
-/** Daily revenue/order counts for the trend chart. */
-export async function getSalesSeries(restaurantId: string, days = 14): Promise<SalesPoint[]> {
+/** Daily revenue/order counts for the trend chart, optionally for one location. */
+export async function getSalesSeries(
+  restaurantId: string,
+  days = 14,
+  branchId?: string | null,
+): Promise<SalesPoint[]> {
+  /*
+   * Both sides of this count days in UTC.
+   *
+   * They used to disagree: the SQL truncated with `date_trunc`, which uses the
+   * database session's timezone (UTC on Neon), while the keys below were built
+   * from `setHours(0,0,0,0)` — local midnight — and then formatted with
+   * `toISOString`. On any server not running in UTC every key missed by a day
+   * and the chart drew a flat line of zeros over real sales. Netlify happens to
+   * run UTC, so it looked fine in production and was empty everywhere else.
+   *
+   * A day here is therefore a UTC day, not a Sri Lankan one. For a restaurant
+   * closing after midnight that puts some of the night's takings on the next
+   * bar. Fixing that properly means truncating in the restaurant's own timezone
+   * and is a separate change; this one only makes the two halves agree.
+   */
   const start = new Date()
-  start.setDate(start.getDate() - (days - 1))
-  start.setHours(0, 0, 0, 0)
+  start.setUTCDate(start.getUTCDate() - (days - 1))
+  start.setUTCHours(0, 0, 0, 0)
+  const atBranch = branchId ? Prisma.sql`AND "branchId" = ${branchId}` : Prisma.empty
 
   const rows = await prisma.$queryRaw<Array<{ day: Date; revenue: bigint | null; orders: bigint }>>`
     SELECT date_trunc('day', "placedAt") AS day,
@@ -159,6 +198,7 @@ export async function getSalesSeries(restaurantId: string, days = 14): Promise<S
     WHERE "restaurantId" = ${restaurantId}
       AND "placedAt" >= ${start}
       AND status <> 'CANCELLED'
+      ${atBranch}
     GROUP BY 1
     ORDER BY 1
   `
@@ -172,12 +212,16 @@ export async function getSalesSeries(restaurantId: string, days = 14): Promise<S
 
   return Array.from({ length: days }, (_, index) => {
     const date = new Date(start)
-    date.setDate(start.getDate() + index)
+    date.setUTCDate(start.getUTCDate() + index)
     const key = date.toISOString().slice(0, 10)
     const entry = byDay.get(key)
     return {
       date: key,
-      label: date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+      label: date.toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        timeZone: 'UTC',
+      }),
       revenue: entry?.revenue ?? 0,
       orders: entry?.orders ?? 0,
     }
@@ -192,9 +236,14 @@ export interface HourPoint {
 }
 
 /** Order volume by hour of day over the trailing window — the "peak hours" view. */
-export async function getPeakHours(restaurantId: string, days = 30): Promise<HourPoint[]> {
+export async function getPeakHours(
+  restaurantId: string,
+  days = 30,
+  branchId?: string | null,
+): Promise<HourPoint[]> {
   const start = new Date()
   start.setDate(start.getDate() - days)
+  const atBranch = branchId ? Prisma.sql`AND "branchId" = ${branchId}` : Prisma.empty
 
   const rows = await prisma.$queryRaw<Array<{ hour: number; orders: bigint; revenue: bigint | null }>>`
     SELECT EXTRACT(HOUR FROM "placedAt")::int AS hour,
@@ -204,6 +253,7 @@ export async function getPeakHours(restaurantId: string, days = 30): Promise<Hou
     WHERE "restaurantId" = ${restaurantId}
       AND "placedAt" >= ${start}
       AND status <> 'CANCELLED'
+      ${atBranch}
     GROUP BY 1
     ORDER BY 1
   `
@@ -231,9 +281,11 @@ export async function getPopularItems(
   restaurantId: string,
   days = 30,
   limit = 8,
+  branchId?: string | null,
 ): Promise<PopularItem[]> {
   const start = new Date()
   start.setDate(start.getDate() - days)
+  const atBranch = branchId ? Prisma.sql`AND o."branchId" = ${branchId}` : Prisma.empty
 
   const rows = await prisma.$queryRaw<
     Array<{ foodId: string | null; name: string; quantity: bigint; revenue: bigint | null }>
@@ -248,6 +300,7 @@ export async function getPopularItems(
       AND o."placedAt" >= ${start}
       AND o.status <> 'CANCELLED'
       AND oi.status <> 'CANCELLED'
+      ${atBranch}
     GROUP BY oi."foodId", oi.name
     ORDER BY quantity DESC
     LIMIT ${limit}
@@ -267,9 +320,14 @@ export interface CategoryShare {
   orders: number
 }
 
-export async function getCategoryBreakdown(restaurantId: string, days = 30): Promise<CategoryShare[]> {
+export async function getCategoryBreakdown(
+  restaurantId: string,
+  days = 30,
+  branchId?: string | null,
+): Promise<CategoryShare[]> {
   const start = new Date()
   start.setDate(start.getDate() - days)
+  const atBranch = branchId ? Prisma.sql`AND o."branchId" = ${branchId}` : Prisma.empty
 
   const rows = await prisma.$queryRaw<Array<{ name: string; revenue: bigint | null; orders: bigint }>>`
     SELECT c.name                       AS name,
@@ -282,6 +340,7 @@ export async function getCategoryBreakdown(restaurantId: string, days = 30): Pro
     WHERE o."restaurantId" = ${restaurantId}
       AND o."placedAt" >= ${start}
       AND o.status <> 'CANCELLED'
+      ${atBranch}
     GROUP BY c.name
     ORDER BY revenue DESC
     LIMIT 8
@@ -300,13 +359,23 @@ export interface PaymentMix {
   count: number
 }
 
-export async function getPaymentMix(restaurantId: string, days = 30): Promise<PaymentMix[]> {
+export async function getPaymentMix(
+  restaurantId: string,
+  days = 30,
+  branchId?: string | null,
+): Promise<PaymentMix[]> {
   const start = new Date()
   start.setDate(start.getDate() - days)
 
   const rows = await prisma.payment.groupBy({
     by: ['method'],
-    where: { restaurantId, status: 'PAID', paidAt: { gte: start } },
+    where: {
+      restaurantId,
+      status: 'PAID',
+      paidAt: { gte: start },
+      // Payments have no branch of their own; they belong to the order's branch.
+      ...(branchId ? { order: { branchId } } : {}),
+    },
     _sum: { amount: true },
     _count: true,
   })
@@ -317,20 +386,35 @@ export async function getPaymentMix(restaurantId: string, days = 30): Promise<Pa
 }
 
 /** Orders per staff member with the revenue they touched. */
-export async function getStaffPerformance(restaurantId: string, days = 30) {
+export async function getStaffPerformance(
+  restaurantId: string,
+  days = 30,
+  branchId?: string | null,
+) {
   const start = new Date()
   start.setDate(start.getDate() - days)
 
   const [ordersByStaff, paymentsByStaff, users] = await Promise.all([
     prisma.order.groupBy({
       by: ['createdById'],
-      where: { restaurantId, placedAt: { gte: start }, createdById: { not: null } },
+      where: {
+        restaurantId,
+        placedAt: { gte: start },
+        createdById: { not: null },
+        ...(branchId ? { branchId } : {}),
+      },
       _sum: { grandTotal: true },
       _count: true,
     }),
     prisma.payment.groupBy({
       by: ['receivedById'],
-      where: { restaurantId, paidAt: { gte: start }, status: 'PAID', receivedById: { not: null } },
+      where: {
+        restaurantId,
+        paidAt: { gte: start },
+        status: 'PAID',
+        receivedById: { not: null },
+        ...(branchId ? { order: { branchId } } : {}),
+      },
       _sum: { amount: true },
       _count: true,
     }),
@@ -499,11 +583,25 @@ export type ReportSummary = Awaited<ReturnType<typeof getReportSummary>>
 // The uncached functions above stay exported for reports and exports, where an
 // operator has explicitly asked for a fresh figure and expects to wait for it.
 
+/*
+ * The branch belongs in the cache KEY, not just in the arguments.
+ *
+ * `unstable_cache` keys on the array it is given and nothing else — it cannot
+ * see the closure. Filter by branch while keying on restaurant alone and the
+ * first location to load the page fills the cache for every other one, so Kandy
+ * is shown Colombo's revenue for the next five minutes. That is a wrong number
+ * presented confidently, which is worse than a slow one.
+ */
+
 /** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
-export function getCachedSalesSeries(restaurantId: string, days = 14): Promise<SalesPoint[]> {
+export function getCachedSalesSeries(
+  restaurantId: string,
+  days = 14,
+  branchId?: string | null,
+): Promise<SalesPoint[]> {
   return unstable_cache(
-    () => getSalesSeries(restaurantId, days),
-    ['analytics:sales-series', restaurantId, String(days)],
+    () => getSalesSeries(restaurantId, days, branchId),
+    ['analytics:sales-series', restaurantId, String(days), branchId ?? 'all'],
     { revalidate: ANALYTICS_TTL_SECONDS },
   )()
 }
@@ -513,10 +611,11 @@ export function getCachedPopularItems(
   restaurantId: string,
   days = 30,
   limit = 8,
+  branchId?: string | null,
 ): Promise<PopularItem[]> {
   return unstable_cache(
-    () => getPopularItems(restaurantId, days, limit),
-    ['analytics:popular', restaurantId, String(days), String(limit)],
+    () => getPopularItems(restaurantId, days, limit, branchId),
+    ['analytics:popular', restaurantId, String(days), String(limit), branchId ?? 'all'],
     { revalidate: ANALYTICS_TTL_SECONDS },
   )()
 }
@@ -525,19 +624,24 @@ export function getCachedPopularItems(
 export function getCachedCategoryBreakdown(
   restaurantId: string,
   days = 30,
+  branchId?: string | null,
 ): Promise<CategoryShare[]> {
   return unstable_cache(
-    () => getCategoryBreakdown(restaurantId, days),
-    ['analytics:categories', restaurantId, String(days)],
+    () => getCategoryBreakdown(restaurantId, days, branchId),
+    ['analytics:categories', restaurantId, String(days), branchId ?? 'all'],
     { revalidate: ANALYTICS_TTL_SECONDS },
   )()
 }
 
 /** Cached wrapper — see {@link ANALYTICS_TTL_SECONDS}. */
-export function getCachedPaymentMix(restaurantId: string, days = 30): Promise<PaymentMix[]> {
+export function getCachedPaymentMix(
+  restaurantId: string,
+  days = 30,
+  branchId?: string | null,
+): Promise<PaymentMix[]> {
   return unstable_cache(
-    () => getPaymentMix(restaurantId, days),
-    ['analytics:payment-mix', restaurantId, String(days)],
+    () => getPaymentMix(restaurantId, days, branchId),
+    ['analytics:payment-mix', restaurantId, String(days), branchId ?? 'all'],
     { revalidate: ANALYTICS_TTL_SECONDS },
   )()
 }

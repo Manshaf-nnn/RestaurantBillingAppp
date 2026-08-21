@@ -4,6 +4,7 @@ import { PageHeader } from '@/features/dashboard/components/page-header'
 import { DrawerConsole } from '@/features/cashdrawer/components/drawer-console'
 import { getDrawerPageData } from '@/features/cashdrawer/queries'
 import { PERMISSIONS, can} from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -11,7 +12,11 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Cash drawer' }
 
-export default async function CashDrawerPage() {
+export default async function CashDrawerPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(
     PERMISSIONS.CASH_DRAWER_OPERATE,
     '/dashboard/cash-drawer',
@@ -20,6 +25,7 @@ export default async function CashDrawerPage() {
 
   const data = await getDrawerPageData({
     restaurantId: user.restaurantId,
+    branchId: scopeToOne(await selectedBranch(user, await searchParams)),
     userId: user.id,
     currency: restaurant.currency,
     // A manager reconciling the day needs everyone's drawers; a cashier only

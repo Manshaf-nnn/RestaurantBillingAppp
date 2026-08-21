@@ -34,6 +34,8 @@ export async function getDrawerPageData(params: {
   userId: string
   currency: string
   canSeeAll: boolean
+  /** Only tills at this location. Null means every location. */
+  branchId?: string | null
 }): Promise<DrawerPageData> {
   const openSession = await getOpenDrawer(params.restaurantId, params.userId)
 
@@ -43,6 +45,7 @@ export async function getDrawerPageData(params: {
       restaurantId: params.restaurantId,
       // A cashier sees their own history; a manager sees the whole floor's.
       userId: params.canSeeAll ? null : params.userId,
+      branchId: params.branchId ?? null,
       limit: 30,
     }),
     listBranches(params.restaurantId),

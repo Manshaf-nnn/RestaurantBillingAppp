@@ -48,16 +48,30 @@ export async function getProductionDashboard(params: {
   restaurantId: string
   branchId?: string | null
 }): Promise<ProductionDashboard> {
+  const defaultHouse = () =>
+    prisma.branch.findFirst({
+      where: { restaurantId: params.restaurantId, type: 'PRODUCTION_HOUSE', deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { createdAt: 'asc' },
+    })
+
+  /*
+   * A requested location that is not a production house falls back to the
+   * default house rather than to nothing. The top-bar switcher can name any
+   * location, and "you have selected Kandy, therefore production does not
+   * exist" is not an answer anyone wants.
+   */
   const house = params.branchId
-    ? await prisma.branch.findFirst({
-        where: { id: params.branchId, restaurantId: params.restaurantId, type: 'PRODUCTION_HOUSE' },
+    ? (await prisma.branch.findFirst({
+        where: {
+          id: params.branchId,
+          restaurantId: params.restaurantId,
+          type: 'PRODUCTION_HOUSE',
+          deletedAt: null,
+        },
         select: { id: true, name: true },
-      })
-    : await prisma.branch.findFirst({
-        where: { restaurantId: params.restaurantId, type: 'PRODUCTION_HOUSE', deletedAt: null },
-        select: { id: true, name: true },
-        orderBy: { createdAt: 'asc' },
-      })
+      })) ?? (await defaultHouse())
+    : await defaultHouse()
 
   if (!house) {
     return {

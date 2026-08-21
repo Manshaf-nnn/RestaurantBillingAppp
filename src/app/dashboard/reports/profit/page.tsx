@@ -8,7 +8,8 @@ import { resolveRange } from '@/features/reports/range'
 import { getBranchComparison, getProfitReport } from '@/features/reports/profit'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS } from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -28,13 +29,18 @@ export default async function ProfitReportPage({
   const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '')
   const range = resolveRange({ preset: str('preset') || 'THIS_MONTH', from: str('from'), to: str('to') })
 
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  /*
+   * Resolved through the shared helper so the top-bar switcher and this page's
+   * own picker always agree, and so a remembered choice survives arriving here
+   * from the nav rather than from a link that carries `?branch=`.
+   */
+  const selection = await selectedBranch(user, p)
+  const allowed = selection.branchIds
   const locations = (await listLocations(user.restaurantId)).filter(
     (l) => allowed === null || allowed.includes(l.id),
   )
-  const requested = str('branch')
-  const chosen = requested && locations.some((l) => l.id === requested) ? requested : null
-  const branchIds = chosen ? [chosen] : allowed
+  const chosen = selection.branchId
+  const branchIds = selection.branchIds
 
   const [profit, comparison] = await Promise.all([
     getProfitReport({ restaurantId: user.restaurantId, range, branchIds }),

@@ -153,6 +153,44 @@ async function main() {
     }
   }
 
+  /*
+   * Every page again, this time with a location chosen.
+   *
+   * The top-bar switcher appends `?branch=`, and each page now resolves it
+   * through `selectedBranch()` into a real predicate. A branch id reaching a
+   * loader that was written restaurant-wide is exactly the kind of change that
+   * renders fine in development and throws on a cold serverless request, so it
+   * is checked the same way the plain pass is.
+   */
+  const branch = await prisma.branch.findFirst({
+    where: { restaurantId: user.restaurantId, deletedAt: null },
+    select: { id: true, name: true },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  if (!branch) {
+    console.log('\nNo location on the fixture tenant — skipping the branch-scoped pass.')
+  } else {
+    console.log(`\nWith "${branch.name}" selected`)
+    for (const path of PAGES) {
+      const url = `${BASE}${path}${path.includes('?') ? '&' : '?'}branch=${branch.id}`
+      const response = await fetch(url, { headers: { cookie }, redirect: 'manual' })
+      const body = response.status === 200 ? await response.text() : ''
+      const boundary = BOUNDARY.find((needle) => body.includes(needle))
+
+      if (response.status === 200 && !boundary) {
+        passed += 1
+        console.log(`  ✓ ${path}`)
+      } else if (response.status >= 300 && response.status < 400) {
+        passed += 1
+        console.log(`  · ${path} → ${response.headers.get('location') ?? ''}`)
+      } else {
+        failed.push(`${path}?branch=`)
+        console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
+      }
+    }
+  }
+
   // The diagnostics are only worth anything if they answer, so check them here
   // rather than discovering they 500 at the moment something else is on fire.
   console.log('\nDiagnostics')

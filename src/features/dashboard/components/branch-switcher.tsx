@@ -4,6 +4,9 @@ import * as React from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Building2, Check, ChevronDown, Factory, Store, Warehouse } from 'lucide-react'
 
+import { callAction } from '@/lib/use-action'
+import { rememberBranch } from '../actions'
+
 const ICONS = {
   BRANCH: Store,
   PRODUCTION_HOUSE: Factory,
@@ -19,11 +22,14 @@ export interface SwitchableLocation {
 /**
  * The global location switcher, in the top bar on every dashboard page.
  *
- * The choice is written to the URL rather than held in a cookie or context.
- * That way the server components doing the filtering can read it directly, a
- * filtered view can be bookmarked or sent to an accountant, and the back
- * button behaves the way people expect. A cookie would make every one of those
- * quietly wrong.
+ * The choice is written to the URL rather than held in context. That way the
+ * server components doing the filtering can read it directly, a filtered view
+ * can be bookmarked or sent to an accountant, and the back button behaves the
+ * way people expect.
+ *
+ * A cookie is written alongside it, but only as a memory: opening the dashboard
+ * fresh tomorrow lands where you left off instead of on "all locations". The URL
+ * still wins whenever both are present, so none of the above is lost.
  *
  * It only renders when there is more than one location, so a single-site
  * restaurant never sees a control that does nothing.
@@ -54,6 +60,12 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
     if (id) next.set('branch', id)
     else next.delete('branch')
     setOpen(false)
+
+    // Fire and forget: the navigation below is what the user sees, and a failed
+    // cookie write should never hold it up or show them an error. The worst case
+    // is that tomorrow's first page load says "all locations".
+    void callAction(() => rememberBranch(id))
+
     const qs = next.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }

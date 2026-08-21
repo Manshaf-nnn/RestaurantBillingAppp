@@ -21,9 +21,14 @@ export interface PurchaseSummary {
 export async function listPurchaseOrders(params: {
   restaurantId: string
   limit?: number
+  /** Only orders being delivered to this location. Null means every location. */
+  branchId?: string | null
 }): Promise<PurchaseSummary[]> {
   const orders = await prisma.purchase.findMany({
-    where: { restaurantId: params.restaurantId },
+    where: {
+      restaurantId: params.restaurantId,
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: params.limit ?? 50,
     include: {

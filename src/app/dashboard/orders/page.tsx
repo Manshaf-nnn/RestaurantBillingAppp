@@ -4,6 +4,7 @@ import { PageHeader } from '@/features/dashboard/components/page-header'
 import { OrdersTable } from '@/features/orders/components/orders-table'
 import { listOrders } from '@/features/orders/queries'
 import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -19,8 +20,10 @@ export default async function OrdersPage({
   const user = await requirePagePermission(PERMISSIONS.ORDER_VIEW, '/dashboard/orders')
   const params = await searchParams
   const restaurant = await requireRestaurant(user.restaurantId)
+  const selection = await selectedBranch(user, params)
 
   const result = await listOrders(user.restaurantId, {
+    branchId: scopeToOne(selection),
     search: params.search,
     status: params.status ?? 'ALL',
     paymentStatus: params.paymentStatus ?? 'ALL',

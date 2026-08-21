@@ -8,7 +8,8 @@ import { listPurchaseOrders } from '@/features/purchasing/queries'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -29,15 +30,20 @@ export default async function PurchasingReportPage({
   const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '')
   const range = resolveRange({ preset: str('preset') || 'THIS_MONTH', from: str('from'), to: str('to') })
 
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  /*
+   * Resolved through the shared helper so the top-bar switcher and this page's
+   * own picker always agree, and so a remembered choice survives arriving here
+   * from the nav rather than from a link that carries `?branch=`.
+   */
+  const selection = await selectedBranch(user, p)
+  const allowed = selection.branchIds
   const locations = (await listLocations(user.restaurantId)).filter(
     (l) => allowed === null || allowed.includes(l.id),
   )
-  const requested = str('branch')
-  const chosen = requested && locations.some((l) => l.id === requested) ? requested : null
+  const chosen = scopeToOne(selection)
 
   const [orders, suggestions, priceMoves, bySupplier] = await Promise.all([
-    listPurchaseOrders({ restaurantId: user.restaurantId, limit: 200 }),
+    listPurchaseOrders({ restaurantId: user.restaurantId, limit: 200, branchId: chosen }),
     getReorderSuggestions({ restaurantId: user.restaurantId, branchId: chosen }),
     // Price history over the window, so a supplier raising prices is visible.
     prisma.purchasePriceHistory.findMany({

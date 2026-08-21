@@ -7,7 +7,8 @@ import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { listTransfers } from '@/features/transfers/queries'
-import { PERMISSIONS, visibleBranchIds, can} from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 
 export const dynamic = 'force-dynamic'
@@ -24,14 +25,24 @@ const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' |
   CANCELLED: { label: 'Cancelled', variant: 'destructive' },
 }
 
-export default async function TransfersPage() {
+export default async function TransfersPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.TRANSFER_VIEW, '/dashboard/transfers')
 
-  // Confined users only see movements touching their own location.
-  const ids = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  /*
+   * This used to read `ids && ids.length === 1 ? ids[0] : null`, which failed
+   * open: a warehouse worker with no location assigned got `[]`, the ternary
+   * fell through to null, and they saw every transfer in the restaurant.
+   * `scopeToOne` returns an id that matches nothing in that case, so the answer
+   * is "none" rather than "all".
+   */
+  const selection = await selectedBranch(user, await searchParams)
   const transfers = await listTransfers({
     restaurantId: user.restaurantId,
-    branchId: ids && ids.length === 1 ? ids[0] : null,
+    branchId: scopeToOne(selection),
   })
 
   const open = transfers.filter((t) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(t.status))

@@ -11,6 +11,7 @@ import { listPurchaseOrders } from '@/features/purchasing/queries'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -27,12 +28,21 @@ const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' |
   CANCELLED: { label: 'Cancelled', variant: 'destructive' },
 }
 
-export default async function PurchasesPage() {
+export default async function PurchasesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.PURCHASE_VIEW, '/dashboard/purchases')
   const restaurant = await requireRestaurant(user.restaurantId)
+
+  // With a location chosen: orders being delivered there, and what that
+  // location — not the group — is running short of.
+  const branchId = scopeToOne(await selectedBranch(user, await searchParams))
+
   const [orders, suggestions] = await Promise.all([
-    listPurchaseOrders({ restaurantId: user.restaurantId }),
-    getReorderSuggestions({ restaurantId: user.restaurantId }),
+    listPurchaseOrders({ restaurantId: user.restaurantId, branchId }),
+    getReorderSuggestions({ restaurantId: user.restaurantId, branchId }),
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

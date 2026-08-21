@@ -189,11 +189,6 @@ export function DashboardShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="glass-chrome sticky top-0 z-30 flex h-16 items-center gap-2 border-b px-4">
-          {locations && locations.length > 1 && (
-            <div className="ml-1 hidden sm:block">
-              <BranchSwitcher locations={locations} />
-            </div>
-          )}
           <Button
             variant="ghost"
             size="icon"
@@ -209,6 +204,15 @@ export function DashboardShell({
               <Image src="/logo-mark.png" alt="TableFlow" width={512} height={512} className="size-full object-contain p-0.5" />
             </span>
           </Link>
+
+          {/*
+            Shown on a phone as well. A branch manager standing in their own store
+            is the most likely person to need the switcher, and they are the least
+            likely to be at a desk.
+          */}
+          {locations && locations.length > 1 ? (
+            <BranchSwitcher locations={locations} />
+          ) : null}
 
           {isRealtimeEnabled() ? (
             <Badge variant={connected ? 'success' : 'destructive'} className="hidden sm:inline-flex">

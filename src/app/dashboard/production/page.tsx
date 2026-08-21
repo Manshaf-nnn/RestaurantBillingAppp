@@ -9,17 +9,32 @@ import { getProductionConsoleData, getProductionDashboard } from '@/features/pro
 import { ProductionConsole } from '@/features/production/components/production-console'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS, can} from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Production' }
 
-export default async function ProductionPage() {
+export default async function ProductionPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.PRODUCTION_VIEW, '/dashboard/production')
   const restaurant = await requireRestaurant(user.restaurantId)
+
+  /*
+   * The switcher can name any location, but production only ever happens at a
+   * production house. Passing a shop through would match no house and blank the
+   * page, so a selection is honoured only when it IS a house; otherwise the
+   * default house is shown. Someone standing in Kandy asking about production
+   * wants to see the kitchen that supplies them, not an empty screen.
+   */
+  const selection = await selectedBranch(user, await searchParams)
+
   const [data, console_] = await Promise.all([
-    getProductionDashboard({ restaurantId: user.restaurantId }),
+    getProductionDashboard({ restaurantId: user.restaurantId, branchId: selection.branchId }),
     getProductionConsoleData({ restaurantId: user.restaurantId, currency: restaurant.currency }),
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
