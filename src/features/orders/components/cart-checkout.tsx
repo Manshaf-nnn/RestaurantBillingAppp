@@ -59,6 +59,20 @@ export function CartCheckout({
   const [formError, setFormError] = React.useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const [placing, setPlacing] = React.useState(false)
+
+  /*
+   * One id for this cart, regenerated only once an order actually succeeds.
+   *
+   * A ref rather than state so a re-render cannot change it mid-submit — the
+   * whole value is that a retry carries the SAME key. That is what lets the
+   * server return the order the guest already has instead of creating a second
+   * one and deducting another set of ingredients.
+   */
+  const idempotencyKey = React.useRef(
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`,
+  )
   const [quoting, startQuote] = React.useTransition()
 
   React.useEffect(() => {
@@ -120,6 +134,7 @@ export function CartCheckout({
 
     setPlacing(true)
     const result = await callAction(() => placeGuestOrder({
+      idempotencyKey: idempotencyKey.current,
       tableId: table.tableId,
       customerName: state.customer.name,
       customerPhone: state.customer.phone,

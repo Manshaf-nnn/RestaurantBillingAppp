@@ -155,10 +155,21 @@ export interface CompleteProductionResult {
  * production house's own stock first, so a run cannot half-consume its way into
  * negative ingredients before failing.
  *
- * Cost flows from what was actually consumed, not from a price list: the
- * finished item's cost per unit is the run's total ingredient cost divided by
- * what was actually made. Making 480 instead of 500 therefore raises the cost
- * of each patty, which is the true picture.
+ * Cost flows from what was actually consumed, not from a price list.
+ *
+ * Ingredients are consumed at the PLANNED quantity, because that is what was
+ * issued to the line — a batch of sauce that catches and yields 480 instead of
+ * 500 still used all of its cream. Output is the actual figure. So the unit cost
+ * is planned inputs divided by real output, and a poor yield raises it, which is
+ * the true picture and the whole reason to record variance.
+ *
+ * This previously scaled the ingredients by actual output too, which cancelled
+ * out: a run making 480 of 500 consumed exactly 480-worth and reported the same
+ * unit cost as a perfect run. The docstring claimed the opposite of what the
+ * code did.
+ *
+ * `overheadCost` — labour, power — is added on top before dividing, since
+ * materials alone understate what a finished item costs to make.
  */
 export async function completeProduction(params: {
   restaurantId: string
@@ -206,9 +217,16 @@ export async function completeProduction(params: {
   }
 
   const spec = order.spec
-  // Ingredients scale with what was actually made, not what was planned: a run
-  // that produced 80% of target consumed roughly 80% of the ingredients.
-  const scale = spec.outputQty > 0 ? batches / 1 : batches
+  /*
+   * Ingredients are consumed at the planned quantity — what was issued to the
+   * line — while output is what actually came off it. That gap is the yield
+   * loss, and costing it is the point: scaling inputs by output as well would
+   * make a wasteful run look exactly as efficient as a perfect one.
+   *
+   * A run that produced nothing consumed nothing; that is a cancellation, and
+   * `setProductionStatus` is the way to record it.
+   */
+  const scale = order.plannedQty
 
   return prisma.$transaction(async (tx) => {
     const consumed: CompleteProductionResult['consumed'] = []
@@ -262,7 +280,10 @@ export async function completeProduction(params: {
     }
 
     const producedQty = round(batches * spec.outputQty)
-    const unitCost = producedQty > 0 ? Math.round(totalCost / producedQty) : 0
+    // Overhead is part of what the batch cost to make, so it belongs in the
+    // divisor's numerator rather than being reported separately and forgotten.
+    const runCost = totalCost + (order.overheadCost ?? 0)
+    const unitCost = producedQty > 0 ? Math.round(runCost / producedQty) : 0
 
     const batchNumber =
       params.batchNumber?.trim().toUpperCase() ||
@@ -327,7 +348,7 @@ export async function completeProduction(params: {
         variance,
         varianceReason: params.varianceReason ?? null,
         varianceNote: params.varianceNote?.trim() || null,
-        totalCost,
+        totalCost: runCost,
         unitCost,
         batchNumber,
         expiryDate,

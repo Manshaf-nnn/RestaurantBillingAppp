@@ -33,7 +33,7 @@ const SERVICE = [
   'phase6-test', 'phase7-test', 'phase8-test', 'phase9-test', 'phase11-test',
   'storage-stock-test', 'connection-url-test', 'action-transport-test',
   'staff-login-test', 'order-lifecycle-test', 'cogs-test',
-  'negative-stock-test', 'reconciliation-test',
+  'negative-stock-test', 'reconciliation-test', 'production-ready-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

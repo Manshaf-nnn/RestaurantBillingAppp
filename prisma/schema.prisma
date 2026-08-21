@@ -1011,7 +1011,17 @@ model Order {
   branch         Branch?               @relation(fields: [branchId], references: [id])
   branchId       String?
 
+  /// Deduplicates a resubmitted order.
+  ///
+  /// The client sends one id per cart. A double tap, a flaky connection retry or
+  /// a replayed request therefore lands on the same key and the second insert
+  /// loses to this constraint, so the guest gets the order they already have
+  /// rather than a second one — which would otherwise deduct the ingredients
+  /// twice. Partial so the column can stay null for orders keyed in by staff.
+  idempotencyKey String?
+
   @@unique([restaurantId, orderNumber])
+  @@unique([restaurantId, idempotencyKey])
   @@index([restaurantId, status, placedAt])
   @@index([restaurantId, paymentStatus])
   @@index([restaurantId, placedAt])
@@ -2449,6 +2459,9 @@ model ProductionOrder {
   status      ProductionStatus @default(DRAFT)
 
   /// Batches planned, and what was actually achieved.
+  /// Labour, power and anything else the run cost beyond its ingredients.
+  /// Materials alone understate what a finished item is worth to make.
+  overheadCost   Int   @default(0)
   plannedQty     Float
   actualQty      Float?
   unit           StockUnit?

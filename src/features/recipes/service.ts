@@ -102,8 +102,33 @@ export async function saveRecipe(params: SaveParams): Promise<Recipe> {
     orderBy: { version: 'desc' },
   })
 
+  /*
+   * Has anything been costed or depleted against this version?
+   *
+   * If so it is history and must be superseded rather than edited, or last
+   * month's margin silently re-prices itself.
+   *
+   * Counting order lines alone was not enough. `OrderItem.recipeId` is only ever
+   * pinned for a *menu* recipe, so a prep recipe — burger sauce, a marinade —
+   * always counted as unused and was edited in place for ever, staying at
+   * version 1. Every menu recipe nesting it then re-costed and re-depleted
+   * against ingredients it never actually used. Three questions, not one:
+   *
+   *   was it sold directly?
+   *   is it an ingredient of a recipe that was sold?
+   *   has a production run been completed against it?
+   */
   const used = current
-    ? (await prisma.orderItem.count({ where: { recipeId: current.id } })) > 0
+    ? (await prisma.orderItem.count({ where: { recipeId: current.id } })) > 0 ||
+      (await prisma.recipeIngredient.count({
+        where: {
+          subRecipeId: current.id,
+          recipe: { orderItems: { some: {} } },
+        },
+      })) > 0 ||
+      (await prisma.productionOrder.count({
+        where: { spec: { outputItemId: current.producesItemId ?? '__none__' }, status: 'COMPLETED' },
+      })) > 0
     : false
 
   return prisma.$transaction(async (tx) => {

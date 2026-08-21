@@ -84,23 +84,8 @@ export async function recordWastage(params: {
       userId: params.userId,
     })
 
-    // Draw the wasted stock out of real batches so a batch's remaining
-    // quantity keeps matching what is physically on the shelf.
-    if (item.trackBatches) {
-      if (params.batchId) {
-        await tx.stockBatch.update({
-          where: { id: params.batchId },
-          data: { remainingQty: { decrement: base } },
-        })
-      } else {
-        const { allocations } = await allocateFefo(tx, {
-          restaurantId: params.restaurantId,
-          itemId: item.id,
-          quantity: base,
-        })
-        await consumeBatches(tx, allocations)
-      }
-    }
+    // Batches are drawn down by postMovement above, for every outward movement
+    // rather than only this one. Repeating it here would consume each lot twice.
 
     const record = await tx.wastageRecord.create({
       data: {

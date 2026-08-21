@@ -176,6 +176,7 @@ export async function placeGuestOrder(
         couponCode: data.couponCode || null,
         redeemPoints: data.redeemPoints,
         guestSessionId,
+        idempotencyKey: data.idempotencyKey || null,
       })
 
       return { orderId: order.id, orderNumber: order.orderNumber }

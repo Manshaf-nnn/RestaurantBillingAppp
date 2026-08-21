@@ -6,6 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
 import { applyLocationDelta } from './location-stock'
+import { allocateFefo, consumeBatches } from './batches'
 
 /**
  * The stock ledger.
@@ -30,10 +31,21 @@ import { applyLocationDelta } from './location-stock'
  *
  * ── Negative stock ──────────────────────────────────────────────────────────
  *
- * An outward movement that would take the balance below zero is allowed and
- * flagged, not refused. Refusing would mean a guest cannot be served because
- * someone forgot to record a delivery, which is the wrong trade in a
- * restaurant. The negative balance surfaces as an alert instead.
+ * An outward movement that would take the balance below zero is refused, unless
+ * the restaurant has set `allowNegativeStock`. Allowing it unconditionally is
+ * defensible — a guest should not be turned away because a delivery was not
+ * keyed in — but it is the owner's trade to make, and left on by default it
+ * quietly produced balances no report could be trusted against.
+ *
+ * Corrections are always allowed through, whatever the setting: an adjustment,
+ * an opening balance or a stock count must be able to record the truth,
+ * including an uncomfortable one.
+ *
+ * ── Batches ─────────────────────────────────────────────────────────────────
+ *
+ * Outgoing stock is drawn from real lots, earliest expiry first, for any item
+ * with `trackBatches`. Done here rather than in each caller so a sale, a
+ * production run and a wastage entry cannot disagree about it.
  */
 
 /** Movement types that add stock. Everything else removes it. */
@@ -230,6 +242,37 @@ export async function postMovement(
       purchaseId: params.purchaseId ?? null,
     },
   })
+
+  /*
+   * Draw outgoing stock out of real lots, earliest expiry first.
+   *
+   * Only wastage did this, so anything sold or used in production left batch
+   * quantities untouched: `remainingQty` stayed at what was received, FEFO kept
+   * offering lots that were long gone, and the expiry board warned about stock
+   * that had already been eaten. Doing it here rather than in each caller means
+   * every outward movement is covered by construction — the same reason
+   * `postMovement` owns the balance itself.
+   *
+   * A caller naming a specific batch has already decided; anything else is
+   * allocated. A shortfall is not an error: batches can legitimately lag behind
+   * the balance for stock received before batch tracking was turned on, and
+   * refusing the movement would block a sale over a bookkeeping detail.
+   */
+  if (item.trackBatches && signed < 0) {
+    if (params.batchId) {
+      await tx.stockBatch.update({
+        where: { id: params.batchId },
+        data: { remainingQty: { decrement: magnitude } },
+      })
+    } else {
+      const { allocations } = await allocateFefo(tx, {
+        restaurantId: params.restaurantId,
+        itemId: item.id,
+        quantity: magnitude,
+      })
+      await consumeBatches(tx, allocations)
+    }
+  }
 
   const costing = costingUpdate(item, signed, params.unitCost)
 
