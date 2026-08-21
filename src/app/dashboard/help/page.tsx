@@ -1,0 +1,296 @@
+import type { Metadata } from 'next'
+import Link from 'next/link'
+
+import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
+import { requirePageUser } from '@/server/auth/guard'
+
+export const dynamic = 'force-dynamic'
+export const metadata: Metadata = { title: 'How it works' }
+
+/**
+ * The guide, in the app rather than in a file nobody opens.
+ *
+ * Written after watching an owner type "sugar" into a box labelled "Storage
+ * areas" — the only text box on that page — and conclude the system was broken.
+ * It was a fair conclusion: nothing anywhere told him how stock gets in.
+ *
+ * Deliberately concrete. Every section names the screen it is talking about and
+ * links to it, because a manual that explains concepts without saying where to
+ * click is the kind nobody finishes.
+ */
+export default async function HelpPage() {
+  await requirePageUser('/dashboard/help')
+
+  return (
+    <>
+      <PageHeader
+        title="How it works"
+        description="Ten minutes here will save you a week of guessing. Everything below links to the screen it describes."
+      />
+
+      <div className="space-y-5">
+        <SectionCard title="The one idea behind everything">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Stock is never a number anyone types. It is the running total of things that
+            happened to it — arrived, sold, wasted, moved, cooked. Every one of those leaves a
+            dated, named row in the stock ledger, and what you see on screen is the sum of
+            those rows.
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            That is why the books can always be proved right, and why there is a screen that
+            proves them: <Guide href="/dashboard/reports/reconciliation">Reconciliation</Guide>.
+          </p>
+        </SectionCard>
+
+        <SectionCard title="1 · Places" description="Everything happens somewhere.">
+          <Rows
+            rows={[
+              ['Branch', 'Serves guests. Tables, a kitchen, a till.'],
+              ['Central warehouse', 'Takes bulk deliveries and supplies the others. No guests.'],
+              ['Production house', 'Makes food from raw materials. No guests.'],
+            ]}
+          />
+          <Note>
+            Inside any of them you can name <strong>storage areas</strong> — Cold room, Dry
+            store, Bar. Those are <em>shelves</em>. They hold stock; they are not stock. Naming
+            one &quot;Sugar&quot; does not give you any sugar.
+          </Note>
+          <Note>
+            One restaurant with one kitchen never needs any of this. You get a location called
+            Main and can forget it exists. <Guide href="/dashboard/locations">Locations</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="2 · Getting stock in" description="Three ways, and only three.">
+          <Rows
+            rows={[
+              [
+                'A purchase order',
+                'Choose the supplier, the items, and where the delivery lands. Raising the order moves nothing — an order is a promise. Stock exists when you press Receive and enter what actually turned up.',
+              ],
+              [
+                '“Add stock here”',
+                'On any location’s page. For your opening count, or a delivery that came without an order.',
+              ],
+              ['A transfer in', 'From another location. See below.'],
+            ]}
+          />
+          <Note>
+            You can receive <strong>less</strong> than you ordered — do. Record what arrived,
+            not what was promised. The order stays open for the rest and the shortfall is
+            visible. <Guide href="/dashboard/purchases">Purchases</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="3 · Stock going out">
+          <Rows
+            rows={[
+              [
+                'A sale',
+                'When the kitchen accepts an order, the recipe for each dish is read and the ingredients come off that branch’s shelves. Change the order and it corrects itself. Cancel it, or void a line at the till, and everything comes back. You never have to remember to undo anything.',
+              ],
+              [
+                'Wastage',
+                'Always with a reason — “we lost 4kg of chicken” and “the fridge failed” are different facts, and only the second lets you fix something.',
+              ],
+              ['A transfer out, or production consuming it', 'See below.'],
+            ]}
+          />
+          <Note>
+            Try to sell what you have not got and you will be stopped. You can turn that off in{' '}
+            <Guide href="/dashboard/settings">Settings</Guide> if you would rather never block
+            service — the balance then goes negative and shows as an alert instead.
+          </Note>
+        </SectionCard>
+
+        <SectionCard
+          title="4 · Moving stock between places"
+          description="Four steps, because something real happens at each one."
+        >
+          <Rows
+            rows={[
+              ['Request', 'Nothing moves. A question: “can Kandy have 20kg of sugar?”'],
+              [
+                'Approve',
+                'Sets 20kg aside at the source — reserved. Still on its shelf, but promised, so nobody can sell it out from under the transfer.',
+              ],
+              [
+                'Dispatch',
+                'The van leaves. The source loses 20kg; the destination shows 20kg in transit — on its way, not yet usable.',
+              ],
+              ['Receive', 'The van arrives. The destination gains what actually arrived.'],
+            ]}
+          />
+          <Note>
+            That middle part is the point: between dispatch and receipt the stock is nowhere
+            anyone can sell it, and it is not lost either. If 18kg arrives instead of 20 you
+            enter 18 and must say why. The 2kg does not quietly evaporate.
+          </Note>
+          <Note>
+            To move stock between two shelves in the same place, pick the same location on both
+            sides and choose two different storage areas. The total does not change; only where
+            it sits. <Guide href="/dashboard/transfers">Transfers</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="5 · Recipes" description="More important than they look.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            A recipe links a dish to what it consumes. Without one, selling a burger takes
+            nothing off any shelf and your food cost is unknowable.
+          </p>
+          <Rows
+            rows={[
+              ['Menu recipe', 'One burger = 1 patty, 2 bun halves, 1 slice of cheese.'],
+              [
+                'Prep recipe',
+                'One batch of burger sauce = mayo, ketchup, spices, and makes 2kg. A menu recipe can then use “50g of burger sauce” as an ingredient.',
+              ],
+            ]}
+          />
+          <Note>
+            Each line takes a <strong>wastage %</strong> for trim, peel and spillage. If 100g
+            reaches the plate but 105g leaves the store, say 5% and the books will match the
+            bin.
+          </Note>
+          <Note>
+            Edit a recipe that has already been sold against and the old version is kept.
+            Last month&apos;s cost stays last month&apos;s cost — otherwise editing a recipe
+            silently rewrites every margin you have ever reported.{' '}
+            <Guide href="/dashboard/recipes">Recipes</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="6 · Production" description="For anything you make rather than buy.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Bread, sauces, marinades, butchered cuts. Raw materials go in, a new stock item
+            comes out. It happens at a <strong>production house</strong>, because making things
+            is a different job from serving guests.
+          </p>
+          <Rows
+            rows={[
+              ['1 · Plan', '“Make 10 batches.” Nothing moves.'],
+              ['2 · Approve', 'Someone senior signs it off. Nothing moves.'],
+              [
+                '3 · Complete',
+                'Enter how many batches you actually got. Only now do the materials come off the shelves, the finished goods appear, and the cost get worked out.',
+              ],
+            ]}
+          />
+          <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            <p className="font-medium">The costing rule — the point of the whole feature</p>
+            <p className="mt-1 text-muted-foreground">
+              You planned 10 batches, so 100kg of flour went into the mixers. Only 8 came out;
+              two caught and were binned. <strong>All 100kg is consumed</strong> — it was used
+              whether or not it became bread — and the cost is divided by the 80 loaves you
+              actually got. Each loaf costs more than it would on a good day.
+            </p>
+            <p className="mt-2 text-muted-foreground">
+              That is the true picture. A system that quietly consumed only 80 loaves&apos;
+              worth would report a disastrous run as perfectly efficient, and you would never
+              learn that your night shift was burning a fifth of your production.
+            </p>
+          </div>
+          <Note>
+            Finished goods sit at the production house. Send them out with a normal transfer.{' '}
+            <Guide href="/dashboard/production">Production</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="7 · Who sees what">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Everyone signs in with their <strong>email</strong> and their{' '}
+            <strong>sign-in code</strong> — eight characters on a card. Their{' '}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">W-0003</code> is a different
+            thing: that is their ID, the one on dockets and in &quot;who served table 4&quot;.
+          </p>
+          <Note>
+            Assign someone to a location and they see only that location. Leave it blank and
+            they see everything — that is your group manager.{' '}
+            <Guide href="/dashboard/staff">Staff</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="8 · Proving the books">
+          <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+{`Opening              100 kg
+  + purchases         50 kg
+  − sold              30 kg
+  − wasted             5 kg
+  = closing          115 kg   ← what the ledger says
+    stored quantity  115 kg   ← what the system holds
+    drift              0      ← must be zero`}
+          </pre>
+          <Note>
+            <strong>Drift must be zero.</strong> Anything else means a balance changed with no
+            movement behind it, and every figure from that item — value, margin, reorder
+            level — is wrong from that moment.{' '}
+            <Guide href="/dashboard/reports/reconciliation">Reconciliation</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="9 · Setting up, in order">
+          <ol className="list-inside list-decimal space-y-1.5 text-sm text-muted-foreground">
+            <li><Guide href="/dashboard/settings">Settings</Guide> — name, currency, tax</li>
+            <li><Guide href="/dashboard/locations">Locations</Guide> — branches, warehouse, production house</li>
+            <li><Guide href="/dashboard/staff">Staff</Guide> — add people, set where they work, hand out sign-in codes</li>
+            <li><Guide href="/dashboard/inventory">Stock</Guide> — create your items with their units</li>
+            <li>Opening figures — &quot;Add stock here&quot; on each location, or a purchase order</li>
+            <li><Guide href="/dashboard/menu">Menu</Guide> — categories and dishes with prices</li>
+            <li>
+              <Guide href="/dashboard/recipes">Recipes</Guide> — link each dish to what it uses.{' '}
+              <strong>Do not skip this.</strong> Without recipes nothing depletes and your food
+              cost is guesswork
+            </li>
+            <li><Guide href="/dashboard/tables">Tables</Guide>, then print the <Guide href="/dashboard/qr">QR codes</Guide></li>
+            <li>Sell something, then check <Guide href="/dashboard/reports/reconciliation">Reconciliation</Guide> balances</li>
+          </ol>
+        </SectionCard>
+
+        <SectionCard title="Words you will see">
+          <Rows
+            rows={[
+              ['Available', 'On the shelf, sellable now'],
+              ['Reserved', 'On the shelf, but promised to an approved transfer'],
+              ['In transit', 'Dispatched, not yet arrived. Not sellable at either end'],
+              ['Batch (production)', 'One run of a recipe. 10 batches of a 10-loaf recipe = 100 loaves'],
+              ['Batch / lot (stock)', 'A delivery with its own expiry date, used oldest-first'],
+              ['Variance', 'The gap between expected and actual. Always needs a reason'],
+              ['Drift', 'Stored balance minus ledger sum. Must be zero'],
+              ['COGS', 'What the ingredients cost. Revenue − COGS = gross profit'],
+              ['Spec', 'A production recipe'],
+            ]}
+          />
+        </SectionCard>
+      </div>
+    </>
+  )
+}
+
+function Rows({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <dl className="space-y-3">
+      {rows.map(([term, meaning]) => (
+        <div key={term} className="grid gap-1 sm:grid-cols-[11rem_1fr] sm:gap-4">
+          <dt className="text-sm font-medium">{term}</dt>
+          <dd className="text-sm leading-relaxed text-muted-foreground">{meaning}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-3 border-l-2 border-border pl-3 text-sm leading-relaxed text-muted-foreground">
+      {children}
+    </p>
+  )
+}
+
+function Guide({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link href={href} className="font-medium text-primary underline-offset-2 hover:underline">
+      {children}
+    </Link>
+  )
+}

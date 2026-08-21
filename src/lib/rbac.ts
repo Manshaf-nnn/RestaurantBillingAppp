@@ -310,6 +310,17 @@ export function canAll(
   return permissions.every((p) => set.has(p))
 }
 
+/**
+ * Who may be put in charge of a location.
+ *
+ * Derived from BRANCH_MANAGE rather than written out as a list of roles, so a
+ * role that gains the permission later cannot be quietly left out of the
+ * manager picker while being perfectly able to run the site.
+ */
+export function canManageLocation(subject: PermissionSubject): boolean {
+  return can(subject, PERMISSIONS.BRANCH_MANAGE)
+}
+
 /** Roles a given role is allowed to create or edit — prevents privilege escalation. */
 export function assignableRoles(role: UserRole): UserRole[] {
   switch (role) {

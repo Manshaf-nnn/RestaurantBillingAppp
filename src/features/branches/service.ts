@@ -1,8 +1,9 @@
 import 'server-only'
 
-import type { Branch } from '@prisma/client'
+import { Prisma, type Branch, type LocationType } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
+import type { OpeningHours } from '@/lib/opening-hours'
 import { prisma, type TxClient } from '@/server/db/prisma'
 
 /**
@@ -178,13 +179,28 @@ export async function createBranch(params: {
   })
 }
 
+/**
+ * Change what a location is and how it is reached.
+ *
+ * Only the fields actually passed are written. That distinction is the whole
+ * point: a caller that means to rename must not silently erase the address and
+ * phone on its way past, which is what `updateLocationAction` did when it
+ * forwarded `data.address ?? null` for a field the form had never sent.
+ *
+ * `openingHours` is the exception worth naming — `null` is a real value here,
+ * meaning "this location keeps the restaurant's own hours", and it is stored as
+ * a database NULL rather than the JSON literal `null` so that reading it back
+ * is a plain emptiness check.
+ */
 export async function updateBranch(params: {
   restaurantId: string
   branchId: string
   name?: string
+  type?: LocationType
   address?: string | null
   phone?: string | null
   isActive?: boolean
+  openingHours?: OpeningHours | null
 }): Promise<BranchSummary> {
   await requireBranch(params.restaurantId, params.branchId)
 
@@ -192,11 +208,59 @@ export async function updateBranch(params: {
     where: { id: params.branchId },
     data: {
       ...(params.name !== undefined ? { name: params.name.trim() } : {}),
+      ...(params.type !== undefined ? { type: params.type } : {}),
       ...(params.address !== undefined ? { address: params.address?.trim() || null } : {}),
       ...(params.phone !== undefined ? { phone: params.phone?.trim() || null } : {}),
       ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
+      ...(params.openingHours !== undefined
+        ? {
+            openingHours:
+              params.openingHours === null
+                ? Prisma.DbNull
+                : (params.openingHours as Prisma.InputJsonValue),
+          }
+        : {}),
     },
     select: SUMMARY,
+  })
+}
+
+/**
+ * Put someone in charge of a location, and keep the two facts from disagreeing.
+ *
+ * `Branch.managerId` on its own is only a caption. Scoping is decided by
+ * `User.branchId` — `visibleBranchIds` reads it, and a MANAGER with none set is
+ * treated as a group manager who sees every site. So naming Nimal as the Kandy
+ * manager while leaving his own branch null would print "managed by Nimal" on
+ * the Kandy page while Nimal's figures still covered the whole chain.
+ *
+ * Someone already tied to another location keeps that tie. The `branchId: null`
+ * in the where clause is what enforces it, atomically: naming a manager is a
+ * small act and it must not quietly move a person off the site they run.
+ */
+export async function setBranchManager(params: {
+  restaurantId: string
+  branchId: string
+  managerId: string | null
+}): Promise<void> {
+  await requireBranch(params.restaurantId, params.branchId)
+
+  await prisma.$transaction(async (tx: TxClient) => {
+    await tx.branch.update({
+      where: { id: params.branchId },
+      data: { managerId: params.managerId },
+    })
+    if (params.managerId) {
+      await tx.user.updateMany({
+        where: {
+          id: params.managerId,
+          restaurantId: params.restaurantId,
+          deletedAt: null,
+          branchId: null,
+        },
+        data: { branchId: params.branchId },
+      })
+    }
   })
 }
 

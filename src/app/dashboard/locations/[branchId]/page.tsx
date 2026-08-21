@@ -7,9 +7,10 @@ import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
 import { StorageForm } from '@/features/branches/components/storage-form'
+import { LocationEditForm } from '@/features/branches/components/location-edit-form'
 import { AddStockForm } from '@/features/branches/components/add-stock-form'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, can} from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, can, canManageLocation } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -25,7 +26,8 @@ export default async function LocationPage({
   const { branchId } = await params
   const user = await requirePagePermission(PERMISSIONS.BRANCH_VIEW, `/dashboard/locations/${branchId}`)
   const restaurant = await requireRestaurant(user.restaurantId)
-  const [{ branch, stock }, transfers, items] = await Promise.all([
+  const canManage = can(user, PERMISSIONS.BRANCH_MANAGE)
+  const [{ branch, stock }, transfers, items, staff] = await Promise.all([
     getLocationDetail({ restaurantId: user.restaurantId, branchId }),
     listTransfers({ restaurantId: user.restaurantId, branchId, limit: 10 }),
     prisma.inventoryItem.findMany({
@@ -33,8 +35,22 @@ export default async function LocationPage({
       select: { id: true, name: true, unit: true },
       orderBy: { name: 'asc' },
     }),
+    // Only fetched for the edit form, which nobody else sees.
+    canManage
+      ? prisma.user.findMany({
+          where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true },
+          select: { id: true, name: true, role: true, permissions: true },
+          orderBy: { name: 'asc' },
+        })
+      : [],
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
+
+  // Who can be put in charge here: judged on BRANCH_MANAGE, so a role that
+  // gains the permission later is offered without this list being touched.
+  const managers = staff
+    .filter((member) => canManageLocation(member))
+    .map((member) => ({ id: member.id, name: member.name, roleLabel: ROLE_LABELS[member.role] }))
 
   const value = stock.reduce((s, r) => s + r.value, 0)
   const inbound = stock.filter((r) => r.inTransit > 0)
@@ -54,6 +70,7 @@ export default async function LocationPage({
           branch.type.replace(/_/g, ' ').toLowerCase(),
           branch.managerName && `managed by ${branch.managerName}`,
           branch.phone,
+          !branch.isActive && 'not in use',
         ].filter(Boolean).join(' · ')}
       />
 
@@ -62,6 +79,26 @@ export default async function LocationPage({
         <Figure label="Items held" value={String(stock.filter((s) => s.available !== 0).length)} />
         <Figure label="Inbound lines" value={String(inbound.length)} />
       </div>
+
+      {canManage && (
+        <div className="mb-5">
+          <LocationEditForm
+            location={{
+              id: branch.id,
+              name: branch.name,
+              code: branch.code,
+              type: branch.type,
+              address: branch.address,
+              phone: branch.phone,
+              isActive: branch.isActive,
+              isDefault: branch.isDefault,
+              managerId: branch.managerId,
+              openingHours: branch.openingHours,
+            }}
+            managers={managers}
+          />
+        </div>
+      )}
 
       {can(user, PERMISSIONS.INVENTORY_MANAGE) && (
         <div className="mb-5">

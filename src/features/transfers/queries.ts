@@ -3,6 +3,7 @@ import 'server-only'
 import type { LocationType } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
+import { parseOpeningHours } from '@/lib/opening-hours'
 import { prisma } from '@/server/db/prisma'
 import { levelFor } from '@/features/inventory/alerts'
 
@@ -196,7 +197,17 @@ export async function getLocationDetail(params: {
       type: branch.type,
       address: branch.address,
       phone: branch.phone,
+      isActive: branch.isActive,
+      isDefault: branch.isDefault,
+      managerId: branch.managerId,
       managerName: branch.manager?.name ?? null,
+      /*
+       * Null is a real answer, not a missing one: it means this location keeps
+       * the restaurant's own hours. `parseOpeningHours` would substitute
+       * DEFAULT_HOURS for an empty column and the edit form would then show
+       * invented times as though someone had chosen them.
+       */
+      openingHours: branch.openingHours ? parseOpeningHours(branch.openingHours) : null,
       storageLocations: branch.storageLocations,
     },
     stock: merged.map((s) => ({

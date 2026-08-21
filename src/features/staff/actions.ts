@@ -4,10 +4,11 @@ import { revalidatePath } from 'next/cache'
 import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
+import { requireBranch } from '@/features/branches/service'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { assignableRoles, PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission, type TenantUser } from '@/server/auth/guard'
 import { hashPassword } from '@/server/auth/password'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { sendMail, staffInviteEmail } from '@/server/mailer'
@@ -23,6 +24,28 @@ import {
 } from './schema'
 
 // ── staff ────────────────────────────────────────────────────────────────────
+
+/**
+ * Which location a member of staff works at, checked before it is written.
+ *
+ * Not exported: a 'use server' module may only export async functions that are
+ * meant to be callable from a browser, and this is neither.
+ *
+ * A branch id from the form is re-read under the acting admin's own restaurant,
+ * so a guessed id from another tenant resolves to nothing rather than tying
+ * someone across the boundary. `assertBranchAccess` is the second half: a site
+ * manager holds STAFF_MANAGE as well, and without it could post another site's
+ * id and staff a location they do not run.
+ */
+async function homeBranchFor(
+  admin: TenantUser,
+  branchId: string | null | undefined,
+): Promise<string | null> {
+  if (!branchId) return null
+  await assertBranchAccess(admin, branchId)
+  const branch = await requireBranch(admin.restaurantId, branchId)
+  return branch.id
+}
 
 export async function inviteStaff(
   input: unknown,
@@ -41,6 +64,10 @@ export async function inviteStaff(
       const existing = await prisma.user.findUnique({ where: { email: data.email } })
       if (existing) throw new ConflictError('A user with that email already exists')
 
+      // Resolved before anything is written, so a bad location cannot leave a
+      // half-made account behind.
+      const branchId = await homeBranchFor(admin, data.branchId)
+
       /*
        * The sign-in code is the password. A waiter is handed a card with their
        * email and this code on it; nothing else has to be remembered or reset
@@ -58,6 +85,7 @@ export async function inviteStaff(
           name: data.name,
           phone: data.phone || null,
           role: data.role,
+          branchId,
           staffCode,
           signInCode: temporaryPassword,
           passwordHash,
@@ -83,7 +111,7 @@ export async function inviteStaff(
         action: AUDIT_ACTIONS.STAFF_INVITED,
         entity: 'User',
         entityId: user.id,
-        after: { email: data.email, role: data.role },
+        after: { email: data.email, role: data.role, branchId },
       })
 
       revalidatePath('/dashboard/staff')
@@ -110,12 +138,15 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
         throw new ForbiddenError('You cannot assign that role')
       }
 
+      const branchId = await homeBranchFor(admin, data.branchId)
+
       await prisma.user.update({
         where: { id: data.id },
         data: {
           name: data.name,
           phone: data.phone || null,
           role: data.role,
+          branchId,
           isActive: data.isActive,
         },
       })
@@ -135,7 +166,8 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
         action: AUDIT_ACTIONS.UPDATE,
         entity: 'User',
         entityId: data.id,
-        after: { role: data.role, isActive: data.isActive },
+        before: { role: target.role, isActive: target.isActive, branchId: target.branchId },
+        after: { role: data.role, isActive: data.isActive, branchId },
       })
 
       revalidatePath('/dashboard/staff')

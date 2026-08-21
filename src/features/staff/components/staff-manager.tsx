@@ -55,16 +55,38 @@ export interface StaffMember {
   role: UserRole
   isActive: boolean
   lastLoginAt: string | null
+  /** null means every location — see ALL_LOCATIONS below. */
+  branchId: string | null
+  branchName: string | null
 }
+
+export interface StaffLocation {
+  id: string
+  name: string
+  isActive: boolean
+}
+
+/*
+ * The sentinel for "every location".
+ *
+ * Radix's Select refuses an empty string as an item value — it reserves that
+ * for "nothing chosen" and clears the trigger — so the null case needs a value
+ * of its own, converted back on the way to the server. It is not merely "no
+ * location set": a manager with no branch is a group manager who sees the whole
+ * chain, and that is the choice being made here.
+ */
+const ALL_LOCATIONS = '__all__'
 
 export function StaffManager({
   staff: initial,
   assignableRoles,
+  locations,
   canManage,
   currentUserId,
 }: {
   staff: StaffMember[]
   assignableRoles: UserRole[]
+  locations: StaffLocation[]
   canManage: boolean
   currentUserId: string
 }) {
@@ -112,6 +134,7 @@ export function StaffManager({
               <TableRow>
                 <TableHead>Member</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Works at</TableHead>
                 <TableHead className="hidden md:table-cell">Contact</TableHead>
                 <TableHead className="hidden lg:table-cell">Last active</TableHead>
                 <TableHead>Status</TableHead>
@@ -139,6 +162,11 @@ export function StaffManager({
                   </TableCell>
                   <TableCell>
                     <RoleBadge role={member.role} />
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {member.branchName ?? (
+                      <span className="text-muted-foreground">All locations</span>
+                    )}
                   </TableCell>
                   <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
                     {member.phone ?? '—'}
@@ -185,10 +213,16 @@ export function StaffManager({
         </div>
       )}
 
-      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} roles={assignableRoles} />
+      <InviteDialog
+        open={inviteOpen}
+        onOpenChange={setInviteOpen}
+        roles={assignableRoles}
+        locations={locations}
+      />
       <EditDialog
         member={editing}
         roles={assignableRoles}
+        locations={locations}
         onClose={() => setEditing(null)}
       />
       <PasswordDialog member={passwordFor} onClose={() => setPasswordFor(null)} />
@@ -206,23 +240,69 @@ export function StaffManager({
   )
 }
 
+/**
+ * Where this person works.
+ *
+ * "All locations" is spelled out rather than left as a blank option because it
+ * is a real decision, not an omission: someone with no location sees every
+ * site's figures, which is what a group manager should do and what a site
+ * manager should not.
+ */
+function WorksAtField({
+  value,
+  onChange,
+  locations,
+}: {
+  value: string
+  onChange: (value: string) => void
+  locations: StaffLocation[]
+}) {
+  return (
+    <Field
+      label="Works at"
+      hint="All locations means they see every site. Pick one to confine them to it."
+    >
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL_LOCATIONS}>All locations</SelectItem>
+          {locations.map((location) => (
+            <SelectItem key={location.id} value={location.id}>
+              {location.name}
+              {location.isActive ? '' : ' (switched off)'}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  )
+}
+
 function InviteDialog({
   open,
   onOpenChange,
   roles,
+  locations,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   roles: UserRole[]
+  locations: StaffLocation[]
 }) {
-  const [form, setForm] = React.useState({ name: '', email: '', phone: '', role: roles[0] ?? 'WAITER' })
+  const [form, setForm] = React.useState({
+    name: '', email: '', phone: '', role: roles[0] ?? 'WAITER', branchId: ALL_LOCATIONS,
+  })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [credentials, setCredentials] = React.useState<{ password: string; emailed: boolean } | null>(null)
 
   React.useEffect(() => {
     if (open) {
-      setForm({ name: '', email: '', phone: '', role: roles[0] ?? 'WAITER' })
+      setForm({
+        name: '', email: '', phone: '', role: roles[0] ?? 'WAITER', branchId: ALL_LOCATIONS,
+      })
       setError(null)
       setCredentials(null)
     }
@@ -231,7 +311,9 @@ function InviteDialog({
   const invite = async () => {
     setSaving(true)
     setError(null)
-    const result = await callAction(() => inviteStaff(form))
+    const result = await callAction(() =>
+      inviteStaff({ ...form, branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId }),
+    )
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -300,6 +382,11 @@ function InviteDialog({
                 </SelectContent>
               </Select>
             </Field>
+            <WorksAtField
+              value={form.branchId}
+              onChange={(branchId) => setForm({ ...form, branchId })}
+              locations={locations}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
                 Cancel
@@ -318,13 +405,17 @@ function InviteDialog({
 function EditDialog({
   member,
   roles,
+  locations,
   onClose,
 }: {
   member: StaffMember | null
   roles: UserRole[]
+  locations: StaffLocation[]
   onClose: () => void
 }) {
-  const [form, setForm] = React.useState({ name: '', phone: '', role: 'WAITER' as UserRole, isActive: true })
+  const [form, setForm] = React.useState({
+    name: '', phone: '', role: 'WAITER' as UserRole, isActive: true, branchId: ALL_LOCATIONS,
+  })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -335,6 +426,7 @@ function EditDialog({
         phone: member.phone ?? '',
         role: member.role,
         isActive: member.isActive,
+        branchId: member.branchId ?? ALL_LOCATIONS,
       })
       setError(null)
     }
@@ -343,7 +435,13 @@ function EditDialog({
   const save = async () => {
     if (!member) return
     setSaving(true)
-    const result = await callAction(() => updateStaff({ id: member.id, ...form }))
+    const result = await callAction(() =>
+      updateStaff({
+        id: member.id,
+        ...form,
+        branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId,
+      }),
+    )
     setSaving(false)
     if (!result.ok) {
       setError(result.error)
@@ -383,6 +481,11 @@ function EditDialog({
             </SelectContent>
           </Select>
         </Field>
+        <WorksAtField
+          value={form.branchId}
+          onChange={(branchId) => setForm({ ...form, branchId })}
+          locations={locations}
+        />
         <label className="flex items-center gap-2 text-sm">
           <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />
           Active — can sign in

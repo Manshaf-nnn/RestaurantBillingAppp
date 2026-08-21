@@ -4,11 +4,27 @@ import { emailSchema, passwordSchema, phoneSchema } from '@/features/auth/schema
 
 const STAFF_ROLES = ['MANAGER', 'KITCHEN', 'CASHIER', 'WAITER'] as const
 
+/**
+ * Which location this person works at.
+ *
+ * `User.branchId` has been in the schema since the beginning and no screen ever
+ * wrote it, so it was null for everyone. That is why nothing in the app could
+ * be scoped to a site: every `?? user.branchId` fallback resolved to null, and
+ * `visibleBranchIds` reads it to decide whether a manager runs one site or the
+ * whole group.
+ *
+ * Empty means every location, and is stored as null. For a manager that is the
+ * difference between a group manager and a site manager; for a single-site
+ * restaurant it is simply the ordinary answer.
+ */
+const branchIdField = z.string().trim().max(40).optional().nullable()
+
 export const inviteStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(80),
   email: emailSchema,
   phone: phoneSchema.optional().or(z.literal('')),
   role: z.enum(STAFF_ROLES),
+  branchId: branchIdField,
 })
 export type InviteStaffInput = z.infer<typeof inviteStaffSchema>
 
@@ -18,6 +34,7 @@ export const updateStaffSchema = z.object({
   phone: phoneSchema.optional().or(z.literal('')),
   role: z.enum(STAFF_ROLES),
   isActive: z.coerce.boolean(),
+  branchId: branchIdField,
 })
 export type UpdateStaffInput = z.infer<typeof updateStaffSchema>
 
