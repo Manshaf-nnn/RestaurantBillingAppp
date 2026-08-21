@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { Download } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -97,6 +98,7 @@ export function ReportTable({
   currency = 'INR',
   locale = 'en-IN',
   empty = 'Nothing in this period.',
+  hrefTemplate,
 }: {
   title: string
   description?: string
@@ -106,6 +108,21 @@ export function ReportTable({
   currency?: CurrencyCode
   locale?: string
   empty?: string
+  /**
+   * Makes each row lead somewhere: `'/dashboard/inventory/{itemId}'`, with
+   * `{key}` filled in from that row.
+   *
+   * A **string**, not a callback, for the same reason `format` is a string —
+   * every caller of this component is a Server Component, and a function
+   * cannot cross the RSC boundary. Passing one throws at render time, which is
+   * exactly how five report pages were left returning 500s earlier in this
+   * project. A row whose template resolves to a blank value is simply not
+   * linked rather than linking to a broken URL.
+   *
+   * Reports were dead ends before this: you could read that Sugar was the
+   * biggest wastage of the month and had no way to reach Sugar.
+   */
+  hrefTemplate?: string
 }) {
   const download = () => {
     const escape = (v: unknown) => {
@@ -154,22 +171,62 @@ export function ReportTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((row, i) => (
-                <tr key={i}>
-                  {columns.map((c) => (
-                    <td
-                      key={c.key}
-                      className={`py-2.5 pr-3 ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}
-                    >
-                      {render(c, row, currency, locale)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {rows.map((row, i) => {
+                const href = hrefTemplate ? resolveHref(hrefTemplate, row) : null
+                return (
+                  <tr
+                    key={i}
+                    className={href ? 'cursor-pointer transition-colors hover:bg-muted/40' : ''}
+                  >
+                    {columns.map((c, columnIndex) => (
+                      <td
+                        key={c.key}
+                        className={`py-2.5 pr-3 ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}
+                      >
+                        {/*
+                          The link wraps the FIRST cell only, not the row. An
+                          anchor cannot legally contain a <tr>, and a row-level
+                          onClick would need this to be a client component with
+                          a callback the server pages cannot supply — as well as
+                          being invisible to the keyboard and to a middle click.
+                        */}
+                        {href && columnIndex === 0 ? (
+                          <Link href={href} className="font-medium hover:underline">
+                            {render(c, row, currency, locale)}
+                          </Link>
+                        ) : (
+                          render(c, row, currency, locale)
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
       )}
     </SectionCard>
   )
+}
+
+/**
+ * Fill `{key}` placeholders from a row.
+ *
+ * Returns null when any placeholder is missing or blank, so a row with no id
+ * stays plain text instead of linking to `/dashboard/inventory/undefined`.
+ */
+function resolveHref(template: string, row: Record<string, unknown>): string | null {
+  let missing = false
+
+  const href = template.replace(/\{(\w+)\}/g, (_match, key: string) => {
+    const value = row[key]
+    if (value === null || value === undefined || value === '') {
+      missing = true
+      return ''
+    }
+    return encodeURIComponent(String(value))
+  })
+
+  return missing ? null : href
 }

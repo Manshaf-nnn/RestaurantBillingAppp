@@ -97,6 +97,7 @@ export default async function InventoryReportPage({
             { key: 'branchName', label: 'Location', format: 'text' },
           ]}
           rows={alerts as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="stock-alerts"
           empty="Everything is above its reorder level."
         />
@@ -123,6 +124,7 @@ export default async function InventoryReportPage({
             { key: 'value', label: 'Value', align: 'right', format: 'money' },
           ]}
           rows={wastage.topItems as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="most-wasted-items"
         />
 
@@ -139,6 +141,7 @@ export default async function InventoryReportPage({
             { key: 'likelyExplained', label: 'Explained', format: 'boolean', trueLabel: 'wastage logged', falseLabel: 'unexplained' },
           ]}
           rows={variance.lines as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="stock-variance"
           empty="No counts approved in this period."
         />
@@ -155,6 +158,7 @@ export default async function InventoryReportPage({
             { key: 'valueAtRisk', label: 'At risk', align: 'right', format: 'money' },
           ]}
           rows={expiring as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="expiring-stock"
           empty="Nothing expiring. Batch tracking must be on for an item to appear here."
         />

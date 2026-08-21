@@ -78,9 +78,10 @@ export default async function PurchasingReportPage({
     .reduce((s, o) => s + o.total, 0)
 
   // First and latest price per item, so the trend is one row not a chart.
-  const trend = new Map<string, { name: string; unit: string; first: number; latest: number; supplier: string | null; buys: number }>()
+  const trend = new Map<string, { itemId: string; name: string; unit: string; first: number; latest: number; supplier: string | null; buys: number }>()
   for (const h of priceMoves) {
     const row = trend.get(h.itemId) ?? {
+      itemId: h.itemId,
       name: h.item.name, unit: h.item.unit as string,
       first: h.unitCost, latest: h.unitCost, supplier: h.supplier?.name ?? null, buys: 0,
     }
@@ -104,6 +105,7 @@ export default async function PurchasingReportPage({
   const nameById = new Map(supplierNames.map((s) => [s.id, s.name]))
   const supplierRows = bySupplier
     .map((s) => ({
+      supplierId: s.supplierId,
       supplier: s.supplierId ? nameById.get(s.supplierId) ?? 'Unknown' : 'No supplier',
       orders: s._count,
       spend: s._sum?.total ?? 0,
@@ -138,6 +140,7 @@ export default async function PurchasingReportPage({
             { key: 'spend', label: 'Spend', align: 'right', format: 'money' },
           ]}
           rows={supplierRows as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/suppliers/{supplierId}"
           filename="spend-by-supplier"
         />
 
@@ -153,6 +156,7 @@ export default async function PurchasingReportPage({
             { key: 'change', label: 'Change', align: 'right', format: 'delta' },
           ]}
           rows={priceRows as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="price-movement"
           empty="Nothing was bought twice in this period, so there is no trend to show."
         />
@@ -169,6 +173,7 @@ export default async function PurchasingReportPage({
             { key: 'total', label: 'Value', align: 'right', format: 'money' },
           ]}
           rows={outstanding as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/purchases/{id}"
           filename="outstanding-purchase-orders"
           empty="Nothing outstanding."
         />
@@ -184,6 +189,7 @@ export default async function PurchasingReportPage({
             { key: 'estimatedCost', label: 'Est. cost', align: 'right', format: 'money' },
           ]}
           rows={suggestions as unknown as Array<Record<string, unknown>>}
+          hrefTemplate="/dashboard/inventory/{itemId}"
           filename="reorder-suggestions"
           empty="Nothing below its reorder level."
         />

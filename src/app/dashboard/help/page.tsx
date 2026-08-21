@@ -61,6 +61,24 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard title="1b · Units and categories" description="Set these up once.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Every stock item picks a unit and a category.{' '}
+            <Guide href="/dashboard/inventory/setup">Units &amp; categories</Guide> is where you name
+            them, order them, and switch off the ones you never use so the dropdowns stay short.
+          </p>
+          <Note>
+            The nine units are the ones the system can convert between — a kilo is a thousand grams,
+            a dozen is twelve. Box, packet and bottle have no fixed size, so each item declares its
+            own: &ldquo;bought as a box of 24&rdquo;. That is how you add a pack size we have never
+            heard of.
+          </Note>
+          <Note>
+            Retiring a category never touches the items in it. They keep it, and last year&apos;s
+            reports keep working; it simply stops being offered for new ones.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="2 · Getting stock in" description="Three ways, and only three.">
           <Rows
             rows={[
@@ -79,6 +97,21 @@ export default async function HelpPage() {
             You can receive <strong>less</strong> than you ordered — do. Record what arrived,
             not what was promised. The order stays open for the rest and the shortfall is
             visible. <Guide href="/dashboard/purchases">Purchases</Guide>
+          </Note>
+          <Note>
+            <strong>An order must be approved before anything can be received against it.</strong>{' '}
+            Approving is what commits the money, so it happens before the van arrives. A draft order
+            will show its items and refuse to take a delivery, and will say so.
+          </Note>
+          <Note>
+            <Guide href="/dashboard/purchases/receive">Goods received</Guide> lists everything
+            waiting to be unloaded and what is still to come on each. That is the screen to open
+            when a van turns up.
+          </Note>
+          <Note>
+            While ordering or receiving, each item shows <strong>what you last paid</strong>, when,
+            and to whom. Click the figure to use it; nothing is filled in behind your back. Enter
+            what the supplier actually charged if it differs — that is what goes in the books.
           </Note>
         </SectionCard>
 
@@ -150,6 +183,29 @@ export default async function HelpPage() {
           <Note>
             Only an owner or a group manager can write one. A manager assigned to a location can
             see and complete theirs, and cannot write instructions for anyone.
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="4c · Suppliers and what you owe" description="Every supplier has a statement.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Open any supplier for their contact details, every order, every delivery, every payment,
+            and a running balance.
+          </p>
+          <Rows
+            rows={[
+              ['Received', 'Goods that have actually arrived. This is what you owe.'],
+              ['Paid', 'What you have paid them. Record it and the balance keeps itself right.'],
+              ['Still on order', 'Ordered, not delivered. Not owed to anyone yet.'],
+            ]}
+          />
+          <Note>
+            An order is a promise, so it never appears as a debt. You owe for what came off the van,
+            which is why a 400,000 order with 50,000 delivered shows 50,000 outstanding.{' '}
+            <Guide href="/dashboard/suppliers">Suppliers</Guide>
+          </Note>
+          <Note>
+            Every reference on the statement is a link. Click a figure to reach the delivery, the
+            delivery to reach the order, the order to reach the items.
           </Note>
         </SectionCard>
 
@@ -277,6 +333,10 @@ export default async function HelpPage() {
         <SectionCard title="9 · Setting up, in order">
           <ol className="list-inside list-decimal space-y-1.5 text-sm text-muted-foreground">
             <li><Guide href="/dashboard/settings">Settings</Guide> — name, currency, tax</li>
+            <li>
+              <Guide href="/dashboard/inventory/setup">Units &amp; categories</Guide> — name your
+              units and set up the categories you group stock by
+            </li>
             <li><Guide href="/dashboard/locations">Locations</Guide> — branches, warehouse, production house</li>
             <li><Guide href="/dashboard/staff">Staff</Guide> — add people, set where they work, hand out sign-in codes</li>
             <li><Guide href="/dashboard/inventory">Stock</Guide> — create your items with their units</li>
@@ -294,6 +354,28 @@ export default async function HelpPage() {
             </li>
             <li>Sell something, then check <Guide href="/dashboard/reports/reconciliation">Reconciliation</Guide> balances</li>
           </ol>
+        </SectionCard>
+
+        <SectionCard title="Finding things">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            The search box at the top finds stock items, suppliers, purchase orders, deliveries,
+            orders, customers and staff — by name, code, number, phone or invoice reference. Press{' '}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">⌘K</code> (or{' '}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">Ctrl K</code>) from anywhere.
+          </p>
+          <Note>
+            You only ever find what you are allowed to open, and only at the locations you can see.
+            A search that showed you a record and then refused to open it would be telling you it
+            exists, which is the thing the permission is for.
+          </Note>
+          <Note>
+            Big lists — purchases, suppliers, transfers, the audit log — have their own search box
+            that looks through everything, not just the rows currently on screen.
+          </Note>
+          <Note>
+            Report rows are clickable. Read that Sugar was the biggest wastage this month and click
+            straight through to Sugar.
+          </Note>
         </SectionCard>
 
         <SectionCard title="Words you will see">

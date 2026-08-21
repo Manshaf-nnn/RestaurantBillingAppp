@@ -41,6 +41,7 @@ const SERVICE = [
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',
+  'search-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

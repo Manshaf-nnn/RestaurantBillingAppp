@@ -96,13 +96,36 @@ export async function listTransfers(params: {
   restaurantId: string
   branchId?: string | null
   limit?: number
+  /** Transfer number, either location, or an item being moved. */
+  search?: string
 }): Promise<TransferSummary[]> {
+  const term = params.search?.trim()
+
   const transfers = await prisma.stockTransfer.findMany({
     where: {
       restaurantId: params.restaurantId,
-      ...(params.branchId
-        ? { OR: [{ fromBranchId: params.branchId }, { toBranchId: params.branchId }] }
-        : {}),
+      /*
+       * Both conditions are OR groups, so they go in an AND rather than
+       * overwriting each other on the same key.
+       */
+      AND: [
+        ...(params.branchId
+          ? [{ OR: [{ fromBranchId: params.branchId }, { toBranchId: params.branchId }] }]
+          : []),
+        ...(term
+          ? [
+              {
+                OR: [
+                  { number: { contains: term, mode: 'insensitive' as const } },
+                  { notes: { contains: term, mode: 'insensitive' as const } },
+                  { fromBranch: { name: { contains: term, mode: 'insensitive' as const } } },
+                  { toBranch: { name: { contains: term, mode: 'insensitive' as const } } },
+                  { lines: { some: { item: { name: { contains: term, mode: 'insensitive' as const } } } } },
+                ],
+              },
+            ]
+          : []),
+      ],
     },
     orderBy: { requestedAt: 'desc' },
     take: params.limit ?? 50,

@@ -9,6 +9,7 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { listTransfers } from '@/features/transfers/queries'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS, can } from '@/lib/rbac'
+import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 
 export const dynamic = 'force-dynamic'
@@ -39,10 +40,13 @@ export default async function TransfersPage({
    * `scopeToOne` returns an id that matches nothing in that case, so the answer
    * is "none" rather than "all".
    */
-  const selection = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const search = (typeof params.search === 'string' ? params.search : '').trim()
+  const selection = await selectedBranch(user, params)
   const transfers = await listTransfers({
     restaurantId: user.restaurantId,
     branchId: scopeToOne(selection),
+    search,
   })
 
   const open = transfers.filter((t) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(t.status))
@@ -61,6 +65,10 @@ export default async function TransfersPage({
         }
       />
 
+      <div className="mb-4 max-w-sm">
+        <SearchBox placeholder="Transfer number, location or item…" defaultValue={search} />
+      </div>
+
       {open.length > 0 && (
         <SectionCard title="In progress" description="Requested, approved or on the road." >
           <ul className="divide-y divide-border">
@@ -72,8 +80,12 @@ export default async function TransfersPage({
       <SectionCard title="All transfers">
         {transfers.length === 0 ? (
           <EmptyState
-            title="No transfers yet"
-            description="Move stock between branches, a warehouse or the production house."
+            title={search ? `Nothing matches “${search}”` : 'No transfers yet'}
+            description={
+              search
+                ? 'Try the transfer number, either location, or an item that was moved.'
+                : 'Move stock between branches, a warehouse or the production house.'
+            }
           />
         ) : (
           <ul className="divide-y divide-border">

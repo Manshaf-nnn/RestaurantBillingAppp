@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { PERMISSIONS } from '@/lib/rbac'
+import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -13,12 +14,40 @@ import { requireRestaurant } from '@/server/db/tenant'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Audit log' }
 
-export default async function AuditLogsPage() {
+export default async function AuditLogsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.AUDIT_VIEW, '/dashboard/audit-logs')
+  const params = await searchParams
+  const search = (typeof params.search === 'string' ? params.search : '').trim()
+
   const [restaurant, logs] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.auditLog.findMany({
-      where: { restaurantId: user.restaurantId },
+      where: {
+        restaurantId: user.restaurantId,
+        /*
+         * Searched in the query, not filtered after `take: 200`. This table is
+         * the one that grows fastest in the whole app — a client filter over
+         * the newest two hundred rows would confidently report "nothing found"
+         * for the action you are actually looking for, which is exactly when
+         * someone is reading an audit log.
+         */
+        ...(search
+          ? {
+              OR: [
+                { action: { contains: search, mode: 'insensitive' } },
+                { entity: { contains: search, mode: 'insensitive' } },
+                { entityId: { contains: search, mode: 'insensitive' } },
+                { actorName: { contains: search, mode: 'insensitive' } },
+                { user: { is: { name: { contains: search, mode: 'insensitive' } } } },
+                { ipAddress: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 200,
       include: { user: { select: { name: true } } },
@@ -28,9 +57,25 @@ export default async function AuditLogsPage() {
 
   return (
     <>
-      <PageHeader title="Audit log" description="Every administrative action, recorded" />
+      <PageHeader
+        title="Audit log"
+        description="Every administrative action, recorded. The newest 200 matching rows."
+      />
+
+      <div className="mb-4 max-w-sm">
+        <SearchBox placeholder="Action, who, entity, record id or IP…" defaultValue={search} />
+      </div>
+
       {logs.length === 0 ? (
-        <EmptyState icon={<ScrollText />} title="No activity yet" description="Admin actions will be logged here." />
+        <EmptyState
+          icon={<ScrollText />}
+          title={search ? `Nothing matches “${search}”` : 'No activity yet'}
+          description={
+            search
+              ? 'Try part of an action name, a person, or the id of the record you are tracing.'
+              : 'Admin actions will be logged here.'
+          }
+        />
       ) : (
         <div className="rounded-xl border bg-card shadow-soft">
           <Table>

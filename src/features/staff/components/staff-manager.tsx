@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import type { UserRole } from '@prisma/client'
-import { Copy, KeyRound, MoreVertical, Pencil, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { Copy, KeyRound, MoreVertical, Pencil, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -91,6 +91,13 @@ export function StaffManager({
   currentUserId: string
 }) {
   const [staff, setStaff] = React.useState(initial)
+  /*
+   * Filtered in the browser, not the URL. A restaurant's staff list is tens of
+   * rows and entirely on screen already, so a round trip per keystroke would
+   * cost more than the filter saves — unlike orders or the audit log, which are
+   * paged and must be searched in the query.
+   */
+  const [search, setSearch] = React.useState('')
   const [inviteOpen, setInviteOpen] = React.useState(false)
   const [editing, setEditing] = React.useState<StaffMember | null>(null)
   const [passwordFor, setPasswordFor] = React.useState<StaffMember | null>(null)
@@ -111,6 +118,20 @@ export function StaffManager({
     }
   }
 
+  const visible = React.useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return staff
+    return staff.filter((member) =>
+      [
+        member.name,
+        member.email,
+        member.phone,
+        ROLE_LABELS[member.role],
+        member.branchName,
+      ].some((field) => field?.toLowerCase().includes(term)),
+    )
+  }, [staff, search])
+
   return (
     <>
       <PageHeader
@@ -125,8 +146,27 @@ export function StaffManager({
         }
       />
 
-      {staff.length === 0 ? (
-        <EmptyState icon={<ShieldCheck />} title="No staff yet" description="Invite your team to give them access." />
+      <div className="mb-4 max-w-sm">
+        <Input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Name, email, phone, code or role…"
+          aria-label="Search staff"
+          startIcon={<Search className="size-4" />}
+        />
+      </div>
+
+      {visible.length === 0 ? (
+        <EmptyState
+          icon={<ShieldCheck />}
+          title={search ? `Nobody matches “${search}”` : 'No staff yet'}
+          description={
+            search
+              ? 'Try part of a name, an email, a phone number or a staff code.'
+              : 'Invite your team to give them access.'
+          }
+        />
       ) : (
         <div className="rounded-xl border bg-card shadow-soft">
           <Table>
@@ -142,7 +182,7 @@ export function StaffManager({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {staff.map((member) => (
+              {visible.map((member) => (
                 <TableRow key={member.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">

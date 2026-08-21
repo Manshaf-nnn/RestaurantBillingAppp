@@ -43,6 +43,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { logout } from '@/features/auth/actions'
 import { LocalTime } from '@/components/local-time'
 import { markAllRead } from '../actions'
+import { GlobalSearch } from '@/features/search/components/global-search'
 import { NAV_SECTIONS } from '../nav'
 import { callAction } from '@/lib/use-action'
 
@@ -241,6 +242,8 @@ export function DashboardShell({
           {locations && locations.length > 1 ? (
             <BranchSwitcher locations={locations} />
           ) : null}
+
+          <GlobalSearch />
 
           {isRealtimeEnabled() ? (
             <Badge variant={connected ? 'success' : 'destructive'} className="hidden sm:inline-flex">
