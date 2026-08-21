@@ -71,35 +71,38 @@ export default async function CustomerAnalyticsPage() {
 
       <div className="mt-5 space-y-5">
         <ReportTable
+          currency={restaurant.currency}
           title="Top spenders"
           columns={[
-            { key: 'name', label: 'Customer', format: (r) => String(r.name ?? 'Unnamed') },
-            { key: 'phone', label: 'Phone', format: (r) => String(r.phone ?? '—') },
+            { key: 'name', label: 'Customer', format: 'text', fallback: 'Unnamed' },
+            { key: 'phone', label: 'Phone', format: 'text' },
             { key: 'orders', label: 'Visits', align: 'right' },
-            { key: 'spent', label: 'Lifetime spend', align: 'right', format: (r) => money(Number(r.spent)) },
+            { key: 'spent', label: 'Lifetime spend', align: 'right', format: 'money' },
           ]}
           rows={data.topSpenders as unknown as Array<Record<string, unknown>>}
           filename="top-spenders"
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Most frequent"
           columns={[
-            { key: 'name', label: 'Customer', format: (r) => String(r.name ?? 'Unnamed') },
-            { key: 'phone', label: 'Phone', format: (r) => String(r.phone ?? '—') },
+            { key: 'name', label: 'Customer', format: 'text', fallback: 'Unnamed' },
+            { key: 'phone', label: 'Phone', format: 'text' },
             { key: 'orders', label: 'Visits', align: 'right' },
-            { key: 'spent', label: 'Lifetime spend', align: 'right', format: (r) => money(Number(r.spent)) },
+            { key: 'spent', label: 'Lifetime spend', align: 'right', format: 'money' },
           ]}
           rows={data.mostFrequent as unknown as Array<Record<string, unknown>>}
           filename="most-frequent-customers"
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="By group"
           columns={[
-            { key: 'group', label: 'Group', format: (r) => String(r.group).toLowerCase() },
+            { key: 'group', label: 'Group', format: 'label' },
             { key: 'count', label: 'Customers', align: 'right' },
-            { key: 'spent', label: 'Lifetime spend', align: 'right', format: (r) => money(Number(r.spent)) },
+            { key: 'spent', label: 'Lifetime spend', align: 'right', format: 'money' },
           ]}
           rows={data.byGroup as unknown as Array<Record<string, unknown>>}
           filename="customers-by-group"

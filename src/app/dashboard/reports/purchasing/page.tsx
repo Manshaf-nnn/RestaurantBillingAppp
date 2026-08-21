@@ -124,25 +124,27 @@ export default async function PurchasingReportPage({
 
       <div className="space-y-5">
         <ReportTable
+          currency={restaurant.currency}
           title="Spend by supplier"
           columns={[
             { key: 'supplier', label: 'Supplier' },
             { key: 'orders', label: 'Orders', align: 'right' },
-            { key: 'spend', label: 'Spend', align: 'right', format: (r) => money(Number(r.spend)) },
+            { key: 'spend', label: 'Spend', align: 'right', format: 'money' },
           ]}
           rows={supplierRows as unknown as Array<Record<string, unknown>>}
           filename="spend-by-supplier"
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Price movement"
           description="Items bought more than once in this period, biggest rise first. Prices are per base unit, so a box and a kilo compare fairly."
           columns={[
             { key: 'name', label: 'Item' },
-            { key: 'supplier', label: 'Supplier', format: (r) => String(r.supplier ?? '—') },
-            { key: 'first', label: 'First paid', align: 'right', format: (r) => money(Number(r.first)) },
-            { key: 'latest', label: 'Last paid', align: 'right', format: (r) => money(Number(r.latest)) },
-            { key: 'change', label: 'Change', align: 'right', format: (r) => `${Number(r.change) > 0 ? '+' : ''}${r.change}%` },
+            { key: 'supplier', label: 'Supplier', format: 'text' },
+            { key: 'first', label: 'First paid', align: 'right', format: 'money' },
+            { key: 'latest', label: 'Last paid', align: 'right', format: 'money' },
+            { key: 'change', label: 'Change', align: 'right', format: 'delta' },
           ]}
           rows={priceRows as unknown as Array<Record<string, unknown>>}
           filename="price-movement"
@@ -150,14 +152,15 @@ export default async function PurchasingReportPage({
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Outstanding orders"
           description="Approved or sent, not yet fully received."
           columns={[
             { key: 'number', label: 'Order' },
-            { key: 'supplierName', label: 'Supplier', format: (r) => String(r.supplierName ?? '—') },
-            { key: 'status', label: 'Status', format: (r) => String(r.status).replace(/_/g, ' ').toLowerCase() },
-            { key: 'receivedPercent', label: 'Received', align: 'right', format: (r) => `${r.receivedPercent}%` },
-            { key: 'total', label: 'Value', align: 'right', format: (r) => money(Number(r.total)) },
+            { key: 'supplierName', label: 'Supplier', format: 'text' },
+            { key: 'status', label: 'Status', format: 'label' },
+            { key: 'receivedPercent', label: 'Received', align: 'right', format: 'percent' },
+            { key: 'total', label: 'Value', align: 'right', format: 'money' },
           ]}
           rows={outstanding as unknown as Array<Record<string, unknown>>}
           filename="outstanding-purchase-orders"
@@ -165,13 +168,14 @@ export default async function PurchasingReportPage({
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Needs ordering"
           columns={[
             { key: 'name', label: 'Item' },
-            { key: 'currentQty', label: 'In stock', align: 'right', format: (r) => `${r.currentQty} ${String(r.unit).toLowerCase()}` },
+            { key: 'currentQty', label: 'In stock', align: 'right', format: 'quantity', unitKey: 'unit' },
             { key: 'suggestedQty', label: 'Suggested', align: 'right' },
-            { key: 'supplierName', label: 'Supplier', format: (r) => String(r.supplierName ?? '—') },
-            { key: 'estimatedCost', label: 'Est. cost', align: 'right', format: (r) => money(Number(r.estimatedCost)) },
+            { key: 'supplierName', label: 'Supplier', format: 'text' },
+            { key: 'estimatedCost', label: 'Est. cost', align: 'right', format: 'money' },
           ]}
           rows={suggestions as unknown as Array<Record<string, unknown>>}
           filename="reorder-suggestions"

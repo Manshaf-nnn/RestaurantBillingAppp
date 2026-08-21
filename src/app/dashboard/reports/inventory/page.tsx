@@ -80,14 +80,15 @@ export default async function InventoryReportPage({
 
       <div className="space-y-5">
         <ReportTable
+          currency={restaurant.currency}
           title="Needs attention"
           description="Out of stock first — those are the ones that stop service."
           columns={[
             { key: 'name', label: 'Item' },
-            { key: 'level', label: 'Status', format: (r) => String(r.level).replace(/_/g, ' ').toLowerCase() },
-            { key: 'quantity', label: 'In stock', align: 'right', format: (r) => `${r.quantity} ${String(r.unit).toLowerCase()}` },
+            { key: 'level', label: 'Status', format: 'label' },
+            { key: 'quantity', label: 'In stock', align: 'right', format: 'quantity', unitKey: 'unit' },
             { key: 'reorderLevel', label: 'Reorder at', align: 'right' },
-            { key: 'branchName', label: 'Location', format: (r) => String(r.branchName ?? '—') },
+            { key: 'branchName', label: 'Location', format: 'text' },
           ]}
           rows={alerts as unknown as Array<Record<string, unknown>>}
           filename="stock-alerts"
@@ -95,29 +96,32 @@ export default async function InventoryReportPage({
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Wastage by reason"
           columns={[
             { key: 'label', label: 'Reason' },
             { key: 'count', label: 'Records', align: 'right' },
-            { key: 'value', label: 'Value', align: 'right', format: (r) => money(Number(r.value)) },
-            { key: 'share', label: 'Share', align: 'right', format: (r) => `${r.share}%` },
+            { key: 'value', label: 'Value', align: 'right', format: 'money' },
+            { key: 'share', label: 'Share', align: 'right', format: 'percent' },
           ]}
           rows={wastage.byReason as unknown as Array<Record<string, unknown>>}
           filename="wastage-by-reason"
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Most wasted items"
           columns={[
             { key: 'name', label: 'Item' },
-            { key: 'quantity', label: 'Quantity', align: 'right', format: (r) => `${Math.round(Number(r.quantity) * 100) / 100} ${String(r.unit).toLowerCase()}` },
-            { key: 'value', label: 'Value', align: 'right', format: (r) => money(Number(r.value)) },
+            { key: 'quantity', label: 'Quantity', align: 'right', format: 'quantity', unitKey: 'unit' },
+            { key: 'value', label: 'Value', align: 'right', format: 'money' },
           ]}
           rows={wastage.topItems as unknown as Array<Record<string, unknown>>}
           filename="most-wasted-items"
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Stock count variance"
           description="What the system held versus what was counted, from approved stock takes."
           columns={[
@@ -125,8 +129,8 @@ export default async function InventoryReportPage({
             { key: 'expected', label: 'Expected', align: 'right' },
             { key: 'actual', label: 'Counted', align: 'right' },
             { key: 'variance', label: 'Variance', align: 'right' },
-            { key: 'varianceValue', label: 'Value', align: 'right', format: (r) => money(Number(r.varianceValue)) },
-            { key: 'likelyExplained', label: 'Explained', format: (r) => (r.likelyExplained ? 'wastage logged' : 'unexplained') },
+            { key: 'varianceValue', label: 'Value', align: 'right', format: 'money' },
+            { key: 'likelyExplained', label: 'Explained', format: 'boolean', trueLabel: 'wastage logged', falseLabel: 'unexplained' },
           ]}
           rows={variance.lines as unknown as Array<Record<string, unknown>>}
           filename="stock-variance"
@@ -134,14 +138,15 @@ export default async function InventoryReportPage({
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Expiring stock"
           description="Batches dated within 30 days, soonest first."
           columns={[
             { key: 'itemName', label: 'Item' },
             { key: 'batchNo', label: 'Batch' },
-            { key: 'remainingQty', label: 'Remaining', align: 'right', format: (r) => `${r.remainingQty} ${String(r.unit).toLowerCase()}` },
-            { key: 'daysLeft', label: 'Days left', align: 'right', format: (r) => r.daysLeft === null ? '—' : String(r.daysLeft) },
-            { key: 'valueAtRisk', label: 'At risk', align: 'right', format: (r) => money(Number(r.valueAtRisk)) },
+            { key: 'remainingQty', label: 'Remaining', align: 'right', format: 'quantity', unitKey: 'unit' },
+            { key: 'daysLeft', label: 'Days left', align: 'right', format: 'text' },
+            { key: 'valueAtRisk', label: 'At risk', align: 'right', format: 'money' },
           ]}
           rows={expiring as unknown as Array<Record<string, unknown>>}
           filename="expiring-stock"

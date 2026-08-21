@@ -79,35 +79,38 @@ export default async function SalesReportPage({
 
       <div className="space-y-5">
         <ReportTable
+          currency={restaurant.currency}
           title="By payment method"
           columns={[
             { key: 'label', label: 'Method' },
             { key: 'count', label: 'Payments', align: 'right' },
-            { key: 'amount', label: 'Amount', align: 'right', format: (r) => money(Number(r.amount)) },
-            { key: 'share', label: 'Share', align: 'right', format: (r) => `${r.share}%` },
+            { key: 'amount', label: 'Amount', align: 'right', format: 'money' },
+            { key: 'share', label: 'Share', align: 'right', format: 'percent' },
           ]}
           rows={payments.byMethod as unknown as Array<Record<string, unknown>>}
           filename={`payments-${range.preset.toLowerCase()}`}
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="By item"
           description="Top 50 by revenue."
           columns={[
             { key: 'label', label: 'Item' },
             { key: 'quantity', label: 'Sold', align: 'right' },
-            { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+            { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
           ]}
           rows={sales.byItem as unknown as Array<Record<string, unknown>>}
           filename={`sales-by-item-${range.preset.toLowerCase()}`}
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="By category"
           columns={[
             { key: 'label', label: 'Category' },
             { key: 'orders', label: 'Lines', align: 'right' },
-            { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+            { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
           ]}
           rows={sales.byCategory as unknown as Array<Record<string, unknown>>}
           filename={`sales-by-category-${range.preset.toLowerCase()}`}
@@ -115,11 +118,12 @@ export default async function SalesReportPage({
 
         {sales.byBranch.length > 1 && (
           <ReportTable
+            currency={restaurant.currency}
             title="By location"
             columns={[
               { key: 'label', label: 'Location' },
               { key: 'orders', label: 'Orders', align: 'right' },
-              { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+              { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
             ]}
             rows={sales.byBranch as unknown as Array<Record<string, unknown>>}
             filename={`sales-by-location-${range.preset.toLowerCase()}`}
@@ -128,12 +132,13 @@ export default async function SalesReportPage({
 
         {sales.byEmployee.length > 0 && (
           <ReportTable
+            currency={restaurant.currency}
             title="By employee"
             description="Orders entered by each member of staff."
             columns={[
               { key: 'label', label: 'Employee' },
               { key: 'orders', label: 'Orders', align: 'right' },
-              { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+              { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
             ]}
             rows={sales.byEmployee as unknown as Array<Record<string, unknown>>}
             filename={`sales-by-employee-${range.preset.toLowerCase()}`}
@@ -141,23 +146,25 @@ export default async function SalesReportPage({
         )}
 
         <ReportTable
+          currency={restaurant.currency}
           title="By hour"
           description="When the money comes in — useful for rostering."
           columns={[
             { key: 'label', label: 'Hour' },
             { key: 'orders', label: 'Orders', align: 'right' },
-            { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+            { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
           ]}
           rows={sales.byHour as unknown as Array<Record<string, unknown>>}
           filename={`sales-by-hour-${range.preset.toLowerCase()}`}
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="By day"
           columns={[
             { key: 'label', label: 'Day' },
             { key: 'orders', label: 'Orders', align: 'right' },
-            { key: 'sales', label: 'Revenue', align: 'right', format: (r) => money(Number(r.sales)) },
+            { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
           ]}
           rows={sales.byDay as unknown as Array<Record<string, unknown>>}
           filename={`sales-by-day-${range.preset.toLowerCase()}`}

@@ -43,7 +43,7 @@ export async function GET() {
      */
     const row = await prisma.restaurant.findUnique({
       where: { id: rid },
-      select: { name: true, status: true, isActive: true, plan: true, trialEndsAt: true, currency: true, timezone: true },
+      select: { name: true, status: true, isActive: true, plan: true, trialEndsAt: true, currency: true, timezone: true, locale: true },
     })
 
     const trialExpired =
@@ -56,6 +56,10 @@ export async function GET() {
       plan: row?.plan ?? null,
       trialEndsAt: row?.trialEndsAt?.toISOString() ?? null,
       trialExpired,
+      // These three feed every money and date formatter in the app.
+      currency: row?.currency ?? null,
+      timezone: row?.timezone ?? null,
+      locale: row?.locale ?? null,
       // The two conditions that lock a working account out of every page.
       blocksDashboard:
         !row
@@ -89,6 +93,19 @@ export async function GET() {
         })],
       ['LAYOUT: branch switcher', async () =>
         (await import('@/features/transfers/queries')).listSwitchableLocations(rid)],
+      ['reports: summary (index page)', async () => {
+        const m = await import('@/features/analytics/queries')
+        return m.getReportSummary(rid, m.resolveRange('week'))
+      }],
+      ['reports: online payments', async () =>
+        (await import('@/features/payments/queries')).getOnlinePayments(rid)],
+      ['feedback: overview', async () =>
+        (await import('@/features/feedback/queries')).getFeedbackOverview(rid)],
+      ['audit log', async () =>
+        prisma.auditLog.findMany({
+          where: { restaurantId: rid }, orderBy: { createdAt: 'desc' }, take: 20,
+          select: { id: true, action: true, createdAt: true },
+        })],
       ['dashboard: stats', async () =>
         (await import('@/features/analytics/queries')).getDashboardStats(rid)],
       ['dashboard: locations', async () =>

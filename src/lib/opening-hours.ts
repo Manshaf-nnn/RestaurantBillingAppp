@@ -29,14 +29,39 @@ export const DEFAULT_HOURS: OpeningHours = {
   sun: { open: '10:00', close: '22:30' },
 }
 
+/** Cheap once, then cached — this is called on every guest menu render. */
+const zoneChecked = new Map<string, boolean>()
+
+function isValidTimeZone(timeZone: string): boolean {
+  if (!timeZone) return false
+  const cached = zoneChecked.get(timeZone)
+  if (cached !== undefined) return cached
+  let ok = true
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone })
+  } catch {
+    ok = false
+  }
+  zoneChecked.set(timeZone, ok)
+  return ok
+}
+
 function toMinutes(value: string): number {
   const [hours, minutes] = value.split(':').map(Number)
   return (hours || 0) * 60 + (minutes || 0)
 }
 
 function nowInZone(timeZone: string): { day: number; minutes: number } {
+  /*
+   * `timeZone` comes from restaurant settings, which is a free-form String with
+   * no enum behind it. An unrecognised value makes Intl throw
+   * `RangeError: Invalid time zone specified`, and this runs while rendering the
+   * guest menu — so one bad settings entry would take the storefront down rather
+   * than merely show the wrong opening hours. Falling back to UTC keeps the menu
+   * up; the worst case is an "open" badge that is a few hours out.
+   */
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
+    timeZone: isValidTimeZone(timeZone) ? timeZone : 'UTC',
     weekday: 'short',
     hour: '2-digit',
     minute: '2-digit',

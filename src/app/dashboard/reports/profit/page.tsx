@@ -83,16 +83,17 @@ export default async function ProfitReportPage({
       <div className="space-y-5">
         {comparison.rows.length > 1 && (
           <ReportTable
+            currency={restaurant.currency}
             title="Branch comparison"
             description="Every location side by side, best gross profit first."
             columns={[
               { key: 'name', label: 'Location' },
               { key: 'orders', label: 'Orders', align: 'right' },
-              { key: 'sales', label: 'Sales', align: 'right', format: (r) => money(Number(r.sales)) },
-              { key: 'cogs', label: 'Ingredients', align: 'right', format: (r) => money(Number(r.cogs)) },
-              { key: 'grossProfit', label: 'Gross profit', align: 'right', format: (r) => money(Number(r.grossProfit)) },
-              { key: 'grossMarginPercent', label: 'Margin', align: 'right', format: (r) => r.grossMarginPercent === null ? '—' : `${r.grossMarginPercent}%` },
-              { key: 'wastage', label: 'Wastage', align: 'right', format: (r) => money(Number(r.wastage)) },
+              { key: 'sales', label: 'Sales', align: 'right', format: 'money' },
+              { key: 'cogs', label: 'Ingredients', align: 'right', format: 'money' },
+              { key: 'grossProfit', label: 'Gross profit', align: 'right', format: 'money' },
+              { key: 'grossMarginPercent', label: 'Margin', align: 'right', format: 'percent' },
+              { key: 'wastage', label: 'Wastage', align: 'right', format: 'money' },
             ]}
             rows={comparison.rows as unknown as Array<Record<string, unknown>>}
             filename={`branch-comparison-${range.preset.toLowerCase()}`}
@@ -100,28 +101,30 @@ export default async function ProfitReportPage({
         )}
 
         <ReportTable
+          currency={restaurant.currency}
           title="Gross profit by item"
           description="Worst margin sits at the bottom — those are the dishes to reprice or re-cost."
           columns={[
             { key: 'label', label: 'Item' },
             { key: 'quantity', label: 'Sold', align: 'right' },
-            { key: 'revenue', label: 'Revenue', align: 'right', format: (r) => money(Number(r.revenue)) },
-            { key: 'cogs', label: 'Cost', align: 'right', format: (r) => money(Number(r.cogs)) },
-            { key: 'grossProfit', label: 'Gross profit', align: 'right', format: (r) => money(Number(r.grossProfit)) },
-            { key: 'foodCostPercent', label: 'Food cost', align: 'right', format: (r) => r.foodCostPercent === null ? '—' : `${r.foodCostPercent}%` },
+            { key: 'revenue', label: 'Revenue', align: 'right', format: 'money' },
+            { key: 'cogs', label: 'Cost', align: 'right', format: 'money' },
+            { key: 'grossProfit', label: 'Gross profit', align: 'right', format: 'money' },
+            { key: 'foodCostPercent', label: 'Food cost', align: 'right', format: 'percent' },
           ]}
           rows={profit.byItem as unknown as Array<Record<string, unknown>>}
           filename={`gross-profit-by-item-${range.preset.toLowerCase()}`}
         />
 
         <ReportTable
+          currency={restaurant.currency}
           title="Gross profit by category"
           columns={[
             { key: 'label', label: 'Category' },
-            { key: 'revenue', label: 'Revenue', align: 'right', format: (r) => money(Number(r.revenue)) },
-            { key: 'cogs', label: 'Cost', align: 'right', format: (r) => money(Number(r.cogs)) },
-            { key: 'grossProfit', label: 'Gross profit', align: 'right', format: (r) => money(Number(r.grossProfit)) },
-            { key: 'grossMarginPercent', label: 'Margin', align: 'right', format: (r) => r.grossMarginPercent === null ? '—' : `${r.grossMarginPercent}%` },
+            { key: 'revenue', label: 'Revenue', align: 'right', format: 'money' },
+            { key: 'cogs', label: 'Cost', align: 'right', format: 'money' },
+            { key: 'grossProfit', label: 'Gross profit', align: 'right', format: 'money' },
+            { key: 'grossMarginPercent', label: 'Margin', align: 'right', format: 'percent' },
           ]}
           rows={profit.byCategory as unknown as Array<Record<string, unknown>>}
           filename={`gross-profit-by-category-${range.preset.toLowerCase()}`}
