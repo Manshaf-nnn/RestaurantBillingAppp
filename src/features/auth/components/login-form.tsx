@@ -19,8 +19,10 @@ import { callAction } from '@/lib/use-action'
 export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }) {
   const params = useSearchParams()
   const nextPath = params.get('next')
-  const staffCode = params.get('staff')
-  const [staffName, setStaffName] = React.useState<string | null>(null)
+  // Only ever used to prefill the email box; never trusted for anything else.
+  const rawEmail = params.get('email')
+  const prefillEmail = rawEmail && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(rawEmail) ? rawEmail : null
+  const staffName = params.get('name')
   const [showPassword, setShowPassword] = React.useState(false)
   const [formError, setFormError] = React.useState<string | null>(null)
   const isAdmin = variant === 'admin'
@@ -31,26 +33,23 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
   })
 
   /*
-   * A staff link carries the person's code. Looking it up fills in their email
-   * and greets them by name, so the only thing they type is their password.
-   * It is a convenience, never a credential — the lookup returns nothing that
-   * grants access, and a failure leaves the ordinary form untouched.
+   * A staff link carries that person's own email, so the only thing they type
+   * is their sign-in code.
+   *
+   * It used to carry their staff code and look the email up through a public
+   * endpoint. Staff codes are a per-restaurant sequence, so anyone could walk
+   * W-0001 upward and harvest every email in the restaurant. Putting the address
+   * straight in the link tells the recipient only what they already know, and
+   * there is no longer an endpoint to walk.
+   *
+   * Prefilling is a convenience and nothing more — the password is still what
+   * authenticates, and a link with someone else's email in it gets no further
+   * than the sign-in form.
    */
   React.useEffect(() => {
-    if (!staffCode) return
-    let cancelled = false
-    fetch(`/api/staff/lookup?code=${encodeURIComponent(staffCode)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled || !data?.found) return
-        setStaffName(data.name)
-        form.setValue('email', data.email)
-      })
-      .catch(() => {
-        // Signing in by hand still works.
-      })
-    return () => { cancelled = true }
-  }, [staffCode, form])
+    if (!prefillEmail) return
+    form.setValue('email', prefillEmail)
+  }, [prefillEmail, form])
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null)
@@ -92,9 +91,10 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
         </p>
       </header>
 
-      {staffName ? (
+      {staffName || prefillEmail ? (
         <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
-          Welcome back, <strong>{staffName}</strong> — enter your password to continue.
+          {staffName ? <>Welcome back, <strong>{staffName}</strong> — </> : null}
+          enter your sign-in code to continue.
         </p>
       ) : null}
 

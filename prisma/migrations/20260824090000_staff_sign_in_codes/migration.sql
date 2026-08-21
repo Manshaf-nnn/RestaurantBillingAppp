@@ -1,0 +1,12 @@
+-- The code a member of staff signs in with.
+--
+-- Deliberately separate from "staffCode". That one is a per-restaurant sequence
+-- (W-0001, W-0002, ...) used to identify who served a table; as a credential a
+-- whole restaurant's logins would be guessable in about twenty attempts. This
+-- column holds a random 8-character code which is also hashed into
+-- "passwordHash", so there is one authentication path.
+--
+-- Nullable and left empty here. Existing staff keep the temporary password they
+-- were emailed until an owner issues a code from the staff page, so nobody is
+-- locked out by this migration.
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "signInCode" TEXT;

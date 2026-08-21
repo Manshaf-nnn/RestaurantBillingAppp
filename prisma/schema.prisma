@@ -620,6 +620,11 @@ model User {
   /// link, a printed docket, or when an owner asks "who served table 4?".
   /// Unique within a restaurant, never across restaurants.
   staffCode           String?
+  /// The code this person signs in with, and the plaintext of their password.
+  /// Separate from staffCode on purpose: that one is a sequence and would be
+  /// guessable as a credential. Readable by the owner so a lost card can be
+  /// reprinted — the same secret is already in that person's pocket.
+  signInCode          String?
   branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import type { UserRole } from '@prisma/client'
-import { Copy, MoreVertical, Pencil, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { Copy, KeyRound, MoreVertical, Pencil, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -41,7 +41,10 @@ import { Alert } from '@/components/ui/feedback'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { initials } from '@/lib/utils'
 import { ROLE_LABELS } from '@/lib/rbac'
-import { inviteStaff, removeStaff, updateStaff } from '../actions'
+import { useRouter } from 'next/navigation'
+
+import { useAction } from '@/lib/use-action'
+import { inviteStaff, removeStaff, setStaffPassword, updateStaff } from '../actions'
 import { callAction } from '@/lib/use-action'
 
 export interface StaffMember {
@@ -68,6 +71,7 @@ export function StaffManager({
   const [staff, setStaff] = React.useState(initial)
   const [inviteOpen, setInviteOpen] = React.useState(false)
   const [editing, setEditing] = React.useState<StaffMember | null>(null)
+  const [passwordFor, setPasswordFor] = React.useState<StaffMember | null>(null)
   const [deleteId, setDeleteId] = React.useState<string | null>(null)
 
   React.useEffect(() => setStaff(initial), [initial])
@@ -162,6 +166,9 @@ export function StaffManager({
                             <DropdownMenuItem onClick={() => setEditing(member)}>
                               <Pencil /> Edit
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setPasswordFor(member)}>
+                              <KeyRound /> Set password
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem destructive onClick={() => setDeleteId(member.id)}>
                               <Trash2 /> Remove
@@ -184,6 +191,7 @@ export function StaffManager({
         roles={assignableRoles}
         onClose={() => setEditing(null)}
       />
+      <PasswordDialog member={passwordFor} onClose={() => setPasswordFor(null)} />
 
       <ConfirmDialog
         open={Boolean(deleteId)}
@@ -386,6 +394,85 @@ function EditDialog({
           </Button>
           <Button onClick={save} loading={saving}>
             Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * The owner setting someone's password by hand.
+ *
+ * For the member of staff who would rather have something they can remember
+ * than a printed code. Doing so clears their sign-in code, because a card
+ * showing a code that is no longer the password is worse than no card.
+ *
+ * The same strength rules apply as anywhere else — this route must not become
+ * the weak one, since the generated codes it replaces are eight random
+ * characters.
+ */
+function PasswordDialog({
+  member,
+  onClose,
+}: {
+  member: StaffMember | null
+  onClose: () => void
+}) {
+  const router = useRouter()
+  const { busy, run } = useAction()
+  const [password, setPassword] = React.useState('')
+  const [fieldError, setFieldError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    setPassword('')
+    setFieldError(null)
+  }, [member])
+
+  const submit = () =>
+    run(() => setStaffPassword({ userId: member!.id, password }), {
+      success: `Password updated for ${member?.name}`,
+      onFail: (result) => {
+        setFieldError(result.fieldErrors?.password?.[0] ?? result.error)
+      },
+      onDone: () => {
+        onClose()
+        router.refresh()
+      },
+    })
+
+  return (
+    <Dialog open={Boolean(member)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Set a password for {member?.name}</DialogTitle>
+          <DialogDescription>
+            They sign in with <strong>{member?.email}</strong>. This replaces their sign-in code,
+            and signs them out of any device they are already using.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Field label="New password" htmlFor="staff-password" required error={fieldError ?? undefined}>
+          <Input
+            id="staff-password"
+            type="text"
+            autoComplete="off"
+            placeholder="At least 8 characters, with a capital and a number"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              setFieldError(null)
+            }}
+          />
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          Shown as you type so you can read it out to them.
+        </p>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={busy || password.length < 8}>
+            {busy ? 'Saving…' : 'Set password'}
           </Button>
         </DialogFooter>
       </DialogContent>

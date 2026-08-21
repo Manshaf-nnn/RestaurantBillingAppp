@@ -1,14 +1,14 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { nextStaffCode } from './codes'
+import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { assignableRoles, PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
-import { generateToken, hashPassword } from '@/server/auth/password'
+import { hashPassword } from '@/server/auth/password'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { sendMail, staffInviteEmail } from '@/server/mailer'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -17,6 +17,7 @@ import {
   couponSchema,
   customerSchema,
   inviteStaffSchema,
+  setStaffPasswordSchema,
   replyReviewSchema,
   updateStaffSchema,
 } from './schema'
@@ -40,8 +41,12 @@ export async function inviteStaff(
       const existing = await prisma.user.findUnique({ where: { email: data.email } })
       if (existing) throw new ConflictError('A user with that email already exists')
 
-      // A temporary password is generated and emailed; the invitee changes it.
-      const temporaryPassword = `${generateToken(4)}A1!`
+      /*
+       * The sign-in code is the password. A waiter is handed a card with their
+       * email and this code on it; nothing else has to be remembered or reset
+       * on the first shift.
+       */
+      const temporaryPassword = generateSignInCode()
       const passwordHash = await hashPassword(temporaryPassword)
 
       // Issued here so a new hire can be handed a code immediately.
@@ -54,6 +59,7 @@ export async function inviteStaff(
           phone: data.phone || null,
           role: data.role,
           staffCode,
+          signInCode: temporaryPassword,
           passwordHash,
           emailVerifiedAt: new Date(),
         },
@@ -136,6 +142,109 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
       return { id: data.id }
     },
     'Staff member updated.',
+  )
+}
+
+/**
+ * Who the acting admin is allowed to change the credentials of.
+ *
+ * Stricter than STAFF_MANAGE alone. Without the role check a manager could
+ * reset the owner's password and take the restaurant — `assignableRoles` already
+ * encodes who outranks whom, so it is reused rather than restated.
+ */
+async function credentialTarget(adminRole: string, adminRestaurantId: string, adminId: string, userId: string) {
+  const target = await prisma.user.findFirst({
+    where: { id: userId, restaurantId: adminRestaurantId, deletedAt: null },
+    select: { id: true, name: true, email: true, role: true, staffCode: true },
+  })
+  if (!target) throw new NotFoundError('Staff member')
+  if (target.id === adminId) {
+    throw new AppError('Use your own profile to change your password', 400, 'SELF_EDIT')
+  }
+  if (!assignableRoles(adminRole as never).includes(target.role as never)) {
+    throw new ForbiddenError(`You cannot change the sign-in details of ${target.name}`)
+  }
+  return target
+}
+
+/** Issue a fresh sign-in code. The previous one stops working immediately. */
+export async function regenerateSignInCode(
+  userId: string,
+): Promise<ActionResult<{ id: string; name: string; code: string }>> {
+  return runSafe(async () => {
+    const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
+    const target = await credentialTarget(admin.role, admin.restaurantId, admin.id, userId)
+
+    const code = await issueSignInCode(target.id)
+
+    // A new credential must not leave the old one usable through a live session.
+    await prisma.session.updateMany({
+      where: { userId: target.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    })
+
+    await audit({
+      restaurantId: admin.restaurantId,
+      userId: admin.id,
+      actorName: admin.name,
+      action: AUDIT_ACTIONS.UPDATE,
+      entity: 'User',
+      entityId: target.id,
+      // Never the code itself — the audit log is read by more people than the
+      // staff page is.
+      after: { signInCodeReissued: true, staffCode: target.staffCode },
+    })
+
+    revalidatePath('/dashboard/staff/codes')
+    revalidatePath('/dashboard/staff')
+    return { id: target.id, name: target.name, code }
+  }, 'New sign-in code issued.')
+}
+
+/**
+ * The owner sets a password by hand.
+ *
+ * For the member of staff who would rather have something memorable than a
+ * printed code. It clears `signInCode`, because a card showing a code that is no
+ * longer the password is worse than no card at all.
+ */
+export async function setStaffPassword(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    setStaffPasswordSchema,
+    input,
+    async (data) => {
+      const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
+      const target = await credentialTarget(admin.role, admin.restaurantId, admin.id, data.userId)
+
+      await prisma.user.update({
+        where: { id: target.id },
+        data: {
+          passwordHash: await hashPassword(data.password),
+          signInCode: null,
+          failedLogins: 0,
+          lockedUntil: null,
+        },
+      })
+      await prisma.session.updateMany({
+        where: { userId: target.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+
+      await audit({
+        restaurantId: admin.restaurantId,
+        userId: admin.id,
+        actorName: admin.name,
+        action: AUDIT_ACTIONS.UPDATE,
+        entity: 'User',
+        entityId: target.id,
+        after: { passwordSetByOwner: true },
+      })
+
+      revalidatePath('/dashboard/staff')
+      revalidatePath('/dashboard/staff/codes')
+      return { id: target.id }
+    },
+    'Password updated.',
   )
 }
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { emailSchema, phoneSchema } from '@/features/auth/schema'
+import { emailSchema, passwordSchema, phoneSchema } from '@/features/auth/schema'
 
 const STAFF_ROLES = ['MANAGER', 'KITCHEN', 'CASHIER', 'WAITER'] as const
 
@@ -67,4 +67,16 @@ export type CouponInput = z.infer<typeof couponSchema>
 export const replyReviewSchema = z.object({
   id: z.string().cuid(),
   reply: z.string().trim().min(1, 'Write a reply').max(500),
+})
+
+/**
+ * An owner setting a member of staff's password by hand.
+ *
+ * Held to the same strength rules as any other password (`passwordSchema`), so
+ * the manual route cannot become the weak one — the generated sign-in codes it
+ * replaces are 8 characters of random.
+ */
+export const setStaffPasswordSchema = z.object({
+  userId: z.string().min(1),
+  password: passwordSchema,
 })
