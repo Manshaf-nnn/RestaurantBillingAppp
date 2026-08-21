@@ -4,6 +4,7 @@ import type { Purchase, PurchaseStatus, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
+import { toBaseUnits } from '@/features/inventory/units'
 
 /**
  * Purchase orders.
@@ -135,12 +136,7 @@ export async function createPurchaseOrder(params: {
     if (line.unitCost < 0) throw new AppError('A cost cannot be negative', 400, 'PO_BAD_COST')
   }
 
-  const owned = await prisma.inventoryItem.count({
-    where: { id: { in: params.lines.map((l) => l.itemId) }, restaurantId: params.restaurantId },
-  })
-  if (owned !== new Set(params.lines.map((l) => l.itemId)).size) {
-    throw new NotFoundError('Inventory item')
-  }
+  await validateLines(params.restaurantId, params.lines)
 
   const money = totalsFor(params.lines, params.discount ?? 0, params.taxTotal ?? 0)
 
@@ -172,10 +168,61 @@ export async function createPurchaseOrder(params: {
   })
 }
 
+/**
+ * Everything the lines on an order must satisfy before it is saved.
+ *
+ * The unit check is the one that matters, and it is the second cause of the
+ * reported "the item is on the order but the GRN won't take it".
+ *
+ * The line's unit was accepted unchecked — the builder offers all nine — and
+ * `toBaseUnits` only ran at goods receipt, deep inside the transaction that
+ * moves the stock. So an order written in BOX against an item that has never
+ * declared how many kilos are in a box saved perfectly, sat in the system for a
+ * week, and then failed at the exact moment someone was standing beside a
+ * pallet with a delivery note. Checking here means the person who wrote the
+ * mistake is the person told about it, while they still have the form open.
+ *
+ * Duplicates are rejected for a plainer reason: two lines for one item silently
+ * double what is ordered, and the old check compared a count against a Set's
+ * size, which cannot detect it.
+ */
+async function validateLines(restaurantId: string, lines: PurchaseLineInput[]) {
+  const seen = new Set<string>()
+  for (const line of lines) {
+    if (seen.has(line.itemId)) {
+      throw new AppError(
+        'The same item is on the order twice — combine the lines',
+        400,
+        'PO_DUPLICATE_ITEM',
+      )
+    }
+    seen.add(line.itemId)
+  }
+
+  const items = await prisma.inventoryItem.findMany({
+    where: { id: { in: [...seen] }, restaurantId },
+    select: {
+      id: true, name: true, unit: true, purchaseUnit: true, unitsPerPurchaseUnit: true,
+    },
+  })
+  if (items.length !== seen.size) throw new NotFoundError('Inventory item')
+
+  const byId = new Map(items.map((i) => [i.id, i]))
+  for (const line of lines) {
+    const item = byId.get(line.itemId)
+    if (!item || !line.unit || line.unit === item.unit) continue
+    // Throws UnitConversionError, whose message names the item and the fix.
+    toBaseUnits(line.quantity, line.unit, item)
+  }
+}
+
 /** Replace the lines on an order that has not been approved yet. */
 export async function updatePurchaseOrder(params: {
   restaurantId: string
   purchaseId: string
+  supplierId?: string | null
+  branchId?: string | null
+  locationId?: string | null
   lines: PurchaseLineInput[]
   discount?: number
   taxTotal?: number
@@ -183,9 +230,29 @@ export async function updatePurchaseOrder(params: {
   notes?: string | null
 }): Promise<Purchase> {
   const po = await requirePurchase(params.restaurantId, params.purchaseId)
+
+  /*
+   * A draft is a proposal and may be changed freely. Once approved it is a
+   * commitment somebody signed, and once anything has been received it is also
+   * a stock history — editing either would rewrite a decision or a fact.
+   */
   if (po.status !== 'DRAFT' && po.status !== 'PENDING_APPROVAL') {
-    throw new AppError('Only a draft order can be edited', 409, 'PO_NOT_EDITABLE')
+    throw new AppError(
+      `A ${po.status.replace(/_/g, ' ').toLowerCase()} order cannot be edited — cancel it and raise a new one`,
+      409,
+      'PO_NOT_EDITABLE',
+    )
   }
+
+  if (params.lines.length === 0) {
+    throw new AppError('Add at least one item to the order', 400, 'PO_EMPTY')
+  }
+  for (const line of params.lines) {
+    if (!(line.quantity > 0)) throw new AppError('Every line needs a quantity above zero', 400, 'PO_BAD_QTY')
+    if (line.unitCost < 0) throw new AppError('A cost cannot be negative', 400, 'PO_BAD_COST')
+  }
+  await validateLines(params.restaurantId, params.lines)
+
   const money = totalsFor(params.lines, params.discount ?? 0, params.taxTotal ?? 0)
 
   return prisma.$transaction(async (tx) => {
@@ -194,6 +261,9 @@ export async function updatePurchaseOrder(params: {
       where: { id: po.id },
       data: {
         ...money,
+        ...(params.supplierId !== undefined ? { supplierId: params.supplierId || null } : {}),
+        ...(params.branchId !== undefined ? { branchId: params.branchId || null } : {}),
+        ...(params.locationId !== undefined ? { locationId: params.locationId || null } : {}),
         expectedAt: params.expectedAt ?? null,
         notes: params.notes?.trim() || null,
         items: {

@@ -198,6 +198,14 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Scale,
         permission: PERMISSIONS.REPORT_VIEW,
       },
+      {
+        // Under Inventory, because it answers a question asked while adding an
+        // item: "why isn't my category in this list".
+        href: '/dashboard/inventory/setup',
+        label: 'Units & categories',
+        icon: Scale,
+        permission: PERMISSIONS.INVENTORY_VIEW,
+      },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_VIEW },
       { href: '/dashboard/purchases', label: 'Purchasing', icon: Truck, permission: PERMISSIONS.PURCHASE_VIEW },
     ],

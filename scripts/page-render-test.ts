@@ -43,6 +43,7 @@ const PAGES = [
   '/dashboard/inventory/wastage',
   '/dashboard/inventory/counts',
   '/dashboard/inventory/expiry',
+  '/dashboard/inventory/setup',
   '/dashboard/purchases',
   '/dashboard/suppliers',
   '/dashboard/recipes',

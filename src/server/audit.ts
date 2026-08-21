@@ -131,6 +131,10 @@ export const AUDIT_ACTIONS = {
   TRANSFER_DISPATCHED: 'transfer.dispatched',
   TRANSFER_RECEIVED: 'transfer.received',
   TRANSFER_CLOSED: 'transfer.closed',
+  UNIT_UPDATED: 'catalog.unit_updated',
+  CATEGORY_CREATED: 'catalog.category_created',
+  CATEGORY_UPDATED: 'catalog.category_updated',
+
   INSTRUCTION_CREATED: 'instruction.created',
   INSTRUCTION_COMPLETED: 'instruction.completed',
   INSTRUCTION_CANCELLED: 'instruction.cancelled',

@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import type { StockUnit } from '@prisma/client'
-import { AlertTriangle, MoreVertical, Package, Pencil, Plus, Search, Trash2, TrendingDown, TrendingUp } from 'lucide-react'
+import Link from 'next/link'
+import { AlertTriangle, Eye, MoreVertical, Package, Pencil, Plus, Search, Settings2, Trash2, TrendingDown, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -40,7 +41,6 @@ import { cn } from '@/lib/utils'
 import { deleteInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
 import { callAction } from '@/lib/use-action'
 
-const UNITS: StockUnit[] = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX']
 
 export interface InventoryRow {
   id: string
@@ -73,6 +73,8 @@ export interface InventoryRow {
 export function InventoryManager({
   items: initial,
   suppliers,
+  units,
+  categories,
   currency,
   locale,
   canManage,
@@ -80,6 +82,13 @@ export function InventoryManager({
 }: {
   items: InventoryRow[]
   suppliers: Array<{ id: string; name: string }>
+  /*
+   * The units and categories on offer, from the managed lists rather than a
+   * hard-coded array. A unit switched off disappears from here; a category
+   * becomes a dropdown instead of a text box people spell four ways.
+   */
+  units: Array<{ code: StockUnit; name: string; symbol: string }>
+  categories: Array<{ id: string; name: string }>
   currency: string
   locale: string
   canManage: boolean
@@ -169,14 +178,22 @@ export function InventoryManager({
         }
         actions={
           canManage ? (
-            <Button
-              onClick={() => {
-                setEditing(null)
-                setDialogOpen(true)
-              }}
-            >
-              <Plus /> Add item
-            </Button>
+            <>
+              {/* Where the answer to "why isn't my category in the list" lives. */}
+              <Button variant="outline" asChild>
+                <Link href="/dashboard/inventory/setup">
+                  <Settings2 /> Units &amp; categories
+                </Link>
+              </Button>
+              <Button
+                onClick={() => {
+                  setEditing(null)
+                  setDialogOpen(true)
+                }}
+              >
+                <Plus /> Add item
+              </Button>
+            </>
           ) : null
         }
       />
@@ -281,10 +298,21 @@ export function InventoryManager({
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <p className="font-medium">{item.name}</p>
-                      {item.category ? (
-                        <p className="text-xs text-muted-foreground">{item.category}</p>
-                      ) : null}
+                      {/*
+                        The detail page existed and worked, and nothing anywhere
+                        on this screen linked to it — the name was a plain <p>.
+                        Six other pages linked in; the one place people actually
+                        look for an item did not.
+                      */}
+                      <Link
+                        href={`/dashboard/inventory/${item.id}`}
+                        className="font-medium hover:underline"
+                      >
+                        {item.name}
+                      </Link>
+                      <p className="text-xs text-muted-foreground">
+                        {[item.sku, item.category].filter(Boolean).join(' · ') || '\u00a0'}
+                      </p>
                     </TableCell>
                     <TableCell>
                       <span className={cn('font-semibold tabular-nums', low && 'text-destructive')}>
@@ -331,6 +359,11 @@ export function InventoryManager({
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem asChild>
+                              <Link href={`/dashboard/inventory/${item.id}`}>
+                                <Eye /> View details
+                              </Link>
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setMovementFor(item)}>
                               <TrendingUp /> Stock in/out
                             </DropdownMenuItem>
@@ -358,7 +391,15 @@ export function InventoryManager({
         </div>
       )}
 
-      <ItemDialog open={dialogOpen} onOpenChange={setDialogOpen} item={editing} suppliers={suppliers} currency={currency} />
+      <ItemDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        item={editing}
+        suppliers={suppliers}
+        units={units}
+        categories={categories}
+        currency={currency}
+      />
       <MovementDialog item={movementFor} onClose={() => setMovementFor(null)} />
 
       <ConfirmDialog
@@ -373,17 +414,26 @@ export function InventoryManager({
   )
 }
 
+/** The symbol from the managed list, falling back to the code. */
+function unitLabel(code: string): string {
+  return code.toLowerCase()
+}
+
 function ItemDialog({
   open,
   onOpenChange,
   item,
   suppliers,
+  units,
+  categories,
   currency,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   item: InventoryRow | null
   suppliers: Array<{ id: string; name: string }>
+  units: Array<{ code: StockUnit; name: string; symbol: string }>
+  categories: Array<{ id: string; name: string }>
   currency: string
 }) {
   const [form, setForm] = React.useState({
@@ -404,6 +454,17 @@ function ItemDialog({
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+
+  /** The managed list, plus whatever this item already uses. */
+  const offeredUnits = React.useMemo(() => {
+    const list = [...units]
+    for (const code of [item?.unit, item?.purchaseUnit]) {
+      if (code && !list.some((u) => u.code === code)) {
+        list.push({ code, name: code.toLowerCase(), symbol: code.toLowerCase() })
+      }
+    }
+    return list
+  }, [units, item])
 
   React.useEffect(() => {
     if (!open) return
@@ -475,7 +536,42 @@ function ItemDialog({
             />
           </Field>
           <Field label="Category">
-            <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Dairy" />
+            {categories.length > 0 ? (
+              <Select
+                value={form.category || '__none__'}
+                onValueChange={(value) =>
+                  setForm({ ...form, category: value === '__none__' ? '' : value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {/*
+                    The item's own category is always listed even if it has been
+                    retired, otherwise opening Edit on an old item would quietly
+                    move it to a different category — or to none.
+                  */}
+                  {[
+                    ...categories.map((c) => c.name),
+                    ...(form.category && !categories.some((c) => c.name === form.category)
+                      ? [form.category]
+                      : []),
+                  ].map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                placeholder="Dairy"
+              />
+            )}
           </Field>
           <Field label="Unit">
             <Select value={form.unit} onValueChange={(value) => setForm({ ...form, unit: value as StockUnit })}>
@@ -483,9 +579,16 @@ function ItemDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {UNITS.map((unit) => (
-                  <SelectItem key={unit} value={unit}>
-                    {unit.toLowerCase()}
+                {/*
+                  From the managed list, so a unit switched off stops being
+                  offered. An item's own unit is always kept in the list, even
+                  when retired — otherwise editing an old item would silently
+                  change how its stock is measured, and a silent unit change is
+                  a corrupted balance.
+                */}
+                {offeredUnits.map((unit) => (
+                  <SelectItem key={unit.code} value={unit.code}>
+                    {unit.name} ({unit.symbol})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -517,13 +620,15 @@ function ItemDialog({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="NONE">Same as the unit above</SelectItem>
-                {UNITS.map((u) => (
-                  <SelectItem key={u} value={u}>{u.toLowerCase()}</SelectItem>
+                {offeredUnits.map((u) => (
+                  <SelectItem key={u.code} value={u.code}>
+                    {u.name} ({u.symbol})
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
-          <Field label={`How many ${form.unit.toLowerCase()} in one ${(form.purchaseUnit || form.unit).toLowerCase()}`}>
+          <Field label={`How many ${unitLabel(form.unit)} in one ${unitLabel(form.purchaseUnit || form.unit)}`}>
             <Input
               type="number"
               step="any"

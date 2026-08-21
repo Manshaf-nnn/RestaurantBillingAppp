@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 
 import { InventoryManager } from '@/features/inventory/components/inventory-manager'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { activeUnits, listStockCategories } from '@/features/catalog/service'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -28,7 +29,7 @@ export default async function InventoryPage({
   const selection = await selectedBranch(user, await searchParams)
   const branchId = scopeToOne(selection)
 
-  const [restaurant, items, suppliers, branch] = await Promise.all([
+  const [restaurant, items, suppliers, branch, units, categories] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.inventoryItem.findMany({
       where: { restaurantId: user.restaurantId, isActive: true },
@@ -51,6 +52,8 @@ export default async function InventoryPage({
           select: { name: true },
         })
       : Promise.resolve(null),
+    activeUnits(user.restaurantId),
+    listStockCategories(user.restaurantId, { activeOnly: true }),
   ])
 
   /** This location's shelf, or the group total when no location is chosen. */
@@ -69,6 +72,8 @@ export default async function InventoryPage({
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
       suppliers={suppliers}
+      units={units.map((u) => ({ code: u.code, name: u.name, symbol: u.symbol }))}
+      categories={categories.map((c) => ({ id: c.id, name: c.name }))}
       items={items.map((item) => ({
         id: item.id,
         name: item.name,

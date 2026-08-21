@@ -34,7 +34,7 @@ export default async function ItemHistoryPage({
     `/dashboard/inventory/${itemId}`,
   )
   const restaurant = await requireRestaurant(user.restaurantId)
-  const { item, rows, ledgerTotal } = await getItemHistory({
+  const { item, rows, ledgerTotal, stockByLocation, purchases } = await getItemHistory({
     restaurantId: user.restaurantId,
     itemId,
   })
@@ -90,6 +90,158 @@ export default async function ItemHistoryPage({
           this ledger ({formatQuantity(ledgerTotal, item.unit)}). The ledger is the source of truth.
         </div>
       )}
+
+      {/*
+        What the item IS, before what has happened to it. This page was named
+        after an item and could not tell you its category, its supplier, how it
+        is bought or when it was added — you had to go back to the list and open
+        the edit dialog to find out.
+      */}
+      <div className="mb-5 grid gap-5 lg:grid-cols-3">
+        <SectionCard title="Details" className="lg:col-span-2">
+          <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+            <Detail label="Item code / SKU">{item.sku ?? '—'}</Detail>
+            <Detail label="Category">{item.category ?? '—'}</Detail>
+            <Detail label="Counted in">{UNIT_LABELS[item.unit]}</Detail>
+            <Detail label="Bought as">
+              {item.purchaseUnit
+                ? `${item.purchaseUnit.toLowerCase()}${
+                    item.unitsPerPurchaseUnit
+                      ? ` of ${item.unitsPerPurchaseUnit} ${UNIT_LABELS[item.unit]}`
+                      : ''
+                  }`
+                : 'Same as counted'}
+            </Detail>
+            <Detail label="Supplier">
+              {item.supplierId && item.supplierName ? (
+                <Link
+                  href={`/dashboard/suppliers/${item.supplierId}`}
+                  className="text-primary hover:underline"
+                >
+                  {item.supplierName}
+                </Link>
+              ) : (
+                '—'
+              )}
+            </Detail>
+            <Detail label="Storage area">{item.storageArea ?? '—'}</Detail>
+            <Detail label="Minimum stock">{formatQuantity(item.minStock, item.unit)}</Detail>
+            <Detail label="Maximum (par)">
+              {item.maxStock ? formatQuantity(item.maxStock, item.unit) : '—'}
+            </Detail>
+            <Detail label="Status">
+              {item.isActive ? 'Active' : <Badge variant="secondary">Removed</Badge>}
+            </Detail>
+            <Detail label="Expiry">
+              {item.expiryDate ? <LocalDateTime value={item.expiryDate} /> : '—'}
+            </Detail>
+            <Detail label="Created">
+              <LocalDateTime value={item.createdAt} />
+            </Detail>
+            <Detail label="Last updated">
+              <LocalDateTime value={item.updatedAt} />
+            </Detail>
+          </dl>
+        </SectionCard>
+
+        <SectionCard
+          title="Where it is"
+          description="One item, many shelves. The total above is all of them added up."
+        >
+          {stockByLocation.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Not held anywhere yet. Stock appears here once it is received, transferred in or an
+              opening balance is set.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {stockByLocation.map((row) => (
+                <li key={row.branchId} className="py-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <Link
+                      href={`/dashboard/locations/${row.branchId}`}
+                      className="font-medium hover:underline"
+                    >
+                      {row.branchName}
+                    </Link>
+                    <span className="tabular-nums">
+                      {formatQuantity(row.available, item.unit)}
+                    </span>
+                  </div>
+                  {row.reserved > 0 || row.inTransit > 0 ? (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {row.reserved > 0 ? `${row.reserved} reserved` : ''}
+                      {row.reserved > 0 && row.inTransit > 0 ? ' · ' : ''}
+                      {row.inTransit > 0 ? `${row.inTransit} in transit` : ''}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </div>
+
+      <div className="mb-5">
+        <SectionCard
+          title="Purchase history"
+          description="What was actually received, not what was ordered. An order is a promise; a receipt is a fact."
+        >
+          {purchases.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Never bought through a purchase order. Deliveries recorded against one appear here
+              with what they cost.
+            </p>
+          ) : (
+            <div className="-mx-2 overflow-x-auto px-2">
+              <table className="w-full min-w-[38rem] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="pb-2 pr-3 font-medium">Received</th>
+                    <th className="pb-2 pr-3 font-medium">GRN</th>
+                    <th className="pb-2 pr-3 font-medium">Order</th>
+                    <th className="pb-2 pr-3 font-medium">Supplier</th>
+                    <th className="pb-2 pr-3 text-right font-medium">Quantity</th>
+                    <th className="pb-2 pr-3 text-right font-medium">Unit cost</th>
+                    <th className="pb-2 text-right font-medium">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {purchases.map((row, index) => (
+                    <tr key={`${row.receiptId}-${index}`}>
+                      <td className="py-2 pr-3 text-muted-foreground">
+                        <LocalDateTime value={row.receivedAt} />
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Link
+                          href={`/dashboard/purchases/${row.purchaseId}/receipts/${row.receiptId}`}
+                          className="tabular-nums hover:underline"
+                        >
+                          {row.receiptNumber}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Link
+                          href={`/dashboard/purchases/${row.purchaseId}`}
+                          className="tabular-nums hover:underline"
+                        >
+                          {row.purchaseNumber}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3 text-muted-foreground">{row.supplierName ?? '—'}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {row.quantity} {row.unit?.toLowerCase() ?? UNIT_LABELS[item.unit]}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{money(row.unitCost)}</td>
+                      <td className="py-2 text-right tabular-nums">{money(row.lineTotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+      </div>
 
       <SectionCard
         title="Stock history"
@@ -174,6 +326,15 @@ function Figure({
         {badge}
       </div>
       <p className="mt-1 font-medium tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-sm">{children}</dd>
     </div>
   )
 }

@@ -172,6 +172,35 @@ export function ReceivePanel({
         </div>
       </SectionCard>
 
+      {/*
+        Why the receive form is not here.
+        
+        The reported symptom was "a new item shows in Purchase Order but not in
+        Purchase/GRN". There is no separate GRN item list to be broken —
+        receiving reads the order's own lines. What actually happened is that a
+        new order is created DRAFT, DRAFT cannot be received, and this whole
+        card simply did not render. The order was right, the item was on it, and
+        the screen said nothing at all.
+      */}
+      {canReceive && !receivable && outstanding.length > 0 && (
+        <SectionCard title="Not ready to receive">
+          <p className="text-sm text-muted-foreground">
+            {detail.status === 'DRAFT' || detail.status === 'PENDING_APPROVAL' ? (
+              <>
+                This order is still a <strong>{status.label.toLowerCase()}</strong>. Nothing can be
+                received against it until it is approved — approving is what commits the money, so
+                it happens before the van arrives, not after.
+                {canApprove ? ' Use Approve above.' : ' Ask someone who can approve orders.'}
+              </>
+            ) : detail.status === 'CANCELLED' ? (
+              'This order was cancelled. Raise a new one if the goods are still coming.'
+            ) : (
+              'Everything on this order has already been received.'
+            )}
+          </p>
+        </SectionCard>
+      )}
+
       {canReceive && receivable && outstanding.length > 0 && (
         <SectionCard
           title="Receive delivery"

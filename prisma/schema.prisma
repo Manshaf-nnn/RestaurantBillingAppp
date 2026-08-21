@@ -479,6 +479,8 @@ model Restaurant {
   feedback         Feedback[]
   shiftNotes       ShiftNote[]
   instructions     BranchInstruction[]
+  units            Unit[]
+  stockCategories  InventoryCategory[]
   suppliers        Supplier[]
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
@@ -1273,6 +1275,10 @@ model InventoryItem {
   sku      String?
   barcode  String?
   category String?
+  /// The managed category, when one has been chosen. `category` above is kept
+  /// in step as a fallback so every existing reader keeps working.
+  categoryId String?
+  categoryRef InventoryCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   /// The unit the ledger is kept in. Every movement is converted to this
   /// before it is posted, so a balance is never a mix of kg and grams.
@@ -1346,6 +1352,7 @@ model InventoryItem {
   @@index([restaurantId, expiryDate])
   @@index([restaurantId, branchId, isActive])
   @@index([restaurantId, supplierId])
+  @@index([restaurantId, categoryId])
   @@map("inventory_items")
 }
 
@@ -1606,6 +1613,70 @@ enum InstructionStatus {
   OPEN
   DONE
   CANCELLED
+}
+
+/// A stock unit the owner can name, label, order and switch off.
+///
+/// `StockUnit` stays an enum and stays the column type everywhere, because the
+/// conversion engine in `features/inventory/units.ts` encodes facts — 1 kg is
+/// 1000 g — that guard every ledger row. Putting those in a form field would
+/// put the correctness of the stock ledger in the hands of a typo.
+///
+/// What this table governs is presentation and availability: what a unit is
+/// called, what symbol prints on a docket, what order the dropdowns list them
+/// in, and whether a unit is offered at all. A restaurant that never sells by
+/// the dozen turns Dozen off and stops scrolling past it forty times a day.
+///
+/// Deactivating never touches stock. Existing items keep their unit and every
+/// historical movement still reads correctly; the unit simply stops being
+/// offered for new ones.
+model Unit {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// The enum member this row describes. One row per member, seeded on demand.
+  code   StockUnit
+  /// What to call it in a dropdown — "Kilogram".
+  name   String
+  /// What to print beside a number — "kg".
+  symbol String
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, isActive])
+  @@map("units")
+}
+
+/// A stock category — Rice, Meat, Cleaning, Packaging.
+///
+/// `InventoryItem.category` was free text, so "Dairy" and "dairy" were two
+/// silent buckets and no screen could offer the list back. The string column
+/// stays as a fallback and is kept in step, so nothing that reads it breaks and
+/// an item can never be orphaned by a category being retired.
+model InventoryCategory {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  items InventoryItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, isActive])
+  @@map("inventory_categories")
 }
 
 model ShiftNote {

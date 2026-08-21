@@ -8,6 +8,7 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { resolveStockLocation } from '@/features/branches/service'
+import { resolveCategory } from '@/features/catalog/service'
 import { postMovement } from './ledger'
 import { setOpeningBalance } from './operations'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
@@ -38,10 +39,23 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
        * movements; the only ways to change one are an opening balance, an
        * adjustment with a reason, or a stock count.
        */
+      /*
+       * The category is resolved into BOTH columns: the new FK and the legacy
+       * string every existing reader still uses (the count sheet, the search
+       * filter, the reports). Writing one and not the other is how two sources
+       * of truth start disagreeing, which is the bug class that has cost this
+       * project the most time.
+       */
+      const category = await resolveCategory({
+        restaurantId: user.restaurantId,
+        categoryName: data.category || null,
+      })
+
       const payload = {
         name: data.name,
         sku: data.sku || null,
-        category: data.category || null,
+        category: category.category,
+        categoryId: category.categoryId,
         unit: data.unit,
         reorderLevel: data.reorderLevel,
         minStock: data.minStock,
