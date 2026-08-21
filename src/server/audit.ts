@@ -136,6 +136,7 @@ export const AUDIT_ACTIONS = {
   INSTRUCTION_CANCELLED: 'instruction.cancelled',
 
   PRODUCTION_CREATED: 'production.created',
+  PRODUCTION_SPEC_UPDATED: 'production.spec_updated',
   PRODUCTION_APPROVED: 'production.approved',
   PRODUCTION_COMPLETED: 'production.completed',
 

@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { Metadata } from 'next'
 import { AlertTriangle, Factory } from 'lucide-react'
 
@@ -35,7 +36,11 @@ export default async function ProductionPage({
 
   const [data, console_] = await Promise.all([
     getProductionDashboard({ restaurantId: user.restaurantId, branchId: selection.branchId }),
-    getProductionConsoleData({ restaurantId: user.restaurantId, currency: restaurant.currency }),
+    getProductionConsoleData({
+      restaurantId: user.restaurantId,
+      currency: restaurant.currency,
+      branchId: selection.branchId,
+    }),
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
@@ -77,7 +82,9 @@ export default async function ProductionPage({
             {data.pending.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-3 py-2.5 text-sm">
                 <Factory className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="font-medium tabular-nums">{p.number}</span>
+                <Link href={`/dashboard/production/${p.id}`} className="font-medium tabular-nums hover:underline">
+                  {p.number}
+                </Link>
                 <span>{p.specName ?? 'Run'}</span>
                 <Badge variant="secondary">{p.status.replace(/_/g, ' ').toLowerCase()}</Badge>
                 <span className="text-muted-foreground">{p.plannedQty} planned</span>
@@ -111,7 +118,7 @@ export default async function ProductionPage({
 
       {can(user, PERMISSIONS.PRODUCTION_MANAGE) && (
         <div className="mb-5">
-          <ProductionConsole data={console_} />
+          <ProductionConsole data={console_} canApprove={can(user, PERMISSIONS.PRODUCTION_APPROVE)} />
         </div>
       )}
 
@@ -136,7 +143,12 @@ export default async function ProductionPage({
                 {data.recent.map((r) => (
                   <tr key={r.id}>
                     <td className="py-2.5 pr-3">
-                      <span className="font-medium tabular-nums">{r.number}</span>
+                      <Link
+                        href={`/dashboard/production/${r.id}`}
+                        className="font-medium tabular-nums hover:underline"
+                      >
+                        {r.number}
+                      </Link>
                       {r.batchNumber && (
                         <span className="block font-mono text-xs text-muted-foreground">{r.batchNumber}</span>
                       )}

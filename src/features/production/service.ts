@@ -370,6 +370,62 @@ export async function completeProduction(params: {
 }
 
 /** Create a production recipe. */
+/**
+ * Everything a spec must satisfy before it is worth saving.
+ *
+ * The unit check is the one that matters. `toBaseUnits` throws when a line is
+ * written in a unit that cannot be resolved to the item's own — "2 BOX of
+ * flour" where flour has no pack size — and it used to throw at *completion*,
+ * inside the transaction that consumes the stock. So the recipe saved happily,
+ * and then a run planned days later failed at the moment someone was standing
+ * at the mixer waiting for it. Catching it here means the person who wrote the
+ * mistake is the person who is told about it.
+ */
+async function validateSpec(params: {
+  restaurantId: string
+  outputItemId: string
+  outputQty: number
+  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
+}) {
+  if (params.items.length === 0) {
+    throw new AppError('A production recipe needs ingredients', 400, 'SPEC_EMPTY')
+  }
+  if (!(params.outputQty > 0)) {
+    throw new AppError('Say how much one batch produces', 400, 'SPEC_BAD_OUTPUT')
+  }
+  if (params.items.some((i) => i.itemId === params.outputItemId)) {
+    throw new AppError('A recipe cannot consume the thing it produces', 400, 'SPEC_SELF_REFERENCE')
+  }
+
+  const seen = new Set<string>()
+  for (const line of params.items) {
+    if (seen.has(line.itemId)) {
+      throw new AppError('The same ingredient is listed twice', 400, 'SPEC_DUPLICATE_ITEM')
+    }
+    seen.add(line.itemId)
+    if (!(line.quantity > 0)) {
+      throw new AppError('Every ingredient needs a quantity', 400, 'SPEC_BAD_QUANTITY')
+    }
+  }
+
+  const ids = [params.outputItemId, ...params.items.map((i) => i.itemId)]
+  const items = await prisma.inventoryItem.findMany({
+    where: { id: { in: ids }, restaurantId: params.restaurantId },
+    select: {
+      id: true, name: true, unit: true, purchaseUnit: true, unitsPerPurchaseUnit: true,
+    },
+  })
+  if (items.length !== new Set(ids).size) throw new NotFoundError('Inventory item')
+
+  const byId = new Map(items.map((i) => [i.id, i]))
+  for (const line of params.items) {
+    const item = byId.get(line.itemId)
+    if (!item || !line.unit || line.unit === item.unit) continue
+    // Throws UnitConversionError with a message naming the item and the fix.
+    toBaseUnits(line.quantity, line.unit as never, item)
+  }
+}
+
 export async function createProductionSpec(params: {
   restaurantId: string
   name: string
@@ -379,25 +435,7 @@ export async function createProductionSpec(params: {
   items: Array<{ itemId: string; quantity: number; unit?: string | null }>
   notes?: string | null
 }) {
-  if (params.items.length === 0) {
-    throw new AppError('A production recipe needs ingredients', 400, 'SPEC_EMPTY')
-  }
-  if (!(params.outputQty > 0)) {
-    throw new AppError('Say how much one batch produces', 400, 'SPEC_BAD_OUTPUT')
-  }
-  if (params.items.some((i) => i.itemId === params.outputItemId)) {
-    throw new AppError(
-      'A recipe cannot consume the thing it produces',
-      400,
-      'SPEC_SELF_REFERENCE',
-    )
-  }
-
-  const ids = [params.outputItemId, ...params.items.map((i) => i.itemId)]
-  const owned = await prisma.inventoryItem.count({
-    where: { id: { in: ids }, restaurantId: params.restaurantId },
-  })
-  if (owned !== new Set(ids).size) throw new NotFoundError('Inventory item')
+  await validateSpec(params)
 
   return prisma.productionSpec.create({
     data: {
@@ -414,6 +452,125 @@ export async function createProductionSpec(params: {
           unit: (i.unit ?? null) as never,
         })),
       },
+    },
+  })
+}
+
+/**
+ * Edit a production recipe.
+ *
+ * There was no way to. A yield that turned out wrong, an ingredient that
+ * changed, a typo in the name — all of it meant creating a second recipe with
+ * almost the same name and hoping people picked the right one. Two recipes for
+ * one product is how a kitchen ends up costing the same bread two ways.
+ *
+ * Runs already completed keep the numbers they were completed with: cost lives
+ * on `ProductionConsumption` and on the order itself, posted at the time and
+ * never recalculated from the spec. So editing cannot rewrite history — which
+ * is exactly why editing is safe to allow.
+ *
+ * Runs not yet completed WILL use the new version, and that is right too: an
+ * approved run has reserved nothing and consumed nothing, so there is no older
+ * truth to preserve.
+ */
+export async function updateProductionSpec(params: {
+  restaurantId: string
+  specId: string
+  name: string
+  outputItemId: string
+  outputQty: number
+  shelfLifeDays?: number | null
+  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
+  notes?: string | null
+}) {
+  const existing = await prisma.productionSpec.findFirst({
+    where: { id: params.specId, restaurantId: params.restaurantId },
+    select: { id: true },
+  })
+  if (!existing) throw new NotFoundError('Production recipe')
+
+  await validateSpec(params)
+
+  /*
+   * Lines are replaced wholesale rather than diffed. `ProductionSpecItem` is a
+   * pure child of the spec — nothing references a line by id — so a diff would
+   * buy nothing and cost a class of bug where a stale line survives an edit.
+   */
+  return prisma.$transaction(async (tx) => {
+    await tx.productionSpecItem.deleteMany({ where: { specId: params.specId } })
+    return tx.productionSpec.update({
+      where: { id: params.specId },
+      data: {
+        name: params.name.trim(),
+        outputItemId: params.outputItemId,
+        outputQty: params.outputQty,
+        shelfLifeDays: params.shelfLifeDays ?? null,
+        notes: params.notes?.trim() || null,
+        items: {
+          create: params.items.map((i) => ({
+            itemId: i.itemId,
+            quantity: i.quantity,
+            unit: (i.unit ?? null) as never,
+          })),
+        },
+      },
+    })
+  })
+}
+
+/**
+ * Retire a recipe, or bring it back.
+ *
+ * Deactivating rather than deleting, because completed runs point at it and a
+ * run whose recipe has vanished cannot explain itself. A retired recipe stops
+ * being offered for new runs and stays readable for old ones.
+ */
+export async function setProductionSpecActive(params: {
+  restaurantId: string
+  specId: string
+  isActive: boolean
+}) {
+  const spec = await prisma.productionSpec.findFirst({
+    where: { id: params.specId, restaurantId: params.restaurantId },
+    select: { id: true },
+  })
+  if (!spec) throw new NotFoundError('Production recipe')
+
+  if (!params.isActive) {
+    /*
+     * Refuse while runs are in flight. Retiring a recipe that an approved run
+     * still depends on would leave that run unable to complete, and the person
+     * retiring it has no way of knowing they have done that.
+     */
+    const open = await prisma.productionOrder.count({
+      where: {
+        restaurantId: params.restaurantId,
+        specId: params.specId,
+        status: { in: ['DRAFT', 'PLANNED', 'APPROVED', 'IN_PROGRESS'] },
+      },
+    })
+    if (open > 0) {
+      throw new AppError(
+        `${open} run${open === 1 ? ' is' : 's are'} still using this recipe — finish or cancel ${open === 1 ? 'it' : 'them'} first`,
+        409,
+        'SPEC_IN_USE',
+      )
+    }
+  }
+
+  return prisma.productionSpec.update({
+    where: { id: params.specId },
+    data: { isActive: params.isActive },
+  })
+}
+
+/** One recipe with its lines, for the edit form. */
+export async function getProductionSpec(params: { restaurantId: string; specId: string }) {
+  return prisma.productionSpec.findFirst({
+    where: { id: params.specId, restaurantId: params.restaurantId },
+    include: {
+      outputItem: { select: { id: true, name: true, unit: true } },
+      items: { include: { item: { select: { id: true, name: true, unit: true } } } },
     },
   })
 }

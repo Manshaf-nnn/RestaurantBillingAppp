@@ -37,6 +37,7 @@ const SERVICE = [
   'stock-location-test',
   'branch-scope-test',
   'instructions-test',
+  'production-spec-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

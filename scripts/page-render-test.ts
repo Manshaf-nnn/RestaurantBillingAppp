@@ -155,6 +155,51 @@ async function main() {
   }
 
   /*
+   * The detail routes, which take an id and so cannot be listed as constants.
+   *
+   * `/dashboard/production/[orderId]` in particular did not exist at all while
+   * the traceability panel linked to it, so every "where did this stock come
+   * from" trail that ended at a production run ended at a 404. A route nothing
+   * renders in CI is a route nobody notices is missing.
+   */
+  const [aRun, aTransfer] = await Promise.all([
+    prisma.productionOrder.findFirst({
+      where: { restaurantId: user.restaurantId ?? undefined },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.stockTransfer.findFirst({
+      where: { restaurantId: user.restaurantId ?? undefined },
+      select: { id: true },
+      orderBy: { requestedAt: 'desc' },
+    }),
+  ])
+
+  const detailPages = [
+    aRun ? `/dashboard/production/${aRun.id}` : null,
+    aTransfer ? `/dashboard/transfers/${aTransfer.id}` : null,
+  ].filter((path): path is string => path !== null)
+
+  if (detailPages.length === 0) {
+    console.log('\nNo runs or transfers on the fixture tenant — detail routes not checked.')
+  } else {
+    console.log('\nDetail routes')
+    for (const path of detailPages) {
+      const response = await fetch(`${BASE}${path}`, { headers: { cookie }, redirect: 'manual' })
+      const body = response.status === 200 ? await response.text() : ''
+      const boundary = BOUNDARY.find((needle) => body.includes(needle))
+
+      if (response.status === 200 && !boundary) {
+        passed += 1
+        console.log(`  ✓ ${path}`)
+      } else {
+        failed.push(path)
+        console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
+      }
+    }
+  }
+
+  /*
    * Every page again, this time with a location chosen.
    *
    * The top-bar switcher appends `?branch=`, and each page now resolves it

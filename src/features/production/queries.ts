@@ -167,6 +167,8 @@ export async function getProductionDashboard(params: {
 export async function getProductionConsoleData(params: {
   restaurantId: string
   currency: string
+  /** Restrict the houses offered to the one chosen in the top bar. */
+  branchId?: string | null
 }) {
   const [houses, items, specs, pending] = await Promise.all([
     prisma.branch.findMany({
@@ -177,16 +179,31 @@ export async function getProductionConsoleData(params: {
       where: { restaurantId: params.restaurantId, isActive: true },
       select: { id: true, name: true, unit: true, quantity: true }, orderBy: { name: 'asc' },
     }),
+    /*
+     * Retired recipes come back too, so they can be un-retired. They are told
+     * apart by `isActive`, and only the active ones are offered for a new run —
+     * a list that silently omits the thing you are looking for reads as a bug.
+     */
     prisma.productionSpec.findMany({
-      where: { restaurantId: params.restaurantId, isActive: true },
-      include: { outputItem: { select: { name: true } } }, orderBy: { name: 'asc' },
+      where: { restaurantId: params.restaurantId },
+      include: {
+        outputItem: { select: { id: true, name: true, unit: true } },
+        items: { include: { item: { select: { id: true, name: true, unit: true } } } },
+      },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     }),
     prisma.productionOrder.findMany({
       where: {
         restaurantId: params.restaurantId,
         status: { in: ['DRAFT', 'PLANNED', 'APPROVED', 'IN_PROGRESS'] },
+        ...(params.branchId ? { branchId: params.branchId } : {}),
       },
-      include: { spec: { select: { name: true } } }, orderBy: { createdAt: 'desc' },
+      include: {
+        spec: {
+          select: { name: true, outputQty: true, outputItem: { select: { name: true, unit: true } } },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
     }),
   ])
 
@@ -195,11 +212,132 @@ export async function getProductionConsoleData(params: {
     houses,
     items: items.map((i) => ({ ...i, unit: i.unit as string })),
     specs: specs.map((s) => ({
-      id: s.id, name: s.name, outputName: s.outputItem.name, outputQty: s.outputQty,
+      id: s.id,
+      name: s.name,
+      isActive: s.isActive,
+      outputItemId: s.outputItemId,
+      outputName: s.outputItem.name,
+      outputUnit: s.outputItem.unit as string,
+      outputQty: s.outputQty,
+      shelfLifeDays: s.shelfLifeDays,
+      notes: s.notes,
+      items: s.items.map((line) => ({
+        itemId: line.itemId,
+        name: line.item.name,
+        quantity: line.quantity,
+        unit: (line.unit ?? line.item.unit) as string,
+      })),
     })),
     pending: pending.map((p) => ({
-      id: p.id, number: p.number, status: p.status,
-      specName: p.spec?.name ?? null, plannedQty: p.plannedQty,
+      id: p.id,
+      number: p.number,
+      status: p.status,
+      specName: p.spec?.name ?? null,
+      plannedQty: p.plannedQty,
+      // So the screen can say "10 batches = 100 loaves" rather than making
+      // someone do the multiplication in their head at the mixer.
+      outputQtyPerBatch: p.spec?.outputQty ?? null,
+      outputName: p.spec?.outputItem.name ?? null,
+      outputUnit: (p.spec?.outputItem.unit ?? null) as string | null,
     })),
   }
 }
+
+/**
+ * One run, in full.
+ *
+ * Written because `/dashboard/production/[orderId]` did not exist and the
+ * traceability panel linked to it anyway: every "where did this stock come
+ * from" trail that ended at a production run ended at a 404. The link was
+ * right; the page was missing.
+ *
+ * Shows what a run actually is — what went in, what came out, what the gap
+ * cost — rather than the summary line the dashboard already carries.
+ */
+export async function getProductionRun(params: { restaurantId: string; orderId: string }) {
+  const order = await prisma.productionOrder.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    include: {
+      branch: { select: { id: true, name: true } },
+      spec: {
+        select: {
+          id: true,
+          name: true,
+          outputQty: true,
+          shelfLifeDays: true,
+          outputItem: { select: { id: true, name: true, unit: true } },
+        },
+      },
+      requestedBy: { select: { name: true } },
+      approvedBy: { select: { name: true } },
+      consumption: {
+        include: { item: { select: { id: true, name: true, unit: true } } },
+        orderBy: { lineCost: 'desc' },
+      },
+      outputs: {
+        include: { item: { select: { id: true, name: true, unit: true } } },
+      },
+    },
+  })
+  if (!order) return null
+
+  const materialCost = order.consumption.reduce((sum, line) => sum + line.lineCost, 0)
+
+  return {
+    id: order.id,
+    number: order.number,
+    status: order.status as string,
+    branchId: order.branchId,
+    branchName: order.branch.name,
+    specId: order.specId,
+    specName: order.spec?.name ?? null,
+    outputName: order.spec?.outputItem.name ?? null,
+    outputUnit: (order.spec?.outputItem.unit ?? null) as string | null,
+    /** One batch's yield — what turns "10 batches" into "100 loaves". */
+    outputQtyPerBatch: order.spec?.outputQty ?? null,
+    shelfLifeDays: order.spec?.shelfLifeDays ?? null,
+    plannedQty: order.plannedQty,
+    actualQty: order.actualQty,
+    variance: order.variance,
+    varianceReason: order.varianceReason as string | null,
+    varianceNote: order.varianceNote,
+    batchNumber: order.batchNumber,
+    notes: order.notes,
+    /*
+     * Three costs, kept apart on purpose. Materials is what the ledger posted;
+     * overhead is what someone typed; unitCost is (materials + overhead) over
+     * what actually came out. Showing only the last one is how a run that
+     * burned a fifth of its flour reads as merely "a bit expensive".
+     */
+    materialCost,
+    overheadCost: order.overheadCost,
+    totalCost: order.totalCost,
+    unitCost: order.unitCost,
+    requestedByName: order.requestedBy?.name ?? null,
+    approvedByName: order.approvedBy?.name ?? null,
+    approvedAt: order.approvedAt?.toISOString() ?? null,
+    startedAt: order.startedAt?.toISOString() ?? null,
+    completedAt: order.completedAt?.toISOString() ?? null,
+    productionDate: order.productionDate?.toISOString() ?? null,
+    expiryDate: order.expiryDate?.toISOString() ?? null,
+    createdAt: order.createdAt.toISOString(),
+    consumption: order.consumption.map((line) => ({
+      id: line.id,
+      itemId: line.itemId,
+      name: line.item.name,
+      quantity: line.quantity,
+      unit: line.unit as string,
+      unitCost: line.unitCost,
+      lineCost: line.lineCost,
+    })),
+    outputs: order.outputs.map((out) => ({
+      id: out.id,
+      itemId: out.itemId,
+      name: out.item.name,
+      quantity: out.quantity,
+      unit: out.unit as string,
+    })),
+  }
+}
+
+export type ProductionRun = NonNullable<Awaited<ReturnType<typeof getProductionRun>>>
