@@ -25,6 +25,10 @@ interface Props {
   city: string | null
   isOpen: boolean
   openingLabel: string | null
+  /** From a table QR — the guest then types nothing at all. */
+  initialTable?: string
+  /** Named when it is not the main site, so a guest can see they scanned right. */
+  branchName?: string | null
 }
 
 function rgbToCss(r: number, g: number, b: number) {
@@ -65,7 +69,7 @@ async function extractThemeColor(url: string | null) {
 export default function CoverPage(props: Props) {
   const { restaurantName, tagline, logoUrl, coverUrl, isOpen, openingLabel } = props
   const [theme, setTheme] = useState({ r: 249, g: 115, b: 22 })
-  const [tableNumber, setTableNumber] = useState('')
+  const [tableNumber, setTableNumber] = useState(props.initialTable ?? '')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)

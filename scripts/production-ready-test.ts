@@ -82,6 +82,10 @@ async function main() {
     data: {
       restaurantId: restaurant.id, categoryId: category.id, name: 'Burger',
       slug: `b-${stamp}`, price: 1000, costPrice: 0, isAvailable: true,
+      // A dish has to be ON a branch's menu to be orderable there. Creating one
+      // straight through Prisma skips `saveFood`, which is what normally writes
+      // this — so the fixture does it by hand.
+      branches: { create: [{ restaurantId: restaurant.id, branchId: branch.id }] },
     },
   })
   const recipe = await prisma.recipe.create({

@@ -21,7 +21,10 @@ export default async function PosPage({
   const user = await requirePagePermission(PERMISSIONS.ORDER_CREATE, '/cashier/pos')
   const restaurant = await requireRestaurant(user.restaurantId)
   const [menu, tables, servers] = await Promise.all([
-    getPublicMenu(user.restaurantId, restaurant.timezone),
+    // The till sells its own branch's menu at its own branch's prices. A
+    // cashier confined to Kandy must not be able to ring up a Colombo-only
+    // dish, and must never charge Colombo's price for a shared one.
+    getPublicMenu(user.restaurantId, restaurant.timezone, user.branchId),
     prisma.restaurantTable.findMany({
       where: { restaurantId: user.restaurantId, isActive: true },
       select: { id: true, number: true, area: true, status: true },

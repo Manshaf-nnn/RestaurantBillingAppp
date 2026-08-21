@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 
 import { getPublicMenu } from '@/features/menu/queries'
+import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
 import { resolvePublicTenant } from '@/server/db/tenant'
@@ -17,7 +18,10 @@ export default async function MenuPage() {
   const restaurant = await resolvePublicTenant()
   if (!restaurant) notFound()
 
-  const menu = await getPublicMenu(restaurant.id, restaurant.timezone)
+  // Which branch this guest is in, from the QR's code (via the cookie the
+  // middleware set) or the restaurant's default. Their menu and their prices.
+  const branch = await resolvePublicBranch(restaurant.id)
+  const menu = await getPublicMenu(restaurant.id, restaurant.timezone, branch?.id ?? null)
 
   return (
     <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>

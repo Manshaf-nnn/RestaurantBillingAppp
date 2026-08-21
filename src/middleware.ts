@@ -95,6 +95,16 @@ function roleAllowed(pathname: string, role: string) {
 }
 
 const TENANT_COOKIE = 'ros_r'
+/*
+ * The branch a QR code points at, remembered for the sitting.
+ *
+ * It has to be a cookie and not just a query param: a guest moves from the
+ * landing screen to the menu to the cart, and only the first of those carries
+ * what the QR encoded. Kept in step with BRANCH_COOKIE in
+ * features/branches/public-branch.ts — duplicated here because middleware runs
+ * on the edge and cannot import a `server-only` module.
+ */
+const BRANCH_COOKIE = 'ros_b'
 
 export async function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl
@@ -104,13 +114,18 @@ export async function middleware(request: NextRequest) {
   // so every later navigation inside the guest app stays on that tenant.
   if (pathname.startsWith('/order')) {
     const slug = request.nextUrl.searchParams.get('r')
-    if (slug && /^[a-z0-9-]{1,60}$/i.test(slug)) {
+    const branch = request.nextUrl.searchParams.get('b')
+    const validSlug = Boolean(slug && /^[a-z0-9-]{1,60}$/i.test(slug))
+    const validBranch = Boolean(branch && /^[A-Za-z0-9-]{1,12}$/.test(branch))
+
+    if (validSlug || validBranch) {
       const response = NextResponse.next()
-      response.cookies.set(TENANT_COOKIE, slug.toLowerCase(), {
-        path: '/',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 12,
-      })
+      const cookie = { path: '/', sameSite: 'lax' as const, maxAge: 60 * 60 * 12 }
+
+      if (validSlug) response.cookies.set(TENANT_COOKIE, slug!.toLowerCase(), cookie)
+      // Which branch's menu, prices and tables the guest sees from here on.
+      if (validBranch) response.cookies.set(BRANCH_COOKIE, branch!.toUpperCase(), cookie)
+
       return response
     }
     return NextResponse.next()

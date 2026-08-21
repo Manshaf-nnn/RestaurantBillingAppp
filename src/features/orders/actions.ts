@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 
+import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
@@ -157,8 +158,14 @@ export async function placeGuestOrder(
       // Backstop against someone cycling cookies from the same connection.
       await enforceRateLimit('placeOrderBurst')
 
+      // The branch this guest is ordering from. `placeOrder` prefers the
+      // table's own branch where there is one, so this is the answer for a
+      // takeaway or counter order with no table.
+      const branch = await resolvePublicBranch(restaurant.id)
+
       const order = await placeOrderService({
         restaurantId: restaurant.id,
+        branchId: branch?.id ?? null,
         tableId: data.tableId,
         type: 'DINE_IN',
         channel: 'QR',
@@ -531,6 +538,11 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
         // A counter sale is keyed in at the till; anything else a staff member
         // enters is attributed to staff rather than to the guest's own device.
         channel: data.type === 'COUNTER' ? 'COUNTER' : 'STAFF',
+        /*
+         * Was `user.branchId ?? null`, which is null for an owner — so every
+         * order an owner rang up was branchless. `placeOrder` resolves this
+         * through the table first and the default last, and never returns null.
+         */
         branchId: user.branchId ?? null,
         // Falls back to whoever is signed in, so a waiter taking their own
         // order is attributed without having to pick themselves from a list.

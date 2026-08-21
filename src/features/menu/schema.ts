@@ -63,7 +63,29 @@ export const foodSchema = z
     happyHourStartMin: z.coerce.number().int().min(0).max(1439).optional().nullable(),
     happyHourEndMin: z.coerce.number().int().min(0).max(1439).optional().nullable(),
     happyHourDays: z.array(z.coerce.number().int().min(0).max(6)).max(7).default([]),
-    variantGroups: z.array(variantGroupSchema).max(10).default([]),
+    /*
+   * Which branches sell this dish, and what they charge.
+   *
+   * An empty list means the dish exists and is on nobody's menu — a real state
+   * for something being prepared before a launch, not an error. The action
+   * fills it with the working location when the form does not say otherwise,
+   * so nothing spreads by itself.
+   *
+   * `price` blank means "same as the base price". A branch only stores a number
+   * when it genuinely charges something else.
+   */
+  branches: z
+    .array(
+      z.object({
+        branchId: z.string().min(1),
+        price: money.nullable().optional(),
+        discountPrice: money.nullable().optional(),
+        isAvailable: z.coerce.boolean().default(true),
+      }),
+    )
+    .max(50)
+    .default([]),
+  variantGroups: z.array(variantGroupSchema).max(10).default([]),
     recipe: z
       .array(
         z.object({

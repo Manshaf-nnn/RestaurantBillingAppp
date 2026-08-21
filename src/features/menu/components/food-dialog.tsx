@@ -92,6 +92,21 @@ interface FormState {
   happyHourDays: number[]
   variantGroups: GroupRow[]
   recipe: RecipeRow[]
+  /** Which locations sell this dish, and what each charges. */
+  branches: BranchRow[]
+}
+
+export interface BranchRow {
+  branchId: string
+  /** Blank means "same as the price above" — nothing is copied. */
+  price: string
+  isAvailable: boolean
+}
+
+export interface BranchOption {
+  id: string
+  name: string
+  type: string
 }
 
 const EMPTY: FormState = {
@@ -117,6 +132,7 @@ const EMPTY: FormState = {
   happyHourDays: [],
   variantGroups: [],
   recipe: [],
+  branches: [],
 }
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -139,6 +155,8 @@ export function FoodDialog({
   categories,
   inventoryItems,
   currency,
+  branches = [],
+  activeBranchId = null,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -146,6 +164,13 @@ export function FoodDialog({
   categories: CategoryOption[]
   inventoryItems: Array<{ id: string; name: string; unit: string }>
   currency: string
+  /** Locations this dish may be sold at. Empty for a single-site restaurant. */
+  branches?: BranchOption[]
+  /**
+   * The location being worked in. A NEW dish starts ticked here and nowhere
+   * else — nothing spreads by itself, which is the whole point.
+   */
+  activeBranchId?: string | null
 }) {
   const [form, setForm] = React.useState<FormState>(EMPTY)
   const [loading, setLoading] = React.useState(false)
@@ -157,7 +182,19 @@ export function FoodDialog({
     setErrors({})
 
     if (!foodId) {
-      setForm({ ...EMPTY, categoryId: categories[0]?.id ?? '' })
+      /*
+       * A new dish starts at the location being worked in, and nowhere else.
+       * With no location chosen — an owner on "All locations" — nothing is
+       * ticked and they choose deliberately, which is the behaviour that stops
+       * a Main Branch dish appearing at Kandy on its own.
+       */
+      setForm({
+        ...EMPTY,
+        categoryId: categories[0]?.id ?? '',
+        branches: activeBranchId
+          ? [{ branchId: activeBranchId, price: '', isAvailable: true }]
+          : [],
+      })
       return
     }
 
@@ -187,6 +224,11 @@ export function FoodDialog({
           isPopular: data.isPopular,
           tags: data.tags.join(', '),
           allergens: data.allergens.join(', '),
+          branches: data.branches.map((row) => ({
+            branchId: row.branchId,
+            price: row.price !== null ? String(row.price) : '',
+            isAvailable: row.isAvailable,
+          })),
           happyHourPrice: data.happyHourPrice !== null ? String(data.happyHourPrice) : '',
           happyHourStart: minutesToTime(data.happyHourStartMin),
           happyHourEnd: minutesToTime(data.happyHourEndMin),
@@ -291,6 +333,13 @@ export function FoodDialog({
           })),
       })),
       recipe: form.recipe.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
+      branches: form.branches.map((row) => ({
+        branchId: row.branchId,
+        // Blank stays null: the branch inherits, and a later change to the
+        // base price still reaches it.
+        price: row.price.trim() ? parseMoney(row.price, currency) : null,
+        isAvailable: row.isAvailable,
+      })),
     }
 
     const result = await callAction(() => saveFood(payload))
@@ -343,6 +392,15 @@ export function FoodDialog({
               <TabsTrigger value="pricing" className="flex-1">
                 Pricing
               </TabsTrigger>
+              {/* Only worth a tab when there is more than one location. */}
+              {branches.length > 1 ? (
+                <TabsTrigger value="branches" className="flex-1">
+                  Locations
+                  <span className="ml-1.5 rounded bg-muted px-1 text-[10px] tabular-nums">
+                    {form.branches.length}
+                  </span>
+                </TabsTrigger>
+              ) : null}
               {inventoryItems.length ? (
                 <TabsTrigger value="recipe" className="flex-1">
                   Recipe
@@ -611,6 +669,115 @@ export function FoodDialog({
                 </div>
               </div>
             </TabsContent>
+
+            {/* ── which locations sell it ─────────────────────────── */}
+            {branches.length > 1 ? (
+              <TabsContent value="branches" className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Tick a location to put this on its menu. Each keeps its own price and can take it
+                  off without affecting anyone else.
+                </p>
+
+                <ul className="space-y-2">
+                  {branches.map((branch) => {
+                    const row = form.branches.find((b) => b.branchId === branch.id)
+                    const on = Boolean(row)
+                    return (
+                      <li
+                        key={branch.id}
+                        className={`rounded-lg border p-3 transition ${
+                          on ? 'border-primary/40 bg-primary/5' : 'border-border'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="flex flex-1 items-center gap-2.5 text-sm font-medium">
+                            <input
+                              type="checkbox"
+                              className="size-4 accent-[hsl(var(--primary))]"
+                              checked={on}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  branches: event.target.checked
+                                    ? [
+                                        ...current.branches,
+                                        { branchId: branch.id, price: '', isAvailable: true },
+                                      ]
+                                    : current.branches.filter((b) => b.branchId !== branch.id),
+                                }))
+                              }
+                            />
+                            {branch.name}
+                            {branch.type !== 'BRANCH' ? (
+                              <span className="text-xs font-normal text-muted-foreground">
+                                {branch.type.replace(/_/g, ' ').toLowerCase()}
+                              </span>
+                            ) : null}
+                          </label>
+
+                          {on ? (
+                            <>
+                              <div className="w-32">
+                                <Input
+                                  inputMode="decimal"
+                                  placeholder={form.price || 'Same price'}
+                                  value={row?.price ?? ''}
+                                  onChange={(event) =>
+                                    setForm((current) => ({
+                                      ...current,
+                                      branches: current.branches.map((b) =>
+                                        b.branchId === branch.id
+                                          ? { ...b, price: event.target.value }
+                                          : b,
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  className="size-3.5 accent-[hsl(var(--primary))]"
+                                  checked={row?.isAvailable ?? true}
+                                  onChange={(event) =>
+                                    setForm((current) => ({
+                                      ...current,
+                                      branches: current.branches.map((b) =>
+                                        b.branchId === branch.id
+                                          ? { ...b, isAvailable: event.target.checked }
+                                          : b,
+                                      ),
+                                    }))
+                                  }
+                                />
+                                On sale
+                              </label>
+                            </>
+                          ) : null}
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+
+                <div className="space-y-2 border-l-2 border-border pl-3 text-xs leading-relaxed text-muted-foreground">
+                  <p>
+                    Leave a price blank and that location charges the price on the Details tab.
+                    Change it there later and every blank location follows — only the ones you have
+                    typed a number into stay put.
+                  </p>
+                  <p>
+                    <strong>On sale</strong> is for &ldquo;we have run out today&rdquo;. Unticking
+                    the location entirely takes it off their menu.
+                  </p>
+                  {form.branches.length === 0 ? (
+                    <p className="text-amber-600 dark:text-amber-400">
+                      No location is selected, so this dish will not appear on any menu.
+                    </p>
+                  ) : null}
+                </div>
+              </TabsContent>
+            ) : null}
 
             {/* ── recipe ──────────────────────────────────────────── */}
             {inventoryItems.length ? (

@@ -2,6 +2,7 @@ import 'server-only'
 import { cache } from 'react'
 
 import { prisma } from '@/server/db/prisma'
+import { applyBranchOverrides, branchFoodFilter, branchOverrides } from './branch-menu'
 import { effectivePrice, type SelectedOption } from '@/features/orders/pricing'
 
 export interface PublicMenuOption {
@@ -64,16 +65,36 @@ export interface PublicMenu {
 /**
  * The guest-facing menu. Prices are resolved server-side (offers and happy hour
  * included) so the client never has to reimplement pricing rules.
+ *
+ * `branchId` makes it that branch's menu, at that branch's prices. Passing null
+ * gives the whole restaurant's list, which is what a single-site restaurant and
+ * the owner's own preview both want.
+ *
+ * The branch is part of the cache key by virtue of being an argument to a
+ * `cache()`d function — but the HTTP response in `/api/public/menu` is also
+ * cached, and its key must carry the branch too or one branch is served
+ * another's menu. That is the same mistake the analytics cache keys made.
  */
 export const getPublicMenu = cache(
-  async (restaurantId: string, timezone = 'Asia/Kolkata'): Promise<PublicMenu> => {
-    const [categories, foods] = await Promise.all([
+  async (
+    restaurantId: string,
+    timezone = 'Asia/Kolkata',
+    branchId?: string | null,
+  ): Promise<PublicMenu> => {
+    const [categories, foods, overrides] = await Promise.all([
       prisma.category.findMany({
         where: { restaurantId, isVisible: true, deletedAt: null },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       }),
       prisma.food.findMany({
-        where: { restaurantId, deletedAt: null, category: { isVisible: true, deletedAt: null } },
+        where: {
+          restaurantId,
+          deletedAt: null,
+          category: { isVisible: true, deletedAt: null },
+          // Only what this branch actually sells. Filtered in the query rather
+          // than afterwards, so a branch with fifty dishes fetches fifty.
+          ...branchFoodFilter(branchId),
+        },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         include: {
           variantGroups: {
@@ -82,11 +103,15 @@ export const getPublicMenu = cache(
           },
         },
       }),
+      branchOverrides({ restaurantId, branchId }),
     ])
 
     const now = new Date()
 
-    const items: PublicMenuItem[] = foods.map((food) => {
+    const items: PublicMenuItem[] = foods.map((base) => {
+      // The branch's price and availability, merged on before pricing runs, so
+      // happy hour and discounts still work exactly as they always have.
+      const food = applyBranchOverrides(base, overrides?.get(base.id))
       const pricing = effectivePrice(food, now, timezone)
       return {
         id: food.id,
@@ -147,14 +172,22 @@ export const getPublicMenu = cache(
   },
 )
 
-/** Admin listing — includes hidden categories and unavailable items. */
+/**
+ * Admin listing — includes hidden categories and unavailable items.
+ *
+ * `branchId` shows that branch's menu: what it sells, at its prices, with its
+ * availability. Null shows every dish in the restaurant, which is what an owner
+ * on "All locations" wants and what a single-site restaurant always sees.
+ */
 export async function getManagedMenu(
   restaurantId: string,
   filter?: { search?: string; categoryId?: string; availability?: string; diet?: string },
+  branchId?: string | null,
 ) {
   const where = {
     restaurantId,
     deletedAt: null,
+    ...branchFoodFilter(branchId),
     ...(filter?.search
       ? {
           OR: [
@@ -170,23 +203,53 @@ export async function getManagedMenu(
     ...(filter?.diet === 'NON_VEG' ? { isVeg: false } : {}),
   }
 
-  const [foods, categories] = await Promise.all([
+  const [rows, categories, overrides, branchCount] = await Promise.all([
     prisma.food.findMany({
       where,
       orderBy: [{ category: { sortOrder: 'asc' } }, { sortOrder: 'asc' }, { name: 'asc' }],
       include: {
         category: { select: { id: true, name: true } },
         variantGroups: { select: { id: true, kind: true } },
+        // How widely a dish is shared, so the list can say "3 of 5 locations"
+        // without a second query per row.
+        _count: { select: { branches: true } },
       },
     }),
     prisma.category.findMany({
       where: { restaurantId, deletedAt: null },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      include: { _count: { select: { foods: { where: { deletedAt: null } } } } },
+      include: {
+        _count: {
+          select: {
+            foods: {
+              where: { deletedAt: null, ...branchFoodFilter(branchId) },
+            },
+          },
+        },
+      },
     }),
+    branchOverrides({ restaurantId, branchId }),
+    prisma.branch.count({ where: { restaurantId, deletedAt: null } }),
   ])
 
-  return { foods, categories }
+  /*
+   * With a branch chosen, the figures shown are that branch's — its price, its
+   * availability. Showing the base price beside a branch's name would be a
+   * number nobody at that branch charges.
+   */
+  const foods = rows.map((row) => {
+    const merged = applyBranchOverrides(row, overrides?.get(row.id))
+    return {
+      ...merged,
+      category: row.category,
+      variantGroups: row.variantGroups,
+      branchCount: row._count.branches,
+      /** True when this branch charges something other than the base price. */
+      hasPriceOverride: Boolean(overrides?.get(row.id)?.price),
+    }
+  })
+
+  return { foods, categories, branchCount }
 }
 
 export async function getFoodForEdit(restaurantId: string, foodId: string) {

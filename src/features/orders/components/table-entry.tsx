@@ -11,6 +11,10 @@ interface TableEntryProps {
   city: string | null
   isOpen: boolean
   openingLabel: string | null
+  /** Pre-filled from a table QR. */
+  initialTable?: string
+  /** Shown when the code was a branch's, so the guest can confirm the place. */
+  branchName?: string | null
 }
 
 /**

@@ -31,7 +31,10 @@ export default async function CashierPage({
   const restaurant = await requireRestaurant(user.restaurantId)
 
   const [menu, bills, today] = await Promise.all([
-    getPublicMenu(user.restaurantId, restaurant.timezone),
+    // The till sells its own branch's menu at its own branch's prices. A
+    // cashier confined to Kandy must not be able to ring up a Colombo-only
+    // dish, and must never charge Colombo's price for a shared one.
+    getPublicMenu(user.restaurantId, restaurant.timezone, user.branchId),
     getCashierQueue(user.restaurantId),
     prisma.payment.aggregate({
       where: {

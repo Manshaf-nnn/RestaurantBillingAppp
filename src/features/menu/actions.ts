@@ -10,6 +10,7 @@ import { slugify } from '@/lib/utils'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
+import { defaultBranchId, replaceFoodBranches } from './branch-menu'
 import { realtime } from '@/server/realtime/emitter'
 import {
   categorySchema,
@@ -289,6 +290,31 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
           foodId = created.id
         }
 
+        /*
+         * Which branches sell it. Replaced wholesale in the same transaction
+         * that replaces the variant groups and recipe, so a dish and its reach
+         * can never be half-saved.
+         *
+         * A new dish with nothing chosen goes to the branch being worked in —
+         * `data.branches` is filled by the form from the top-bar switcher — and
+         * failing that, to the restaurant's default. Never to every branch:
+         * that is what the old restaurant-wide menu did, and undoing it is the
+         * point of this whole change.
+         */
+        const branches = data.branches.length
+          ? data.branches
+          : data.id
+            ? [] // An edit that sent nothing means "leave it where it is".
+            : [{ branchId: await defaultBranchId(user.restaurantId), isAvailable: true }]
+
+        if (branches.length || !data.id) {
+          await replaceFoodBranches(tx, {
+            restaurantId: user.restaurantId,
+            foodId,
+            branches,
+          })
+        }
+
         for (const group of data.variantGroups) {
           await tx.variantGroup.create({
             data: {
@@ -426,7 +452,13 @@ export async function duplicateFood(id: string): Promise<ActionResult<{ id: stri
 
     const food = await prisma.food.findFirst({
       where: { id, restaurantId: user.restaurantId, deletedAt: null },
-      include: { variantGroups: { include: { options: true } } },
+      include: {
+        variantGroups: { include: { options: true } },
+        // A copy is sold where the original is, with the same overrides. Any
+        // other answer is a guess: copying to every branch would spread it and
+        // copying to none would make a dish nobody can order.
+        branches: true,
+      },
     })
     if (!food) throw new NotFoundError('Menu item')
 
@@ -474,6 +506,23 @@ export async function duplicateFood(id: string): Promise<ActionResult<{ id: stri
           },
         },
       })
+
+      // Sold wherever the original is, at the same overrides. The copy starts
+      // unavailable anyway, so nothing goes on sale by accident.
+      if (food.branches.length) {
+        await prisma.foodBranch.createMany({
+          data: food.branches.map((row) => ({
+            restaurantId: user.restaurantId,
+            foodId: copy.id,
+            branchId: row.branchId,
+            price: row.price,
+            discountPrice: row.discountPrice,
+            isAvailable: row.isAvailable,
+            sortOrder: row.sortOrder,
+          })),
+          skipDuplicates: true,
+        })
+      }
 
       revalidatePath('/dashboard/menu')
       return { id: copy.id }

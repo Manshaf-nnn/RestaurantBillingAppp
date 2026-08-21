@@ -48,6 +48,13 @@ export async function importMenuRows(
       // Prices arrive in major units; the database stores integer minor units.
       const toMinor = (value: number) => Math.round(value * 100)
 
+      // Where imported dishes are sold — every location, see the note below.
+      const allBranches = await prisma.branch.findMany({
+        where: { restaurantId: user.restaurantId, deletedAt: null },
+        select: { id: true },
+      })
+      const branches = allBranches.map((b) => b.id)
+
       const result = await prisma.$transaction(
         async (tx) => {
           const existingCategories = await tx.category.findMany({
@@ -112,7 +119,7 @@ export async function importMenuRows(
               continue
             }
 
-            await tx.food.create({
+            const food = await tx.food.create({
               data: {
                 restaurantId: user.restaurantId,
                 categoryId,
@@ -120,6 +127,24 @@ export async function importMenuRows(
                 ...fields,
               },
             })
+
+            /*
+             * Put it on a menu, or it exists and nobody can order it.
+             *
+             * An import is a restaurant setting itself up, so every location
+             * gets it — unlike a dish added by hand, which goes only to the
+             * branch being worked in. Somebody importing eighty dishes is
+             * describing what the business sells, not what one site sells.
+             */
+            await tx.foodBranch.createMany({
+              data: branches.map((branchId) => ({
+                restaurantId: user.restaurantId,
+                foodId: food.id,
+                branchId,
+              })),
+              skipDuplicates: true,
+            })
+
             created += 1
           }
 

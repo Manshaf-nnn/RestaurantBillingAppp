@@ -5,6 +5,7 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { toMajor } from '@/lib/money'
 import { requireAnyPermission } from '@/server/auth/guard'
 import { getFoodForEdit } from './queries'
+import { foodBranchRows } from './branch-menu'
 
 /** Loads a menu item and reshapes it into major-unit values the form edits. */
 export async function fetchFoodForEdit(foodId: string) {
@@ -13,7 +14,16 @@ export async function fetchFoodForEdit(foodId: string) {
     const food = await getFoodForEdit(user.restaurantId, foodId)
     if (!food) throw new Error('Menu item not found')
 
+    // Which locations sell it, with their own prices, so the form can show a
+    // branch's figure beside its checkbox and blank where it inherits.
+    const branches = await foodBranchRows({ restaurantId: user.restaurantId, foodId })
+
     return {
+      branches: branches.map((row) => ({
+        branchId: row.branchId,
+        price: row.price !== null ? toMajor(row.price) : null,
+        isAvailable: row.isAvailable,
+      })),
       id: food.id,
       categoryId: food.categoryId,
       name: food.name,

@@ -4,6 +4,7 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { resolveBranchId } from '@/features/branches/service'
+import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-menu'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import {
   prisma,
@@ -131,6 +132,12 @@ export async function buildDraft(params: {
   manualDiscount?: number
   redeemPoints?: number
   customerId?: string | null
+  /*
+   * Which branch this order is for. Lines are priced at ITS prices, and a dish
+   * that branch does not sell is refused here rather than being quietly rung
+   * up at the restaurant's base price.
+   */
+  branchId?: string | null
   db?: TxClient
 }): Promise<OrderDraft> {
   const db = params.db ?? prisma
@@ -139,18 +146,37 @@ export async function buildDraft(params: {
   if (!params.items.length) throw new AppError('Your cart is empty', 400, 'EMPTY_CART')
 
   const foodIds = [...new Set(params.items.map((item) => item.foodId))]
-  const foods = await db.food.findMany({
-    where: { id: { in: foodIds }, restaurantId: params.restaurantId, deletedAt: null },
-    include: { variantGroups: { include: { options: true } } },
-  })
+  const [foods, overrides] = await Promise.all([
+    db.food.findMany({
+      where: { id: { in: foodIds }, restaurantId: params.restaurantId, deletedAt: null },
+      include: { variantGroups: { include: { options: true } } },
+    }),
+    branchOverrides({ restaurantId: params.restaurantId, branchId: params.branchId }),
+  ])
 
   const foodById = new Map(foods.map((food) => [food.id, food]))
   const now = new Date()
   const priced: PricedDraftItem[] = []
 
   for (const line of params.items) {
-    const food = foodById.get(line.foodId)
-    if (!food) throw new NotFoundError('Menu item')
+    const base = foodById.get(line.foodId)
+    if (!base) throw new NotFoundError('Menu item')
+
+    /*
+     * A dish the branch does not sell cannot be ordered there.
+     *
+     * `overrides` is null when no branch is in play, which is the ordinary
+     * single-site case and means "no restriction". When a branch IS in play, a
+     * missing entry means the dish is not on that branch's menu at all —
+     * different from being on it and switched off, and both refused with the
+     * same message a guest already understands.
+     */
+    if (overrides && !overrides.has(base.id)) {
+      throw new AppError(`${base.name} is not on the menu here`, 409, 'ITEM_UNAVAILABLE')
+    }
+
+    // The branch's price and availability, merged on before pricing runs.
+    const food = applyBranchOverrides(base, overrides?.get(base.id))
     if (!food.isAvailable) {
       throw new AppError(`${food.name} is currently unavailable`, 409, 'ITEM_UNAVAILABLE')
     }
@@ -391,6 +417,31 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
   }
 
+  /*
+   * Which branch this order belongs to, resolved before the cart is priced.
+   *
+   * It has to come first: the branch decides the prices, so pricing the cart
+   * and then discovering the branch would ring the order up at the restaurant's
+   * base prices and store it against a location charging something else.
+   *
+   * The table wins where there is one — a guest at Kandy's table 4 is ordering
+   * from Kandy whatever the caller believed — then the caller's branch, then
+   * the restaurant's default. `resolveBranchId` never returns null.
+   */
+  const seatedAt = params.tableId
+    ? await prisma.restaurantTable.findFirst({
+        where: { id: params.tableId, restaurantId: params.restaurantId, isActive: true },
+        select: { branchId: true },
+      })
+    : null
+
+  const branchId =
+    seatedAt?.branchId ??
+    (await resolveBranchId({
+      restaurantId: params.restaurantId,
+      requestedBranchId: params.branchId,
+    }))
+
   const draft = await buildDraft({
     restaurantId: params.restaurantId,
     items: params.items,
@@ -398,6 +449,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     manualDiscount: params.manualDiscount,
     redeemPoints: params.redeemPoints,
     customerId: existingCustomer?.id ?? null,
+    branchId,
   })
 
   if (params.couponCode && draft.couponError) {
@@ -415,27 +467,6 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
         })
         if (!table) throw new NotFoundError('Table')
       }
-
-      /*
-       * Which branch this order belongs to, resolved once and never null.
-       *
-       * The table wins, because a table stands in exactly one building and
-       * that is the most truthful answer available — a guest sitting at Kandy's
-       * table 4 is ordering from Kandy whatever the caller believed. Failing
-       * that, the caller's branch; failing that, the restaurant's default.
-       *
-       * This used to be `params.branchId ?? null`, and the guest path never
-       * passed one at all: 426 of 434 orders were stored with no branch, and
-       * since every branch filter is `branchId IN (…)` — where `NULL IN (…)`
-       * is never true — they vanished from every branch report. The column is
-       * NOT NULL now, so this cannot silently regress.
-       */
-      const branchId =
-        table?.branchId ??
-        (await resolveBranchId({
-          restaurantId: params.restaurantId,
-          requestedBranchId: params.branchId,
-        }))
 
       // Customers are keyed by phone within a restaurant.
       const customer = await tx.customer.upsert({

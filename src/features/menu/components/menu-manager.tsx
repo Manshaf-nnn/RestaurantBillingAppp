@@ -49,6 +49,16 @@ export interface ManagedFood {
   categoryId: string
   categoryName: string
   variantCount: number
+  /** How many locations sell it — "1 of 5" tells an owner what is shared. */
+  branchCount: number
+  /** True when the location being viewed charges its own price. */
+  hasPriceOverride: boolean
+}
+
+export interface BranchOption {
+  id: string
+  name: string
+  type: string
 }
 
 export interface CategoryOption {
@@ -63,6 +73,10 @@ export function MenuManager({
   currency,
   locale,
   canManage,
+  branches = [],
+  activeBranchId = null,
+  activeBranchName = null,
+  branchCount = 1,
 }: {
   foods: ManagedFood[]
   categories: CategoryOption[]
@@ -70,6 +84,13 @@ export function MenuManager({
   currency: string
   locale: string
   canManage: boolean
+  /** Locations this person may share a dish with. */
+  branches?: BranchOption[]
+  /** The location being viewed, from the top-bar switcher. */
+  activeBranchId?: string | null
+  activeBranchName?: string | null
+  /** How many locations the restaurant has, for the "1 of N" label. */
+  branchCount?: number
 }) {
   const [foods, setFoods] = React.useState(initialFoods)
   const [search, setSearch] = React.useState('')
@@ -137,7 +158,13 @@ export function MenuManager({
     <>
       <PageHeader
         title="Menu"
-        description={`${foods.length} items across ${categories.length} categories`}
+        description={
+          activeBranchName
+            ? `${foods.length} item${foods.length === 1 ? '' : 's'} on ${activeBranchName}'s menu, at ${activeBranchName}'s prices.`
+            : branchCount > 1
+              ? `${foods.length} items across ${categories.length} categories, every location. Pick one in the top bar to see and price its own menu.`
+              : `${foods.length} items across ${categories.length} categories`
+        }
         actions={
           canManage ? (
             <Button onClick={openCreate}>
@@ -257,6 +284,15 @@ export function MenuManager({
                       {formatMoney(food.price, currency, locale)}
                     </span>
                   ) : null}
+                  {/*
+                    Say when this price is not the base one, so nobody raises
+                    the base and wonders why this location did not move.
+                  */}
+                  {food.hasPriceOverride ? (
+                    <Badge variant="secondary" size="sm">
+                      own price
+                    </Badge>
+                  ) : null}
                   <SpiceLevelIndicator level={food.spiceLevel} />
                 </div>
 
@@ -266,6 +302,23 @@ export function MenuManager({
                   {food.variantCount > 0 ? (
                     <Badge variant="secondary" size="sm">
                       {food.variantCount} option{food.variantCount === 1 ? '' : 's'}
+                    </Badge>
+                  ) : null}
+                  {/*
+                    How far a dish is shared. Without this, an owner editing at
+                    Main has no way to know they are about to change something
+                    four other branches also sell.
+                  */}
+                  {branchCount > 1 ? (
+                    <Badge
+                      variant={food.branchCount === 0 ? 'destructive' : 'secondary'}
+                      size="sm"
+                    >
+                      {food.branchCount === 0
+                        ? 'no location'
+                        : food.branchCount === branchCount
+                          ? 'all locations'
+                          : `${food.branchCount} of ${branchCount}`}
                     </Badge>
                   ) : null}
                   <span className="text-xs text-muted-foreground">{food.soldCount} sold</span>
@@ -298,6 +351,8 @@ export function MenuManager({
           categories={categories}
           inventoryItems={inventoryItems}
           currency={currency}
+          branches={branches}
+          activeBranchId={activeBranchId}
         />
       ) : null}
 
