@@ -21,6 +21,11 @@ async function main() {
   const shop = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'the-copper-spoon' } })
   const user = await prisma.user.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
   const category = await prisma.category.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
+  // Orders carry a required branch now.
+  const branch = await prisma.branch.findFirstOrThrow({
+    where: { restaurantId: shop.id, deletedAt: null },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+  })
   const S = Date.now().toString(36)
 
   const mkItem = async (name: string, unit: 'PIECE' | 'GRAM' | 'KG', cost = 0) => {
@@ -68,7 +73,8 @@ async function main() {
   const mkOrder = async (burgerQty: number) => {
     const o = await prisma.order.create({
       data: {
-        restaurantId: shop.id, orderNumber: `T3-${S}-${orders.length}`, type: 'COUNTER',
+        restaurantId: shop.id, branchId: branch.id,
+        orderNumber: `T3-${S}-${orders.length}`, type: 'COUNTER',
         status: 'PENDING', paymentStatus: 'UNPAID', customerName: 'Test', customerPhone: '0700000000',
         subtotal: 0, grandTotal: 0,
         items: { create: [{ foodId: burger.id, name: burger.name, unitPrice: 120000, quantity: burgerQty, lineTotal: 120000 * burgerQty }] },

@@ -189,10 +189,31 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
         },
       })
 
+      /*
+       * Every restaurant gets its main location up front.
+       *
+       * It used to be created lazily by `ensureDefaultBranch` the first time
+       * somebody opened an inventory screen, which was fine while a branch was
+       * optional. Tables and orders now require one, so a restaurant with no
+       * branch could not seat a guest or take an order — the whole point of
+       * signing up. Creating it here, in the same transaction as the
+       * restaurant, means that state cannot exist.
+       */
+      const mainBranch = await tx.branch.create({
+        data: {
+          restaurantId: restaurant.id,
+          name: 'Main',
+          code: 'MAIN',
+          type: 'BRANCH',
+          isDefault: true,
+        },
+      })
+
       // A restaurant is unusable without a floor — start with 8 tables.
       await tx.restaurantTable.createMany({
         data: Array.from({ length: 8 }, (_, index) => ({
           restaurantId: restaurant.id,
+          branchId: mainBranch.id,
           number: String(index + 1),
           capacity: index < 4 ? 2 : 4,
           sortOrder: index,

@@ -18,13 +18,14 @@ export default async function TablesPage({
   const user = await requirePagePermission(PERMISSIONS.TABLE_VIEW, '/dashboard/tables')
 
   /*
-   * A table stands in one building — table 4 at Kandy and table 4 at Colombo are
-   * different tables — so a chosen location narrows the list.
+   * A table stands in one building — table 4 at Kandy and table 4 at Colombo
+   * are different tables — so a chosen location narrows the list, strictly.
    *
-   * Tables with no location are shown at every location rather than nowhere.
-   * `RestaurantTable.branchId` is nullable and no screen has ever written it, so
-   * a strict filter would show an empty floor plan to a restaurant that plainly
-   * has tables. Unassigned means "not yet decided", not "belongs to no one".
+   * This used to fall back to showing tables with no branch at every location,
+   * because the column was nullable and nothing wrote it, so a strict filter
+   * would have shown an empty floor to a restaurant that plainly had tables.
+   * Every row now has a branch and the column is NOT NULL, so the fallback is
+   * not just unnecessary — it would be a lie.
    */
   const branchId = scopeToOne(await selectedBranch(user, await searchParams))
 
@@ -32,7 +33,7 @@ export default async function TablesPage({
     where: {
       restaurantId: user.restaurantId,
       isActive: true,
-      ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}),
+      ...(branchId ? { branchId } : {}),
     },
     orderBy: [{ area: 'asc' }, { sortOrder: 'asc' }, { number: 'asc' }],
     include: {

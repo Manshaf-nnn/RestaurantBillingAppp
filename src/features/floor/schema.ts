@@ -2,6 +2,15 @@ import { z } from 'zod'
 
 export const tableSchema = z.object({
   id: z.string().cuid().optional(),
+  /*
+   * Which branch this table stands in.
+   *
+   * Blank resolves to the caller's branch, or the restaurant's default — a
+   * single-site restaurant never has to think about it. The column was
+   * nullable and no screen ever wrote it, so table numbers could not restart
+   * per branch and a QR could not say which kitchen an order belonged to.
+   */
+  branchId: z.string().min(1).optional().or(z.literal('')),
   number: z
     .string()
     .trim()
@@ -17,6 +26,7 @@ export const tableSchema = z.object({
 export type TableInput = z.infer<typeof tableSchema>
 
 export const bulkTablesSchema = z.object({
+  branchId: z.string().min(1).optional().or(z.literal('')),
   count: z.coerce.number().int().min(1).max(100),
   startFrom: z.coerce.number().int().min(1).max(999).default(1),
   capacity: z.coerce.number().int().min(1).max(50).default(4),

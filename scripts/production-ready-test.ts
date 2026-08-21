@@ -50,8 +50,9 @@ async function main() {
       role: 'OWNER', passwordHash: 'x', staffCode: 'W-0001',
     },
   })
+  // Tables belong to a branch now — the fixture already has one above.
   const table = await prisma.restaurantTable.create({
-    data: { restaurantId: restaurant.id, number: '1', capacity: 4 },
+    data: { restaurantId: restaurant.id, branchId: branch.id, number: '1', capacity: 4 },
   })
 
   const patty = await prisma.inventoryItem.create({

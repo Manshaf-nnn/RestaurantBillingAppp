@@ -132,12 +132,32 @@ async function main() {
     users[member.role as string] = user.id
   }
 
+  // ── the main location ──────────────────────────────────────────────────────
+  //
+  // Tables and orders both require a branch now, so the seed has to make one
+  // before either.
+  const mainBranch =
+    (await prisma.branch.findFirst({
+      where: { restaurantId: restaurant.id, deletedAt: null },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    })) ??
+    (await prisma.branch.create({
+      data: {
+        restaurantId: restaurant.id,
+        name: 'Main',
+        code: 'MAIN',
+        type: 'BRANCH',
+        isDefault: true,
+      },
+    }))
+
   // ── tables ─────────────────────────────────────────────────────────────────
   const existingTables = await prisma.restaurantTable.count({ where: { restaurantId: restaurant.id } })
   if (existingTables === 0) {
     await prisma.restaurantTable.createMany({
       data: Array.from({ length: 16 }, (_, index) => ({
         restaurantId: restaurant.id,
+        branchId: mainBranch.id,
         number: String(index + 1),
         capacity: index < 6 ? 2 : index < 12 ? 4 : 6,
         area: index < 10 ? 'Main' : index < 14 ? 'Terrace' : 'Private',
@@ -386,6 +406,7 @@ async function main() {
       const order = await prisma.order.create({
         data: {
           restaurantId: restaurant.id,
+          branchId: mainBranch.id,
           orderNumber: `${stamp}-${String(orderSeq).padStart(3, '0')}`,
           type: 'DINE_IN',
           status,

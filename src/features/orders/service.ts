@@ -3,6 +3,7 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
+import { resolveBranchId } from '@/features/branches/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import {
   prisma,
@@ -415,6 +416,27 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
         if (!table) throw new NotFoundError('Table')
       }
 
+      /*
+       * Which branch this order belongs to, resolved once and never null.
+       *
+       * The table wins, because a table stands in exactly one building and
+       * that is the most truthful answer available — a guest sitting at Kandy's
+       * table 4 is ordering from Kandy whatever the caller believed. Failing
+       * that, the caller's branch; failing that, the restaurant's default.
+       *
+       * This used to be `params.branchId ?? null`, and the guest path never
+       * passed one at all: 426 of 434 orders were stored with no branch, and
+       * since every branch filter is `branchId IN (…)` — where `NULL IN (…)`
+       * is never true — they vanished from every branch report. The column is
+       * NOT NULL now, so this cannot silently regress.
+       */
+      const branchId =
+        table?.branchId ??
+        (await resolveBranchId({
+          restaurantId: params.restaurantId,
+          requestedBranchId: params.branchId,
+        }))
+
       // Customers are keyed by phone within a restaurant.
       const customer = await tx.customer.upsert({
         where: {
@@ -454,7 +476,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
               idempotencyKey: params.idempotencyKey || null,
               type,
               channel: params.channel ?? 'STAFF',
-              branchId: params.branchId ?? null,
+              branchId,
               status: 'PENDING',
               paymentStatus: 'UNPAID',
               tableId: table?.id ?? null,

@@ -201,6 +201,9 @@ export async function splitBill(
       data: {
         restaurantId: order.restaurantId,
         orderNumber,
+        // A split bill is the same sitting at the same table — it belongs to
+        // the branch the original did, not to whoever happens to be splitting.
+        branchId: order.branchId,
         type: order.type,
         status: order.status,
         tableId: order.tableId,

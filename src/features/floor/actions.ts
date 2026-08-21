@@ -6,7 +6,8 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { resolveBranchId } from '@/features/branches/service'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
 import {
@@ -25,7 +26,18 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TABLE_MANAGE)
+
+      // Never trust the posted id, and never leave it unset: a table without a
+      // branch cannot be reached by a QR.
+      await assertBranchAccess(user, data.branchId || null)
+      const branchId = await resolveBranchId({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId || null,
+        userBranchId: user.branchId,
+      })
+
       const payload = {
+        branchId,
         number: data.number.toUpperCase(),
         label: data.label || null,
         area: data.area || 'Main',
@@ -56,7 +68,12 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
         revalidatePath('/dashboard/tables')
         return { id: record.id }
       } catch (error) {
-        if (isUniqueViolation(error)) throw new ConflictError(`Table ${data.number} already exists`)
+        if (isUniqueViolation(error)) {
+          // Scoped per branch now, so the message has to be too — "Table 1
+          // already exists" reads as a lie when Kandy has one and this is
+          // Colombo.
+          throw new ConflictError(`Table ${data.number} already exists at this location`)
+        }
         throw error
       }
     },
@@ -71,21 +88,33 @@ export async function createTablesBulk(input: unknown): Promise<ActionResult<{ c
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TABLE_MANAGE)
 
+      await assertBranchAccess(user, data.branchId || null)
+      const branchId = await resolveBranchId({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId || null,
+        userBranchId: user.branchId,
+      })
+
+      // Numbers taken AT THIS BRANCH. Restaurant-wide would refuse to create
+      // Kandy's table 1 because Colombo already has one.
       const existing = await prisma.restaurantTable.findMany({
-        where: { restaurantId: user.restaurantId },
+        where: { restaurantId: user.restaurantId, branchId },
         select: { number: true },
       })
       const taken = new Set(existing.map((table) => table.number))
 
       const rows = Array.from({ length: data.count }, (_, index) => ({
         restaurantId: user.restaurantId,
+        branchId,
         number: String(data.startFrom + index),
         capacity: data.capacity,
         area: data.area || 'Main',
         sortOrder: data.startFrom + index,
       })).filter((row) => !taken.has(row.number))
 
-      if (!rows.length) throw new ConflictError('All those table numbers already exist')
+      if (!rows.length) {
+        throw new ConflictError('All those table numbers already exist at this location')
+      }
 
       const result = await prisma.restaurantTable.createMany({ data: rows, skipDuplicates: true })
       revalidatePath('/dashboard/tables')

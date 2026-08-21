@@ -482,6 +482,7 @@ model Restaurant {
   units            Unit[]
   stockCategories  InventoryCategory[]
   supplierPayments SupplierPayment[]
+  foodBranches     FoodBranch[]
   suppliers        Supplier[]
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
@@ -796,12 +797,60 @@ model Food {
   recipe        RecipeItem[]
   orderItems    OrderItem[]
   recipes       Recipe[]
+  branches      FoodBranch[]
 
   @@unique([restaurantId, slug])
   @@index([restaurantId, categoryId])
   @@index([restaurantId, isAvailable])
   @@index([restaurantId, isPopular])
   @@map("foods")
+}
+
+/// Which branches may sell a dish, and what it costs at each.
+///
+/// The menu used to be one flat list per restaurant: one price, one
+/// availability flag, one sort order for every site. A dish added at Main
+/// appeared instantly at Kandy, and dropping Kandy's price dropped Main's.
+///
+/// This is a join table rather than a copy of the dish per branch, and that
+/// distinction matters: duplicating would fork the recipe, the photo, the
+/// variant groups and the sales history, so "how many burgers did we sell"
+/// would need summing across rows that drift apart. One `Food` stays the
+/// master; only what differs per site lives here.
+///
+/// `InventoryStock` is the same shape for stock and is the precedent — except
+/// that both columns here are non-null, so a plain `@@unique` works where that
+/// model needed partial indexes.
+///
+/// A row's existence IS the sharing decision. No row means the branch does not
+/// have the dish at all — not that it has it and turned it off.
+model FoodBranch {
+  id           String     @id @default(cuid())
+  /// Denormalised so every query can scope by tenant without a second join.
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  foodId       String
+  food         Food       @relation(fields: [foodId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  /// null means "use the dish's own price". Set only when this branch differs,
+  /// so a restaurant that prices the same everywhere has one number to change.
+  price         Int?
+  discountPrice Int?
+  /// Off here, on elsewhere — distinct from the dish's own `isAvailable`,
+  /// which takes it off every menu at once.
+  isAvailable Boolean @default(true)
+  /// Overrides the dish's own order on this branch's menu.
+  sortOrder Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([foodId, branchId])
+  @@index([restaurantId, branchId, isAvailable])
+  @@index([branchId])
+  @@map("food_branches")
 }
 
 model VariantGroup {
@@ -875,10 +924,16 @@ model RestaurantTable {
   orders          Order[]
   reservations    Reservation[]
   serviceRequests ServiceRequest[]
-  branch          Branch?          @relation(fields: [branchId], references: [id])
-  branchId        String?
+  /// Required. A table stands in one building; "Table 4" at Kandy and "Table 4"
+  /// at Colombo are different tables, and a QR that cannot say which is a QR
+  /// that sends the order to the wrong kitchen. Nullable until now, and never
+  /// written by any screen — every row was back-filled to its restaurant's
+  /// default branch by the migration that made this required.
+  branch          Branch           @relation(fields: [branchId], references: [id])
+  branchId        String
 
-  @@unique([restaurantId, number])
+  /// Numbers restart per branch, which is why this is not [restaurantId, number].
+  @@unique([restaurantId, branchId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, branchId])
   @@map("restaurant_tables")
@@ -1015,8 +1070,14 @@ model Order {
   redemptions    CouponRedemption[]
   stockMovements StockMovement[]
   depletions     OrderStockDepletion[]
-  branch         Branch?               @relation(fields: [branchId], references: [id])
-  branchId       String?
+  /// Required. 426 of 434 orders had no branch before this: the guest path
+  /// never passed one and the staff path passed `user.branchId ?? null`, which
+  /// is null for an owner. Since every branch filter is `branchId IN (…)` and
+  /// `NULL IN (…)` is never true, selecting a location made almost every order
+  /// vanish from sales and profit. Now the database refuses a branchless order,
+  /// so no code path can quietly skip it again.
+  branch         Branch                @relation(fields: [branchId], references: [id])
+  branchId       String
 
   /// Deduplicates a resubmitted order.
   ///
@@ -1866,6 +1927,7 @@ model Branch {
   coupons          Coupon[]
   instructions     BranchInstruction[]
   goodsReceipts    GoodsReceipt[]
+  menu             FoodBranch[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
