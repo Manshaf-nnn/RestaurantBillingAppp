@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import {
   approveTransfer, closeTransfer, dispatchTransfer, receiveTransfer, requestTransfer,
 } from './service'
@@ -35,6 +35,7 @@ export async function requestTransferAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_REQUEST)
+      await assertBranchAccess(user, data.fromBranchId)
       const transfer = await requestTransfer({
         restaurantId: user.restaurantId,
         fromBranchId: data.fromBranchId,

@@ -102,7 +102,7 @@ async function main() {
       where: {
         restaurantId: row.restaurantId,
         itemId: row.itemId,
-        branchId: row.branchId,
+        branchId: row.branchId!,
         storageLocationId: row.locationId,
       },
     })

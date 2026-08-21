@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { recordWastage, reviewWastage } from './wastage'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
@@ -47,6 +47,7 @@ export async function recordWastageAction(
 ): Promise<ActionResult<{ id: string; costValue: number }>> {
   return runAction(wastageSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_WASTAGE)
+    await assertBranchAccess(user, data.branchId || null)
 
     const record = await recordWastage({
       restaurantId: user.restaurantId,

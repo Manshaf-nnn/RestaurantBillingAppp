@@ -2,7 +2,7 @@ import 'server-only'
 import { redirect } from 'next/navigation'
 
 import { ForbiddenError, UnauthorizedError } from '@/lib/errors'
-import { can, canAny, type Permission } from '@/lib/rbac'
+import { can, canAny, canAccessBranch, type Permission } from '@/lib/rbac'
 import { getAdminUser, getCurrentUser, type AuthUser } from './session'
 
 /**
@@ -49,6 +49,29 @@ export async function requireTenantUser(): Promise<TenantUser> {
     throw new ForbiddenError('This account is not linked to a restaurant')
   }
   return user as TenantUser
+}
+
+/**
+ * Refuse an action aimed at a location this user may not touch.
+ *
+ * Permissions answer "may they do this at all", never "may they do it *there*".
+ * A warehouse assistant tied to Colombo held INVENTORY_MANAGE and could waste,
+ * adjust or dispatch Kandy's stock simply by posting Kandy's id — the actions
+ * checked the restaurant and the permission and nothing else. `canAccessBranch`
+ * existed for exactly this and had no callers anywhere in the codebase.
+ *
+ * Call it in every action that takes a branch id from the client. A null id
+ * means "wherever this user belongs" and is always allowed; the caller resolves
+ * it afterwards.
+ */
+export async function assertBranchAccess(
+  user: TenantUser,
+  branchId: string | null | undefined,
+): Promise<void> {
+  if (!branchId) return
+  if (!canAccessBranch({ role: user.role, branchId: user.branchId }, branchId)) {
+    throw new ForbiddenError('You do not have access to that location')
+  }
 }
 
 export async function requirePermission(permission: Permission): Promise<TenantUser> {

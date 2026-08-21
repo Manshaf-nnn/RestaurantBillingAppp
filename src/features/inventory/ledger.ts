@@ -162,6 +162,19 @@ export async function postMovement(
   const balanceBefore = item.quantity
   const balanceAfter = round(balanceBefore + signed)
 
+  /*
+   * What this stock was worth when it moved.
+   *
+   * Inbound movements bring their own price and it must not be invented — the
+   * weighted average is computed from it below. Outbound movements had no cost
+   * at all, so every SALE, WASTAGE and TRANSFER_OUT row recorded zero, and the
+   * ledger could not answer "what did we consume, in money" — which is exactly
+   * what COGS is. Stamping the average in force at the moment of the movement
+   * makes the ledger the source of truth for cost as well as quantity, and it is
+   * a snapshot: later price changes cannot rewrite what last month cost.
+   */
+  const unitCost = params.unitCost ?? (signed < 0 ? item.costPerUnit : 0)
+
   const movement = await tx.stockMovement.create({
     data: {
       restaurantId: params.restaurantId,
@@ -171,7 +184,7 @@ export async function postMovement(
       quantityEntered: Math.abs(params.quantity),
       enteredUnit,
       balanceAfter,
-      unitCost: params.unitCost ?? 0,
+      unitCost,
       reason: params.reason ?? null,
       notes: params.notes ?? null,
       referenceType: params.referenceType ?? null,

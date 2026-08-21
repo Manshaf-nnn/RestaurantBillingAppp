@@ -7,7 +7,7 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import { createPurchaseOrder, setPurchaseStatus, upsertSupplierItem } from './service'
 import { createPurchaseReturn, receiveGoods } from './receiving'
@@ -40,6 +40,7 @@ export async function createPurchaseOrderAction(
 ): Promise<ActionResult<{ id: string; number: string }>> {
   return runAction(createSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.PURCHASE_CREATE)
+    await assertBranchAccess(user, data.branchId || null)
     const f = await factor(user.restaurantId)
 
     const po = await createPurchaseOrder({

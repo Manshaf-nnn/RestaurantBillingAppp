@@ -3,7 +3,7 @@ import type { Order, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
-import { pinRecipeVersions, reconcileOrderDepletion } from '@/features/inventory/depletion'
+import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import {
   prisma,
   isUniqueViolation,
@@ -678,6 +678,9 @@ export async function updateOrderStatus(params: {
     // the right answer instead of double-deducting.
     if (params.status === 'ACCEPTED' || params.status === 'PREPARING') {
       await pinRecipeVersions(tx, { restaurantId: order.restaurantId, orderId: order.id })
+      // Same moment, same recipe version: record what those ingredients cost, so
+      // the profit report reads the ledger's numbers rather than a menu field.
+      await snapshotLineCosts(tx, { restaurantId: order.restaurantId, orderId: order.id })
       const depleted = await reconcileOrderDepletion(tx, {
         restaurantId: order.restaurantId,
         orderId: order.id,

@@ -82,9 +82,39 @@ export async function getProfitReport(params: {
     select: {
       name: true, quantity: true, lineTotal: true, costPrice: true, recipeId: true,
       food: { select: { id: true, category: { select: { id: true, name: true } } } },
-      order: { select: { branch: { select: { id: true, name: true } } } },
+      order: {
+        select: {
+          id: true,
+          subtotal: true,
+          discountTotal: true,
+          loyaltyDiscount: true,
+          branch: { select: { id: true, name: true } },
+          payments: { where: { status: 'REFUNDED' }, select: { amount: true } },
+        },
+      },
     },
   })
+
+  /*
+   * Revenue here must mean the same thing it means on the sales report.
+   *
+   * This summed `lineTotal`, which is what was charged before any discount and
+   * before any refund. The sales report defines net as gross − discounts −
+   * refunds, so the two screens reported different revenue for the same period
+   * and the profit figure was overstated by every discount ever given.
+   *
+   * Order-level reductions are apportioned across the lines in proportion to
+   * what each contributed, which is the only division that keeps the parts
+   * summing to the whole.
+   */
+  const reductionShare = new Map<string, number>()
+  for (const line of lines) {
+    const order = line.order
+    if (!order || reductionShare.has(order.id)) continue
+    const refunded = order.payments.reduce((sum, p) => sum + p.amount, 0)
+    const reduction = order.discountTotal + order.loyaltyDiscount + refunded
+    reductionShare.set(order.id, order.subtotal > 0 ? reduction / order.subtotal : 0)
+  }
 
   // Recipe costs are resolved once per recipe rather than per line — a busy
   // day is thousands of lines across a few dozen recipes.
@@ -119,16 +149,34 @@ export async function getProfitReport(params: {
   })
 
   for (const line of lines) {
-    // `costPrice` is the snapshot taken at sale time; the recipe is the
-    // fallback for lines sold before snapshots existed.
-    const unitCost = line.costPrice ?? (line.recipeId ? costByRecipe.get(line.recipeId) ?? 0 : 0)
+    /*
+     * `costPrice` is the cost snapshot taken when the kitchen accepted the line,
+     * priced from the pinned recipe at the weighted average then in force. The
+     * recipe is the fallback for lines sold before snapshots existed.
+     *
+     * This was written `costPrice ?? recipeCost`, which never reached the
+     * fallback: the column is `Int @default(0)`, not nullable, so `??` only fires
+     * on null and a zero passed straight through. Any restaurant that had not
+     * typed cost prices into its menu reported cost of nil and a margin of 100%.
+     * The zero check is the whole fix.
+     */
+    const unitCost =
+      line.costPrice > 0
+        ? line.costPrice
+        : line.recipeId
+          ? costByRecipe.get(line.recipeId) ?? 0
+          : 0
     const lineCost = Math.round(unitCost * line.quantity)
     const known = unitCost > 0
 
-    revenue += line.lineTotal
+    // What this line actually earned, after its share of any discount or refund.
+    const share = reductionShare.get(line.order.id) ?? 0
+    const netLine = Math.max(0, Math.round(line.lineTotal * (1 - share)))
+
+    revenue += netLine
     cogs += lineCost
     if (known) withRecipe += 1
-    else { withoutRecipe += 1; revenueWithout += line.lineTotal }
+    else { withoutRecipe += 1; revenueWithout += netLine }
 
     for (const [map, key, label] of [
       [item, line.name, line.name],
@@ -136,7 +184,7 @@ export async function getProfitReport(params: {
       [branch, line.order.branch?.id ?? 'none', line.order.branch?.name ?? 'Unassigned'],
     ] as Array<[Map<string, GrossProfitRow>, string, string]>) {
       const row = map.get(key) ?? blank(key, label)
-      row.revenue += line.lineTotal
+      row.revenue += netLine
       row.cogs += lineCost
       row.quantity += line.quantity
       map.set(key, row)

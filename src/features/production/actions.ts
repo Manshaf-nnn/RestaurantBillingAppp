@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import {
   completeProduction, createProductionOrder, createProductionSpec, setProductionStatus,
 } from './service'
@@ -52,6 +52,7 @@ export async function createProductionOrderAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
+      await assertBranchAccess(user, data.branchId)
       const order = await createProductionOrder({
         restaurantId: user.restaurantId, branchId: data.branchId, specId: data.specId,
         plannedQty: data.plannedQty, notes: data.notes || null, userId: user.id,

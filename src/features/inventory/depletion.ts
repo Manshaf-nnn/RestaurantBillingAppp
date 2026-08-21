@@ -2,7 +2,7 @@ import 'server-only'
 
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from './ledger'
-import { resolveOrderConsumption } from './recipe-resolver'
+import { resolveOrderConsumption, resolveRecipe } from './recipe-resolver'
 
 /**
  * Recipe-driven stock depletion for an order.
@@ -203,6 +203,56 @@ export async function pinRecipeVersions(
     pinned += 1
   }
   return pinned
+}
+
+/**
+ * Record what each line's ingredients actually cost, at the moment it is sold.
+ *
+ * COGS used to come from `Food.costPrice` — a number the owner types into the
+ * menu dialog, defaulting to zero. A restaurant that never filled it in reported
+ * cost of nil and a gross margin of 100%, and the "recipe fallback" meant to
+ * cover that was unreachable: `costPrice ?? recipeCost` never fires, because the
+ * column is not nullable. So the headline profit figure on the reports screen
+ * was, for most restaurants, arithmetic on a zero.
+ *
+ * The real number is already in the system. `resolveRecipe` explodes the pinned
+ * recipe — sub-recipes, yields and wastage percentages included — and prices it
+ * at the weighted average cost then in force. Writing that onto the line makes it
+ * a snapshot: tomorrow's price rise cannot rewrite what today's plate cost.
+ *
+ * Runs beside `pinRecipeVersions`, so the cost recorded belongs to the same
+ * recipe version the stock was drawn against.
+ */
+export async function snapshotLineCosts(
+  tx: TxClient,
+  params: { restaurantId: string; orderId: string },
+): Promise<number> {
+  const lines = await tx.orderItem.findMany({
+    where: { orderId: params.orderId, recipeId: { not: null } },
+    select: { id: true, recipeId: true, costPrice: true },
+  })
+  if (lines.length === 0) return 0
+
+  const costByRecipe = new Map<string, number>()
+  let written = 0
+
+  for (const line of lines) {
+    const recipeId = line.recipeId!
+    if (!costByRecipe.has(recipeId)) {
+      const resolved = await resolveRecipe(tx, { restaurantId: params.restaurantId, recipeId, portions: 1 })
+      costByRecipe.set(recipeId, resolved ? Math.round(resolved.totalCost) : 0)
+    }
+    const cost = costByRecipe.get(recipeId) ?? 0
+
+    // Only overwrite a zero. A line already carrying a cost was either priced by
+    // an earlier snapshot or set deliberately, and re-pricing it later would
+    // change history.
+    if (cost > 0 && line.costPrice === 0) {
+      await tx.orderItem.update({ where: { id: line.id }, data: { costPrice: cost } })
+      written += 1
+    }
+  }
+  return written
 }
 
 /** Standalone wrapper for callers not already inside a transaction. */

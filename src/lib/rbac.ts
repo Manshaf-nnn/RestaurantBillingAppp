@@ -337,25 +337,39 @@ export function assignableRoles(role: UserRole): UserRole[] {
  * clause. That is deliberately different from an empty array, which would mean
  * "no locations at all" and silently return nothing.
  */
+/*
+ * Roles whose remit is the whole restaurant rather than one site.
+ *
+ * MANAGER is deliberately NOT here. A restaurant with several sites has a
+ * manager per site, and "the Colombo manager must not see Kandy's figures" is
+ * the ordinary expectation — it was listed, so every branch manager saw every
+ * branch. It is now decided per user instead: a manager with no branch assigned
+ * is a group manager and sees everything; a manager assigned to Colombo sees
+ * Colombo. That reads the existing data rather than needing a new flag, and it
+ * leaves single-site restaurants (where nobody has a branch) unchanged.
+ */
 const CROSS_LOCATION_ROLES: UserRole[] = [
   'SUPER_ADMIN',
   'OWNER',
   'ADMIN',
-  'MANAGER',
   'INVENTORY_MANAGER',
   'PURCHASING_MANAGER',
   'ACCOUNTANT',
 ]
 
-export function seesAllLocations(role: UserRole): boolean {
-  return CROSS_LOCATION_ROLES.includes(role)
+/** Roles that see everything only while they are not tied to one site. */
+const SITE_SCOPED_WHEN_ASSIGNED: UserRole[] = ['MANAGER']
+
+export function seesAllLocations(role: UserRole, branchId?: string | null): boolean {
+  if (CROSS_LOCATION_ROLES.includes(role)) return true
+  return SITE_SCOPED_WHEN_ASSIGNED.includes(role) && !branchId
 }
 
 export function visibleBranchIds(subject: {
   role: UserRole
   branchId?: string | null
 }): string[] | null {
-  if (seesAllLocations(subject.role)) return null
+  if (seesAllLocations(subject.role, subject.branchId)) return null
   // Someone tied to a location with none assigned yet sees nothing rather than
   // everything — failing closed is the only safe default here.
   return subject.branchId ? [subject.branchId] : []

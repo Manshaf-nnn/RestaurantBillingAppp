@@ -4,7 +4,7 @@ import QRCode from 'qrcode'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
-import { prisma } from '@/server/db/prisma'
+import { prisma, guardLocks } from '@/server/db/prisma'
 import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
@@ -163,6 +163,24 @@ export async function capturePayment(params: {
   const restaurant = await requireRestaurant(params.restaurantId)
 
   const result = await prisma.$transaction(async (tx) => {
+    /*
+     * Lock the bill before reading what is outstanding.
+     *
+     * Without this, two taps on "Settle" — or a cashier and a QR guest paying at
+     * the same moment — both read `paidTotal = 0`, both find the full amount
+     * outstanding, both pass the overpayment check and both write a PAID row.
+     * The order settles once, but the drawer and the payment-mix report count
+     * the money twice, and the reconciliation at close of service is short by a
+     * bill that was never taken. The same pattern already guards goods receipt.
+     */
+    await guardLocks(tx)
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM orders
+      WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}
+      FOR UPDATE
+    `
+    if (locked.length === 0) throw new NotFoundError('Order')
+
     const order = await tx.order.findFirst({
       where: { id: params.orderId, restaurantId: params.restaurantId },
       include: { items: true, table: true },
