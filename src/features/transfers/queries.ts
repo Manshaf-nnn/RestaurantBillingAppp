@@ -19,6 +19,18 @@ export interface LocationSummary {
   lowStock: number
   outOfStock: number
   inTransitLines: number
+  /*
+   * Who runs it and how many people work there.
+   *
+   * `isDefault` was already fetched and never rendered, and the manager — a
+   * cheap join on one indexed column — was not fetched at all, so the card told
+   * you what a location HELD and nothing about who was answerable for it.
+   */
+  managerId: string | null
+  managerName: string | null
+  staffCount: number
+  address: string | null
+  phone: string | null
 }
 
 /**
@@ -33,6 +45,8 @@ export async function listLocations(restaurantId: string): Promise<LocationSumma
     where: { restaurantId, deletedAt: null },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
     include: {
+      manager: { select: { id: true, name: true } },
+      _count: { select: { users: { where: { deletedAt: null, isActive: true } } } },
       stock: {
         include: {
           item: {
@@ -76,6 +90,11 @@ export async function listLocations(restaurantId: string): Promise<LocationSumma
       lowStock,
       outOfStock,
       inTransitLines,
+      managerId: b.manager?.id ?? null,
+      managerName: b.manager?.name ?? null,
+      staffCount: b._count.users,
+      address: b.address,
+      phone: b.phone,
     }
   })
 }
@@ -158,11 +177,84 @@ export async function getLocationDetail(params: {
   const branch = await prisma.branch.findFirst({
     where: { id: params.branchId, restaurantId: params.restaurantId, deletedAt: null },
     include: {
-      manager: { select: { name: true } },
+      manager: {
+        select: { id: true, name: true, email: true, phone: true, staffCode: true, signInCode: true },
+      },
       storageLocations: { where: { deletedAt: null }, select: { id: true, name: true } },
     },
   })
   if (!branch) throw new NotFoundError('Location')
+
+  /*
+   * Everything else that happens here, in one batch.
+   *
+   * A location page that shows only what is on the shelves answers one question
+   * out of five. The other four — who works here, what is coming in, what it
+   * sold, where it keeps things — were all one query away and none was asked.
+   */
+  const since = new Date()
+  since.setDate(since.getDate() - 30)
+
+  const [team, incoming, receipts, sales, unpaid] = await Promise.all([
+    prisma.user.findMany({
+      where: { restaurantId: params.restaurantId, branchId: branch.id, deletedAt: null },
+      select: {
+        id: true, name: true, email: true, role: true, staffCode: true,
+        isActive: true, lastLoginAt: true,
+      },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+    }),
+    // Ordered here and not yet fully delivered.
+    prisma.purchase.findMany({
+      where: {
+        restaurantId: params.restaurantId,
+        branchId: branch.id,
+        status: { in: ['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED'] },
+      },
+      select: {
+        id: true, number: true, status: true, total: true, expectedAt: true,
+        supplier: { select: { id: true, name: true } },
+      },
+      orderBy: [{ expectedAt: 'asc' }, { createdAt: 'asc' }],
+      take: 10,
+    }),
+    // Delivered here — including anything diverted here from another order.
+    prisma.goodsReceipt.findMany({
+      where: {
+        restaurantId: params.restaurantId,
+        OR: [
+          { branchId: branch.id },
+          { branchId: null, purchase: { branchId: branch.id } },
+        ],
+      },
+      select: {
+        id: true, number: true, receivedAt: true, supplierRef: true,
+        purchase: { select: { id: true, number: true, supplier: { select: { name: true } } } },
+        lines: { select: { acceptedQty: true, unitCost: true } },
+      },
+      orderBy: { receivedAt: 'desc' },
+      take: 10,
+    }),
+    prisma.order.aggregate({
+      where: {
+        restaurantId: params.restaurantId,
+        branchId: branch.id,
+        status: { not: 'CANCELLED' },
+        placedAt: { gte: since },
+      },
+      _sum: { grandTotal: true },
+      _count: true,
+    }),
+    prisma.order.aggregate({
+      where: {
+        restaurantId: params.restaurantId,
+        branchId: branch.id,
+        status: { not: 'CANCELLED' },
+        paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
+      },
+      _sum: { grandTotal: true, paidTotal: true },
+    }),
+  ])
 
   const stock = await prisma.inventoryStock.findMany({
     where: { branchId: branch.id, restaurantId: params.restaurantId },
@@ -224,6 +316,19 @@ export async function getLocationDetail(params: {
       isDefault: branch.isDefault,
       managerId: branch.managerId,
       managerName: branch.manager?.name ?? null,
+      manager: branch.manager
+        ? {
+            id: branch.manager.id,
+            name: branch.manager.name,
+            email: branch.manager.email,
+            phone: branch.manager.phone,
+            staffCode: branch.manager.staffCode,
+            // Plaintext by design — the owner must be able to reprint a lost
+            // card. Same trade-off documented on staff codes; the page that
+            // renders it is permission-gated.
+            signInCode: branch.manager.signInCode,
+          }
+        : null,
       /*
        * Null is a real answer, not a missing one: it means this location keeps
        * the restaurant's own hours. `parseOpeningHours` would substitute
@@ -251,8 +356,50 @@ export async function getLocationDetail(params: {
       // Only worth showing when it is actually split across more than one.
       shelves: s.shelves.length > 1 ? s.shelves : [],
     })),
+    team: team.map((t) => ({
+      id: t.id,
+      name: t.name,
+      email: t.email,
+      role: t.role as string,
+      staffCode: t.staffCode,
+      isActive: t.isActive,
+      lastLoginAt: t.lastLoginAt?.toISOString() ?? null,
+    })),
+    incoming: incoming.map((po) => ({
+      id: po.id,
+      number: po.number,
+      status: po.status as string,
+      total: po.total,
+      expectedAt: po.expectedAt?.toISOString() ?? null,
+      supplierId: po.supplier?.id ?? null,
+      supplierName: po.supplier?.name ?? null,
+    })),
+    receipts: receipts.map((r) => ({
+      id: r.id,
+      number: r.number,
+      purchaseId: r.purchase.id,
+      purchaseNumber: r.purchase.number,
+      supplierName: r.purchase.supplier?.name ?? null,
+      supplierRef: r.supplierRef,
+      receivedAt: r.receivedAt.toISOString(),
+      value: r.lines.reduce((sum, l) => sum + Math.round(l.acceptedQty * l.unitCost), 0),
+    })),
+    sales: {
+      days: 30,
+      orders: sales._count,
+      revenue: sales._sum.grandTotal ?? 0,
+      /*
+       * Owed on orders taken here, all time — not just the window. A debt does
+       * not stop existing because it is a month old, and showing a 30-day
+       * figure beside a lifetime one under the same heading would be worse
+       * than showing neither.
+       */
+      unpaid: Math.max(0, (unpaid._sum.grandTotal ?? 0) - (unpaid._sum.paidTotal ?? 0)),
+    },
   }
 }
+
+export type LocationDetail = Awaited<ReturnType<typeof getLocationDetail>>
 
 
 /** One transfer with everything the detail screen shows. */
@@ -358,11 +505,37 @@ export async function getTransferBuilderData(restaurantId: string) {
  * on every single page load to populate a dropdown that needs three fields.
  */
 export async function listSwitchableLocations(restaurantId: string): Promise<
-  Array<{ id: string; name: string; type: LocationType }>
+  Array<{
+    id: string
+    name: string
+    type: LocationType
+    /** Shown under the name, so the menu is worth opening. */
+    managerName: string | null
+    staffCount: number
+  }>
 > {
-  return prisma.branch.findMany({
+  /*
+   * The manager is a `SET NULL` join on one indexed column and the staff count
+   * is a `_count` on an indexed relation, so this is still the cheap query the
+   * note above insists on — no stock rows, no items.
+   */
+  const branches = await prisma.branch.findMany({
     where: { restaurantId, deletedAt: null, isActive: true },
-    select: { id: true, name: true, type: true },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      manager: { select: { name: true } },
+      _count: { select: { users: { where: { deletedAt: null, isActive: true } } } },
+    },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
   })
+
+  return branches.map((b) => ({
+    id: b.id,
+    name: b.name,
+    type: b.type,
+    managerName: b.manager?.name ?? null,
+    staffCount: b._count.users,
+  }))
 }

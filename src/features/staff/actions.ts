@@ -6,7 +6,7 @@ import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { requireBranch } from '@/features/branches/service'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
-import { assignableRoles, PERMISSIONS } from '@/lib/rbac'
+import { assignableRoles, canManageLocation, PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission, type TenantUser } from '@/server/auth/guard'
 import { hashPassword } from '@/server/auth/password'
@@ -140,15 +140,50 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
 
       const branchId = await homeBranchFor(admin, data.branchId)
 
-      await prisma.user.update({
-        where: { id: data.id },
-        data: {
-          name: data.name,
-          phone: data.phone || null,
-          role: data.role,
-          branchId,
-          isActive: data.isActive,
-        },
+      /*
+       * Two facts have to stay in step: `User.branchId` decides what someone
+       * can SEE, and `Branch.managerId` decides what a location says about
+       * itself. `setBranchManager` on the locations screen has always written
+       * both. This screen wrote only the first, so moving a named manager to
+       * another site — or switching them off — left their old location still
+       * captioned "managed by X" while X was scoped somewhere else entirely.
+       *
+       * Done in one transaction with the update, because a caption that
+       * survives a failed write is the same bug in a smaller window.
+       */
+      const runs = await prisma.branch.findFirst({
+        where: { restaurantId: admin.restaurantId, managerId: data.id, deletedAt: null },
+        select: { id: true },
+      })
+      const stillRunsIt = runs && runs.id === branchId && data.isActive
+
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: data.id },
+          data: {
+            name: data.name,
+            phone: data.phone || null,
+            role: data.role,
+            branchId,
+            isActive: data.isActive,
+          },
+        })
+
+        if (runs && !stillRunsIt) {
+          await tx.branch.update({ where: { id: runs.id }, data: { managerId: null } })
+        }
+
+        /*
+         * And name them on the location they have just been moved to, if it has
+         * nobody. Not if it already has a manager — that is a decision for the
+         * location's own screen, not a side effect of editing a staff record.
+         */
+        if (branchId && branchId !== runs?.id) {
+          await tx.branch.updateMany({
+            where: { id: branchId, restaurantId: admin.restaurantId, managerId: null },
+            data: { managerId: canManageLocation({ role: data.role }) ? data.id : null },
+          })
+        }
       })
 
       // Deactivating a user must also cut their live sessions.

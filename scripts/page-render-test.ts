@@ -164,7 +164,7 @@ async function main() {
    * from" trail that ended at a production run ended at a 404. A route nothing
    * renders in CI is a route nobody notices is missing.
    */
-  const [aRun, aTransfer] = await Promise.all([
+  const [aRun, aTransfer, aLocation] = await Promise.all([
     prisma.productionOrder.findFirst({
       where: { restaurantId: user.restaurantId ?? undefined },
       select: { id: true },
@@ -175,11 +175,17 @@ async function main() {
       select: { id: true },
       orderBy: { requestedAt: 'desc' },
     }),
+    prisma.branch.findFirst({
+      where: { restaurantId: user.restaurantId ?? undefined, deletedAt: null },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    }),
   ])
 
   const detailPages = [
     aRun ? `/dashboard/production/${aRun.id}` : null,
     aTransfer ? `/dashboard/transfers/${aTransfer.id}` : null,
+    aLocation ? `/dashboard/locations/${aLocation.id}` : null,
   ].filter((path): path is string => path !== null)
 
   if (detailPages.length === 0) {

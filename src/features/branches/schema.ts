@@ -12,13 +12,66 @@ import { z } from 'zod'
 
 export const LOCATION_TYPES = ['BRANCH', 'PRODUCTION_HOUSE', 'CENTRAL_WAREHOUSE'] as const
 
-export const locationSchema = z.object({
-  name: z.string().trim().min(2, 'Give the location a name').max(60),
-  code: z.string().trim().min(1, 'Give it a short code').max(12),
-  type: z.enum(LOCATION_TYPES),
-  address: z.string().trim().max(200).optional().or(z.literal('')),
-  phone: z.string().trim().max(30).optional().or(z.literal('')),
-})
+/**
+ * Who runs the place, decided while the place is being created.
+ *
+ * Three ways, because all three happen: nobody yet, somebody who already works
+ * here, or somebody new who needs an account. Making the third route go through
+ * the Staff screen first meant creating a location, leaving it, creating a
+ * person, coming back and finally joining the two — and a location with no
+ * manager is one nobody can be held to.
+ */
+const MANAGER_MODES = ['NONE', 'EXISTING', 'NEW'] as const
+
+export const locationSchema = z
+  .object({
+    name: z.string().trim().min(2, 'Give the location a name').max(60),
+    code: z.string().trim().min(1, 'Give it a short code').max(12),
+    type: z.enum(LOCATION_TYPES),
+    address: z.string().trim().max(200).optional().or(z.literal('')),
+    phone: z.string().trim().max(30).optional().or(z.literal('')),
+
+    managerMode: z.enum(MANAGER_MODES).default('NONE'),
+    /** EXISTING — somebody who already has an account here. */
+    managerId: z.string().trim().optional().or(z.literal('')),
+    /** NEW — the details a fresh manager account is built from. */
+    managerName: z.string().trim().max(80).optional().or(z.literal('')),
+    managerEmail: z.string().trim().max(255).optional().or(z.literal('')),
+    managerPhone: z.string().trim().max(30).optional().or(z.literal('')),
+  })
+  /*
+   * Validated as a whole rather than field by field, so the message names the
+   * thing that is actually missing. Checking `managerEmail` on its own would
+   * either demand an email from someone who chose "nobody yet", or accept a
+   * half-filled new manager and create an account with no way to sign in.
+   */
+  .superRefine((data, ctx) => {
+    if (data.managerMode === 'EXISTING' && !data.managerId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['managerId'],
+        message: 'Choose who manages this location',
+      })
+    }
+
+    if (data.managerMode === 'NEW') {
+      if (!data.managerName || data.managerName.length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['managerName'],
+          message: "Enter the manager's name",
+        })
+      }
+      // The email is their username — without it the account cannot be used.
+      if (!data.managerEmail || !z.string().email().safeParse(data.managerEmail).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['managerEmail'],
+          message: 'Enter a valid email — it is what they sign in with',
+        })
+      }
+    }
+  })
 
 const timeOfDay = z
   .string()

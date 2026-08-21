@@ -42,6 +42,7 @@ const SERVICE = [
   'purchasing-test',
   'supplier-ledger-test',
   'search-test',
+  'locations-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

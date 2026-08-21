@@ -1,14 +1,18 @@
 'use server'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
-import { AppError, NotFoundError } from '@/lib/errors'
-import { PERMISSIONS, canManageLocation } from '@/lib/rbac'
+import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
+import { PERMISSIONS, assignableRoles, canManageLocation } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { hashPassword } from '@/server/auth/password'
 import { prisma } from '@/server/db/prisma'
+import { requireRestaurant } from '@/server/db/tenant'
+import { generateSignInCode, nextStaffCode } from '@/features/staff/codes'
+import { sendMail, staffInviteEmail } from '@/server/mailer'
 import { locationSchema, storageLocationSchema, updateLocationSchema } from './schema'
 import {
-  createBranch,
+  createLocationWithManager,
   requireBranch,
   setBranchManager,
   setDefaultBranch,
@@ -38,30 +42,122 @@ import {
  * storage locations, stock and transfers for free rather than needing a
  * parallel system.
  */
-export async function createLocationAction(
-  input: unknown,
-): Promise<ActionResult<{ id: string; name: string }>> {
+export async function createLocationAction(input: unknown): Promise<
+  ActionResult<{
+    id: string
+    name: string
+    /** Returned once, so the owner can hand the card over. Never fetched again. */
+    manager: { name: string; email: string; signInCode: string; emailed: boolean } | null
+  }>
+> {
   return runAction(locationSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
 
-    const branch = await createBranch({
+    /*
+     * Minting a manager is a bigger power than adding a location, so it is
+     * checked separately and by the same rank rule the Staff screen uses:
+     * nobody may create their own rank or above. A site manager can hold
+     * BRANCH_MANAGE and still must not be able to create another manager.
+     *
+     * Checked here rather than left to the Staff service so the refusal is a
+     * sentence about what happened, not a schema error about a field.
+     */
+    if (data.managerMode === 'NEW' && !assignableRoles(user.role).includes('MANAGER')) {
+      throw new ForbiddenError('Only an owner or admin can create a manager account')
+    }
+    if (data.managerMode === 'EXISTING' && data.managerId) {
+      const candidate = await prisma.user.findFirst({
+        where: { id: data.managerId, restaurantId: user.restaurantId, deletedAt: null },
+        select: { role: true, permissions: true },
+      })
+      if (!candidate) throw new NotFoundError('Manager')
+      // Never trust the posted id: re-check that this person may actually run a
+      // location, exactly as the edit path does.
+      if (!canManageLocation(candidate)) {
+        throw new AppError('That person cannot manage a location', 400, 'MANAGER_ROLE')
+      }
+    }
+
+    const result = await createLocationWithManager({
       restaurantId: user.restaurantId,
       name: data.name,
       code: data.code,
+      type: data.type,
       address: data.address || null,
       phone: data.phone || null,
+      manager:
+        data.managerMode === 'NEW'
+          ? {
+              mode: 'NEW',
+              name: data.managerName ?? '',
+              email: data.managerEmail ?? '',
+              phone: data.managerPhone || null,
+            }
+          : data.managerMode === 'EXISTING' && data.managerId
+            ? { mode: 'EXISTING', userId: data.managerId }
+            : { mode: 'NONE' },
+      // The same helpers the Staff screen uses, so there is one kind of
+      // credential in this system and not two.
+      issueCredentials: async () => {
+        const signInCode = generateSignInCode()
+        return { signInCode, passwordHash: await hashPassword(signInCode) }
+      },
+      nextStaffCode: (tx) => nextStaffCode(tx, user.restaurantId),
     })
 
-    // createBranch does not know about types, so the type is applied here.
-    await prisma.branch.update({ where: { id: branch.id }, data: { type: data.type } })
+    const branch = result.branch
+    let emailed = false
+
+    if (result.created) {
+      const restaurant = await requireRestaurant(user.restaurantId)
+      const sent = await sendMail({
+        to: result.created.email,
+        ...staffInviteEmail({
+          name: result.created.name,
+          restaurantName: restaurant.name,
+          email: result.created.email,
+          temporaryPassword: result.created.signInCode,
+          role: 'MANAGER',
+        }),
+      })
+      emailed = sent.sent
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: branch.id,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.STAFF_INVITED,
+        entity: 'User',
+        entityId: result.created.userId,
+        // The code itself is never audited — the audit log is widely readable.
+        after: { email: result.created.email, role: 'MANAGER', branchId: branch.id },
+      })
+    }
 
     await audit({
       restaurantId: user.restaurantId, branchId: branch.id, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.CREATE, entity: 'Branch', entityId: branch.id,
-      after: { name: branch.name, code: branch.code, type: data.type },
+      after: {
+        name: branch.name,
+        code: branch.code,
+        type: data.type,
+        managerId: branch.managerId,
+      },
     })
 
-    return { id: branch.id, name: branch.name }
+    return {
+      id: branch.id,
+      name: branch.name,
+      manager: result.created
+        ? {
+            name: result.created.name,
+            email: result.created.email,
+            signInCode: result.created.signInCode,
+            emailed,
+          }
+        : null,
+    }
   }, 'Location created.')
 }
 

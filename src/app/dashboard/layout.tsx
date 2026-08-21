@@ -64,7 +64,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const allowedBranchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
   const locations = allLocations
     .filter((l) => allowedBranchIds === null || allowedBranchIds.includes(l.id))
-    .map((l) => ({ id: l.id, name: l.name, type: l.type as 'BRANCH' | 'PRODUCTION_HOUSE' | 'CENTRAL_WAREHOUSE' }))
+    .map((l) => ({
+      id: l.id,
+      name: l.name,
+      type: l.type as 'BRANCH' | 'PRODUCTION_HOUSE' | 'CENTRAL_WAREHOUSE',
+      managerName: l.managerName,
+      staffCount: l.staffCount,
+    }))
 
 
   return (

@@ -1,9 +1,20 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { Building2, Check, ChevronDown, Factory, Store, Warehouse } from 'lucide-react'
+import {
+  ArrowUpRight,
+  Building2,
+  Check,
+  ChevronDown,
+  Factory,
+  Settings2,
+  Store,
+  Warehouse,
+} from 'lucide-react'
 
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/primitives'
 import { callAction } from '@/lib/use-action'
 import { rememberBranch } from '../actions'
 
@@ -13,45 +24,60 @@ const ICONS = {
   CENTRAL_WAREHOUSE: Warehouse,
 } as const
 
+const TYPE_LABEL: Record<keyof typeof ICONS, string> = {
+  BRANCH: 'Branch',
+  PRODUCTION_HOUSE: 'Production house',
+  CENTRAL_WAREHOUSE: 'Central warehouse',
+}
+
 export interface SwitchableLocation {
   id: string
   name: string
   type: keyof typeof ICONS
+  managerName?: string | null
+  staffCount?: number
 }
 
 /**
  * The global location switcher, in the top bar on every dashboard page.
  *
- * The choice is written to the URL rather than held in context. That way the
- * server components doing the filtering can read it directly, a filtered view
- * can be bookmarked or sent to an accountant, and the back button behaves the
- * way people expect.
+ * ── Why this is a Radix Popover and not a plain div ─────────────────────────
  *
- * A cookie is written alongside it, but only as a memory: opening the dashboard
- * fresh tomorrow lands where you left off instead of on "all locations". The URL
- * still wins whenever both are present, so none of the above is lost.
+ * It used to be hand-rolled: an `absolute` menu inside the header, and clicking
+ * the button appeared to do nothing. The logic was fine — the menu really was
+ * rendering — but the header carries `.glass-chrome`, whose
+ * `backdrop-filter: blur(22px)` creates its own stacking context and containing
+ * block, and an absolutely-positioned descendant of one of those is a
+ * long-standing way to paint something the user cannot see.
  *
- * It only renders when there is more than one location, so a single-site
- * restaurant never sees a control that does nothing.
+ * The proof was one element to the right: the notification bell and the avatar
+ * menu live in the *same header*, work perfectly, and are Radix — whose
+ * `PopoverContent` wraps itself in a Portal and so escapes the header
+ * altogether. Using the same primitive removes the whole class of problem
+ * rather than guessing at which mechanism it was, and brings Escape, arrow keys
+ * and focus handling that the hand-rolled version never had.
+ *
+ * ── Two jobs, kept separate ─────────────────────────────────────────────────
+ *
+ * Clicking the **name** changes which location the whole dashboard is showing.
+ * Clicking the **↗** opens that location's own page in a new tab. They are
+ * genuinely different intentions — "show me Kandy's takings" and "let me look
+ * at Kandy" — and collapsing them into one click would mean either losing the
+ * filter or opening a tab every time someone changes it.
+ *
+ * The choice is written to the URL rather than held in context, so the server
+ * components doing the filtering can read it directly, a filtered view can be
+ * bookmarked or sent to an accountant, and the back button behaves. The cookie
+ * alongside it is only a memory of the last choice.
  */
 export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] }) {
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
   const [open, setOpen] = React.useState(false)
-  const ref = React.useRef<HTMLDivElement>(null)
 
   const current = params.get('branch')
   const active = locations.find((l) => l.id === current) ?? null
-
-  React.useEffect(() => {
-    if (!open) return
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [open])
 
   if (locations.length < 2) return null
 
@@ -68,74 +94,140 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
 
     const qs = next.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
+
+    /*
+     * And then force the page to re-render.
+     *
+     * `experimental.staleTimes.dynamic` in next.config.mjs keeps a visited page
+     * in the client router cache for half a minute — which is what stops the
+     * app feeling like it reloads on every sidebar click. The side effect is
+     * that switching Kandy → All → Kandy inside that window would be served
+     * from the cache with figures that never move, which looks exactly like a
+     * broken control. Changing location is precisely the moment the cache must
+     * not win.
+     */
+    router.refresh()
   }
 
   const Icon = active ? ICONS[active.type] ?? Building2 : Building2
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm hover:bg-muted"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <Icon className="h-4 w-4 text-muted-foreground" />
-        <span className="max-w-[10rem] truncate">{active ? active.name : 'All locations'}</span>
-        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="absolute left-0 z-50 mt-1 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm transition-colors hover:bg-muted"
+          aria-label="Change location"
         >
-          <Option label="All locations" icon={Building2} selected={!active} onClick={() => choose(null)} />
-          <div className="border-t border-border" />
+          <Icon className="h-4 w-4 text-muted-foreground" />
+          <span className="max-w-[10rem] truncate">{active ? active.name : 'All locations'}</span>
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent align="start" className="w-80 p-0">
+        <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Showing figures for
+        </p>
+
+        <Row
+          label="All locations"
+          hint="Everything added together"
+          icon={Building2}
+          selected={!active}
+          onSelect={() => choose(null)}
+        />
+
+        <div className="my-1 border-t border-border" />
+
+        <ul className="max-h-[50vh] overflow-y-auto">
           {locations.map((l) => (
-            <Option
-              key={l.id}
-              label={l.name}
-              hint={l.type !== 'BRANCH' ? l.type.replace(/_/g, ' ').toLowerCase() : undefined}
-              icon={ICONS[l.type] ?? Store}
-              selected={active?.id === l.id}
-              onClick={() => choose(l.id)}
-            />
+            <li key={l.id}>
+              <Row
+                label={l.name}
+                hint={[
+                  TYPE_LABEL[l.type] ?? 'Location',
+                  l.managerName ?? 'No manager',
+                  l.staffCount ? `${l.staffCount} staff` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+                icon={ICONS[l.type] ?? Store}
+                selected={active?.id === l.id}
+                onSelect={() => choose(l.id)}
+                /*
+                 * A new tab, deliberately. You are usually looking a location up
+                 * *while* doing something else — checking what Kandy holds
+                 * before approving their transfer — and losing the page you were
+                 * on would be the wrong trade.
+                 */
+                openHref={`/dashboard/locations/${l.id}`}
+              />
+            </li>
           ))}
+        </ul>
+
+        <div className="border-t border-border">
+          <Link
+            href="/dashboard/locations"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Settings2 className="h-4 w-4" />
+            Manage locations
+          </Link>
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
-function Option({
+function Row({
   label,
   hint,
   icon: Icon,
   selected,
-  onClick,
+  onSelect,
+  openHref,
 }: {
   label: string
   hint?: string
   icon: React.ComponentType<{ className?: string }>
   selected: boolean
-  onClick: () => void
+  onSelect: () => void
+  /** When set, an ↗ that opens this location in a new tab. */
+  openHref?: string
 }) {
   return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={selected}
-      onClick={onClick}
-      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-muted"
-    >
-      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">
-        {label}
-        {hint && <span className="ml-1.5 text-xs text-muted-foreground">{hint}</span>}
-      </span>
-      {selected && <Check className="h-4 w-4 shrink-0 text-primary" />}
-    </button>
+    <div className="flex items-stretch">
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={selected ? 'true' : undefined}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-muted"
+      >
+        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{label}</span>
+          {hint ? (
+            <span className="block truncate text-xs text-muted-foreground">{hint}</span>
+          ) : null}
+        </span>
+        {selected ? <Check className="h-4 w-4 shrink-0 text-primary" /> : null}
+      </button>
+
+      {openHref ? (
+        <Link
+          href={openHref}
+          target="_blank"
+          rel="noreferrer"
+          title={`Open ${label} in a new tab`}
+          aria-label={`Open ${label} in a new tab`}
+          className="flex w-10 shrink-0 items-center justify-center border-l border-border/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ArrowUpRight className="h-4 w-4" />
+        </Link>
+      ) : null}
+    </div>
   )
 }

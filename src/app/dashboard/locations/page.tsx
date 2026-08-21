@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Building2, Factory, Store, Warehouse } from 'lucide-react'
+import { Factory, Store, UserRound, Warehouse } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
@@ -8,8 +8,9 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { listLocations } from '@/features/transfers/queries'
 import { LocationForm } from '@/features/branches/components/location-form'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, can} from '@/lib/rbac'
+import { PERMISSIONS, assignableRoles, can, canManageLocation } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -23,9 +24,41 @@ const TYPES = {
 
 export default async function LocationsPage() {
   const user = await requirePagePermission(PERMISSIONS.BRANCH_VIEW, '/dashboard/locations')
-  const restaurant = await requireRestaurant(user.restaurantId)
-  const locations = await listLocations(user.restaurantId)
+  const canManage = can(user, PERMISSIONS.BRANCH_MANAGE)
+
+  const [restaurant, locations, team] = await Promise.all([
+    requireRestaurant(user.restaurantId),
+    listLocations(user.restaurantId),
+    /*
+     * Candidates for the manager picker on the create form — only fetched when
+     * the form will actually render, so a read-only viewer costs nothing.
+     */
+    canManage
+      ? prisma.user.findMany({
+          where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            permissions: true,
+            branch: { select: { name: true } },
+          },
+          orderBy: { name: 'asc' },
+        })
+      : Promise.resolve([]),
+  ])
+
   const money = (m: number) => formatMoney(m, restaurant.currency)
+
+  // Never trust a posted id, and never offer one that would be refused: the
+  // same `canManageLocation` test the server re-runs on submit.
+  const managers = team.filter(canManageLocation).map((m) => ({
+    id: m.id,
+    name: m.name,
+    email: m.email,
+    branchName: m.branch?.name ?? null,
+  }))
 
   const totalValue = locations.reduce((s, l) => s + l.stockValue, 0)
 
@@ -34,7 +67,14 @@ export default async function LocationsPage() {
       <PageHeader
         title="Locations"
         description="Branches, production houses and warehouses. Every one holds its own stock and shares one ledger."
-        actions={can(user, PERMISSIONS.BRANCH_MANAGE) ? <LocationForm /> : null}
+        actions={
+          canManage ? (
+            <LocationForm
+              managers={managers}
+              canCreateManager={assignableRoles(user.role).includes('MANAGER')}
+            />
+          ) : null
+        }
       />
 
       {locations.length === 0 ? (
@@ -69,10 +109,32 @@ export default async function LocationsPage() {
                         <p className="text-xs text-muted-foreground">{meta.label} · {l.code}</p>
                       </div>
                     </div>
-                    {!l.isActive && <Badge variant="secondary">inactive</Badge>}
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {l.isDefault ? <Badge variant="secondary">Default</Badge> : null}
+                      {!l.isActive && <Badge variant="secondary">inactive</Badge>}
+                    </div>
                   </div>
 
-                  <dl className="mt-4 space-y-1.5 text-sm">
+                  {/*
+                    Who is answerable for this place, on the card. Previously you
+                    had to open a location to find out whether anyone ran it —
+                    and in practice almost nobody did.
+                  */}
+                  <p className="mt-3 flex items-center gap-1.5 text-xs">
+                    <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    {l.managerName ? (
+                      <span className="truncate">{l.managerName}</span>
+                    ) : (
+                      <span className="text-amber-600 dark:text-amber-400">No manager yet</span>
+                    )}
+                    {l.staffCount > 0 ? (
+                      <span className="text-muted-foreground">
+                        · {l.staffCount} {l.staffCount === 1 ? 'person' : 'people'}
+                      </span>
+                    ) : null}
+                  </p>
+
+                  <dl className="mt-3 space-y-1.5 text-sm">
                     <Row label="Stock value" value={money(l.stockValue)} />
                     <Row label="Items held" value={String(l.itemsHeld)} />
                     {l.outOfStock > 0 && (

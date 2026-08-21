@@ -147,38 +147,6 @@ export async function requireBranch(restaurantId: string, branchId: string): Pro
   return branch
 }
 
-export async function createBranch(params: {
-  restaurantId: string
-  name: string
-  code: string
-  address?: string | null
-  phone?: string | null
-}): Promise<BranchSummary> {
-  const code = params.code.trim().toUpperCase()
-  const clash = await prisma.branch.findFirst({
-    where: { restaurantId: params.restaurantId, code, deletedAt: null },
-    select: { id: true },
-  })
-  if (clash) throw new AppError(`Branch code ${code} is already used`, 409, 'BRANCH_CODE_TAKEN')
-
-  // The first branch a restaurant creates becomes its default.
-  const count = await prisma.branch.count({
-    where: { restaurantId: params.restaurantId, deletedAt: null },
-  })
-
-  return prisma.branch.create({
-    data: {
-      restaurantId: params.restaurantId,
-      name: params.name.trim(),
-      code,
-      address: params.address?.trim() || null,
-      phone: params.phone?.trim() || null,
-      isDefault: count === 0,
-    },
-    select: SUMMARY,
-  })
-}
-
 /**
  * Change what a location is and how it is reached.
  *
@@ -276,5 +244,161 @@ export async function setDefaultBranch(restaurantId: string, branchId: string): 
   await prisma.$transaction(async (tx: TxClient) => {
     await tx.branch.updateMany({ where: { restaurantId }, data: { isDefault: false } })
     await tx.branch.update({ where: { id: branchId }, data: { isDefault: true, isActive: true } })
+  })
+}
+
+/**
+ * Create a location and settle who runs it, in one transaction.
+ *
+ * Two problems solved together.
+ *
+ * The first is that a location arrived with nobody in charge. The manager
+ * picker only existed on the *edit* page, so setting one up meant: create the
+ * location, leave, create a person on the Staff screen, come back, join the
+ * two. Four screens for one decision, and in practice it was skipped — of the
+ * twenty-four staff accounts in this database, two had a location.
+ *
+ * The second is that `createLocationAction` used to write twice — create the
+ * branch, then immediately update it just to set `type`, because `createBranch`
+ * had no type parameter. Two round trips, non-atomic, and a failure between
+ * them left a location of the wrong kind.
+ *
+ * Everything below happens in one transaction, so a duplicate email or a bad
+ * code cannot leave a half-made location or an orphaned account behind.
+ *
+ * A new manager is an ordinary `User` with `role: MANAGER` — the same record
+ * the Staff screen produces, built from the same helpers. There is deliberately
+ * no second kind of account: sign-in, codes and RBAC all keep working because
+ * there is nothing new for them to know about.
+ */
+export async function createLocationWithManager(params: {
+  restaurantId: string
+  name: string
+  code: string
+  type: LocationType
+  address?: string | null
+  phone?: string | null
+  manager:
+    | { mode: 'NONE' }
+    | { mode: 'EXISTING'; userId: string }
+    | { mode: 'NEW'; name: string; email: string; phone?: string | null }
+  /** Builds the credentials for a new account; injected so this file stays db-only. */
+  issueCredentials?: () => Promise<{ signInCode: string; passwordHash: string }>
+  nextStaffCode?: (tx: TxClient) => Promise<string>
+}): Promise<{
+  branch: Branch
+  /** Present only when a new account was made, and only this once. */
+  created: { userId: string; name: string; email: string; signInCode: string } | null
+}> {
+  const code = params.code.trim().toUpperCase()
+  const email = params.manager.mode === 'NEW' ? params.manager.email.trim().toLowerCase() : null
+
+  /*
+   * Both uniqueness checks run before the transaction opens as well as inside
+   * it. Outside gives a readable message; inside is what actually holds, since
+   * two people can pass the outside check at the same moment.
+   */
+  const clash = await prisma.branch.findFirst({
+    where: { restaurantId: params.restaurantId, code, deletedAt: null },
+    select: { id: true },
+  })
+  if (clash) throw new AppError(`Location code ${code} is already used`, 409, 'BRANCH_CODE_TAKEN')
+
+  if (email) {
+    // The email unique index is GLOBAL, not per restaurant, so this has to be
+    // an unscoped lookup or the constraint fires as an opaque 500 instead.
+    const taken = await prisma.user.findUnique({ where: { email }, select: { id: true } })
+    if (taken) {
+      throw new AppError(
+        `${email} already has an account — pick them from the list instead`,
+        409,
+        'MANAGER_EMAIL_TAKEN',
+      )
+    }
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // The first location a restaurant creates becomes its default.
+    const existing = await tx.branch.count({
+      where: { restaurantId: params.restaurantId, deletedAt: null },
+    })
+
+    const branch = await tx.branch.create({
+      data: {
+        restaurantId: params.restaurantId,
+        name: params.name.trim(),
+        code,
+        type: params.type,
+        address: params.address?.trim() || null,
+        phone: params.phone?.trim() || null,
+        isDefault: existing === 0,
+      },
+    })
+
+    if (params.manager.mode === 'EXISTING') {
+      const person = await tx.user.findFirst({
+        where: {
+          id: params.manager.userId,
+          restaurantId: params.restaurantId,
+          deletedAt: null,
+        },
+        select: { id: true, branchId: true },
+      })
+      if (!person) throw new NotFoundError('Manager')
+
+      await tx.branch.update({ where: { id: branch.id }, data: { managerId: person.id } })
+
+      /*
+       * Only move them if they are not already running somewhere. Naming the
+       * Colombo manager on a new Kandy record must not silently un-scope
+       * Colombo — the same guard `setBranchManager` has carried since it was
+       * written.
+       */
+      if (!person.branchId) {
+        await tx.user.update({ where: { id: person.id }, data: { branchId: branch.id } })
+      }
+
+      return { branch, created: null }
+    }
+
+    if (params.manager.mode === 'NEW') {
+      if (!params.issueCredentials || !params.nextStaffCode) {
+        throw new AppError('Cannot issue credentials here', 500, 'NO_CREDENTIAL_ISSUER')
+      }
+
+      const { signInCode, passwordHash } = await params.issueCredentials()
+      const staffCode = await params.nextStaffCode(tx)
+
+      const person = await tx.user.create({
+        data: {
+          restaurantId: params.restaurantId,
+          email: email!,
+          name: params.manager.name.trim(),
+          phone: params.manager.phone?.trim() || null,
+          role: 'MANAGER',
+          branchId: branch.id,
+          staffCode,
+          signInCode,
+          passwordHash,
+          // Staff never verify an address — the owner vouched for them by
+          // typing it. Same as the Staff screen.
+          emailVerifiedAt: new Date(),
+        },
+      })
+
+      await tx.branch.update({ where: { id: branch.id }, data: { managerId: person.id } })
+
+      return {
+        branch,
+        created: {
+          userId: person.id,
+          name: person.name,
+          email: person.email,
+          signInCode,
+        },
+      }
+    }
+
+    return { branch, created: null }
   })
 }
