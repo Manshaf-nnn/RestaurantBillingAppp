@@ -5,8 +5,9 @@ import { revalidatePath } from 'next/cache'
 import { runAction, type ActionResult } from '@/lib/action'
 import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
+import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import {
   adjustStock, receiveStock, setOpeningBalance, transferStock,
@@ -133,10 +134,25 @@ export async function setOpeningBalanceAction(input: unknown): Promise<ActionRes
 
 // ── stock counts ─────────────────────────────────────────────────────────────
 
-export async function openStockCountAction(): Promise<ActionResult<{ id: string; reference: string }>> {
+/**
+ * Start a stock count.
+ *
+ * Takes the location being counted. It used to take nothing and record
+ * `user.branchId ?? null`, which is null for an owner — so every count was
+ * against "no location" and its adjustments credited no shelf.
+ */
+export async function openStockCountAction(
+  branchId?: string | null,
+): Promise<ActionResult<{ id: string; reference: string }>> {
   const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
+  await assertBranchAccess(user, branchId ?? null)
   const count = await openStockCount({
-    restaurantId: user.restaurantId, userId: user.id, branchId: user.branchId ?? null,
+    restaurantId: user.restaurantId, userId: user.id,
+    branchId: await resolveStockLocation({
+      restaurantId: user.restaurantId,
+      requestedBranchId: branchId,
+      userBranchId: user.branchId,
+    }),
   })
   await audit({
     restaurantId: user.restaurantId, userId: user.id, actorName: user.name,

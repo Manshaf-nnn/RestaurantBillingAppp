@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { runAction, type ActionResult } from '@/lib/action'
 import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
+import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -46,7 +47,11 @@ export async function createPurchaseOrderAction(
     const po = await createPurchaseOrder({
       restaurantId: user.restaurantId,
       supplierId: data.supplierId || null,
-      branchId: data.branchId || user.branchId || null,
+      branchId: await resolveStockLocation({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId,
+        userBranchId: user.branchId,
+      }),
       userId: user.id,
       discount: Math.round(data.discount * f),
       taxTotal: Math.round(data.taxTotal * f),

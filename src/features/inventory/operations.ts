@@ -135,12 +135,25 @@ export async function recordProduction(params: Simple): Promise<PostedMovement> 
 export async function setOpeningBalance(
   params: Simple & { unitCost?: number },
 ): Promise<PostedMovement> {
+  /*
+   * One opening balance per item PER LOCATION, not per restaurant.
+   *
+   * This counted restaurant-wide, so opening a second warehouse with stock the
+   * first branch already carried was refused — "this item already has an opening
+   * balance" — even though that location had never held any. Every location gets
+   * its own starting figure; that is the whole point of tracking stock by place.
+   */
   const existing = await prisma.stockMovement.count({
-    where: { itemId: params.itemId, restaurantId: params.restaurantId, type: 'OPENING_BALANCE' },
+    where: {
+      itemId: params.itemId,
+      restaurantId: params.restaurantId,
+      type: 'OPENING_BALANCE',
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
   })
   if (existing > 0) {
     throw new AppError(
-      'This item already has an opening balance — use a stock count to correct it',
+      'This item already has an opening balance at that location — use a stock count to correct it',
       409,
       'OPENING_BALANCE_EXISTS',
     )

@@ -84,6 +84,37 @@ export async function listBranches(restaurantId: string): Promise<BranchSummary[
  * Falls back to the user's home branch, then the restaurant default. Returns a
  * real id in every case so callers can write it straight onto a record.
  */
+/**
+ * Where a stock movement happened, resolved to a real location. Never null.
+ *
+ * This is the fix for the bug that made multi-location inventory meaningless.
+ * Every entry point — receiving a purchase, an opening balance, a manual
+ * movement, a stock count — used to write `branchId: user.branchId ?? null`.
+ * `User.branchId` is not set by any screen in the app, so for an owner that is
+ * always null, and `applyLocationDelta` discards a movement with no branch:
+ *
+ *     if (!params.branchId) return        // location-stock.ts
+ *
+ * The restaurant-wide total therefore rose while no `InventoryStock` row was
+ * ever created. Every location's "Stock here" panel stayed empty for ever, and
+ * the transfer builder — which reads `InventoryStock` — had nothing to offer.
+ * Stock existed in the accounts and nowhere on any shelf.
+ *
+ * Falling back to the default branch is what makes the ledger's location
+ * dimension trustworthy: a movement always names a place, so the per-branch sum
+ * always reconciles to the restaurant total. A single-site restaurant that has
+ * never thought about locations simply gets its one branch, silently.
+ */
+export async function resolveStockLocation(params: {
+  restaurantId: string
+  /** What the screen asked for, if it offered a choice. */
+  requestedBranchId?: string | null
+  /** The user's home location, when they have one. */
+  userBranchId?: string | null
+}): Promise<string> {
+  return resolveBranchId(params)
+}
+
 export async function resolveBranchId(params: {
   restaurantId: string
   requestedBranchId?: string | null

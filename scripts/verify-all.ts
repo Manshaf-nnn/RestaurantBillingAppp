@@ -34,6 +34,7 @@ const SERVICE = [
   'storage-stock-test', 'connection-url-test', 'action-transport-test',
   'staff-login-test', 'order-lifecycle-test', 'cogs-test',
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
+  'stock-location-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

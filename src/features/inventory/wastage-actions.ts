@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
+import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { recordWastage, reviewWastage } from './wastage'
@@ -58,7 +59,11 @@ export async function recordWastageAction(
       reasonNote: data.reasonNote || null,
       notes: data.notes || null,
       photoUrl: data.photoUrl || null,
-      branchId: data.branchId || user.branchId || null,
+      branchId: await resolveStockLocation({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId,
+        userBranchId: user.branchId,
+      }),
       locationId: data.locationId || null,
       batchId: data.batchId || null,
       userId: user.id,

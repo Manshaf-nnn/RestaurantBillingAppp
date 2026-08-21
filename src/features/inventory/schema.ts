@@ -23,6 +23,8 @@ export const inventoryItemSchema = z.object({
    * builder takes from the supplier's pack size) threw at goods receipt with
    * "set the purchase unit", pointing at a field the owner had no way to set.
    */
+  /** Where the opening quantity lands. Defaults to the restaurant's main location. */
+  branchId: z.string().min(1).optional().or(z.literal('')),
   purchaseUnit: z.enum(UNITS).optional().or(z.literal('')),
   unitsPerPurchaseUnit: z.coerce.number().min(0).max(100_000).default(0),
 })
@@ -30,6 +32,10 @@ export type InventoryItemInput = z.infer<typeof inventoryItemSchema>
 
 export const stockMovementSchema = z.object({
   itemId: z.string().cuid(),
+  /** Which location the stock moves at. Defaults to the main location. */
+  branchId: z.string().min(1).optional().or(z.literal('')),
+  /** Optional shelf within that location. */
+  storageLocationId: z.string().min(1).optional().or(z.literal('')),
   type: z.enum(['PURCHASE', 'CONSUMPTION', 'WASTE', 'ADJUSTMENT', 'RETURN', 'EXPIRY']),
   quantity: z.coerce.number().refine((value) => value !== 0, 'Quantity cannot be zero'),
   reason: z.string().trim().max(160).optional().or(z.literal('')),
@@ -49,6 +55,7 @@ export const supplierSchema = z.object({
 export type SupplierInput = z.infer<typeof supplierSchema>
 
 export const purchaseSchema = z.object({
+  branchId: z.string().min(1).optional().or(z.literal('')),
   supplierId: z.string().cuid().optional().or(z.literal('')),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
   items: z

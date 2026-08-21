@@ -35,8 +35,8 @@ export function StorageForm({
 
   return (
     <SectionCard
-      title="Storage areas"
-      description="Where stock physically sits inside this location. Optional — a small site can keep everything in one place."
+      title="Storage areas (shelves, not stock)"
+      description="Name the places inside this location where stock sits — Cold room, Dry store, Bar. This does not add any stock; use “Add stock here” above for that."
     >
       {existing.length > 0 && (
         <ul className="mb-4 flex flex-wrap gap-2">
@@ -48,7 +48,7 @@ export function StorageForm({
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1.5">
           <Label htmlFor="st-name" className="text-xs">Name</Label>
-          <Input id="st-name" placeholder="e.g. Cold room" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input id="st-name" placeholder="e.g. Cold room, Dry store" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="st-code" className="text-xs">Code</Label>

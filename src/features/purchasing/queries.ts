@@ -175,6 +175,8 @@ function round(v: number) {
 
 export interface PoBuilderData {
   suppliers: Array<{ id: string; name: string; paymentTerms: string }>
+  /** Where the delivery can land. */
+  locations: Array<{ id: string; name: string; type: string; isDefault: boolean }>
   items: Array<{
     id: string
     name: string
@@ -201,7 +203,7 @@ export async function getPoBuilderData(params: {
   restaurantId: string
   currency: string
 }): Promise<PoBuilderData> {
-  const [suppliers, items] = await Promise.all([
+  const [suppliers, items, locations] = await Promise.all([
     prisma.supplier.findMany({
       where: { restaurantId: params.restaurantId, isActive: true },
       select: { id: true, name: true, paymentTerms: true },
@@ -223,11 +225,20 @@ export async function getPoBuilderData(params: {
         },
       },
     }),
+    // Where the delivery lands. Without this the purchase carried no location,
+    // so receiving it credited no shelf and the goods were invisible everywhere
+    // except the restaurant-wide total.
+    prisma.branch.findMany({
+      where: { restaurantId: params.restaurantId, deletedAt: null, isActive: true },
+      select: { id: true, name: true, type: true, isDefault: true },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    }),
   ])
 
   return {
     currency: params.currency,
     suppliers: suppliers.map((s) => ({ id: s.id, name: s.name, paymentTerms: s.paymentTerms })),
+    locations,
     items: items.map((i) => ({
       id: i.id,
       name: i.name,

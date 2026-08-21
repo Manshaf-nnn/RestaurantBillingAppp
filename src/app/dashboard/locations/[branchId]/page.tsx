@@ -7,9 +7,11 @@ import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
 import { StorageForm } from '@/features/branches/components/storage-form'
+import { AddStockForm } from '@/features/branches/components/add-stock-form'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -23,9 +25,14 @@ export default async function LocationPage({
   const { branchId } = await params
   const user = await requirePagePermission(PERMISSIONS.BRANCH_VIEW, `/dashboard/locations/${branchId}`)
   const restaurant = await requireRestaurant(user.restaurantId)
-  const [{ branch, stock }, transfers] = await Promise.all([
+  const [{ branch, stock }, transfers, items] = await Promise.all([
     getLocationDetail({ restaurantId: user.restaurantId, branchId }),
     listTransfers({ restaurantId: user.restaurantId, branchId, limit: 10 }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: user.restaurantId, isActive: true },
+      select: { id: true, name: true, unit: true },
+      orderBy: { name: 'asc' },
+    }),
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
@@ -55,6 +62,18 @@ export default async function LocationPage({
         <Figure label="Items held" value={String(stock.filter((s) => s.available !== 0).length)} />
         <Figure label="Inbound lines" value={String(inbound.length)} />
       </div>
+
+      {can(user, PERMISSIONS.INVENTORY_MANAGE) && (
+        <div className="mb-5">
+          <AddStockForm
+            branchId={branch.id}
+            branchName={branch.name}
+            items={items}
+            shelves={branch.storageLocations}
+            currency={restaurant.currency}
+          />
+        </div>
+      )}
 
       {can(user, PERMISSIONS.BRANCH_MANAGE) && (
         <div className="mb-5">

@@ -77,6 +77,11 @@ export function PoBuilder({
       ? prefill.map((row, i) => lineFor(row.itemId, String(row.quantity), `pre-${i}`))
       : [],
   )
+  // Defaults to the restaurant's main location, so a single-site restaurant
+  // never has to think about it and a multi-site one must choose deliberately.
+  const [branchId, setBranchId] = React.useState(
+    () => data.locations.find((l) => l.isDefault)?.id ?? data.locations[0]?.id ?? '',
+  )
   const [expectedAt, setExpectedAt] = React.useState('')
   const [discount, setDiscount] = React.useState('')
   const [taxTotal, setTaxTotal] = React.useState('')
@@ -119,6 +124,7 @@ export function PoBuilder({
     setBusy(true)
     const result = await callAction(() => createPurchaseOrderAction({
       supplierId,
+      branchId,
       expectedAt,
       notes,
       discount: Number(discount) || 0,
@@ -157,6 +163,30 @@ export function PoBuilder({
           <div className="space-y-1.5">
             <Label htmlFor="expected">Expected delivery</Label>
             <Input id="expected" type="date" value={expectedAt} onChange={(e) => setExpectedAt(e.target.value)} />
+          </div>
+          {/*
+            Where the goods physically arrive. This was missing, so every
+            purchase was raised against no location — and on receipt the stock
+            credited no shelf, leaving warehouses permanently empty while the
+            restaurant-wide total rose.
+          */}
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="destination">Deliver to</Label>
+            <select
+              id="destination"
+              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+              value={branchId}
+              onChange={(e) => setBranchId(e.target.value)}
+            >
+              {data.locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name} · {l.type.replace(/_/g, ' ').toLowerCase()}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              The stock lands here when the delivery is received.
+            </p>
           </div>
         </div>
       </SectionCard>

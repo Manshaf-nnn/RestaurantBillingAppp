@@ -7,6 +7,7 @@ import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
+import { resolveStockLocation } from '@/features/branches/service'
 import { postMovement } from './ledger'
 import { setOpeningBalance } from './operations'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
@@ -70,7 +71,11 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
             quantity: data.quantity,
             unitCost: data.costPerUnit,
             userId: user.id,
-            branchId: user.branchId ?? null,
+            branchId: await resolveStockLocation({
+              restaurantId: user.restaurantId,
+              requestedBranchId: data.branchId,
+              userBranchId: user.branchId,
+            }),
           })
         }
 
@@ -126,6 +131,14 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
           ? data.quantity >= 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT'
           : MOVEMENT_TYPES[data.type]
 
+      // Resolved before the transaction opens, so the lookup does not run while
+      // the item row is locked.
+      const branchId = await resolveStockLocation({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId,
+        userBranchId: user.branchId,
+      })
+
       const posted = await prisma.$transaction((tx) =>
         postMovement(tx, {
           restaurantId: user.restaurantId,
@@ -134,7 +147,8 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
           quantity: Math.abs(data.quantity),
           reason: data.reason || null,
           userId: user.id,
-          branchId: user.branchId ?? null,
+          branchId,
+          locationId: data.storageLocationId || null,
         }),
       )
       const nextQuantity = posted.balanceAfter
@@ -234,6 +248,11 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PURCHASE_MANAGE)
+      const destination = await resolveStockLocation({
+        restaurantId: user.restaurantId,
+        requestedBranchId: data.branchId,
+        userBranchId: user.branchId,
+      })
 
       const items = await prisma.inventoryItem.findMany({
         where: { id: { in: data.items.map((line) => line.itemId) }, restaurantId: user.restaurantId },
@@ -292,7 +311,7 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
             referenceId: created.id,
             purchaseId: created.id,
             userId: user.id,
-            branchId: user.branchId ?? null,
+            branchId: destination,
           })
         }
 
