@@ -3,14 +3,16 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
-import { SupplierPricing } from '@/features/purchasing/components/supplier-pricing'
+import { SupplierProfile } from '@/features/suppliers/components/supplier-profile'
+import { getSupplierLedger } from '@/features/suppliers/ledger'
 import { getSupplierPricing } from '@/features/purchasing/queries'
-import { PERMISSIONS } from '@/lib/rbac'
+import { Badge } from '@/components/ui/badge'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
-export const metadata: Metadata = { title: 'Supplier pricing' }
+export const metadata: Metadata = { title: 'Supplier' }
 
 export default async function SupplierPricingPage({
   params,
@@ -23,11 +25,15 @@ export default async function SupplierPricingPage({
     `/dashboard/suppliers/${supplierId}`,
   )
   const restaurant = await requireRestaurant(user.restaurantId)
-  const data = await getSupplierPricing({
-    restaurantId: user.restaurantId,
-    supplierId,
-    currency: restaurant.currency,
-  })
+
+  const [pricing, ledger] = await Promise.all([
+    getSupplierPricing({
+      restaurantId: user.restaurantId,
+      supplierId,
+      currency: restaurant.currency,
+    }),
+    getSupplierLedger({ restaurantId: user.restaurantId, supplierId }),
+  ])
 
   return (
     <>
@@ -39,10 +45,26 @@ export default async function SupplierPricingPage({
         Suppliers
       </Link>
       <PageHeader
-        title={data.supplier.name}
-        description="What this supplier charges, and how their packaging converts into your stock units."
+        title={ledger.supplier.name}
+        description={
+          [
+            ledger.supplier.company,
+            ledger.supplier.contactName,
+            ledger.supplier.phone,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'Supplier'
+        }
+        actions={
+          ledger.supplier.isActive ? null : <Badge variant="secondary">Inactive</Badge>
+        }
       />
-      <SupplierPricing data={data} />
+      <SupplierProfile
+        ledger={ledger}
+        pricing={pricing}
+        currency={restaurant.currency}
+        canPay={can(user, PERMISSIONS.SUPPLIER_PAYMENT)}
+      />
     </>
   )
 }

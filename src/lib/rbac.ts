@@ -48,6 +48,13 @@ export const PERMISSIONS = {
   INVENTORY_VIEW: 'inventory.view',
   INVENTORY_MANAGE: 'inventory.manage',
   SUPPLIER_VIEW: 'supplier.view',
+  /*
+   * Recording money paid to a supplier. Separate from SUPPLIER_MANAGE, because
+   * editing a phone number and settling an invoice are different powers — a
+   * purchasing manager should be able to keep the supplier list tidy without
+   * being able to say the restaurant has paid someone.
+   */
+  SUPPLIER_PAYMENT: 'supplier.payment',
   SUPPLIER_MANAGE: 'supplier.manage',
   PURCHASE_MANAGE: 'purchase.manage',
 
@@ -220,9 +227,10 @@ const WAREHOUSE_STAFF: Permission[] = [
 /** Reads the money. Deliberately read-only: an accountant who can edit the
  *  figures they audit is not an audit. */
 const ACCOUNTANT: Permission[] = [
-  // Read-only on suppliers: an accountant reconciles what is owed and never
-  // edits a supplier record.
+  // Read-only on the supplier RECORD — an accountant reconciles what is owed
+  // and never edits a phone number — but settling the account is their job.
   PERMISSIONS.SUPPLIER_VIEW,
+  PERMISSIONS.SUPPLIER_PAYMENT,
   PERMISSIONS.DASHBOARD_VIEW,
   PERMISSIONS.ANALYTICS_VIEW,
   PERMISSIONS.REPORT_VIEW,

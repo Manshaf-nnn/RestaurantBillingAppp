@@ -126,6 +126,8 @@ export const AUDIT_ACTIONS = {
   PO_UPDATED: 'purchase.updated',
   PO_RETURNED: 'purchase.returned',
   SUPPLIER_UPDATED: 'supplier.updated',
+  SUPPLIER_PAID: 'supplier.paid',
+  SUPPLIER_PAYMENT_REMOVED: 'supplier.payment_removed',
 
   TRANSFER_REQUESTED: 'transfer.requested',
   TRANSFER_APPROVED: 'transfer.approved',

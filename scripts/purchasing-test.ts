@@ -77,7 +77,7 @@ async function main() {
   })
 
   // Twelve items, so the "3 items" claim can actually be tested.
-  const items = []
+  const items: Array<{ id: string; name: string }> = []
   for (let i = 1; i <= 12; i += 1) {
     items.push(
       await prisma.inventoryItem.create({

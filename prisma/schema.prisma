@@ -481,6 +481,7 @@ model Restaurant {
   instructions     BranchInstruction[]
   units            Unit[]
   stockCategories  InventoryCategory[]
+  supplierPayments SupplierPayment[]
   suppliers        Supplier[]
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
@@ -639,6 +640,7 @@ model User {
   /// reprinted — the same secret is already in that person's pocket.
   signInCode          String?
   branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  supplierPayments    SupplierPayment[]   @relation("SupplierPaymentBy")
   instructionsGiven   BranchInstruction[] @relation("InstructionAuthor")
   instructionsDone    BranchInstruction[] @relation("InstructionCompleter")
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
@@ -1259,6 +1261,7 @@ model Supplier {
   purchases     Purchase[]
   suppliedItems SupplierItem[]
   returns       PurchaseReturn[]
+  payments      SupplierPayment[]
   priceHistory  PurchasePriceHistory[] @relation("PriceHistorySupplier")
 
   @@unique([restaurantId, name])
@@ -1456,6 +1459,7 @@ model Purchase {
   movements StockMovement[]
   receipts  GoodsReceipt[]
   returns   PurchaseReturn[]
+  payments  SupplierPayment[]
 
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
@@ -1677,6 +1681,52 @@ model InventoryCategory {
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive])
   @@map("inventory_categories")
+}
+
+/// Money paid to a supplier.
+///
+/// The one thing missing before a supplier ledger could exist. Purchases and
+/// receipts were recorded, and there was no way anywhere in the system to say
+/// "we paid ABC Distributors 30,000" — so "what do we owe" had no answer, and
+/// `Supplier.paymentTerms` was stored, displayed, and drove nothing.
+///
+/// A payment may be attached to one order, or left general — a lump sum against
+/// an account is how most small suppliers are actually settled, and forcing it
+/// onto an invoice would make people invent an allocation that never happened.
+///
+/// The BALANCE is never stored. It is computed from the documents each time it
+/// is read: received value owed, less payments and returns. A stored balance is
+/// a second source of truth that drifts from the first, which is the bug class
+/// that has cost this project the most time.
+model SupplierPayment {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  supplierId   String
+  supplier     Supplier   @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  /// Optional — settles one specific order rather than the account generally.
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  /// Minor units, like every other money column here.
+  amount    Int
+  method    PaymentMethod @default(CASH)
+  /// Cheque number, transfer reference, receipt number.
+  reference String?
+  notes     String?
+  paidAt    DateTime      @default(now())
+
+  createdById   String?
+  createdBy     User?   @relation("SupplierPaymentBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Kept beside the id so a departed member of staff cannot erase who paid.
+  createdByName String
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, supplierId, paidAt])
+  @@index([restaurantId, paidAt])
+  @@map("supplier_payments")
 }
 
 model ShiftNote {
