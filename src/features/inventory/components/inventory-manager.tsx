@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 import { deleteInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
 import { callAction } from '@/lib/use-action'
 
-const UNITS: StockUnit[] = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN']
+const UNITS: StockUnit[] = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX']
 
 export interface InventoryRow {
   id: string
@@ -52,6 +52,8 @@ export interface InventoryRow {
   costPerUnit: number
   supplierName: string | null
   expiryDate: string | null
+  purchaseUnit: StockUnit | null
+  unitsPerPurchaseUnit: number | null
 }
 
 export function InventoryManager({
@@ -372,6 +374,8 @@ function ItemDialog({
     costPerUnit: '',
     supplierId: '',
     expiryDate: '',
+    purchaseUnit: '' as StockUnit | '',
+    unitsPerPurchaseUnit: '',
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -388,6 +392,8 @@ function ItemDialog({
       costPerUnit: item ? String(toMajor(item.costPerUnit, currency)) : '',
       supplierId: '',
       expiryDate: item?.expiryDate ? item.expiryDate.slice(0, 10) : '',
+      purchaseUnit: item?.purchaseUnit ?? '',
+      unitsPerPurchaseUnit: item?.unitsPerPurchaseUnit ? String(item.unitsPerPurchaseUnit) : '',
     })
   }, [open, item, currency])
 
@@ -403,6 +409,8 @@ function ItemDialog({
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
       supplierId: form.supplierId,
       expiryDate: form.expiryDate,
+      purchaseUnit: form.purchaseUnit,
+      unitsPerPurchaseUnit: Number(form.unitsPerPurchaseUnit) || 0,
     }))
     setSaving(false)
     if (!result.ok) {
@@ -460,6 +468,33 @@ function ItemDialog({
               <Input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
             </Field>
           )}
+          <Field label="Bought as (optional)">
+            <Select
+              value={form.purchaseUnit || 'NONE'}
+              onValueChange={(v) => setForm({ ...form, purchaseUnit: v === 'NONE' ? '' : (v as StockUnit) })}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="NONE">Same as the unit above</SelectItem>
+                {UNITS.map((u) => (
+                  <SelectItem key={u} value={u}>{u.toLowerCase()}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={`How many ${form.unit.toLowerCase()} in one ${(form.purchaseUnit || form.unit).toLowerCase()}`}>
+            <Input
+              type="number"
+              step="any"
+              value={form.unitsPerPurchaseUnit}
+              onChange={(e) => setForm({ ...form, unitsPerPurchaseUnit: e.target.value })}
+              disabled={!form.purchaseUnit}
+              placeholder={form.purchaseUnit ? 'e.g. 24' : 'Choose a purchase unit first'}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Buy in boxes, count in bottles. Receiving a delivery in boxes converts it for you.
+            </p>
+          </Field>
           <Field label="Reorder level">
             <Input type="number" step="any" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })} />
           </Field>

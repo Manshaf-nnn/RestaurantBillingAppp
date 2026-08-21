@@ -38,6 +38,8 @@ export default async function InventoryPage() {
         name: item.name,
         category: item.category,
         unit: item.unit,
+        purchaseUnit: item.purchaseUnit,
+        unitsPerPurchaseUnit: item.unitsPerPurchaseUnit,
         quantity: item.quantity,
         reorderLevel: item.reorderLevel,
         costPerUnit: item.costPerUnit,

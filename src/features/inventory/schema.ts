@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN'] as const
+const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 
 export const inventoryItemSchema = z.object({
   id: z.string().cuid().optional(),
@@ -14,6 +14,17 @@ export const inventoryItemSchema = z.object({
   supplierId: z.string().cuid().optional().or(z.literal('')),
   storageArea: z.string().trim().max(40).optional().or(z.literal('')),
   expiryDate: z.string().optional().or(z.literal('')),
+  /*
+   * How this item is bought, when that differs from how it is counted.
+   *
+   * The conversion engine already handles "one box is 24 bottles" and refuses
+   * rather than guessing — but it reads these two columns, and nothing in the
+   * app ever wrote them. So a purchase order raised in BOX (the default the PO
+   * builder takes from the supplier's pack size) threw at goods receipt with
+   * "set the purchase unit", pointing at a field the owner had no way to set.
+   */
+  purchaseUnit: z.enum(UNITS).optional().or(z.literal('')),
+  unitsPerPurchaseUnit: z.coerce.number().min(0).max(100_000).default(0),
 })
 export type InventoryItemInput = z.infer<typeof inventoryItemSchema>
 

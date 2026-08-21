@@ -37,6 +37,7 @@ export async function updateRestaurantSettings(input: unknown): Promise<ActionRe
           taxLabel: data.taxLabel,
           taxRateBps: bpsFromPercent(data.taxRatePercent),
           taxInclusive: data.taxInclusive,
+          allowNegativeStock: data.allowNegativeStock,
           serviceChargeBps: bpsFromPercent(data.serviceChargePercent),
           loyaltyEnabled: data.loyaltyEnabled,
           loyaltyEarnRateX100: Math.round(data.loyaltyEarnRate * 100),

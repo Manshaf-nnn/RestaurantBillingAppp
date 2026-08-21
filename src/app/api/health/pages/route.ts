@@ -146,6 +146,8 @@ export async function GET() {
         (await import('@/features/approvals/service')).listApprovals({ restaurantId: rid, branchIds })],
       ['customers: analytics', async () =>
         (await import('@/features/customers/analytics')).getCustomerAnalytics({ restaurantId: rid })],
+      ['reports: reconciliation', async () =>
+        (await import('@/features/reports/reconciliation')).getReconciliationReport({ restaurantId: rid, range })],
       ['reports: sales', async () =>
         (await import('@/features/reports/sales')).getSalesReport({ restaurantId: rid, range, branchIds })],
       ['reports: payments', async () =>

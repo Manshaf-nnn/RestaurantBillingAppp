@@ -163,6 +163,36 @@ export async function postMovement(
   const balanceAfter = round(balanceBefore + signed)
 
   /*
+   * Refuse to go negative unless this restaurant has said otherwise.
+   *
+   * Previously allowed unconditionally: `wentNegative` was computed here and
+   * read by nothing, so a sale could always drive stock below zero and the only
+   * trace was a negative number on a report. That is defensible for a busy
+   * kitchen — refusing to serve a guest because a delivery was not keyed in is
+   * usually the worse outcome — but it is the owner's call, not a constant.
+   *
+   * Corrections are always allowed through: a stock count, an adjustment or a
+   * transfer reversal must be able to set the truth, including a negative one,
+   * or an owner could not fix the very problem this refusal creates.
+   */
+  const CORRECTIONS: StockMovementType[] = ['ADJUSTMENT', 'ADJUSTMENT_OUT', 'OPENING_BALANCE']
+  if (balanceAfter < 0 && !CORRECTIONS.includes(params.type)) {
+    const restaurant = await tx.restaurant.findUnique({
+      where: { id: params.restaurantId },
+      select: { allowNegativeStock: true },
+    })
+    if (!restaurant?.allowNegativeStock) {
+      throw new AppError(
+        `Not enough ${item.name}: ${formatQuantity(balanceBefore, item.unit)} left, ` +
+          `${formatQuantity(magnitude, item.unit)} needed. ` +
+          'Record the delivery first, or allow negative stock in settings.',
+        409,
+        'STOCK_INSUFFICIENT',
+      )
+    }
+  }
+
+  /*
    * What this stock was worth when it moved.
    *
    * Inbound movements bring their own price and it must not be invented — the

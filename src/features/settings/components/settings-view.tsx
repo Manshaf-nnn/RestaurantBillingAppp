@@ -49,6 +49,7 @@ export interface SettingsData {
   taxLabel: string
   taxRatePercent: number
   taxInclusive: boolean
+  allowNegativeStock: boolean
   serviceChargePercent: number
   loyaltyEnabled: boolean
   loyaltyEarnRate: number
@@ -218,6 +219,24 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
               <label className="flex items-center gap-2 self-end pb-2 text-sm">
                 <Switch checked={form.taxInclusive} onCheckedChange={(v) => set('taxInclusive', v)} disabled={!canManage} />
                 Prices include tax
+              </label>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-border p-3">
+              <label className="flex items-start gap-3 text-sm">
+                <Switch
+                  checked={form.allowNegativeStock}
+                  onCheckedChange={(v) => set('allowNegativeStock', v)}
+                  disabled={!canManage}
+                />
+                <span>
+                  <span className="font-medium">Allow selling stock you have run out of</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Off: the till refuses an item once its stock reaches zero, so the figures stay
+                    true. On: service is never blocked and the balance goes negative until the
+                    delivery is keyed in. Corrections and stock counts are always allowed either way.
+                  </span>
+                </span>
               </label>
             </div>
           </SectionCard>

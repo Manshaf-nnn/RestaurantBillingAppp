@@ -414,6 +414,16 @@ model Restaurant {
   country     String? @default("IN")
   postalCode  String?
   timezone    String  @default("Asia/Kolkata")
+  /// Whether an outward movement may take a balance below zero.
+  ///
+  /// Off by default, which is what workflow.md asks for. It was hardcoded on:
+  /// a sale could always drive stock negative and `wentNegative` was computed
+  /// and never read by anything.
+  ///
+  /// Turning it ON is a legitimate choice for a busy kitchen — refusing to serve
+  /// a guest because a delivery was not keyed in is usually the worse outcome —
+  /// so it is the owner's decision rather than ours.
+  allowNegativeStock Boolean @default(false)
   locale      String  @default("en")
   currency    String  @default("INR")
 

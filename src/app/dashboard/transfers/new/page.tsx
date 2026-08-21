@@ -25,7 +25,7 @@ export default async function NewTransferPage() {
         Transfers
       </Link>
       <PageHeader title="New transfer" description="Move stock from one location to another." />
-      <TransferBuilder locations={data.locations} stockByBranch={data.stockByBranch} />
+      <TransferBuilder locations={data.locations} stockByBranch={data.stockByBranch} storageByBranch={data.storageByBranch} />
     </>
   )
 }

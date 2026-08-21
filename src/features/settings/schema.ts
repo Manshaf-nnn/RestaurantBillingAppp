@@ -19,6 +19,7 @@ export const restaurantSettingsSchema = z.object({
   taxLabel: z.string().trim().min(1).max(20),
   taxRatePercent: z.coerce.number().min(0).max(100),
   taxInclusive: z.coerce.boolean().default(false),
+  allowNegativeStock: z.coerce.boolean().default(false),
   serviceChargePercent: z.coerce.number().min(0).max(100),
   loyaltyEnabled: z.coerce.boolean().default(true),
   loyaltyEarnRate: z.coerce.number().min(0).max(100).default(1),

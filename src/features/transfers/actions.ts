@@ -26,6 +26,16 @@ export async function requestTransferAction(
     z.object({
       fromBranchId: z.string().min(1, 'Choose where it is coming from'),
       toBranchId: z.string().min(1, 'Choose where it is going'),
+      /*
+       * Optional shelves. The service has always supported a same-branch move
+       * between two storage areas — Main Store to Cold Room — and validates that
+       * each shelf belongs to the branch beside it. These two fields were simply
+       * missing from the schema, so the form could not express it and picking one
+       * branch on both sides failed with "choose a different destination", which
+       * described the shape of the bug rather than anything the user did.
+       */
+      fromStorageId: z.string().min(1).optional().or(z.literal('')),
+      toStorageId: z.string().min(1).optional().or(z.literal('')),
       notes: z.string().trim().max(300).optional().or(z.literal('')),
       lines: z.array(z.object({
         itemId: z.string().min(1),
@@ -40,6 +50,8 @@ export async function requestTransferAction(
         restaurantId: user.restaurantId,
         fromBranchId: data.fromBranchId,
         toBranchId: data.toBranchId,
+        fromStorageId: data.fromStorageId || null,
+        toStorageId: data.toStorageId || null,
         notes: data.notes || null,
         lines: data.lines,
         userId: user.id,

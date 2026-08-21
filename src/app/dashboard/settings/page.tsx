@@ -36,6 +36,7 @@ export default async function SettingsPage() {
         taxLabel: restaurant.taxLabel,
         taxRatePercent: restaurant.taxRateBps / 100,
         taxInclusive: restaurant.taxInclusive,
+        allowNegativeStock: restaurant.allowNegativeStock,
         serviceChargePercent: restaurant.serviceChargeBps / 100,
         loyaltyEnabled: restaurant.loyaltyEnabled,
         loyaltyEarnRate: restaurant.loyaltyEarnRateX100 / 100,

@@ -25,14 +25,18 @@ interface Line { key: string; itemId: string; quantity: string }
 export function TransferBuilder({
   locations,
   stockByBranch,
+  storageByBranch = [],
 }: {
   locations: Array<{ id: string; name: string; type: string }>
   stockByBranch: Array<{ branchId: string; items: Array<{ itemId: string; name: string; unit: string; free: number }> }>
+  storageByBranch?: Array<{ branchId: string; shelves: Array<{ id: string; name: string }> }>
 }) {
   const router = useRouter()
   const [fromId, setFromId] = React.useState('')
   const [toId, setToId] = React.useState('')
   const [notes, setNotes] = React.useState('')
+  const [fromStorageId, setFromStorageId] = React.useState('')
+  const [toStorageId, setToStorageId] = React.useState('')
   const [lines, setLines] = React.useState<Line[]>([])
   const { busy, run } = useAction()
 
@@ -41,6 +45,15 @@ export function TransferBuilder({
     [stockByBranch, fromId],
   )
   const itemById = React.useMemo(() => new Map(available.map((i) => [i.itemId, i])), [available])
+
+  const shelvesFor = React.useCallback(
+    (branchId: string) => storageByBranch.find((s) => s.branchId === branchId)?.shelves ?? [],
+    [storageByBranch],
+  )
+  const fromShelves = shelvesFor(fromId)
+  const toShelves = shelvesFor(toId)
+  // Moving within one location is only meaningful between two different shelves.
+  const sameBranch = Boolean(fromId) && fromId === toId
 
   // Changing the source invalidates any line chosen from the old one.
   React.useEffect(() => { setLines([]) }, [fromId])
@@ -51,6 +64,10 @@ export function TransferBuilder({
       .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity) }))
 
     if (!fromId || !toId) { toast.error('Choose both locations'); return }
+    if (sameBranch && (!fromStorageId || !toStorageId || fromStorageId === toStorageId)) {
+      toast.error('Moving within one location needs two different storage areas')
+      return
+    }
     if (payload.length === 0) { toast.error('Add at least one item'); return }
 
     const over = payload.find((p) => (itemById.get(p.itemId)?.free ?? 0) < p.quantity)
@@ -60,7 +77,10 @@ export function TransferBuilder({
     }
 
     await run(
-      () => requestTransferAction({ fromBranchId: fromId, toBranchId: toId, notes, lines: payload }),
+      () => requestTransferAction({
+        fromBranchId: fromId, toBranchId: toId, notes, lines: payload,
+        fromStorageId, toStorageId,
+      }),
       {
         success: (data) => `${data.number} requested`,
         onDone: (data) => router.push(`/dashboard/transfers/${data.id}`),
@@ -97,7 +117,7 @@ export function TransferBuilder({
               onChange={(e) => setToId(e.target.value)}
             >
               <option value="">Choose…</option>
-              {locations.filter((l) => l.id !== fromId).map((l) => (
+              {locations.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name} · {l.type.replace(/_/g, ' ').toLowerCase()}
                 </option>
@@ -105,6 +125,56 @@ export function TransferBuilder({
             </select>
           </div>
         </div>
+
+        {/*
+          Only shown when the location has shelves. A restaurant that keeps
+          everything in one place should not have to answer a question that has
+          one possible answer.
+        */}
+        {(fromShelves.length > 0 || toShelves.length > 0) && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="from-shelf">
+                From storage area {sameBranch ? '' : '(optional)'}
+              </Label>
+              <select
+                id="from-shelf"
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                value={fromStorageId}
+                onChange={(e) => setFromStorageId(e.target.value)}
+                disabled={fromShelves.length === 0}
+              >
+                <option value="">{fromShelves.length ? 'Anywhere in this location' : 'None set up'}</option>
+                {fromShelves.map((sh) => (
+                  <option key={sh.id} value={sh.id}>{sh.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="to-shelf">
+                To storage area {sameBranch ? '' : '(optional)'}
+              </Label>
+              <select
+                id="to-shelf"
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                value={toStorageId}
+                onChange={(e) => setToStorageId(e.target.value)}
+                disabled={toShelves.length === 0}
+              >
+                <option value="">{toShelves.length ? 'Anywhere in this location' : 'None set up'}</option>
+                {toShelves.map((sh) => (
+                  <option key={sh.id} value={sh.id}>{sh.name}</option>
+                ))}
+              </select>
+            </div>
+            {sameBranch && (
+              <p className="sm:col-span-2 text-xs text-muted-foreground">
+                Same location on both sides — this moves stock between two storage areas, so the
+                location&apos;s total is unchanged. Choose a different area for each.
+              </p>
+            )}
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard

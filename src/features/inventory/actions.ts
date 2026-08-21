@@ -46,6 +46,8 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
         costPerUnit: data.costPerUnit,
         supplierId: data.supplierId || null,
         storageArea: data.storageArea || null,
+        purchaseUnit: data.purchaseUnit || null,
+        unitsPerPurchaseUnit: data.unitsPerPurchaseUnit > 0 ? data.unitsPerPurchaseUnit : null,
         expiryDate: data.expiryDate ? new Date(data.expiryDate) : null,
       }
 

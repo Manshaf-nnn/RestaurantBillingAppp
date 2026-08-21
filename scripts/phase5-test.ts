@@ -1,6 +1,7 @@
 /** Phase 5: wastage, batches, expiry, FEFO, variance. */
 import { prisma } from '../src/server/db/prisma'
 import { recordWastage, reviewWastage, getWastageReport } from '../src/features/inventory/wastage'
+import { postMovement } from '../src/features/inventory/ledger'
 import { upsertBatch, allocateFefo, bucketFor, listExpiringStock, getExpirySummary } from '../src/features/inventory/batches'
 import { getVarianceReport } from '../src/features/inventory/variance-report'
 import { setOpeningBalance, adjustStock } from '../src/features/inventory/operations'
@@ -87,6 +88,15 @@ async function main() {
     await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-2026-0825', quantity: 20, unitCost: 100_00, expiryDate: day(6) })
     await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 20, unitCost: 100_00, expiryDate: day(2) })
     await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-NO-DATE', quantity: 20, unitCost: 100_00 })
+
+    // The batches hold 60 kg, so the item balance must too. upsertBatch records
+    // a lot; it does not move stock — receiving does both. Without this the
+    // fixture wasted 5 kg from a balance of zero, which only passed while the
+    // ledger allowed negative stock unconditionally.
+    await postMovement(tx, {
+      restaurantId: shop.id, itemId: chicken.id, type: 'OPENING_BALANCE',
+      quantity: 60, unitCost: 100_00, userId: user.id,
+    })
   })
   const alloc = await allocateFefo(prisma, { restaurantId: shop.id, itemId: chicken.id, quantity: 30 })
   ok('FEFO takes the earliest expiry first', alloc.allocations[0].batchNo === 'CHK-2026-0823', alloc.allocations[0].batchNo)
