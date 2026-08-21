@@ -2,7 +2,7 @@
   "name": "restaurantos",
   "version": "1.0.0",
   "private": true,
-  "description": "RestaurantOS — Cloud Restaurant POS & QR Ordering Platform",
+  "description": "RestaurantOS \u2014 Cloud Restaurant POS & QR Ordering Platform",
   "scripts": {
     "dev": "node server.mjs",
     "dev:next": "next dev",
@@ -21,7 +21,8 @@
     "db:backup": "tsx scripts/backup.ts",
     "setup": "prisma generate && prisma db push && npm run db:seed",
     "setup:prod": "prisma generate && prisma db push && npm run db:seed:prod",
-    "netlify:build": "prisma generate && prisma migrate deploy && npm run db:seed:prod && next build"
+    "netlify:build": "prisma generate && prisma migrate deploy && npm run db:seed:prod && next build",
+    "verify": "tsx --tsconfig tsconfig.test.json scripts/verify-all.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
