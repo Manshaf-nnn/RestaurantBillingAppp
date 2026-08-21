@@ -33,6 +33,9 @@ const EXPECTED_COLUMNS: Array<{ table: string; column: string; since: string }> 
   { table: 'coupons', column: 'scope', since: 'customers_and_discounts' },
   { table: 'suppliers', column: 'paymentTerms', since: 'purchasing' },
   { table: 'purchases', column: 'subtotal', since: 'purchasing' },
+  // Auth reads this one. If it is missing, sign-in itself starts failing, so it
+  // is the last column that should be absent from a drift check.
+  { table: 'users', column: 'signInCode', since: 'staff_sign_in_codes' },
 ]
 
 const EXPECTED_TABLES = [

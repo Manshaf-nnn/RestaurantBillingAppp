@@ -20,7 +20,14 @@ const ingredientSchema = z.object({
   notes: z.string().trim().max(200).optional().or(z.literal('')),
 })
 
-export const saveRecipeSchema = z.object({
+/*
+ * Not exported. A 'use server' module may only export async functions — Next
+ * turns every export into a callable server reference, and a Zod object is not
+ * callable. Exporting this threw "A 'use server' file can only export async
+ * functions, found object" on the FIRST call into the module, so every action
+ * in this file failed with a bare digest and nothing was ever written.
+ */
+const saveRecipeSchema = z.object({
   foodId: z.string().min(1).optional().or(z.literal('')),
   producesItemId: z.string().min(1).optional().or(z.literal('')),
   name: z.string().trim().max(80).optional().or(z.literal('')),

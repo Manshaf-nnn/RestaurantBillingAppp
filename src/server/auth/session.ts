@@ -1,4 +1,5 @@
 import 'server-only'
+import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
 import type { UserRole } from '@prisma/client'
 
@@ -105,7 +106,15 @@ export async function rotateSession(
 ): Promise<AuthUser | null> {
   const session = await prisma.session.findUnique({
     where: { refreshTokenHash: hashToken(rawRefreshToken) },
-    include: { user: true },
+    include: {
+      user: {
+        select: {
+          id: true, email: true, name: true, role: true, restaurantId: true,
+          branchId: true, avatarUrl: true, permissions: true, isActive: true,
+          deletedAt: true,
+        },
+      },
+    },
   })
 
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null
@@ -219,7 +228,15 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
 
   const session = await prisma.session.findUnique({
     where: { refreshTokenHash: hashToken(refreshToken) },
-    include: { user: true },
+    include: {
+      user: {
+        select: {
+          id: true, email: true, name: true, role: true, restaurantId: true,
+          branchId: true, avatarUrl: true, permissions: true, isActive: true,
+          deletedAt: true,
+        },
+      },
+    },
   })
 
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null
@@ -309,15 +326,28 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
   }
 }
 
-/** The signed-in staff / restaurant user (dashboard, kitchen, cashier, …). */
-export async function getCurrentUser(): Promise<AuthUser | null> {
+/**
+ * The signed-in staff / restaurant user (dashboard, kitchen, cashier, …).
+ *
+ * Memoised per request. Almost every render resolves the session at least
+ * twice — the layout guards, then the page guards again — and each call was a
+ * cookie read, a JWT verify and a session-plus-user query. On a Server Action
+ * that revalidates, the page is re-rendered inside the same POST, so it ran
+ * four times for one click. `React.cache` collapses that to one, which matters
+ * most on exactly the requests that were closest to the serverless time limit.
+ *
+ * Safe to cache: the cache is per-request, and the only thing that changes the
+ * answer mid-request is `renewFromRefreshToken` issuing a new access token —
+ * which returns the same user either way.
+ */
+export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   return resolveUser('staff')
-}
+})
 
 /** The signed-in platform admin — a completely separate session from staff. */
-export async function getAdminUser(): Promise<AuthUser | null> {
+export const getAdminUser = cache(async (): Promise<AuthUser | null> => {
   return resolveUser('admin')
-}
+})
 
 /** Stable anonymous identifier for QR guests, so they can track their orders. */
 export async function getOrCreateGuestSessionId(): Promise<string> {

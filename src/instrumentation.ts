@@ -53,10 +53,10 @@ export async function onRequestError(
   request: { path?: string },
   context: { routePath?: string },
 ) {
+  let captured: CapturedError | null = null
   try {
     const err = error as { message?: string; stack?: string; digest?: string; name?: string }
-    store.__recentErrors ??= []
-    store.__recentErrors.push({
+    captured = {
       at: new Date().toISOString(),
       // The digest is what the browser shows, so it is the join key between the
       // reference code someone reads out and the cause recorded here.
@@ -65,9 +65,51 @@ export async function onRequestError(
       kind: err?.name ?? typeof error,
       message: err?.message ?? String(error),
       stack: err?.stack ?? null,
-    })
+    }
+    store.__recentErrors ??= []
+    store.__recentErrors.push(captured)
     if (store.__recentErrors.length > LIMIT) store.__recentErrors.shift()
   } catch {
     // Diagnostics must never be able to fail a request.
+  }
+
+  /*
+   * Also persist it.
+   *
+   * The in-memory list above is per-instance, and serverless instances are
+   * short-lived — so the instance that failed is usually not the one answering
+   * /api/health/errors, and the endpoint reads empty exactly when someone needs
+   * it. Writing the row is what makes a reference code answerable minutes later.
+   *
+   * Imported lazily so Prisma is never pulled into a runtime that cannot take
+   * it, and swallowed entirely: this runs while something is already going
+   * wrong, quite possibly the database itself, and a failed log write must not
+   * become a second error on top of the first.
+   */
+  if (!captured) return
+  try {
+    const { prisma } = await import('@/server/db/prisma')
+    await prisma.errorLog.create({
+      data: {
+        digest: captured.digest,
+        route: captured.route,
+        kind: captured.kind,
+        message: captured.message.slice(0, 4_000),
+        stack: captured.stack?.slice(0, 8_000) ?? null,
+      },
+    })
+
+    // Keep the table small without a scheduled job: trim occasionally rather
+    // than on every write, since this is already the unhappy path.
+    if (Math.abs(captured.at.charCodeAt(captured.at.length - 1)) % 10 === 0) {
+      await prisma.$executeRaw`
+        DELETE FROM error_logs
+        WHERE id IN (
+          SELECT id FROM error_logs ORDER BY "createdAt" DESC OFFSET 200
+        )
+      `
+    }
+  } catch {
+    // Already reported in memory; nothing further to do.
   }
 }

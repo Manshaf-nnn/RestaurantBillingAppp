@@ -54,8 +54,27 @@ function describe(error: unknown): { message: string; expired: boolean } {
   if (/was not found on the server/i.test(raw)) {
     return { message: 'The app was updated. Refresh the page and try again.', expired: false }
   }
+
+  /*
+   * Nothing recognised, which in production means the server threw and React
+   * replaced the message with a placeholder — deliberately, so an unfiltered
+   * error cannot leak table and column names to whoever is looking at the
+   * screen. It attaches a `digest` instead, and that number is the only thing
+   * linking what the user saw to the real cause in the server log.
+   *
+   * This message used to end at "keeps happening", which is precisely the
+   * report nobody can act on. Showing the reference turns it into a lookup:
+   * paste it into /api/health/errors and the actual exception comes back.
+   */
+  const digest =
+    error && typeof error === 'object' && 'digest' in error
+      ? String((error as { digest?: unknown }).digest ?? '')
+      : ''
+
   return {
-    message: 'That did not work. Try again, and tell us if it keeps happening.',
+    message: digest
+      ? `That did not work — reference ${digest}. Check Settings → Diagnostics, or send us that number.`
+      : 'That did not work, and the server gave no reason — it may have timed out. Try again.',
     expired: false,
   }
 }

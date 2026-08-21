@@ -15,7 +15,14 @@ const REASONS = [
   'PREPARATION', 'CUSTOMER_RETURN', 'OTHER',
 ] as const
 
-export const wastageSchema = z.object({
+/*
+ * Not exported. A 'use server' module may only export async functions — Next
+ * turns every export into a callable server reference, and a Zod object is not
+ * callable. Exporting this threw "A 'use server' file can only export async
+ * functions, found object" on the FIRST call into the module, so every action
+ * in this file failed with a bare digest and nothing was ever written.
+ */
+const wastageSchema = z.object({
   itemId: z.string().min(1, 'Choose an item'),
   quantity: z.coerce.number().positive('Quantity must be more than zero').max(1_000_000),
   unit: z.enum(UNITS).optional(),

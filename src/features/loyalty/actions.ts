@@ -9,7 +9,14 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
-export const loyaltySettingsSchema = z.object({
+/*
+ * Not exported. A 'use server' module may only export async functions — Next
+ * turns every export into a callable server reference, and a Zod object is not
+ * callable. Exporting this threw "A 'use server' file can only export async
+ * functions, found object" on the FIRST call into the module, so every action
+ * in this file failed with a bare digest and nothing was ever written.
+ */
+const loyaltySettingsSchema = z.object({
   enabled: z.coerce.boolean().default(true),
   // Points earned per 1 currency unit spent.
   earnRate: z.coerce.number().min(0).max(100).default(1),

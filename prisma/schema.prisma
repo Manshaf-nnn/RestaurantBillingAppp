@@ -2565,3 +2565,33 @@ model ApprovalRequest {
   @@index([restaurantId, branchId, status])
   @@map("approval_requests")
 }
+
+/// Recent server errors, so a reference code shown to a user can be turned back
+/// into its cause.
+///
+/// Next strips error messages in production — correctly, since an unfiltered
+/// error names tables and columns to anyone who can load the page — and hands
+/// the browser a digest instead. Keeping the pair here is what makes that digest
+/// answerable. In-memory capture was tried first and is not enough: serverless
+/// instances are short-lived, so the one that failed is rarely the one answering
+/// the diagnostic.
+///
+/// Capped by the writer, never read on a request path, and best-effort — a
+/// failure to record an error must never turn into a second error.
+model ErrorLog {
+  id           String  @id @default(cuid())
+  restaurantId String?
+
+  /// The number shown to the user; the join key back to this row.
+  digest  String?
+  route   String?
+  kind    String
+  message String
+  stack   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([digest])
+  @@index([createdAt])
+  @@map("error_logs")
+}

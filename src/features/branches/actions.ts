@@ -1,6 +1,5 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
@@ -10,9 +9,32 @@ import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { createBranch, setDefaultBranch, updateBranch } from './service'
 
+/*
+ * These actions deliberately do NOT call `revalidatePath`.
+ *
+ * Every route in this app is `force-dynamic` and none uses ISR, so there is no
+ * cached render for it to invalidate — but calling it sets `pathWasRevalidated`,
+ * which makes Next re-render the whole route *inside the action's own POST*
+ * before replying. For /dashboard/locations that meant the layout's queries, a
+ * second session lookup, and listLocations' join over every stock row, stacked
+ * on the action's own work inside a 10-second serverless budget. When it did not
+ * fit, the function returned a non-RSC body and the client saw a bare "that did
+ * not work" with the record already written.
+ *
+ * The forms call `router.refresh()` when the action succeeds, which fetches the
+ * new page on its own budget instead.
+ */
+
 const TYPES = ['BRANCH', 'PRODUCTION_HOUSE', 'CENTRAL_WAREHOUSE'] as const
 
-export const locationSchema = z.object({
+/*
+ * Not exported. A 'use server' module may only export async functions — Next
+ * turns every export into a callable server reference, and a Zod object is not
+ * callable. Exporting this threw "A 'use server' file can only export async
+ * functions, found object" on the FIRST call into the module, so every action
+ * in this file failed with a bare digest and nothing was ever written.
+ */
+const locationSchema = z.object({
   name: z.string().trim().min(2, 'Give the location a name').max(60),
   code: z.string().trim().min(1, 'Give it a short code').max(12),
   type: z.enum(TYPES),
@@ -50,7 +72,6 @@ export async function createLocationAction(
       after: { name: branch.name, code: branch.code, type: data.type },
     })
 
-    revalidatePath('/dashboard/locations')
     return { id: branch.id, name: branch.name }
   }, 'Location created.')
 }
@@ -78,7 +99,6 @@ export async function updateLocationAction(
         action: AUDIT_ACTIONS.UPDATE, entity: 'Branch', entityId: branch.id,
         after: { name: branch.name, type: data.type },
       })
-      revalidatePath('/dashboard/locations')
       return { id: branch.id }
     },
     'Location updated.',
@@ -114,7 +134,6 @@ export async function createStorageLocationAction(
           code: data.code.trim().toUpperCase(),
         },
       })
-      revalidatePath(`/dashboard/locations/${data.branchId}`)
       return { id: store.id }
     },
     'Storage area added.',
@@ -125,7 +144,6 @@ export async function setDefaultLocationAction(branchId: string): Promise<Action
   return runSafe(async () => {
     const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
     await setDefaultBranch(user.restaurantId, branchId)
-    revalidatePath('/dashboard/locations')
     return { ok: true } as const
   })
 }
