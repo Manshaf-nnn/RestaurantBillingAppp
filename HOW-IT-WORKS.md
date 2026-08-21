@@ -279,3 +279,58 @@ opening 0, transferred in 20, sold 2, closing 18, **drift 0.**
 | **Drift** | Stored balance minus ledger sum. Must be zero |
 | **COGS** | What the ingredients cost. Revenue − COGS = gross profit |
 | **Spec** | A production recipe |
+
+---
+
+## Working across locations
+
+**The switcher in the top bar changes everything below it.** Pick Kandy and the
+takings, the orders, the stock quantities, the tables and the reorder list are
+all Kandy's. Pick "All locations" for the group total. Your choice is
+remembered between visits, and the address bar carries it — so a filtered view
+can be bookmarked or sent to an accountant.
+
+Two things stay restaurant-wide on purpose: your customer list and your item
+list. A customer is a customer wherever they eat, and "Flour" is one item
+defined once. It is the *quantity* that lives somewhere — 100kg at the
+warehouse and 5kg at Kandy are the same item on two shelves.
+
+### Things to do
+
+The owner leaves an instruction for a location — "count the cold room before
+Friday" — and the managers there are notified. It stays on their list until
+someone marks it done, with their name and what they found against it. A month
+later you can still see whether it happened.
+
+Only an owner or a group manager writes them. A manager assigned to a location
+sees and completes theirs.
+
+### Who may move stock
+
+Each step of a transfer belongs to one end:
+
+| Step | Who |
+|---|---|
+| Request | Either end — asking to pull, or offering to push |
+| Approve | The sending location; approval reserves their stock |
+| Dispatch | The sending location; the stock leaves that building |
+| Receive | The receiving location; only they can say what came off the van |
+| Cancel / reject | Either end |
+
+An owner or group manager passes every one of these. Buttons you cannot use are
+not shown.
+
+### Production
+
+Runs read "10 batches = 100 loaves" so nobody multiplies in their head at the
+mixer. On completion you can enter what the labour and power cost; it is
+divided over the output along with the ingredients, so the cost per loaf is
+what it really cost.
+
+Click any run number for the full picture: what went in, what came out, what
+the shortfall cost, who approved it.
+
+Recipes can be edited or retired. Editing affects future runs only — runs
+already completed keep the costs they were completed with, so last month's
+margins never move under you. A recipe cannot be retired while a run still
+depends on it.

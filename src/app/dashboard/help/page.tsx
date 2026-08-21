@@ -133,6 +133,26 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard
+          title="4b · Telling a branch what to do"
+          description="The owner asks; the branch answers."
+        >
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Leave an instruction for one location or for all of them. The managers there are
+            notified, and it stays on their list until someone marks it done — with their name and
+            what they found against it.
+          </p>
+          <Note>
+            Use it for the things that used to happen on the phone: &quot;count the cold room before
+            Friday&quot;, &quot;stop selling the fish curry&quot;. A month later you can still see
+            whether it was done. <Guide href="/dashboard/tasks">Things to do</Guide>
+          </Note>
+          <Note>
+            Only an owner or a group manager can write one. A manager assigned to a location can
+            see and complete theirs, and cannot write instructions for anyone.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="5 · Recipes" description="More important than they look.">
           <p className="text-sm leading-relaxed text-muted-foreground">
             A recipe links a dish to what it consumes. Without one, selling a burger takes
@@ -191,6 +211,20 @@ export default async function HelpPage() {
             </p>
           </div>
           <Note>
+            <strong>Overheads.</strong> When you complete a run you can add what the labour, power
+            and gas cost. It is divided over the output along with the ingredients, so the cost per
+            loaf is what it really cost — not just what the flour cost.
+          </Note>
+          <Note>
+            Click any run number to see it in full: what went in, what came out, what the gap cost,
+            and who approved it.
+          </Note>
+          <Note>
+            Recipes can be edited or retired. Editing changes future runs only — runs already
+            completed keep the costs they were completed with, so last month&apos;s margins never
+            move under you.
+          </Note>
+          <Note>
             Finished goods sit at the production house. Send them out with a normal transfer.{' '}
             <Guide href="/dashboard/production">Production</Guide>
           </Note>
@@ -207,6 +241,18 @@ export default async function HelpPage() {
             Assign someone to a location and they see only that location. Leave it blank and
             they see everything — that is your group manager.{' '}
             <Guide href="/dashboard/staff">Staff</Guide>
+          </Note>
+          <Note>
+            <strong>The location switcher in the top bar changes everything below it.</strong> Pick
+            Kandy and the takings, the orders, the stock quantities, the tables and the reorder
+            list are all Kandy&apos;s. Pick &quot;All locations&quot; for the group. Your choice is
+            remembered, and the address bar carries it — so a filtered view can be bookmarked or
+            sent to your accountant.
+          </Note>
+          <Note>
+            On a transfer, each step belongs to one end: the sending location approves and
+            dispatches, the receiving location receives. Either end can ask for it, and either end
+            can call it off. Buttons you cannot use are not shown.
           </Note>
         </SectionCard>
 
@@ -242,6 +288,10 @@ export default async function HelpPage() {
               cost is guesswork
             </li>
             <li><Guide href="/dashboard/tables">Tables</Guide>, then print the <Guide href="/dashboard/qr">QR codes</Guide></li>
+            <li>
+              If you have more than one location, use the switcher in the top bar and leave{' '}
+              <Guide href="/dashboard/tasks">instructions</Guide> for each manager
+            </li>
             <li>Sell something, then check <Guide href="/dashboard/reports/reconciliation">Reconciliation</Guide> balances</li>
           </ol>
         </SectionCard>
