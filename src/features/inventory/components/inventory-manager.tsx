@@ -442,9 +442,24 @@ function ItemDialog({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Quantity in stock">
-            <Input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-          </Field>
+          {/*
+            Only offered when creating. A balance is the result of movements, so
+            changing it on an existing item is a stock adjustment — with a reason
+            and a ledger entry — not a field edit. It used to be editable here and
+            wrote straight to the row, which left the balance and its own history
+            permanently disagreeing.
+          */}
+          {item?.id ? (
+            <Field label="Quantity in stock">
+              <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                {form.quantity} — change this with <strong>Stock movement</strong> or a stock count.
+              </p>
+            </Field>
+          ) : (
+            <Field label="Opening quantity">
+              <Input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+            </Field>
+          )}
           <Field label="Reorder level">
             <Input type="number" step="any" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })} />
           </Field>

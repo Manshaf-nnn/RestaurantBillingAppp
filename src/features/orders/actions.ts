@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 
+import { reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -263,6 +264,17 @@ export async function updateGuestOrderItems(
             },
           })
         }
+
+        /*
+         * The lines just changed, so what this order should have consumed
+         * changed with them. Without this, a guest reducing two burgers to one
+         * kept both sets of ingredients deducted — and because the order was
+         * already accepted, nothing downstream ever reconciled it.
+         */
+        await reconcileOrderDepletion(tx, {
+          restaurantId: restaurant.id,
+          orderId: order.id,
+        })
 
         await tx.order.update({
           where: { id: order.id },

@@ -7,6 +7,8 @@ import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
+import { postMovement } from './ledger'
+import { setOpeningBalance } from './operations'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
 import {
@@ -25,12 +27,21 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
     async (data) => {
       const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
 
+      /*
+       * `quantity` is deliberately absent from this payload.
+       *
+       * Editing an item used to write the balance straight onto the row, with no
+       * ledger entry and no location delta — so the cached number and the sum of
+       * its movements silently disagreed from then on, and every reconciliation
+       * for that item was wrong for ever after. A balance is the *result* of
+       * movements; the only ways to change one are an opening balance, an
+       * adjustment with a reason, or a stock count.
+       */
       const payload = {
         name: data.name,
         sku: data.sku || null,
         category: data.category || null,
         unit: data.unit,
-        quantity: data.quantity,
         reorderLevel: data.reorderLevel,
         costPerUnit: data.costPerUnit,
         supplierId: data.supplierId || null,
@@ -39,11 +50,28 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
       }
 
       try {
-        const record = data.id
-          ? await prisma.inventoryItem.update({ where: { id: data.id }, data: payload })
-          : await prisma.inventoryItem.create({ data: { ...payload, restaurantId: user.restaurantId } })
+        if (data.id) {
+          const record = await prisma.inventoryItem.update({ where: { id: data.id }, data: payload })
+          return { id: record.id }
+        }
 
-        revalidatePath('/dashboard/inventory')
+        const record = await prisma.inventoryItem.create({
+          data: { ...payload, quantity: 0, restaurantId: user.restaurantId },
+        })
+
+        // A starting quantity on a brand-new item is legitimate — but it goes in
+        // as an opening balance so it has a date, an author and a ledger row.
+        if (data.quantity > 0) {
+          await setOpeningBalance({
+            restaurantId: user.restaurantId,
+            itemId: record.id,
+            quantity: data.quantity,
+            unitCost: data.costPerUnit,
+            userId: user.id,
+            branchId: user.branchId ?? null,
+          })
+        }
+
         return { id: record.id }
       } catch (error) {
         if (isUniqueViolation(error)) throw new ConflictError('An item with that name already exists')
@@ -66,34 +94,48 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
       })
       if (!item) throw new NotFoundError('Inventory item')
 
-      // PURCHASE/RETURN add; WASTE/CONSUMPTION/EXPIRY remove; ADJUSTMENT is signed.
-      const signed =
-        data.type === 'PURCHASE' || data.type === 'RETURN'
-          ? Math.abs(data.quantity)
-          : data.type === 'ADJUSTMENT'
-            ? data.quantity
-            : -Math.abs(data.quantity)
+      /*
+       * Posted through the ledger rather than written by hand.
+       *
+       * This used to compute the sign itself, update `quantity` directly and
+       * hand-write the movement — with no `balanceAfter`, no unit conversion and
+       * no `applyLocationDelta`, so branch stock never moved. Worse, it clamped
+       * the new balance with `Math.max(0, …)`, so any withdrawal that would have
+       * gone negative wrote a movement of the full amount while the cached
+       * balance stopped at zero. The two could never agree again.
+       *
+       * `postMovement` owns all of that: the type decides the sign, the item row
+       * is locked, `balanceAfter` is recorded, and the location delta is applied
+       * in the same transaction.
+       */
+      const MOVEMENT_TYPES = {
+        PURCHASE: 'PURCHASE',
+        RETURN: 'CUSTOMER_RETURN',
+        WASTE: 'WASTAGE',
+        EXPIRY: 'WASTAGE',
+        CONSUMPTION: 'ADJUSTMENT_OUT',
+        ADJUSTMENT_IN: 'ADJUSTMENT_IN',
+        ADJUSTMENT_OUT: 'ADJUSTMENT_OUT',
+      } as const
 
-      const nextQuantity = Math.max(0, item.quantity + signed)
+      // A signed ADJUSTMENT is two different movements; everything else is fixed.
+      const resolved =
+        data.type === 'ADJUSTMENT'
+          ? data.quantity >= 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT'
+          : MOVEMENT_TYPES[data.type]
 
-      const updated = await prisma.$transaction(async (tx) => {
-        const next = await tx.inventoryItem.update({
-          where: { id: item.id },
-          data: { quantity: nextQuantity },
-        })
-        await tx.stockMovement.create({
-          data: {
-            restaurantId: user.restaurantId,
-            itemId: item.id,
-            type: data.type,
-            quantity: signed,
-            unitCost: item.costPerUnit,
-            reason: data.reason || null,
-            userId: user.id,
-          },
-        })
-        return next
-      })
+      const posted = await prisma.$transaction((tx) =>
+        postMovement(tx, {
+          restaurantId: user.restaurantId,
+          itemId: item.id,
+          type: resolved,
+          quantity: Math.abs(data.quantity),
+          reason: data.reason || null,
+          userId: user.id,
+          branchId: user.branchId ?? null,
+        }),
+      )
+      const nextQuantity = posted.balanceAfter
 
       await audit({
         restaurantId: user.restaurantId,
@@ -226,23 +268,29 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
           },
         })
 
-        // Receiving a purchase increases stock and logs a movement per line.
+        /*
+         * Receiving a purchase increases stock, through the ledger.
+         *
+         * This used to increment `quantity` directly and — worse — set
+         * `costPerUnit = line.unitCost`, overwriting the weighted average with
+         * the price of the newest delivery. One cheap sack of flour would
+         * re-price the whole shelf and every margin derived from it.
+         * `postMovement` blends the new cost in by quantity instead, and records
+         * `balanceAfter` and the location delta.
+         */
         for (const line of lines) {
-          await tx.inventoryItem.update({
-            where: { id: line.itemId },
-            data: { quantity: { increment: line.quantity }, costPerUnit: line.unitCost },
-          })
-          await tx.stockMovement.create({
-            data: {
-              restaurantId: user.restaurantId,
-              itemId: line.itemId,
-              type: 'PURCHASE',
-              quantity: line.quantity,
-              unitCost: line.unitCost,
-              reason: `Purchase ${number}`,
-              purchaseId: created.id,
-              userId: user.id,
-            },
+          await postMovement(tx, {
+            restaurantId: user.restaurantId,
+            itemId: line.itemId,
+            type: 'PURCHASE',
+            quantity: line.quantity,
+            unitCost: line.unitCost,
+            reason: `Purchase ${number}`,
+            referenceType: 'Purchase',
+            referenceId: created.id,
+            purchaseId: created.id,
+            userId: user.id,
+            branchId: user.branchId ?? null,
           })
         }
 

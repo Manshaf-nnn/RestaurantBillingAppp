@@ -816,27 +816,27 @@ export async function cancelOrder(params: {
       })
     }
 
-    // Return any ingredients already deducted.
-    const consumed = await tx.stockMovement.findMany({
-      where: { orderId: order.id, type: { in: ['SALE', 'CONSUMPTION'] } },
+    /*
+     * Return any ingredients already deducted.
+     *
+     * This used to sum the SALE rows and hand-write the reversal: a direct
+     * `inventoryItem.update`, a movement with no `balanceAfter` and no cost, and
+     * no `applyLocationDelta` — so per-branch stock was never credited back. It
+     * also summed only SALE and CONSUMPTION, ignoring SALE_REVERSAL, so an order
+     * that had ever been reduced returned *more* than it took. And it left
+     * `orderStockDepletion.appliedQty` untouched, so the next reconcile would
+     * return everything a second time.
+     *
+     * `reconcileOrderDepletion` already does this correctly and idempotently:
+     * desired becomes nothing, so it posts exactly what is outstanding, through
+     * the ledger, with the branch attached.
+     */
+    await reconcileOrderDepletion(tx, {
+      restaurantId: order.restaurantId,
+      orderId: order.id,
+      userId: params.actorId ?? null,
+      releaseAll: true,
     })
-    for (const movement of consumed) {
-      await tx.inventoryItem.update({
-        where: { id: movement.itemId },
-        data: { quantity: { increment: Math.abs(movement.quantity) } },
-      })
-      await tx.stockMovement.create({
-        data: {
-          restaurantId: order.restaurantId,
-          itemId: movement.itemId,
-          type: 'RETURN',
-          quantity: Math.abs(movement.quantity),
-          reason: `Order ${order.orderNumber} cancelled`,
-          orderId: order.id,
-          userId: params.actorId ?? null,
-        },
-      })
-    }
 
     if (order.tableId) {
       const openOrders = await tx.order.count({

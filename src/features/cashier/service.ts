@@ -4,6 +4,7 @@ import type { Order } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { computeTotals } from '@/features/orders/pricing'
+import { reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { prisma, type TxClient } from '@/server/db/prisma'
 
 /**
@@ -434,7 +435,24 @@ export async function voidOrderItem(
       },
     })
 
+    /*
+     * Put the ingredients back.
+     *
+     * Voiding a line only marked it CANCELLED and recalculated the money; the
+     * stock it had already consumed stayed consumed. A busy counter voiding
+     * mistakes all evening quietly drained the ledger against food that was
+     * never served, and the loss looked like theft or wastage rather than a bug.
+     *
+     * `resolveOrderConsumption` ignores cancelled lines, so reconciling here
+     * computes the new desired total and returns exactly the difference.
+     */
+    const stock = await reconcileOrderDepletion(tx, {
+      restaurantId: order.restaurantId,
+      orderId: order.id,
+      userId: params.actorId ?? null,
+    })
+
     const updated = await recalculateOrderTotals(tx, order.id)
-    return { order: updated, itemName: item.name, lineTotal: item.lineTotal }
+    return { order: updated, itemName: item.name, lineTotal: item.lineTotal, stock }
   })
 }

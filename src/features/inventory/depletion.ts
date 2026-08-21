@@ -58,11 +58,37 @@ export async function reconcileOrderDepletion(
   // sixty buns instead of six. The lock makes the "run twice, change nothing"
   // guarantee hold under concurrency as well as in sequence.
   await guardLocks(tx)
-  await tx.$queryRaw`
-    SELECT id FROM orders
+  const locked = await tx.$queryRaw<Array<{ id: string; branchId: string | null }>>`
+    SELECT id, "branchId" FROM orders
     WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}
     FOR UPDATE
   `
+
+  /*
+   * Where the sale happened, so the ledger can take the stock off the right
+   * shelf.
+   *
+   * These postings used to carry no branch at all. `applyLocationDelta` returns
+   * early without one (`location-stock.ts`), so per-branch `InventoryStock`
+   * never went down: receipts and transfers added to it, sales took nothing
+   * away. Restaurant-wide totals stayed correct, which is why it went unnoticed,
+   * but every per-branch figure drifted upward for ever — and `assertSufficient`
+   * reads exactly that number, so transfers were being approved against stock
+   * that had already been eaten.
+   *
+   * A single-location restaurant leaves `Order.branchId` null, so fall back to
+   * the default branch rather than to nothing; otherwise the same bug simply
+   * moves to the restaurants least likely to spot it.
+   */
+  const branchId =
+    locked[0]?.branchId ??
+    (
+      await tx.branch.findFirst({
+        where: { restaurantId: params.restaurantId, deletedAt: null, isDefault: true },
+        select: { id: true },
+      })
+    )?.id ??
+    null
 
   const desired = params.releaseAll
     ? { totals: new Map<string, number>(), problems: [] as string[] }
@@ -100,6 +126,7 @@ export async function reconcileOrderDepletion(
         restaurantId: params.restaurantId,
         itemId,
         type: 'SALE',
+        branchId,
         quantity: delta,
         reason: 'Recipe consumption',
         referenceType: 'Order',
@@ -113,6 +140,7 @@ export async function reconcileOrderDepletion(
         restaurantId: params.restaurantId,
         itemId,
         type: 'SALE_REVERSAL',
+        branchId,
         quantity: Math.abs(delta),
         reason: params.releaseAll ? 'Order cancelled' : 'Order quantity reduced',
         referenceType: 'Order',
