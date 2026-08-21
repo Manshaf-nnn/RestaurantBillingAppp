@@ -32,6 +32,7 @@ import {
   PiggyBank,
   UserSearch,
   BadgeCheck,
+  ListTodo,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -60,6 +61,17 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: LayoutDashboard,
         permission: PERMISSIONS.DASHBOARD_VIEW,
         exact: true,
+      },
+      {
+        /*
+         * High in the list on purpose. A branch manager signing in should see
+         * what the owner has asked of them before they see anything else — an
+         * instruction buried under Reports is an instruction nobody reads.
+         */
+        href: '/dashboard/tasks',
+        label: 'Things to do',
+        icon: ListTodo,
+        permission: PERMISSIONS.DASHBOARD_VIEW,
       },
       {
         href: '/dashboard/analytics',

@@ -25,6 +25,7 @@ const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 const PAGES = [
   '/dashboard',
   '/dashboard/help',
+  '/dashboard/tasks',
   '/dashboard/reports',
   '/dashboard/reports/sales',
   '/dashboard/reports/profit',
@@ -163,7 +164,7 @@ async function main() {
    * is checked the same way the plain pass is.
    */
   const branch = await prisma.branch.findFirst({
-    where: { restaurantId: user.restaurantId, deletedAt: null },
+    where: { restaurantId: user.restaurantId ?? undefined, deletedAt: null },
     select: { id: true, name: true },
     orderBy: { createdAt: 'asc' },
   })

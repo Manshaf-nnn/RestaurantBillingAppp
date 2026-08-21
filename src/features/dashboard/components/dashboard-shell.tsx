@@ -72,6 +72,7 @@ export function DashboardShell({
   orderUrl,
   trialDaysLeft,
   initialNotifications,
+  openTasks = 0,
   children,
 }: {
   user: ShellUser
@@ -81,6 +82,12 @@ export function DashboardShell({
   orderUrl: string
   trialDaysLeft?: number | null
   initialNotifications: ShellNotification[]
+  /**
+   * Outstanding instructions for this person. Shown as a count beside "Things
+   * to do", and only when there are any — a permanent grey zero is furniture,
+   * and people stop seeing furniture.
+   */
+  openTasks?: number
   children: React.ReactNode
 }) {
   const pathname = usePathname()
@@ -139,6 +146,11 @@ export function DashboardShell({
                   >
                     <item.icon className="size-4 shrink-0" />
                     <span className="truncate">{item.label}</span>
+                    {item.href === '/dashboard/tasks' && openTasks > 0 ? (
+                      <span className="ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                        {openTasks > 9 ? '9+' : openTasks}
+                      </span>
+                    ) : null}
                   </Link>
                 </li>
               )

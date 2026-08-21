@@ -36,6 +36,7 @@ const SERVICE = [
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
   'stock-location-test',
   'branch-scope-test',
+  'instructions-test',
 ]
 
 const RUNTIME = ['page-render-test', 'action-e2e-test']

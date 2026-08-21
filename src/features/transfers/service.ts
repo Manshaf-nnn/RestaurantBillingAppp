@@ -1,8 +1,9 @@
 import 'server-only'
 
-import type { StockTransfer, TransferStatus, TransferVarianceReason } from '@prisma/client'
+import type { StockTransfer, TransferStatus, TransferVarianceReason, UserRole } from '@prisma/client'
 
-import { AppError, NotFoundError } from '@/lib/errors'
+import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
+import { canAccessBranch } from '@/lib/rbac'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { applyLocationDelta, assertSufficient } from '@/features/inventory/location-stock'
@@ -517,4 +518,66 @@ function assertTransition(from: TransferStatus, to: TransferStatus) {
 
 function round(v: number): number {
   return Math.round(v * 1e6) / 1e6
+}
+
+/**
+ * Which end of a transfer a person must be standing at to do something to it.
+ *
+ * The old rule was one line — `assertBranchAccess(user, fromBranchId)` on
+ * request, and nothing at all on approve, dispatch, receive or close — and it
+ * was wrong in both directions.
+ *
+ * Wrong for the manager: a transfer request is a *question*, and the person
+ * asking is almost always the destination. "Can Kandy have 20kg of sugar from
+ * the warehouse?" was refused, because the Kandy manager has no access to the
+ * warehouse. The one screen built for branch managers to pull stock could not
+ * be used by a branch manager.
+ *
+ * Wrong for everyone else: with no check on the later steps, anyone holding the
+ * permission could dispatch stock out of a location they have nothing to do
+ * with, or receive goods into someone else's store. Permission answers "may
+ * this person dispatch transfers"; it never answered "whose".
+ *
+ * So each step is guarded by the end it actually touches:
+ *
+ *   request   either end — asking to pull, or offering to push
+ *   approve   source     — approval reserves the source's stock
+ *   dispatch  source     — the stock leaves that building
+ *   receive   destination — it arrives in this one
+ *   close     either end — either side may call it off
+ *
+ * An unrestricted user (owner, admin, group manager) passes every one of these.
+ */
+export type TransferSide = 'SOURCE' | 'DESTINATION' | 'EITHER'
+
+export function assertTransferSide(
+  user: { role: UserRole; branchId?: string | null },
+  transfer: { fromBranchId: string; toBranchId: string },
+  side: TransferSide,
+): void {
+  const atSource = canAccessBranch(user, transfer.fromBranchId)
+  const atDestination = canAccessBranch(user, transfer.toBranchId)
+
+  const allowed =
+    side === 'SOURCE' ? atSource : side === 'DESTINATION' ? atDestination : atSource || atDestination
+
+  if (allowed) return
+
+  throw new ForbiddenError(
+    side === 'SOURCE'
+      ? 'Only someone at the sending location can do that'
+      : side === 'DESTINATION'
+        ? 'Only someone at the receiving location can do that'
+        : 'You do not have access to either location on this transfer',
+  )
+}
+
+/** The two ends of a transfer, for a guard that runs before the service does. */
+export async function transferEnds(restaurantId: string, transferId: string) {
+  const transfer = await prisma.stockTransfer.findFirst({
+    where: { id: transferId, restaurantId },
+    select: { id: true, fromBranchId: true, toBranchId: true },
+  })
+  if (!transfer) throw new NotFoundError('Transfer')
+  return transfer
 }

@@ -478,6 +478,7 @@ model Restaurant {
   reviews          Review[]
   feedback         Feedback[]
   shiftNotes       ShiftNote[]
+  instructions     BranchInstruction[]
   suppliers        Supplier[]
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
@@ -636,6 +637,8 @@ model User {
   /// reprinted — the same secret is already in that person's pocket.
   signInCode          String?
   branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  instructionsGiven   BranchInstruction[] @relation("InstructionAuthor")
+  instructionsDone    BranchInstruction[] @relation("InstructionCompleter")
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
   cashMovements       CashMovement[]      @relation("CashMovementBy")
@@ -1550,6 +1553,61 @@ model Feedback {
 }
 
 /// Digital shift handover — notes one manager leaves for the next shift.
+/// An owner's standing instruction for one location, and the manager's answer.
+///
+/// Added because there was no way for an owner to tell a branch anything. They
+/// could see the branch's numbers and move its stock, and then had to pick up
+/// the phone — so the app held the facts and WhatsApp held the decisions, and
+/// nobody could tell later whether a thing had actually been done.
+///
+/// Deliberately not a message: a message is read and forgotten. This has a
+/// state, an optional due date, and a name against the completion, so "did
+/// Kandy ever do the stock count I asked for" has an answer on a screen.
+model BranchInstruction {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// The location it is for. Null means every location — a group-wide notice.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  title String
+  body  String?
+
+  priority InstructionPriority @default(NORMAL)
+  status   InstructionStatus   @default(OPEN)
+  dueAt    DateTime?
+
+  createdById String?
+  createdBy   User?   @relation("InstructionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByName String
+
+  doneById   String?
+  doneBy     User?     @relation("InstructionCompleter", fields: [doneById], references: [id], onDelete: SetNull)
+  doneByName String?
+  doneAt     DateTime?
+  doneNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, status, createdAt])
+  @@index([restaurantId, branchId, status])
+  @@map("branch_instructions")
+}
+
+enum InstructionPriority {
+  NORMAL
+  URGENT
+}
+
+enum InstructionStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
 model ShiftNote {
   id           String     @id @default(cuid())
   restaurantId String
@@ -1685,6 +1743,7 @@ model Branch {
   productionOrders ProductionOrder[]
   approvalRequests ApprovalRequest[]
   coupons          Coupon[]
+  instructions     BranchInstruction[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])

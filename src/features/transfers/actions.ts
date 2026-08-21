@@ -6,9 +6,11 @@ import { z } from 'zod'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { requirePermission } from '@/server/auth/guard'
+import { notifyLocation } from '@/features/instructions/service'
 import {
-  approveTransfer, closeTransfer, dispatchTransfer, receiveTransfer, requestTransfer,
+  approveTransfer, assertTransferSide, closeTransfer, dispatchTransfer, receiveTransfer,
+  requestTransfer, transferEnds,
 } from './service'
 
 const REASONS = ['DAMAGED_IN_TRANSIT', 'MISSING', 'REJECTED_ON_ARRIVAL', 'OTHER'] as const
@@ -45,7 +47,13 @@ export async function requestTransferAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_REQUEST)
-      await assertBranchAccess(user, data.fromBranchId)
+      /*
+       * Either end. This used to demand access to the SOURCE, which meant a
+       * branch manager could not ask the warehouse for anything — the one thing
+       * the screen exists for. Asking to pull stock in is as legitimate as
+       * offering to push it out.
+       */
+      assertTransferSide(user, { fromBranchId: data.fromBranchId, toBranchId: data.toBranchId }, 'EITHER')
       const transfer = await requestTransfer({
         restaurantId: user.restaurantId,
         fromBranchId: data.fromBranchId,
@@ -61,6 +69,19 @@ export async function requestTransferAction(
         action: AUDIT_ACTIONS.TRANSFER_REQUESTED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number, from: data.fromBranchId, to: data.toBranchId },
       })
+      /*
+       * Tell the other end. A request that only appears on a list nobody has
+       * opened is not a request — the warehouse has no reason to look, so the
+       * van never leaves and the branch concludes the feature is broken.
+       */
+      await notifyLocation({
+        restaurantId: user.restaurantId,
+        branchId: data.fromBranchId,
+        title: `Stock requested: ${transfer.number}`,
+        body: `${user.name} has asked for ${data.lines.length} item${data.lines.length === 1 ? '' : 's'}.`,
+        data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
+      })
+
       touch(transfer.id)
       return { id: transfer.id, number: transfer.number }
     },
@@ -72,11 +93,21 @@ export async function requestTransferAction(
 export async function approveTransferAction(transferId: string): Promise<ActionResult<{ id: string }>> {
   return runSafe(async () => {
     const user = await requirePermission(PERMISSIONS.TRANSFER_APPROVE)
+    // Approval reserves stock at the sending location, so that is whose call it is.
+    const ends = await transferEnds(user.restaurantId, transferId)
+    assertTransferSide(user, ends, 'SOURCE')
     const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
     await audit({
       restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.TRANSFER_APPROVED, entity: 'StockTransfer', entityId: transfer.id,
       after: { number: transfer.number },
+    })
+    await notifyLocation({
+      restaurantId: user.restaurantId,
+      branchId: ends.toBranchId,
+      title: `Transfer approved: ${transfer.number}`,
+      body: `${user.name} approved it. The stock is reserved and will be sent.`,
+      data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
     })
     touch(transferId)
     return { id: transfer.id }
@@ -95,6 +126,9 @@ export async function dispatchTransferAction(input: unknown): Promise<ActionResu
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_DISPATCH)
+      // The stock leaves that building; nobody else gets to send it.
+      const ends = await transferEnds(user.restaurantId, data.transferId)
+      assertTransferSide(user, ends, 'SOURCE')
       const transfer = await dispatchTransfer({
         restaurantId: user.restaurantId,
         transferId: data.transferId,
@@ -106,6 +140,14 @@ export async function dispatchTransferAction(input: unknown): Promise<ActionResu
         action: AUDIT_ACTIONS.TRANSFER_DISPATCHED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number },
       })
+      await notifyLocation({
+        restaurantId: user.restaurantId,
+        branchId: ends.toBranchId,
+        title: `On its way: ${transfer.number}`,
+        body: `${user.name} dispatched it. Receive it when the van arrives — nothing is on your shelf until you do.`,
+        data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
+      })
+
       touch(data.transferId)
       return { id: transfer.id }
     },
@@ -129,6 +171,9 @@ export async function receiveTransferAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_RECEIVE)
+      // Only the people unloading the van can say what came off it.
+      const ends = await transferEnds(user.restaurantId, data.transferId)
+      assertTransferSide(user, ends, 'DESTINATION')
       const result = await receiveTransfer({
         restaurantId: user.restaurantId,
         transferId: data.transferId,
@@ -145,6 +190,26 @@ export async function receiveTransferAction(
         action: AUDIT_ACTIONS.TRANSFER_RECEIVED, entity: 'StockTransfer', entityId: result.transfer.id,
         after: { number: result.transfer.number, variances: result.variances },
       })
+      /*
+       * The sending location hears about it either way, and hears about a
+       * shortfall loudly. Stock that left one building and did not arrive at
+       * the other is the single most expensive thing this module can detect,
+       * and it is worthless if only the person unloading the van knows.
+       */
+      await notifyLocation({
+        restaurantId: user.restaurantId,
+        branchId: ends.fromBranchId,
+        title:
+          result.variances > 0
+            ? `Short on arrival: ${result.transfer.number}`
+            : `Received in full: ${result.transfer.number}`,
+        body:
+          result.variances > 0
+            ? `${user.name} received it with ${result.variances} line${result.variances === 1 ? '' : 's'} not matching what was sent.`
+            : `${user.name} received everything that was sent.`,
+        data: { transferId: result.transfer.id, href: `/dashboard/transfers/${result.transfer.id}` },
+      })
+
       touch(data.transferId)
       return { id: result.transfer.id, variances: result.variances }
     },
@@ -162,6 +227,10 @@ export async function closeTransferAction(input: unknown): Promise<ActionResult<
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_APPROVE)
+      // Either side may call it off — the sender changed their mind, or the
+      // receiver no longer needs it.
+      const ends = await transferEnds(user.restaurantId, data.transferId)
+      assertTransferSide(user, ends, 'EITHER')
       const transfer = await closeTransfer({
         restaurantId: user.restaurantId,
         transferId: data.transferId,
@@ -174,6 +243,15 @@ export async function closeTransferAction(input: unknown): Promise<ActionResult<
         action: AUDIT_ACTIONS.TRANSFER_CLOSED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number, status: data.status },
       })
+      // Whichever end did not close it needs to know it is not coming.
+      await notifyLocation({
+        restaurantId: user.restaurantId,
+        branchId: ends.toBranchId,
+        title: `${data.status === 'REJECTED' ? 'Rejected' : 'Cancelled'}: ${transfer.number}`,
+        body: `${user.name} closed it${data.reason ? ` — ${data.reason}` : ''}.`,
+        data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
+      })
+
       touch(data.transferId)
       return { id: transfer.id }
     },

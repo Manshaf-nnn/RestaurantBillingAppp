@@ -4,6 +4,7 @@ import { DashboardShell } from '@/features/dashboard/components/dashboard-shell'
 import { appUrl } from '@/lib/env'
 import { prisma } from '@/server/db/prisma'
 import { listSwitchableLocations } from '@/features/transfers/queries'
+import { countOpenInstructions } from '@/features/instructions/service'
 import { visibleBranchIds } from '@/lib/rbac'
 import { requirePageUser } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -41,7 +42,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     ? Math.max(0, Math.ceil((tenant.trialEndsAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
     : null
 
-  const [restaurant, notifications] = await Promise.all([
+  const [restaurant, notifications, openTasks] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.notification.findMany({
       where: {
@@ -52,6 +53,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       take: 30,
       select: { id: true, title: true, body: true, createdAt: true, readAt: true },
     }),
+    countOpenInstructions({ restaurantId: user.restaurantId, user }),
   ])
 
   // The switcher only offers what this user is allowed to see, so a branch
@@ -68,6 +70,7 @@ locations={locations}
             restaurantName={restaurant.name}
       orderUrl={`${appUrl()}/order?r=${restaurant.slug}`}
       trialDaysLeft={trialDaysLeft}
+      openTasks={openTasks}
       user={{
         id: user.id,
         name: user.name,

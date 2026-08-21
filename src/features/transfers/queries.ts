@@ -255,6 +255,8 @@ export async function getTransferDetail(params: {
     id: t.id,
     number: t.number,
     status: t.status as string,
+    fromBranchId: t.fromBranchId,
+    toBranchId: t.toBranchId,
     fromName: t.fromBranch.name,
     toName: t.toBranch.name,
     notes: t.notes,
