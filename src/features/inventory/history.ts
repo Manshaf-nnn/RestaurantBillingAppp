@@ -96,6 +96,16 @@ export async function getItemHistory(params: {
   restaurantId: string
   itemId: string
   limit?: number
+  /*
+   * Which locations this reader may see. Null is unrestricted.
+   *
+   * An item is defined once for the whole restaurant, so the RECORD is not
+   * branch-scoped and the page is rightly open to anyone with INVENTORY_VIEW.
+   * What it holds, and what has happened to it, is per branch — and this page
+   * was showing every branch's holdings and every branch's movements to a
+   * site-scoped viewer.
+   */
+  branchIds?: string[] | null
 }): Promise<ItemHistory> {
   const item = await prisma.inventoryItem.findFirst({
     where: { id: params.itemId, restaurantId: params.restaurantId },
@@ -115,8 +125,10 @@ export async function getItemHistory(params: {
   })
   if (!item) throw new NotFoundError('Inventory item')
 
+  const branchWhere = params.branchIds ? { branchId: { in: params.branchIds } } : {}
+
   const movements = await prisma.stockMovement.findMany({
-    where: { itemId: item.id, restaurantId: params.restaurantId },
+    where: { itemId: item.id, restaurantId: params.restaurantId, ...branchWhere },
     orderBy: { createdAt: 'desc' },
     take: params.limit ?? 200,
     include: {
@@ -129,11 +141,11 @@ export async function getItemHistory(params: {
 
   const [sum, locationStock, receiptLines] = await Promise.all([
     prisma.stockMovement.aggregate({
-      where: { itemId: item.id, restaurantId: params.restaurantId },
+      where: { itemId: item.id, restaurantId: params.restaurantId, ...branchWhere },
       _sum: { quantity: true },
     }),
     prisma.inventoryStock.findMany({
-      where: { itemId: item.id, restaurantId: params.restaurantId },
+      where: { itemId: item.id, restaurantId: params.restaurantId, ...branchWhere },
       include: { branch: { select: { id: true, name: true } } },
     }),
     /*
@@ -142,7 +154,22 @@ export async function getItemHistory(params: {
      * money and the stock followed.
      */
     prisma.goodsReceiptLine.findMany({
-      where: { itemId: item.id, receipt: { restaurantId: params.restaurantId } },
+      where: {
+        itemId: item.id,
+        receipt: {
+          restaurantId: params.restaurantId,
+          // A delivery records where it landed; older ones fall back to the
+          // order's branch, so both have to be considered.
+          ...(params.branchIds
+            ? {
+                OR: [
+                  { branchId: { in: params.branchIds } },
+                  { branchId: null, purchase: { branchId: { in: params.branchIds } } },
+                ],
+              }
+            : {}),
+        },
+      },
       orderBy: { createdAt: 'desc' },
       take: 20,
       include: {

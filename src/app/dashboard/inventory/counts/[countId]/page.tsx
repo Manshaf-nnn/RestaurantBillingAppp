@@ -1,11 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { CountSheet } from '@/features/inventory/components/count-sheet'
 import { getStockCountDetail } from '@/features/inventory/count-queries'
-import { PERMISSIONS, can} from '@/lib/rbac'
+import { PERMISSIONS, can, canAccessBranch } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -28,6 +29,10 @@ export default async function StockCountPage({
     stockCountId: countId,
     currency: restaurant.currency,
   })
+
+  // A count taken at another branch is not this person's to read or approve —
+  // approving one posts variance adjustments into that branch's ledger.
+  if (detail.branchId && !canAccessBranch(user, detail.branchId)) notFound()
 
   return (
     <>

@@ -1,12 +1,20 @@
 'use server'
 
+import type { UserRole } from '@prisma/client'
 import { revalidatePath } from 'next/cache'
 import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { requireBranch } from '@/features/branches/service'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
-import { assignableRoles, canManageLocation, PERMISSIONS } from '@/lib/rbac'
+import {
+  assignableRoles,
+  canManageLocation,
+  PERMISSIONS,
+  ROLE_LABELS,
+  seesAllLocations,
+  visibleBranchIds,
+} from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission, type TenantUser } from '@/server/auth/guard'
 import { hashPassword } from '@/server/auth/password'
@@ -41,11 +49,57 @@ async function homeBranchFor(
   admin: TenantUser,
   branchId: string | null | undefined,
 ): Promise<string | null> {
-  if (!branchId) return null
+  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+
+  if (!branchId) {
+    /*
+     * "Every location" is only somebody's to grant if they have every location.
+     *
+     * This used to `return null` unconditionally, and that was an escalation
+     * rather than a convenience: a manager confined to Kandy could create an
+     * account with no branch, which sees the whole group. Combined with the
+     * role rule below it meant a Kandy manager could mint an accountant who
+     * reads every branch's revenue, payments and audit log — more reach than
+     * the person who created them.
+     */
+    if (reach === null) return null
+    throw new ForbiddenError(
+      'You can only add people to your own location — leave the location blank only if you oversee all of them',
+    )
+  }
+
   await assertBranchAccess(admin, branchId)
   const branch = await requireBranch(admin.restaurantId, branchId)
   return branch.id
 }
+
+/**
+ * Nobody may create an account that sees more than they do.
+ *
+ * The rank rule (`assignableRoles`) stops a manager minting another manager,
+ * but rank is not reach: `ACCOUNTANT`, `INVENTORY_MANAGER` and
+ * `PURCHASING_MANAGER` are all assignable by a manager AND are all
+ * cross-location roles, so a site manager could grant sight of every branch
+ * while being confined to one themselves.
+ */
+function assertScopeAllowed(admin: TenantUser, role: UserRole) {
+  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+  if (reach === null) return
+
+  // Would this role see every location regardless of the branch we pin them to?
+  if (seesAllLocations(role, null) && !SITE_SCOPED_WHEN_BRANCH.includes(role)) {
+    throw new ForbiddenError(
+      `You cannot create a ${ROLE_LABELS[role].toLowerCase()} — that role sees every location and you do not`,
+    )
+  }
+}
+
+/**
+ * Roles that see everything only while unassigned, and are confined the moment
+ * they are given a branch. Safe for a site manager to create, because the
+ * branch check above guarantees they are given one.
+ */
+const SITE_SCOPED_WHEN_BRANCH: UserRole[] = ['MANAGER']
 
 export async function inviteStaff(
   input: unknown,
@@ -60,6 +114,8 @@ export async function inviteStaff(
       if (!assignableRoles(admin.role).includes(data.role)) {
         throw new ForbiddenError('You cannot assign that role')
       }
+      // Rank is not reach — see the note on assertScopeAllowed.
+      assertScopeAllowed(admin, data.role)
 
       const existing = await prisma.user.findUnique({ where: { email: data.email } })
       if (existing) throw new ConflictError('A user with that email already exists')
@@ -137,6 +193,7 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
       if (!assignableRoles(admin.role).includes(data.role)) {
         throw new ForbiddenError('You cannot assign that role')
       }
+      assertScopeAllowed(admin, data.role)
 
       const branchId = await homeBranchFor(admin, data.branchId)
 

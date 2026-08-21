@@ -1,7 +1,7 @@
 import 'server-only'
 import { redirect } from 'next/navigation'
 
-import { ForbiddenError, UnauthorizedError } from '@/lib/errors'
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '@/lib/errors'
 import { can, canAny, canAccessBranch, type Permission } from '@/lib/rbac'
 import { getAdminUser, getCurrentUser, type AuthUser } from './session'
 
@@ -117,4 +117,34 @@ export async function requirePageAnyPermission(
   if (!user.restaurantId) redirect('/onboarding')
   if (!canAny(user, permissions)) redirect('/forbidden')
   return user as TenantUser
+}
+
+/**
+ * Refuse a record that belongs to a branch this person cannot see.
+ *
+ * The distinction from `assertBranchAccess` is the whole point: that one checks
+ * a branch id *the caller sent*, which protects the destination of a write and
+ * nothing else. This checks the branch of a record *already in the database*,
+ * which is what stops a Kandy manager approving a Colombo purchase order by
+ * pasting its id.
+ *
+ * The audit that prompted this found the payload-only pattern in four
+ * purchasing actions: omit the optional `branchId` and `assertBranchAccess`
+ * returns immediately on its `if (!branchId) return`, so the guard passed while
+ * checking nothing. `production/actions.ts` already had the right shape — read
+ * the record's own branch, then assert — and this makes it reusable.
+ *
+ * A null branch on the record means "not branch-scoped" and is allowed: a
+ * supplier and a customer belong to the restaurant, not to a site.
+ */
+export async function assertRecordBranch(
+  user: TenantUser,
+  record: { branchId: string | null } | null,
+  what = 'record',
+): Promise<void> {
+  if (!record) throw new NotFoundError(what)
+  if (!record.branchId) return
+  if (!canAccessBranch({ role: user.role, branchId: user.branchId }, record.branchId)) {
+    throw new ForbiddenError(`That ${what} belongs to another location`)
+  }
 }

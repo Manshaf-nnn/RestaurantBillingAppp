@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
@@ -8,7 +9,7 @@ import { getPurchaseDetail } from '@/features/purchasing/queries'
 import { listSwitchableLocations } from '@/features/transfers/queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, can, canAccessBranch, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -28,6 +29,10 @@ export default async function PurchaseOrderPage({
     purchaseId,
     currency: restaurant.currency,
   })
+
+  // Another branch's order is not this person's to read — the sibling edit
+  // page already refused it and this one did not.
+  if (detail.branchId && !canAccessBranch(user, detail.branchId)) notFound()
 
   /*
    * Where a delivery may be diverted to. Only what this person may see, so a

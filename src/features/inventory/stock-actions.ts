@@ -7,7 +7,8 @@ import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import {
   adjustStock, receiveStock, setOpeningBalance, transferStock,
@@ -166,6 +167,11 @@ export async function openStockCountAction(
 export async function recordCountLinesAction(input: unknown): Promise<ActionResult<{ recorded: number }>> {
   return runAction(countLinesSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
+    await assertRecordBranch(
+      user,
+      await countBranch(user.restaurantId, data.stockCountId),
+      'stock count',
+    )
     const result = await recordCountLines({
       restaurantId: user.restaurantId,
       stockCountId: data.stockCountId,
@@ -178,8 +184,23 @@ export async function recordCountLinesAction(input: unknown): Promise<ActionResu
   }, 'Count saved. Nothing has moved yet.')
 }
 
+/**
+ * The branch a stock count belongs to.
+ *
+ * Approving a count posts variance adjustments straight into that branch's
+ * ledger — it is one of the few actions in this app that MOVES stock on
+ * somebody else's shelves — and it took an id and checked nothing.
+ */
+async function countBranch(restaurantId: string, stockCountId: string) {
+  return prisma.stockCount.findFirst({
+    where: { id: stockCountId, restaurantId },
+    select: { branchId: true },
+  })
+}
+
 export async function submitStockCountAction(stockCountId: string): Promise<ActionResult<{ id: string }>> {
   const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
+  await assertRecordBranch(user, await countBranch(user.restaurantId, stockCountId), 'stock count')
   const count = await submitStockCount(user.restaurantId, stockCountId)
   revalidatePath(`/dashboard/inventory/counts/${stockCountId}`)
   return { ok: true, data: { id: count.id } }
@@ -195,6 +216,11 @@ export async function approveStockCountAction(
 ): Promise<ActionResult<{ adjusted: number; unchanged: number }>> {
   return runAction(approveCountSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT_APPROVE)
+    await assertRecordBranch(
+      user,
+      await countBranch(user.restaurantId, data.stockCountId),
+      'stock count',
+    )
     const result = await approveStockCount({
       restaurantId: user.restaurantId, stockCountId: data.stockCountId,
       userId: user.id, notes: data.notes || null,

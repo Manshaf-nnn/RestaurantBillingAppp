@@ -83,12 +83,18 @@ export function StaffManager({
   locations,
   canManage,
   currentUserId,
+  canAssignAllLocations = true,
 }: {
   staff: StaffMember[]
   assignableRoles: UserRole[]
   locations: StaffLocation[]
   canManage: boolean
   currentUserId: string
+  /**
+   * Whether "All locations" may be chosen. False for a site manager — granting
+   * sight of every branch is not theirs to grant, and the server refuses it.
+   */
+  canAssignAllLocations?: boolean
 }) {
   const [staff, setStaff] = React.useState(initial)
   /*
@@ -258,12 +264,14 @@ export function StaffManager({
         onOpenChange={setInviteOpen}
         roles={assignableRoles}
         locations={locations}
+        canAssignAllLocations={canAssignAllLocations}
       />
       <EditDialog
         member={editing}
         roles={assignableRoles}
         locations={locations}
         onClose={() => setEditing(null)}
+        canAssignAllLocations={canAssignAllLocations}
       />
       <PasswordDialog member={passwordFor} onClose={() => setPasswordFor(null)} />
 
@@ -292,22 +300,36 @@ function WorksAtField({
   value,
   onChange,
   locations,
+  canAssignAllLocations = true,
 }: {
   value: string
   onChange: (value: string) => void
   locations: StaffLocation[]
+  canAssignAllLocations?: boolean
 }) {
   return (
     <Field
       label="Works at"
-      hint="All locations means they see every site. Pick one to confine them to it."
+      hint={
+        canAssignAllLocations
+          ? 'All locations means they see every site. Pick one to confine them to it.'
+          : 'They will see this location and no other.'
+      }
     >
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL_LOCATIONS}>All locations</SelectItem>
+          {/*
+            Only offered to somebody who has every location themselves. Giving
+            away sight of the whole chain is not a site manager's to give, and
+            the server refuses it — this stops the dropdown promising something
+            that would fail.
+          */}
+          {canAssignAllLocations ? (
+            <SelectItem value={ALL_LOCATIONS}>All locations</SelectItem>
+          ) : null}
           {locations.map((location) => (
             <SelectItem key={location.id} value={location.id}>
               {location.name}
@@ -325,14 +347,20 @@ function InviteDialog({
   onOpenChange,
   roles,
   locations,
+  canAssignAllLocations = true,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   roles: UserRole[]
   locations: StaffLocation[]
+  canAssignAllLocations?: boolean
 }) {
   const [form, setForm] = React.useState({
-    name: '', email: '', phone: '', role: roles[0] ?? 'WAITER', branchId: ALL_LOCATIONS,
+    name: '', email: '', phone: '',
+    role: roles[0] ?? 'WAITER',
+    // A site manager cannot grant "all locations", so their new hire starts at
+    // the only location they have — never at a value the server will refuse.
+    branchId: canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -426,6 +454,7 @@ function InviteDialog({
               value={form.branchId}
               onChange={(branchId) => setForm({ ...form, branchId })}
               locations={locations}
+              canAssignAllLocations={canAssignAllLocations}
             />
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -447,11 +476,13 @@ function EditDialog({
   roles,
   locations,
   onClose,
+  canAssignAllLocations = true,
 }: {
   member: StaffMember | null
   roles: UserRole[]
   locations: StaffLocation[]
   onClose: () => void
+  canAssignAllLocations?: boolean
 }) {
   const [form, setForm] = React.useState({
     name: '', phone: '', role: 'WAITER' as UserRole, isActive: true, branchId: ALL_LOCATIONS,
@@ -525,6 +556,7 @@ function EditDialog({
           value={form.branchId}
           onChange={(branchId) => setForm({ ...form, branchId })}
           locations={locations}
+          canAssignAllLocations={canAssignAllLocations}
         />
         <label className="flex items-center gap-2 text-sm">
           <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />

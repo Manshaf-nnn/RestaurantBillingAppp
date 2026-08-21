@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +13,7 @@ import { AddStockForm } from '@/features/branches/components/add-stock-form'
 import { ManagerCredentials } from '@/features/branches/components/manager-credentials'
 import { LocalDateTime } from '@/components/local-time'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, ROLE_LABELS, can, canManageLocation } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, can, canAccessBranch, canManageLocation } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -57,6 +58,14 @@ export default async function LocationPage({
         })
       : [],
   ])
+  /*
+   * The worst of the gaps: BRANCH_VIEW is held by cashiers and warehouse
+   * staff, and this page shows another site's stock, value, team roster, sales
+   * — and, to anyone with BRANCH_MANAGE, its manager's sign-in credentials.
+   * Typing another branch's id was enough.
+   */
+  if (!canAccessBranch(user, branchId)) notFound()
+
   const { branch, stock, team, incoming, receipts, sales } = detail
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 
 import { OrderDetail } from '@/features/orders/components/order-detail'
 import { getOrderForStaff, readOptions } from '@/features/orders/queries'
-import { can, PERMISSIONS } from '@/lib/rbac'
+import { can, canAccessBranch, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -25,6 +25,15 @@ export default async function OrderDetailPage({
   ])
 
   if (!order) notFound()
+
+  /*
+   * Another branch's order is not this person's to read.
+   *
+   * `Order.branchId` has been on the record the whole time and this page never
+   * looked at it — so a Kandy manager pasting a Colombo order id got the
+   * customer, the totals and the payments.
+   */
+  if (order.branchId && !canAccessBranch(user, order.branchId)) notFound()
 
   return (
     <OrderDetail

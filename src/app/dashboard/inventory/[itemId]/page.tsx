@@ -9,7 +9,7 @@ import { getItemHistory } from '@/features/inventory/history'
 import { levelFor } from '@/features/inventory/alerts'
 import { UNIT_LABELS, formatQuantity } from '@/features/inventory/units'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -34,9 +34,16 @@ export default async function ItemHistoryPage({
     `/dashboard/inventory/${itemId}`,
   )
   const restaurant = await requireRestaurant(user.restaurantId)
+  /*
+   * The ITEM is restaurant-wide — one definition, one SKU — so this page is
+   * open to anyone who may see stock. What it HOLDS is per branch, and this
+   * page was showing every location's holdings and movements to somebody
+   * confined to one of them.
+   */
   const { item, rows, ledgerTotal, stockByLocation, purchases } = await getItemHistory({
     restaurantId: user.restaurantId,
     itemId,
+    branchIds: visibleBranchIds({ role: user.role, branchId: user.branchId }),
   })
 
   const money = (minor: number) => formatMoney(minor, restaurant.currency)

@@ -8,7 +8,7 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission, requireTenantUser } from '@/server/auth/guard'
+import { assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
 import { resolvePublicTenant } from '@/server/db/tenant'
@@ -423,9 +423,25 @@ export async function createServiceRequest(
 
 // ── staff surface ────────────────────────────────────────────────────────────
 
+/**
+ * The branch an order belongs to.
+ *
+ * Read from the record before acting on it. Every one of these actions was
+ * `{ id, restaurantId }` only, so a Kandy cashier could advance, cancel or
+ * discount a Colombo order by pasting its id — and `Order.branchId` was sitting
+ * right there, never consulted.
+ */
+async function orderBranch(restaurantId: string, orderId: string) {
+  return prisma.order.findFirst({
+    where: { id: orderId, restaurantId },
+    select: { branchId: true },
+  })
+}
+
 export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ id: string; status: string }>> {
   return runAction(updateOrderStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
+    await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
 
     const order = await updateOrderStatusService({
       restaurantId: user.restaurantId,
@@ -459,6 +475,7 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
 export async function updateItemStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(updateItemStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
+    await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
 
     const item = await prisma.orderItem.findFirst({
       where: { id: data.itemId, order: { id: data.orderId, restaurantId: user.restaurantId } },
@@ -497,6 +514,8 @@ export async function cancelOrder(input: unknown): Promise<ActionResult<{ id: st
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.ORDER_CANCEL)
+      // Cancelling returns stock to a branch's shelves, so it must be theirs.
+      await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
 
       const order = await cancelOrderService({
         restaurantId: user.restaurantId,
@@ -589,6 +608,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.DISCOUNT_APPLY)
+      await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
 
       const order = await prisma.order.findFirst({
         where: { id: data.orderId, restaurantId: user.restaurantId },

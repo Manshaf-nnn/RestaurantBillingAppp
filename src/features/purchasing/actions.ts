@@ -8,7 +8,8 @@ import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import {
   createPurchaseOrder, setPurchaseStatus, updatePurchaseOrder, upsertSupplierItem,
@@ -94,6 +95,21 @@ const statusSchema = z.object({
  * money is a different act from proposing that it be spent, and a cashier holds
  * neither permission.
  */
+/**
+ * The branch a purchase order belongs to.
+ *
+ * Read from the record before acting, never taken from the payload — omitting
+ * an optional `branchId` used to slip straight past `assertBranchAccess`'s
+ * `if (!branchId) return`, so the guard ran and checked nothing. Mirrors
+ * `houseOf()` in the production actions, which already had this right.
+ */
+async function purchaseBranch(restaurantId: string, purchaseId: string) {
+  return prisma.purchase.findFirst({
+    where: { id: purchaseId, restaurantId },
+    select: { branchId: true },
+  })
+}
+
 export async function setPurchaseStatusAction(
   input: unknown,
 ): Promise<ActionResult<{ status: string }>> {
@@ -101,6 +117,12 @@ export async function setPurchaseStatusAction(
     const needsApproval = data.status === 'APPROVED' || data.status === 'ORDERED'
     const user = await requirePermission(
       needsApproval ? PERMISSIONS.PURCHASE_APPROVE : PERMISSIONS.PURCHASE_CREATE,
+    )
+    // Approving or cancelling another branch's spend was possible until now.
+    await assertRecordBranch(
+      user,
+      await purchaseBranch(user.restaurantId, data.purchaseId),
+      'purchase order',
     )
 
     const po = await setPurchaseStatus({
@@ -151,6 +173,13 @@ export async function updatePurchaseOrderAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PURCHASE_CREATE)
+      // Two checks, for two different things: the order you are editing, and
+      // the branch you are moving it to.
+      await assertRecordBranch(
+        user,
+        await purchaseBranch(user.restaurantId, data.purchaseId),
+        'purchase order',
+      )
       await assertBranchAccess(user, data.branchId || null)
       const f = await factor(user.restaurantId)
 
@@ -215,7 +244,12 @@ export async function receiveGoodsAction(
 ): Promise<ActionResult<{ number: string; status: string; posted: number }>> {
   return runAction(receiveSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.PURCHASE_RECEIVE)
-    // You cannot receive goods into a location you have no business in.
+    // The order being received against, and the place it is going.
+    await assertRecordBranch(
+      user,
+      await purchaseBranch(user.restaurantId, data.purchaseId),
+      'purchase order',
+    )
     await assertBranchAccess(user, data.branchId || null)
     const f = await factor(user.restaurantId)
 

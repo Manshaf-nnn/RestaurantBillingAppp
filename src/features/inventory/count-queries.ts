@@ -44,6 +44,8 @@ export interface StockCountDetail {
   countedAt: string
   approvedByName: string | null
   approvedAt: string | null
+  /** Needed so the page can refuse a count belonging to another branch. */
+  branchId: string | null
   branchName: string | null
   locationName: string | null
   currency: string
@@ -148,6 +150,7 @@ export async function getStockCountDetail(params: {
     countedAt: count.countedAt.toISOString(),
     approvedByName: count.approvedBy?.name ?? null,
     approvedAt: count.approvedAt?.toISOString() ?? null,
+    branchId: count.branchId,
     branchName: count.branch?.name ?? null,
     locationName: count.location?.name ?? null,
     currency: params.currency,

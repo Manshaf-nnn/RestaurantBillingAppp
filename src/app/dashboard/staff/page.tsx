@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 
 import { listBranches } from '@/features/branches/service'
 import { StaffManager } from '@/features/staff/components/staff-manager'
-import { assignableRoles, can, PERMISSIONS } from '@/lib/rbac'
+import { assignableRoles, can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
@@ -13,9 +13,25 @@ export const metadata: Metadata = { title: 'Staff' }
 export default async function StaffPage() {
   const user = await requirePagePermission(PERMISSIONS.STAFF_VIEW, '/dashboard/staff')
 
+  /*
+   * A branch manager sees and manages their own team, and nobody else's.
+   *
+   * This list used to be restaurant-wide: a Kandy manager could read every
+   * employee in the chain with their email, phone and last sign-in. Null means
+   * unrestricted — an owner or a group manager — and `[]` means confined with
+   * no branch, which correctly shows nothing rather than everything.
+   */
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+
   const [staff, locations] = await Promise.all([
     prisma.user.findMany({
-      where: { restaurantId: user.restaurantId, deletedAt: null },
+      where: {
+        restaurantId: user.restaurantId,
+        deletedAt: null,
+        // Someone who sees every site is not on any one team, so they are only
+        // listed for people who can see every site.
+        ...(reach ? { branchId: { in: reach } } : {}),
+      },
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
       select: {
         id: true,
@@ -38,12 +54,26 @@ export default async function StaffPage() {
     listBranches(user.restaurantId),
   ])
 
+  /*
+   * And they can only assign somebody to a location they run. The server
+   * refuses anything else anyway — `homeBranchFor` calls `assertBranchAccess`
+   * — but offering the whole chain in a dropdown disclosed every location's
+   * name and guaranteed an error for anyone who picked one.
+   */
+  const pickable = locations.filter((l) => reach === null || reach.includes(l.id))
+
   return (
     <StaffManager
       canManage={can(user, PERMISSIONS.STAFF_MANAGE)}
       currentUserId={user.id}
       assignableRoles={assignableRoles(user.role)}
-      locations={locations.map((l) => ({ id: l.id, name: l.name, isActive: l.isActive }))}
+      locations={pickable.map((l) => ({ id: l.id, name: l.name, isActive: l.isActive }))}
+      /*
+       * "All locations" is only offered to somebody who has all of them.
+       * `homeBranchFor` now refuses a blank branch from a confined creator —
+       * that was the escalation route to an unscoped accountant account.
+       */
+      canAssignAllLocations={reach === null}
       staff={staff.map((member) => ({
         id: member.id,
         name: member.name,
