@@ -123,6 +123,7 @@ export const AUDIT_ACTIONS = {
   PO_ORDERED: 'purchase.ordered',
   PO_CANCELLED: 'purchase.cancelled',
   PO_RECEIVED: 'purchase.received',
+  PO_UPDATED: 'purchase.updated',
   PO_RETURNED: 'purchase.returned',
   SUPPLIER_UPDATED: 'supplier.updated',
 

@@ -12,6 +12,7 @@ import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -38,10 +39,12 @@ export default async function PurchasesPage({
 
   // With a location chosen: orders being delivered there, and what that
   // location — not the group — is running short of.
-  const branchId = scopeToOne(await selectedBranch(user, await searchParams))
+  const params = await searchParams
+  const search = typeof params.search === 'string' ? params.search : ''
+  const branchId = scopeToOne(await selectedBranch(user, params))
 
   const [orders, suggestions] = await Promise.all([
-    listPurchaseOrders({ restaurantId: user.restaurantId, branchId }),
+    listPurchaseOrders({ restaurantId: user.restaurantId, branchId, search }),
     getReorderSuggestions({ restaurantId: user.restaurantId, branchId }),
   ])
   const money = (m: number) => formatMoney(m, restaurant.currency)
@@ -52,11 +55,23 @@ export default async function PurchasesPage({
         title="Purchasing"
         description="Orders to suppliers, and what still needs buying. Stock only moves when goods arrive."
         actions={
-          <Button asChild>
-            <Link href="/dashboard/purchases/new">New order</Link>
-          </Button>
+          <>
+            <Button variant="outline" asChild>
+              <Link href="/dashboard/purchases/receive">Receive goods</Link>
+            </Button>
+            <Button asChild>
+              <Link href="/dashboard/purchases/new">New order</Link>
+            </Button>
+          </>
         }
       />
+
+      <div className="mb-4 max-w-sm">
+        <SearchBox
+          placeholder="Order number, supplier, item, GRN or invoice…"
+          defaultValue={search}
+        />
+      </div>
 
       {suggestions.length > 0 && (
         <SectionCard
@@ -119,8 +134,12 @@ export default async function PurchasesPage({
       <SectionCard title="Purchase orders">
         {orders.length === 0 ? (
           <EmptyState
-            title="No purchase orders yet"
-            description="Orders you place with suppliers appear here, with what has arrived against each."
+            title={search ? `Nothing matches “${search}”` : 'No purchase orders yet'}
+            description={
+              search
+                ? 'Try the order number, the supplier, an item on the order, or a GRN or invoice number.'
+                : 'Orders you place with suppliers appear here, with what has arrived against each.'
+            }
           />
         ) : (
           <ul className="divide-y divide-border">

@@ -10,7 +10,9 @@ import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
-import { createPurchaseOrder, setPurchaseStatus, upsertSupplierItem } from './service'
+import {
+  createPurchaseOrder, setPurchaseStatus, updatePurchaseOrder, upsertSupplierItem,
+} from './service'
 import { createPurchaseReturn, receiveGoods } from './receiving'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
@@ -24,6 +26,8 @@ async function factor(restaurantId: string) {
 const createSchema = z.object({
   supplierId: z.string().min(1).optional().or(z.literal('')),
   branchId: z.string().min(1).optional().or(z.literal('')),
+  /** The shelf within that location. The column existed and nothing ever set it. */
+  locationId: z.string().min(1).optional().or(z.literal('')),
   expectedAt: z.string().optional().or(z.literal('')),
   notes: z.string().trim().max(500).optional().or(z.literal('')),
   discount: z.coerce.number().min(0).default(0),
@@ -52,6 +56,7 @@ export async function createPurchaseOrderAction(
         requestedBranchId: data.branchId,
         userBranchId: user.branchId,
       }),
+      locationId: data.locationId || null,
       userId: user.id,
       discount: Math.round(data.discount * f),
       taxTotal: Math.round(data.taxTotal * f),
@@ -124,10 +129,76 @@ export async function setPurchaseStatusAction(
   }, 'Order updated.')
 }
 
+/**
+ * Change a draft order.
+ *
+ * `updatePurchaseOrder` has existed in the service since purchasing was built,
+ * complete with the rule that only a draft may be edited — and nothing ever
+ * called it. There was no action, no route and no button, so a draft with a
+ * wrong quantity could only be cancelled and re-raised, losing its number and
+ * its history.
+ *
+ * The status rule is the service's, not this action's: once an order is
+ * approved it is a commitment someone signed, and once anything has been
+ * received it is also a stock history. Editing either would rewrite a decision
+ * or a fact.
+ */
+export async function updatePurchaseOrderAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    z.object({ purchaseId: z.string().min(1), ...createSchema.shape }),
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PURCHASE_CREATE)
+      await assertBranchAccess(user, data.branchId || null)
+      const f = await factor(user.restaurantId)
+
+      const po = await updatePurchaseOrder({
+        restaurantId: user.restaurantId,
+        purchaseId: data.purchaseId,
+        supplierId: data.supplierId || null,
+        branchId: data.branchId
+          ? await resolveStockLocation({
+              restaurantId: user.restaurantId,
+              requestedBranchId: data.branchId,
+              userBranchId: user.branchId,
+            })
+          : null,
+        locationId: data.locationId || null,
+        discount: Math.round(data.discount * f),
+        taxTotal: Math.round(data.taxTotal * f),
+        expectedAt: data.expectedAt ? new Date(data.expectedAt) : null,
+        notes: data.notes || null,
+        lines: data.lines.map((l) => ({
+          itemId: l.itemId,
+          quantity: l.quantity,
+          unit: l.unit,
+          unitCost: Math.round(l.unitCost * f),
+        })),
+      })
+
+      await audit({
+        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        action: AUDIT_ACTIONS.PO_UPDATED, entity: 'Purchase', entityId: po.id,
+        after: { number: po.number, lines: data.lines.length, total: po.total },
+      })
+
+      revalidatePath('/dashboard/purchases')
+      revalidatePath(`/dashboard/purchases/${po.id}`)
+      return { id: po.id }
+    },
+    'Order updated.',
+  )
+}
+
 const receiveSchema = z.object({
   purchaseId: z.string().min(1),
   supplierRef: z.string().trim().max(80).optional().or(z.literal('')),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
+  /** Where the van actually unloaded. Blank means "where the order said". */
+  branchId: z.string().min(1).optional().or(z.literal('')),
+  locationId: z.string().min(1).optional().or(z.literal('')),
   lines: z.array(z.object({
     purchaseItemId: z.string().min(1),
     acceptedQty: z.coerce.number().min(0).max(1_000_000),
@@ -144,6 +215,8 @@ export async function receiveGoodsAction(
 ): Promise<ActionResult<{ number: string; status: string; posted: number }>> {
   return runAction(receiveSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.PURCHASE_RECEIVE)
+    // You cannot receive goods into a location you have no business in.
+    await assertBranchAccess(user, data.branchId || null)
     const f = await factor(user.restaurantId)
 
     const result = await receiveGoods({
@@ -151,6 +224,8 @@ export async function receiveGoodsAction(
       purchaseId: data.purchaseId,
       supplierRef: data.supplierRef || null,
       notes: data.notes || null,
+      branchId: data.branchId || null,
+      locationId: data.locationId || null,
       userId: user.id,
       lines: data.lines
         .filter((l) => l.acceptedQty > 0 || l.rejectedQty > 0)

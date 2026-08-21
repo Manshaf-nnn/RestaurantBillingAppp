@@ -33,6 +33,7 @@ import {
   UserSearch,
   BadgeCheck,
   ListTodo,
+  PackageCheck,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -208,6 +209,15 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck, permission: PERMISSIONS.SUPPLIER_VIEW },
       { href: '/dashboard/purchases', label: 'Purchasing', icon: Truck, permission: PERMISSIONS.PURCHASE_VIEW },
+      {
+        // The storekeeper's screen. Receiving always worked and lived at the
+        // bottom of an individual order, so the only way in was to already know
+        // the order number.
+        href: '/dashboard/purchases/receive',
+        label: 'Goods received',
+        icon: PackageCheck,
+        permission: PERMISSIONS.PURCHASE_RECEIVE,
+      },
     ],
   },
   {

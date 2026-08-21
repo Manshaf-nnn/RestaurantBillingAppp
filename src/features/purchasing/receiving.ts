@@ -49,6 +49,17 @@ export async function receiveGoods(params: {
   lines: ReceiveLineInput[]
   supplierRef?: string | null
   notes?: string | null
+  /*
+   * Where this delivery actually landed, when it is not where the order said.
+   *
+   * The destination used to be taken from `po.branchId` with no way to say
+   * otherwise, so a van diverted to another site could not be recorded
+   * truthfully — the stock went onto the wrong shelf in the books and the
+   * difference surfaced weeks later as a variance nobody could account for.
+   * Null keeps the ordinary behaviour: receive where the order said.
+   */
+  branchId?: string | null
+  locationId?: string | null
   userId?: string | null
 }): Promise<{ receipt: GoodsReceipt; status: string; posted: number }> {
   const po = await requirePurchase(params.restaurantId, params.purchaseId)
@@ -65,6 +76,21 @@ export async function receiveGoods(params: {
   }
   if (params.lines.length === 0) {
     throw new AppError('Nothing to receive', 400, 'RECEIPT_EMPTY')
+  }
+
+  // Resolved once, here, so every line of this receipt lands in the same place
+  // and the receipt itself records where that was.
+  const destinationBranchId = params.branchId ?? po.branchId
+  const destinationLocationId = params.branchId
+    ? params.locationId ?? null
+    : params.locationId ?? po.locationId
+
+  if (params.branchId) {
+    const branch = await prisma.branch.findFirst({
+      where: { id: params.branchId, restaurantId: params.restaurantId, deletedAt: null },
+      select: { id: true },
+    })
+    if (!branch) throw new NotFoundError('Location')
   }
 
   const items = await prisma.purchaseItem.findMany({
@@ -137,6 +163,8 @@ export async function receiveGoods(params: {
         number,
         supplierRef: params.supplierRef?.trim() || null,
         notes: params.notes?.trim() || null,
+        branchId: destinationBranchId,
+        locationId: destinationLocationId,
         receivedById: params.userId ?? null,
       },
     })
@@ -193,8 +221,8 @@ export async function receiveGoods(params: {
           referenceType: 'Purchase',
           referenceId: po.id,
           purchaseId: po.id,
-          branchId: po.branchId,
-          locationId: po.locationId,
+          branchId: destinationBranchId,
+          locationId: destinationLocationId,
           batchNo: line.batchNo?.trim() || null,
           expiryDate: line.expiryDate ?? null,
           userId: params.userId,
@@ -219,8 +247,8 @@ export async function receiveGoods(params: {
             quantity: acceptedBase,
             unitCost: costPerBase,
             expiryDate: line.expiryDate ?? null,
-            locationId: po.locationId,
-            branchId: po.branchId,
+            locationId: destinationLocationId,
+            branchId: destinationBranchId,
           })
 
           await tx.stockMovement.update({

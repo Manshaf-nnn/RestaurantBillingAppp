@@ -45,6 +45,7 @@ const PAGES = [
   '/dashboard/inventory/expiry',
   '/dashboard/inventory/setup',
   '/dashboard/purchases',
+  '/dashboard/purchases/receive',
   '/dashboard/suppliers',
   '/dashboard/recipes',
   '/dashboard/staff',

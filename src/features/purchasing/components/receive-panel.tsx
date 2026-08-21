@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { CheckCircle2, PackageCheck, Send, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -11,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { LocalDateTime } from '@/components/local-time'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, toMajor } from '@/lib/money'
 import { receiveGoodsAction, setPurchaseStatusAction } from '../actions'
 import type { PurchaseDetail } from '../queries'
 import { callAction } from '@/lib/use-action'
@@ -39,10 +40,16 @@ export function ReceivePanel({
   detail,
   canApprove,
   canReceive,
+  canEdit,
+  locations = [],
 }: {
   detail: PurchaseDetail
   canApprove: boolean
   canReceive: boolean
+  /** Draft orders only — the service refuses anything further along. */
+  canEdit?: boolean
+  /** Where a delivery may be diverted to, when it did not go where planned. */
+  locations?: Array<{ id: string; name: string }>
 }) {
   const router = useRouter()
   const money = (m: number) => formatMoney(m, detail.currency)
@@ -58,6 +65,12 @@ export function ReceivePanel({
   const [batchNo, setBatchNo] = React.useState<Record<string, string>>({})
   const [expiry, setExpiry] = React.useState<Record<string, string>>({})
   const [supplierRef, setSupplierRef] = React.useState('')
+  const [unitCost, setUnitCost] = React.useState<Record<string, string>>({})
+  /*
+   * Where the van actually unloaded. Blank means "where the order said", which
+   * is the ordinary case; the picker exists for the day it goes somewhere else.
+   */
+  const [destination, setDestination] = React.useState('')
   const [busy, setBusy] = React.useState(false)
 
   const move = async (next: string, reason?: string) => {
@@ -77,6 +90,9 @@ export function ReceivePanel({
         rejectedQty: Number(rejected[l.id] ?? 0) || 0,
         batchNo: batchNo[l.id] ?? '',
         expiryDate: expiry[l.id] ?? '',
+        // Only sent when someone typed one. Absent means "charged what we
+        // ordered at", which is what the server already assumes.
+        unitCost: unitCost[l.id] ? Number(unitCost[l.id]) : undefined,
       }))
       .filter((l) => l.acceptedQty > 0 || l.rejectedQty > 0)
 
@@ -94,13 +110,16 @@ export function ReceivePanel({
     }
 
     setBusy(true)
-    const result = await callAction(() => receiveGoodsAction({ purchaseId: detail.id, supplierRef, lines }))
+    const result = await callAction(() =>
+      receiveGoodsAction({ purchaseId: detail.id, supplierRef, branchId: destination, lines }),
+    )
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
     toast.success(`${result.data.number} received — stock updated`)
     setRejected({})
     setBatchNo({})
     setExpiry({})
+    setUnitCost({})
     setSupplierRef('')
     router.refresh()
   }
@@ -202,10 +221,39 @@ export function ReceivePanel({
       )}
 
       {canReceive && receivable && outstanding.length > 0 && (
+        // Anchored, so the receiving screen's button lands on the form rather
+        // than the top of a long order.
         <SectionCard
+          id="receive"
           title="Receive delivery"
           description="Enter what actually arrived. Only the accepted quantity enters stock — rejected goods are recorded but never counted in."
         >
+          {locations.length > 1 ? (
+            <div className="mb-3 max-w-xs space-y-1">
+              <Label className="text-xs">Received at</Label>
+              <select
+                className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+              >
+                <option value="">
+                  {detail.branchName ? `${detail.branchName} (as ordered)` : 'As ordered'}
+                </option>
+                {locations
+                  .filter((l) => l.id !== detail.branchId)
+                  .map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Only change this if the van unloaded somewhere else. The stock goes onto the shelf
+                you pick here.
+              </p>
+            </div>
+          ) : null}
+
           <div className="mb-3 max-w-xs space-y-1">
             <Label htmlFor="ref" className="text-xs">Supplier delivery note (optional)</Label>
             <Input id="ref" placeholder="e.g. DN-4471" value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} />
@@ -214,13 +262,51 @@ export function ReceivePanel({
           <ul className="space-y-3">
             {outstanding.map((l) => (
               <li key={l.id} className="grid grid-cols-12 items-end gap-2">
-                <div className="col-span-12 sm:col-span-5">
+                <div className="col-span-12 sm:col-span-4">
                   <p className="font-medium">{l.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {l.outstanding} {l.unit.toLowerCase()} outstanding
+                    {l.outstanding} {l.unit.toLowerCase()} outstanding · ordered at{' '}
+                    {money(l.unitCost)}
                   </p>
+                  {/*
+                    What it last actually cost, as opposed to what the price
+                    list says. The data has always been captured on every
+                    delivery and was never shown anywhere in purchasing, so the
+                    one number a person entering an invoice wants — "is this
+                    what we normally pay" — was the one number missing.
+                  */}
+                  {(() => {
+                    const last = detail.lastPurchaseByItem[l.itemId]
+                    if (!last) {
+                      return (
+                        <p className="mt-0.5 text-xs text-muted-foreground">No previous purchase</p>
+                      )
+                    }
+                    return (
+                      <p className="mt-0.5 text-xs">
+                        <span className="text-muted-foreground">Last paid </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setUnitCost((c) => ({
+                              ...c,
+                              [l.id]: String(toMajor(last.unitCost, detail.currency)),
+                            }))
+                          }
+                          className="font-medium text-primary underline-offset-2 hover:underline"
+                        >
+                          {money(last.unitCost)}
+                        </button>
+                        <span className="text-muted-foreground">
+                          {' '}
+                          on <LocalDateTime value={last.at} />
+                          {last.supplierName ? ` · ${last.supplierName}` : ''}
+                        </span>
+                      </p>
+                    )
+                  })()}
                 </div>
-                <div className="col-span-6 space-y-1 sm:col-span-3">
+                <div className="col-span-4 space-y-1 sm:col-span-2">
                   <Label className="text-xs">Accepted</Label>
                   <Input
                     inputMode="decimal"
@@ -228,13 +314,28 @@ export function ReceivePanel({
                     onChange={(e) => setAccepted((c) => ({ ...c, [l.id]: e.target.value }))}
                   />
                 </div>
-                <div className="col-span-6 space-y-1 sm:col-span-3">
+                <div className="col-span-4 space-y-1 sm:col-span-2">
                   <Label className="text-xs">Rejected</Label>
                   <Input
                     inputMode="decimal"
                     placeholder="0"
                     value={rejected[l.id] ?? ''}
                     onChange={(e) => setRejected((c) => ({ ...c, [l.id]: e.target.value }))}
+                  />
+                </div>
+                {/*
+                  Suppliers change prices between the order and the van. The
+                  server has always accepted a delivered cost and the form never
+                  sent one, so the price history recorded what was ordered
+                  rather than what was paid.
+                */}
+                <div className="col-span-4 space-y-1 sm:col-span-2">
+                  <Label className="text-xs">Cost / {l.unit.toLowerCase()}</Label>
+                  <Input
+                    inputMode="decimal"
+                    placeholder={String(toMajor(l.unitCost, detail.currency))}
+                    value={unitCost[l.id] ?? ''}
+                    onChange={(e) => setUnitCost((c) => ({ ...c, [l.id]: e.target.value }))}
                   />
                 </div>
 
@@ -284,7 +385,15 @@ export function ReceivePanel({
             {detail.receipts.map((r) => (
               <li key={r.id} className="py-3">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="font-medium">{r.number}</span>
+                  <Link
+                    href={`/dashboard/purchases/${detail.id}/receipts/${r.id}`}
+                    className="font-medium hover:underline"
+                  >
+                    {r.number}
+                  </Link>
+                  {r.branchName ? (
+                    <span className="text-muted-foreground">· {r.branchName}</span>
+                  ) : null}
                   {r.supplierRef && <span className="text-muted-foreground">· {r.supplierRef}</span>}
                   <span className="ml-auto text-muted-foreground">
                     <LocalDateTime value={r.receivedAt} />

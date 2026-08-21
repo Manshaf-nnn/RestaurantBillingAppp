@@ -1815,6 +1815,7 @@ model Branch {
   approvalRequests ApprovalRequest[]
   coupons          Coupon[]
   instructions     BranchInstruction[]
+  goodsReceipts    GoodsReceipt[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1911,6 +1912,7 @@ model StorageLocation {
   batches        StockBatch[]
   wastageRecords WastageRecord[]
   stock          InventoryStock[]
+  goodsReceipts  GoodsReceipt[]
   transfersFrom  StockTransfer[]  @relation("TransferFromStorage")
   transfersTo    StockTransfer[]  @relation("TransferToStorage")
 
@@ -2152,6 +2154,18 @@ model GoodsReceipt {
   supplierRef String?
   notes       String?
 
+  /// Where this delivery actually landed.
+  ///
+  /// Receiving used to be hard-wired to the order's own branch, so a van
+  /// diverted to another site could not be recorded truthfully — the stock went
+  /// onto the wrong shelf in the books and the difference surfaced weeks later
+  /// as a variance nobody could explain. Null means "wherever the order said",
+  /// which is the ordinary case.
+  branchId   String?
+  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  locationId String?
+  location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
   receivedById String?
   receivedBy   User?    @relation("ReceiptReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
   receivedAt   DateTime @default(now())
@@ -2162,6 +2176,7 @@ model GoodsReceipt {
 
   @@unique([restaurantId, number])
   @@index([restaurantId, purchaseId])
+  @@index([restaurantId, receivedAt])
   @@map("goods_receipts")
 }
 

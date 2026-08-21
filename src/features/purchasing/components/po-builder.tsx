@@ -11,7 +11,8 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
-import { createPurchaseOrderAction } from '../actions'
+import { LocalDateTime } from '@/components/local-time'
+import { createPurchaseOrderAction, updatePurchaseOrderAction } from '../actions'
 import type { PoBuilderData } from '../queries'
 import { callAction } from '@/lib/use-action'
 
@@ -37,12 +38,33 @@ interface Line {
  * `prefill` carries items straight from the reorder suggestions, which is the
  * path most orders will take: see what is low, order it.
  */
+export interface PoEditTarget {
+  purchaseId: string
+  number: string
+  supplierId: string | null
+  branchId: string | null
+  expectedAt: string | null
+  notes: string | null
+  discount: number
+  taxTotal: number
+  lines: Array<{ itemId: string; quantity: number; unit: string | null; unitCost: number }>
+}
+
 export function PoBuilder({
   data,
   prefill,
+  editing,
 }: {
   data: PoBuilderData
   prefill?: Array<{ itemId: string; quantity: number }>
+  /*
+   * The same form, editing an existing draft. `updatePurchaseOrder` has been in
+   * the service since purchasing was built and nothing ever called it — so a
+   * draft with a wrong quantity could only be cancelled and re-raised, losing
+   * its number and its history. Only drafts reach here; the service refuses
+   * anything further along.
+   */
+  editing?: PoEditTarget
 }) {
   const router = useRouter()
   const factor = minorUnitFactor(data.currency)
@@ -63,6 +85,7 @@ export function PoBuilder({
   }
 
   const [supplierId, setSupplierId] = React.useState(() => {
+    if (editing) return editing.supplierId ?? ''
     // Pre-select the supplier that covers most of the prefilled items.
     if (!prefill?.length) return ''
     const tally = new Map<string, number>()
@@ -72,28 +95,60 @@ export function PoBuilder({
     }
     return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
   })
-  const [lines, setLines] = React.useState<Line[]>(() =>
-    prefill?.length
+  const [lines, setLines] = React.useState<Line[]>(() => {
+    if (editing) {
+      // The saved values, not re-derived ones. An order records what was
+      // actually agreed, and re-pricing it from today's list on open would
+      // quietly change the order someone is only trying to correct a typo in.
+      return editing.lines.map((row, i) => ({
+        key: `edit-${i}`,
+        itemId: row.itemId,
+        quantity: String(row.quantity),
+        unit: row.unit ?? itemById.get(row.itemId)?.unit ?? 'PIECE',
+        unitCost: String(row.unitCost / factor),
+      }))
+    }
+    return prefill?.length
       ? prefill.map((row, i) => lineFor(row.itemId, String(row.quantity), `pre-${i}`))
-      : [],
-  )
+      : []
+  })
   // Defaults to the restaurant's main location, so a single-site restaurant
   // never has to think about it and a multi-site one must choose deliberately.
   const [branchId, setBranchId] = React.useState(
-    () => data.locations.find((l) => l.isDefault)?.id ?? data.locations[0]?.id ?? '',
+    () =>
+      editing?.branchId ??
+      data.locations.find((l) => l.isDefault)?.id ??
+      data.locations[0]?.id ??
+      '',
   )
-  const [expectedAt, setExpectedAt] = React.useState('')
-  const [discount, setDiscount] = React.useState('')
-  const [taxTotal, setTaxTotal] = React.useState('')
-  const [notes, setNotes] = React.useState('')
+  const [expectedAt, setExpectedAt] = React.useState(editing?.expectedAt?.slice(0, 10) ?? '')
+  const [discount, setDiscount] = React.useState(
+    editing && editing.discount > 0 ? String(editing.discount / factor) : '',
+  )
+  const [taxTotal, setTaxTotal] = React.useState(
+    editing && editing.taxTotal > 0 ? String(editing.taxTotal / factor) : '',
+  )
+  const [notes, setNotes] = React.useState(editing?.notes ?? '')
   const [busy, setBusy] = React.useState(false)
 
   const update = (key: string, patch: Partial<Line>) =>
     setLines((current) =>
       current.map((l) => {
         if (l.key !== key) return l
-        // Re-price when the item changes; keep whatever was typed otherwise.
-        if (patch.itemId && patch.itemId !== l.itemId) return lineFor(patch.itemId, l.quantity, l.key)
+        /*
+         * Changing the item re-prices the line, because a price belongs to an
+         * item and keeping the old one would be wrong. The quantity is kept —
+         * it is about the order, not the item — and so is a cost the buyer
+         * typed deliberately, which used to be discarded silently.
+         */
+        if (patch.itemId && patch.itemId !== l.itemId) {
+          const fresh = lineFor(patch.itemId, l.quantity, l.key)
+          const source = itemById.get(l.itemId)?.sources[0]
+          const wasDefault =
+            l.unitCost === '' ||
+            l.unitCost === String((source?.price ?? itemById.get(l.itemId)?.fallbackCost ?? 0) / factor)
+          return wasDefault ? fresh : { ...fresh, unitCost: l.unitCost }
+        }
         return { ...l, ...patch }
       }),
     )
@@ -121,8 +176,19 @@ export function PoBuilder({
       return
     }
 
+    // Two lines for one item double what is ordered, and the supplier delivers
+    // it. Caught here as well as on the server so it is said while the form is
+    // still open.
+    const duplicate = payload.find((l, i) => payload.findIndex((o) => o.itemId === l.itemId) !== i)
+    if (duplicate) {
+      toast.error(
+        `${itemById.get(duplicate.itemId)?.name ?? 'That item'} is on the order twice — combine the lines`,
+      )
+      return
+    }
+
     setBusy(true)
-    const result = await callAction(() => createPurchaseOrderAction({
+    const body = {
       supplierId,
       branchId,
       expectedAt,
@@ -130,14 +196,25 @@ export function PoBuilder({
       discount: Number(discount) || 0,
       taxTotal: Number(taxTotal) || 0,
       lines: payload,
-    }))
+    }
+    const result = await callAction(() =>
+      editing
+        ? updatePurchaseOrderAction({ purchaseId: editing.purchaseId, ...body })
+        : createPurchaseOrderAction(body),
+    )
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
-    toast.success(`${result.data.number} created as a draft`)
-    router.push(`/dashboard/purchases/${result.data.id}`)
+    if (editing) {
+      toast.success(`${editing.number} updated`)
+      router.push(`/dashboard/purchases/${editing.purchaseId}`)
+    } else {
+      const created = result.data as { id: string; number: string }
+      toast.success(`${created.number} created as a draft`)
+      router.push(`/dashboard/purchases/${created.id}`)
+    }
   }
 
   return (
@@ -275,6 +352,44 @@ export function PoBuilder({
                         : ''}
                     </p>
                   )}
+
+                  {/*
+                    What it last actually cost, beside what the price list says.
+                    The prefilled figure is the supplier's standing quote, or
+                    failing that the weighted average — neither of which is what
+                    was paid last time, which is the number a buyer is actually
+                    checking against. Clicking it fills the cost box; it never
+                    overwrites anything on its own.
+                  */}
+                  {item ? (
+                    <p className="col-span-12 -mt-1 pl-1 text-xs">
+                      {item.lastPurchase ? (
+                        <>
+                          <span className="text-muted-foreground">Last paid </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              update(line.key, {
+                                unitCost: String(item.lastPurchase!.unitCost / factor),
+                              })
+                            }
+                            className="font-medium text-primary underline-offset-2 hover:underline"
+                          >
+                            {money(item.lastPurchase.unitCost)}
+                          </button>
+                          <span className="text-muted-foreground">
+                            {' '}
+                            on <LocalDateTime value={item.lastPurchase.at} />
+                            {item.lastPurchase.supplierName
+                              ? ` · ${item.lastPurchase.supplierName}`
+                              : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">No previous purchase</span>
+                      )}
+                    </p>
+                  ) : null}
                 </li>
               )
             })}
@@ -321,7 +436,13 @@ export function PoBuilder({
 
       <Button size="lg" onClick={submit} disabled={busy}>
         <Save className="mr-2 h-4 w-4" />
-        {busy ? 'Creating…' : 'Create order'}
+        {busy
+          ? editing
+            ? 'Saving…'
+            : 'Creating…'
+          : editing
+            ? 'Save changes'
+            : 'Create order'}
       </Button>
       <p className="text-xs text-muted-foreground">
         The order is created as a draft. It has to be approved before goods can be received against it,

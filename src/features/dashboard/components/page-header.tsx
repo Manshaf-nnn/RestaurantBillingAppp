@@ -103,6 +103,7 @@ export function StatCard({
 }
 
 export function SectionCard({
+  id,
   title,
   description,
   actions,
@@ -110,6 +111,8 @@ export function SectionCard({
   className,
   bodyClassName,
 }: {
+  /** For deep links — a button elsewhere that should land on this card. */
+  id?: string
   title: string
   description?: string
   actions?: React.ReactNode
@@ -118,7 +121,7 @@ export function SectionCard({
   bodyClassName?: string
 }) {
   return (
-    <section className={cn('rounded-xl border bg-card shadow-soft', className)}>
+    <section id={id} className={cn('rounded-xl border bg-card shadow-soft scroll-mt-20', className)}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold">{title}</h2>
