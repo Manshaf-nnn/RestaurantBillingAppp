@@ -53,7 +53,7 @@ export default async function GuestBillPage({
         bill={{
           id: order.id,
           orderNumber: order.orderNumber,
-          tableNumber: order.table?.number ?? null,
+          tableNumber: order.tableNumber ?? order.table?.number ?? null,
           customerName: order.customerName,
           customerEmail: order.customerEmail,
           placedAt: order.placedAt.toISOString(),

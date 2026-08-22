@@ -49,7 +49,11 @@ const SERVICE = [
   'branch-isolation-test',
 ]
 
-const RUNTIME = ['page-render-test', 'action-e2e-test', 'qr-to-kitchen-test']
+const RUNTIME = [
+  'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // Skips itself unless the server carries Socket.IO (`node server.mjs`).
+  'socket-order-room-test',
+]
 
 interface Outcome {
   name: string

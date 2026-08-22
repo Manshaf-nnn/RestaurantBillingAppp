@@ -57,6 +57,8 @@ export interface TrackedOrder {
   orderNumber: string
   status: OrderStatus
   tableId: string | null
+  /** The branch's public code, checked server-side when calling a waiter. */
+  branchCode: string | null
   tableNumber: string | null
   customerName: string
   grandTotal: number
@@ -179,7 +181,9 @@ export function OrderTracker({
             {initial.tableNumber ? ` · Table ${initial.tableNumber}` : ''}
           </p>
         </div>
-        {initial.tableId ? <CallWaiter tableId={initial.tableId} /> : null}
+        {initial.tableId ? (
+          <CallWaiter tableId={initial.tableId} branchCode={initial.branchCode} />
+        ) : null}
       </header>
 
       <div className="space-y-5 p-4">
@@ -405,7 +409,7 @@ export function OrderTracker({
   )
 }
 
-function CallWaiter({ tableId }: { tableId: string }) {
+function CallWaiter({ tableId, branchCode }: { tableId: string; branchCode: string | null }) {
   const [pending, startTransition] = React.useTransition()
 
   return (
@@ -415,7 +419,9 @@ function CallWaiter({ tableId }: { tableId: string }) {
       loading={pending}
       onClick={() =>
         startTransition(async () => {
-          const result = await callAction(() => createServiceRequest({ tableId, type: 'HELP' }))
+          const result = await callAction(() =>
+            createServiceRequest({ tableId, type: 'HELP' }, undefined, branchCode),
+          )
           if (result.ok) toast.success('A waiter is on the way')
           else toast.error(result.error)
         })

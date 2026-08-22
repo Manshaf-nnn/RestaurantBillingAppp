@@ -35,6 +35,7 @@ export default async function OrdersPage({
     <>
       <PageHeader title="Orders" description={`${result.total} orders`} />
       <OrdersTable
+        branchIds={selection.branchIds}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
         total={result.total}
@@ -52,7 +53,7 @@ export default async function OrdersPage({
           status: order.status,
           paymentStatus: order.paymentStatus,
           type: order.type,
-          tableNumber: order.table?.number ?? null,
+          tableNumber: order.tableNumber ?? order.table?.number ?? null,
           customerName: order.customerName,
           customerPhone: order.customerPhone,
           itemCount: order.items.reduce((total, item) => total + item.quantity, 0),

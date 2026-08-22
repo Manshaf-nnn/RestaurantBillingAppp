@@ -31,10 +31,17 @@ export default async function MenuPage({
    * alone would silently show another branch's menu at another branch's prices.
    */
   const params = await searchParams
-  const branch = await resolvePublicBranch(
-    restaurant.id,
-    typeof params.b === 'string' ? params.b : null,
-  )
+  const branchCode = typeof params.b === 'string' ? params.b : null
+  /*
+   * A code that matches no location is `notFound()`, not an error boundary.
+   *
+   * `resolvePublicBranch` refuses an explicitly-supplied code that matches
+   * nothing, rather than quietly serving the default branch. That is the right
+   * answer for an API caller; for a guest holding a phone it has to look like a
+   * page that does not exist, not like the software falling over.
+   */
+  const branch = await resolvePublicBranch(restaurant.id, branchCode).catch(() => null)
+  if (branchCode && !branch) notFound()
   const menu = await getPublicMenu(restaurant.id, restaurant.timezone, branch?.id ?? null)
 
   return (

@@ -444,7 +444,9 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
   const seatedAt = params.tableId
     ? await prisma.restaurantTable.findFirst({
         where: { id: params.tableId, restaurantId: params.restaurantId, isActive: true },
-        select: { branchId: true },
+        // The number too, so the order can keep a copy: `tableId` is SetNull,
+        // and a deleted table used to erase which table an order had been at.
+        select: { branchId: true, number: true },
       })
     : null
 
@@ -532,6 +534,9 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
               status: 'PENDING',
               paymentStatus: 'UNPAID',
               tableId: table?.id ?? null,
+              // Snapshotted, not derived. `tableId` is SetNull, so deleting a
+              // table used to erase which table every past order had been at.
+              tableNumber: table?.number ?? null,
               customerId: customer.id,
               customerName: params.customerName,
               customerPhone: params.customerPhone,
@@ -984,6 +989,7 @@ export async function cancelOrder(params: {
   realtime.orderCancelled(order.restaurantId, {
     orderId: order.id,
     orderNumber: order.orderNumber,
+    branchId: order.branchId,
     status: 'CANCELLED',
     tableId: order.tableId,
     tableNumber: order.table?.number ?? null,
@@ -1076,6 +1082,7 @@ async function broadcastOrder(orderId: string, kind: 'created' | 'status') {
     realtime.orderStatus(order.restaurantId, {
       orderId: payload.id,
       orderNumber: payload.orderNumber,
+      branchId: payload.branchId,
       status: payload.status,
       tableId: payload.tableId,
       tableNumber: payload.tableNumber,

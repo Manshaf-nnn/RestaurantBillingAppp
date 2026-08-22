@@ -13,6 +13,7 @@ import { parse } from 'node:url'
 import next from 'next'
 import { Server as SocketServer } from 'socket.io'
 import { jwtVerify } from 'jose'
+import { PrismaClient } from '@prisma/client'
 
 // Auto-configure the public URL on cloud hosts that expose it, so cookies get
 // marked Secure and links/QRs point at the right domain without manual setup.
@@ -75,6 +76,74 @@ async function identify(socket) {
   } catch {
     return { user: null, guestId }
   }
+}
+
+/*
+ * Who may listen to one order's live stream.
+ *
+ * `join:order` used to be: staff of any tenant, yes; any guest, yes. The
+ * comment claimed the room was "re-checked against the order room registry" and
+ * no such check existed. `user.rid` was read and never compared to the order's
+ * restaurant, and `guestId` is self-issued by the browser on first page load —
+ * so knowing an order's cuid was enough for ANY visitor, and for a staff member
+ * of a DIFFERENT RESTAURANT, to receive that order's live updates: the
+ * customer's name and phone, every line item, and the total.
+ *
+ * That is a cross-tenant leak, not merely a cross-branch one. This is the check
+ * the comment described.
+ */
+const prisma = new PrismaClient()
+
+/*
+ * Roles whose remit is the whole business rather than one site.
+ *
+ * Duplicated from `src/lib/rbac.ts` — CROSS_LOCATION_ROLES — because this file
+ * is plain ESM running before/outside the Next bundle and cannot import the
+ * TypeScript module. Same reason `BRANCH_COOKIE` is duplicated in
+ * `src/middleware.ts`. Keep the two in step.
+ */
+const CROSS_LOCATION_ROLES = new Set([
+  'SUPER_ADMIN', 'OWNER', 'ADMIN', 'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'ACCOUNTANT',
+])
+
+async function mayWatchOrder(socket, orderId) {
+  const order = await prisma.order
+    .findUnique({
+      where: { id: orderId },
+      select: { restaurantId: true, branchId: true, guestSessionId: true },
+    })
+    .catch(() => null)
+  if (!order) return false
+
+  const user = socket.data.user
+
+  // A guest may watch the order they placed, and only that one. The cookie is
+  // not httpOnly — the cart reads it — so it is an identifier, not a secret;
+  // matching it against the row is what makes it sufficient here.
+  if (!user?.rid) {
+    return Boolean(socket.data.guestId) && order.guestSessionId === socket.data.guestId
+  }
+
+  // Staff: their own restaurant first. This is the line that was missing.
+  if (user.rid !== order.restaurantId) return false
+
+  if (CROSS_LOCATION_ROLES.has(user.role)) return true
+
+  /*
+   * Site-scoped roles are confined to their own branch. The JWT does not carry
+   * `branchId` — the session reads it from the database on every request — so
+   * it is read here too rather than trusted from the token.
+   *
+   * A MANAGER with no branch is a group manager and sees everything; anyone
+   * else with no branch sees nothing, which is how `visibleBranchIds` fails
+   * closed and is deliberately mirrored.
+   */
+  const staff = await prisma.user
+    .findUnique({ where: { id: user.sub }, select: { branchId: true } })
+    .catch(() => null)
+  if (!staff) return false
+  if (!staff.branchId) return user.role === 'MANAGER'
+  return staff.branchId === order.branchId
 }
 
 const app = next({ dev, hostname, port })
@@ -140,14 +209,9 @@ io.on('connection', (socket) => {
 
   socket.on('join:order', async (orderId) => {
     if (typeof orderId !== 'string' || orderId.length > 64) return
-    // Staff of the owning tenant may always subscribe. Guests must own the
-    // order — enforced by the API that hands out the id together with the
-    // guest cookie, and re-checked here against the order room registry.
-    if (user?.rid) {
-      socket.join(`order:${orderId}`)
-      return
-    }
-    if (socket.data.guestId) socket.join(`order:${orderId}`)
+    // Ownership is checked against the row, not assumed from the fact that the
+    // caller knows an id. See `mayWatchOrder`.
+    if (await mayWatchOrder(socket, orderId)) socket.join(`order:${orderId}`)
   })
 
   socket.on('leave:order', (orderId) => {

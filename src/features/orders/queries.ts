@@ -9,6 +9,9 @@ import type { SelectedOption } from './pricing'
 const ORDER_DETAIL_INCLUDE = {
   items: { orderBy: { createdAt: 'asc' as const } },
   table: { select: { id: true, number: true, label: true, area: true } },
+  // The branch's code, so a guest screen can prove which place it belongs to
+  // when it calls back — a call bell must ring in the room the guest is in.
+  branch: { select: { code: true, name: true } },
   customer: { select: { id: true, name: true, phone: true, email: true, loyaltyPoints: true } },
   payments: { orderBy: { createdAt: 'desc' as const } },
   invoice: true,

@@ -81,6 +81,16 @@ export interface OrderSummaryPayload {
 export interface OrderStatusPayload {
   orderId: string
   orderNumber: string
+  /**
+   * Which location this concerns.
+   *
+   * Rooms are keyed `r:<restaurantId>:<role>` with no branch segment, so every
+   * board in the chain receives every event and each one filters on arrival.
+   * `OrderSummaryPayload` gained this first and the kitchen board used it;
+   * these three had no branch at all, which is why the waiter, cashier and
+   * dashboard boards could not filter and rang for other branches.
+   */
+  branchId: string
   status: OrderStatus
   tableId: string | null
   tableNumber: string | null
@@ -90,6 +100,8 @@ export interface OrderStatusPayload {
 export interface PaymentPayload {
   orderId: string
   orderNumber: string
+  /** Which location took the money. See `OrderStatusPayload.branchId`. */
+  branchId: string
   paymentId: string
   method: PaymentMethod
   amount: number
@@ -100,6 +112,15 @@ export interface PaymentPayload {
 export interface ServiceRequestPayload {
   id: string
   tableId: string
+  /**
+   * The branch of the table that called.
+   *
+   * `ServiceRequest` has no branch column — it reaches one through its table,
+   * which is how `getWaiterBoard` already scopes the list. Carrying it on the
+   * payload lets the waiter station do the same for the live bell, instead of
+   * ringing at every station in the business.
+   */
+  branchId: string
   tableNumber: string
   type: ServiceRequestType
   note: string | null

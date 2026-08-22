@@ -29,17 +29,32 @@ export function LiveOrderFeed({
   initialOrders,
   currency,
   locale,
+  branchIds,
 }: {
   initialOrders: FeedOrder[]
   currency: string
   locale: string
+  /** Locations this feed is showing. Null means all of them. */
+  branchIds: string[] | null
 }) {
   const [orders, setOrders] = React.useState(initialOrders)
+
+  /*
+   * Live events arrive restaurant-wide — rooms carry no branch — so a feed
+   * showing one location has to ignore the rest itself. The server render
+   * beside it is already scoped; without this the two disagreed on screen.
+   */
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
 
   // Re-sync when polling (realtime off / serverless).
   React.useEffect(() => setOrders(initialOrders), [initialOrders])
 
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload)) return
     setOrders((current) => [
       {
         id: payload.id,

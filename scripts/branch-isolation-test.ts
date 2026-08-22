@@ -234,12 +234,33 @@ async function main() {
   const scanned = await resolvePublicBranch(restaurant.id, 'B01')
   check('scanning Branch 01’s code resolves to Branch 01', scanned?.id === b01.id, `${scanned?.name}`)
 
-  const nonsense = await resolvePublicBranch(restaurant.id, 'ZZZZ')
-  check(
-    'a smudged code falls back to the default rather than failing',
-    nonsense?.id === main.id,
-    'a guest with a damaged QR would have seen an error instead of a menu',
+  /*
+   * This assertion used to say the opposite, and the behaviour changed on
+   * purpose.
+   *
+   * It read "a smudged code falls back to the default rather than failing" —
+   * so `?b=ZZZZ` served Main's menu at Main's prices to a guest who believed
+   * they were looking at Kandy's, and an attacker walking the codes got a 200
+   * either way, which is what made the enumeration silent. A code that was
+   * SUPPLIED and matched nothing is now refused.
+   *
+   * The case the old test was protecting is real and still works: it is NO code
+   * at all — a single-site restaurant, or a guest whose cookie was dropped —
+   * and that still falls through to the default rather than showing an error
+   * page to somebody holding a menu.
+   */
+  await refuses(
+    'a code that matches no location is refused, not quietly redirected',
+    () => resolvePublicBranch(restaurant.id, 'ZZZZ'),
+    /does not match a location/i,
   )
+
+  /*
+   * The no-code fallback is NOT asserted here, and cannot be: with no code
+   * `resolvePublicBranch` reads the `ros_b` cookie, and there is no request
+   * scope in a plain node process. It is covered where it actually happens —
+   * `qr-to-kitchen-test` fetches `/order` over HTTP with a real cookie jar.
+   */
 
   const order = await placeOrder({
     restaurantId: restaurant.id,
@@ -659,9 +680,23 @@ async function main() {
     !wrongPoster.ok,
     'the guest was seated at another branch’s table',
   )
+  /*
+   * The refusal names the guest's OWN branch and not the other one.
+   *
+   * It used to say "Table 99 is at Main Branch, not Branch 01" — friendlier for
+   * the honest case, and an enumeration oracle: `resolveTable` is
+   * unauthenticated, so anyone could walk the numbers and map every branch's
+   * floor. Telling the guest where they are is useful; telling them where they
+   * are not is somebody else's business.
+   */
   check(
-    'and the refusal says which branch it is at',
-    !wrongPoster.ok && /Main Branch/.test(wrongPoster.error) && /Branch 01/.test(wrongPoster.error),
+    'the refusal names this branch',
+    !wrongPoster.ok && /Branch 01/.test(wrongPoster.error),
+    !wrongPoster.ok ? wrongPoster.error : '',
+  )
+  check(
+    'and does not disclose the branch that does have it',
+    !wrongPoster.ok && !/Main Branch/.test(wrongPoster.error),
     !wrongPoster.ok ? wrongPoster.error : '',
   )
 

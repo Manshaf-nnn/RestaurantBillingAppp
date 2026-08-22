@@ -18,7 +18,7 @@ function toWaiterOrder(order: BoardOrder): WaiterOrder {
     id: order.id,
     orderNumber: order.orderNumber,
     status: order.status as WaiterOrder['status'],
-    tableNumber: order.table?.number ?? null,
+    tableNumber: order.tableNumber ?? order.table?.number ?? null,
     customerName: order.customerName,
     grandTotal: order.grandTotal,
     readyAt: order.readyAt?.toISOString() ?? null,
@@ -56,6 +56,9 @@ export default async function WaiterPage({
 
   return (
     <WaiterBoard
+      // Which locations this screen shows, so live events for another
+      // branch are ignored rather than chiming here.
+      branchIds={branchIds}
       restaurantName={restaurant.name}
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}

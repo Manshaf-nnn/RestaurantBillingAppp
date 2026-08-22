@@ -52,7 +52,7 @@ export default async function OrderDetailPage({
         status: order.status,
         paymentStatus: order.paymentStatus,
         type: order.type,
-        tableNumber: order.table?.number ?? null,
+        tableNumber: order.tableNumber ?? order.table?.number ?? null,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         customerEmail: order.customerEmail,

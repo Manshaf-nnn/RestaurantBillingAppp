@@ -1,6 +1,7 @@
 import 'server-only'
 import { cookies } from 'next/headers'
 
+import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -66,6 +67,22 @@ export async function resolvePublicBranch(
       select: { id: true, name: true, code: true, isDefault: true },
     })
     if (match) return match
+
+    /*
+     * A code that was SUPPLIED and matched nothing is an error, not a shrug.
+     *
+     * Everything used to fall through to the default branch, so `?b=GARBAGE`
+     * served Main's menu at Main's prices to someone who believed they were
+     * looking at Kandy's — and an attacker probing codes got a 200 either way,
+     * which is what made the enumeration silent.
+     *
+     * Only an EXPLICIT code is refused. No code at all still falls through
+     * below: that is the smudged-QR and the single-site case, and a guest with
+     * a damaged sticker should get a menu rather than an error page.
+     */
+    if (code) {
+      throw new NotFoundError('That code does not match a location here')
+    }
   }
 
   return prisma.branch.findFirst({

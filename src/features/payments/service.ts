@@ -310,7 +310,7 @@ export async function capturePayment(params: {
       }
     }
 
-    return { payment, order: updatedOrder, fullySettled, invoiceNumber, tableNumber: order.table?.number ?? null }
+    return { payment, order: updatedOrder, fullySettled, invoiceNumber, tableNumber: order.tableNumber ?? order.table?.number ?? null }
   })
 
   if (result.fullySettled) {
@@ -322,6 +322,9 @@ export async function capturePayment(params: {
   realtime.paymentReceived(params.restaurantId, {
     orderId: params.orderId,
     orderNumber: result.order.orderNumber,
+    // The till that takes the money belongs to one site; without this the
+    // cashier board added another branch's payment to its own day total.
+    branchId: result.order.branchId,
     paymentId: result.payment.id,
     method: result.payment.method,
     amount: result.payment.amount,
@@ -404,7 +407,7 @@ function buildInvoiceSnapshot(
     order: {
       number: order.orderNumber,
       placedAt: order.placedAt.toISOString(),
-      tableNumber: order.table?.number ?? null,
+      tableNumber: order.tableNumber ?? order.table?.number ?? null,
       customerName: order.customerName,
       customerPhone: order.customerPhone,
     },

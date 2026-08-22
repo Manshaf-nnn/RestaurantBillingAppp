@@ -33,6 +33,13 @@ export const RATE_LIMITS = {
   serviceRequest: { limit: 10, windowSeconds: 300 },
   /** per venue IP */
   serviceRequestBurst: { limit: 200, windowSeconds: 300 },
+  /*
+   * The checkout summary re-prices on every cart change, so a guest genuinely
+   * hits it often — but it is unauthenticated and fans out per distinct dish,
+   * and it had no limit at all. Sized per venue IP like its neighbours: roomy
+   * for a full dining room editing their carts, closed to a script.
+   */
+  quoteCartBurst: { limit: 600, windowSeconds: 300 },
   // Also per IP, and also shared by the whole venue: guests browsing the menu
   // and staff devices polling their stations all arrive from one address.
   publicRead: { limit: 600, windowSeconds: 60 },
@@ -42,14 +49,28 @@ export const RATE_LIMITS = {
 
 export type RateLimitName = keyof typeof RATE_LIMITS
 
-export async function clientIp(): Promise<string> {
-  const h = await headers()
-  return (
-    h.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    h.get('x-real-ip') ??
-    h.get('cf-connecting-ip') ??
-    'unknown'
-  )
+/**
+ * The caller's address, or null when there is no caller.
+ *
+ * `headers()` throws outside a request scope. In production that cannot happen
+ * — a server action or route handler always has one — but the test suites and
+ * the maintenance scripts call services directly, and a rate limiter blowing up
+ * a test run is the limiter reporting on its own environment rather than on
+ * anything about the request. Null means "not a request", and `rateLimit`
+ * treats that as nothing to limit.
+ */
+export async function clientIp(): Promise<string | null> {
+  try {
+    const h = await headers()
+    return (
+      h.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+      h.get('x-real-ip') ??
+      h.get('cf-connecting-ip') ??
+      'unknown'
+    )
+  } catch {
+    return null
+  }
 }
 
 export interface RateLimitResult {
@@ -68,6 +89,12 @@ export async function rateLimit(
 ): Promise<RateLimitResult> {
   const rule = RATE_LIMITS[name]
   const id = identifier ?? (await clientIp())
+
+  // No request, no caller, nothing to limit. See `clientIp`.
+  if (id === null) {
+    return { ok: true, remaining: rule.limit, retryAfterSeconds: 0 }
+  }
+
   const key = `rl:${name}:${id}`
 
   const { count, resetAt } = await incrementCounter(key, rule.windowSeconds)

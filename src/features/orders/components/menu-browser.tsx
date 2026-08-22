@@ -179,7 +179,12 @@ export function MenuBrowser({
           </div>
 
           <ThemeToggle className="guest-ink shrink-0 hover:bg-black/5 dark:hover:bg-white/10" />
-          <ServiceRequestDialog tableId={state.table?.tableId ?? null} />
+          <ServiceRequestDialog
+            tableId={state.table?.tableId ?? null}
+            // The branch the guest scanned, checked server-side against the
+            // table — a call bell must ring in the room the guest is sitting in.
+            branchCode={state.table?.branchCode ?? null}
+          />
         </div>
 
         <div className="px-4 pb-3">
@@ -575,7 +580,13 @@ function Chip({
   )
 }
 
-function ServiceRequestDialog({ tableId }: { tableId: string | null }) {
+function ServiceRequestDialog({
+  tableId,
+  branchCode,
+}: {
+  tableId: string | null
+  branchCode: string | null
+}) {
   const [open, setOpen] = React.useState(false)
   const [pending, startTransition] = React.useTransition()
 
@@ -583,7 +594,9 @@ function ServiceRequestDialog({ tableId }: { tableId: string | null }) {
 
   const request = (type: (typeof SERVICE_ACTIONS)[number]['type']) => {
     startTransition(async () => {
-      const result = await callAction(() => createServiceRequest({ tableId, type }))
+      const result = await callAction(() =>
+        createServiceRequest({ tableId, type }, undefined, branchCode),
+      )
       if (result.ok) {
         toast.success('Our staff have been notified')
         setOpen(false)

@@ -996,6 +996,15 @@ model Order {
 
   tableId    String?
   table      RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  /// The table number as it was when the order was taken.
+  ///
+  /// `tableId` is SetNull, so deleting a table erased which table every past
+  /// order had been at — twenty-five screens read `order.table?.number` and all
+  /// of them went blank. A number is also a display value that a restaurant may
+  /// renumber; the bill should say what the guest saw, not what the floor plan
+  /// says today. Null for takeaway, delivery and counter sales, which have no
+  /// table — a real state, not a missing one.
+  tableNumber String?
   customerId String?
   customer   Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
 

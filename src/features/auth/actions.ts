@@ -50,9 +50,11 @@ const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 export async function login(input: unknown): Promise<ActionResult<{ redirectTo: string }>> {
   return runAction(loginSchema, input, async (data) => {
+    // Two-dimensional limiting: per IP and per account. `clientIp` returns
+    // null outside a request scope, where `enforceRateLimit` derives it itself
+    // and finds the same nothing — so undefined and null mean the same here.
     const ip = await clientIp()
-    // Two-dimensional limiting: per IP and per account.
-    await enforceRateLimit('login', ip)
+    await enforceRateLimit('login', ip ?? undefined)
     await enforceRateLimit('login', `email:${data.email}`)
 
     const user = await prisma.user.findUnique({ where: { email: data.email } })

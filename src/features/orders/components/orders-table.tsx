@@ -48,6 +48,7 @@ export function OrdersTable({
   currency,
   locale,
   filters,
+  branchIds,
 }: {
   orders: OrderRow[]
   total: number
@@ -56,16 +57,30 @@ export function OrdersTable({
   currency: string
   locale: string
   filters: { search: string; status: string; paymentStatus: string; type: string }
+  /** Locations this list is showing. Null means all of them. */
+  branchIds: string[] | null
 }) {
   const router = useRouter()
   const params = useSearchParams()
   const [search, setSearch] = React.useState(filters.search)
   const [live, setLive] = React.useState(orders)
 
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
+
   React.useEffect(() => setLive(orders), [orders])
 
   // A brand-new order shows up at the top of page 1 without a refresh.
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    /*
+     * The loader for this table is branch-scoped; this handler was not, so a
+     * live row for another branch appeared at the top of a list that had
+     * deliberately filtered it out, and stayed until the next refresh.
+     */
+    if (!isOurs(payload)) return
     if (page !== 1 || filters.status !== 'ALL') return
     setLive((current) =>
       current.some((order) => order.id === payload.id)

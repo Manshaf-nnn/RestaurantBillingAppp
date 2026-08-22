@@ -95,11 +95,14 @@ export function CashierBoard({
   restaurant,
   menu,
   startInTakeaway = false,
+  branchIds,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
   todayCount: number
   user: { name: string; role: string }
+  /** Locations this screen is showing. Null means all of them. */
+  branchIds: string[] | null
   menu: PublicMenu
   startInTakeaway?: boolean
   restaurant: {
@@ -113,6 +116,26 @@ export function CashierBoard({
     phone: string | null
   }
 }) {
+
+  /*
+   * Whether a live event belongs on this screen.
+   *
+   * Socket rooms are keyed `r:<restaurantId>:<role>` with no branch segment, so
+   * every board in the chain receives every event. The server render is
+   * branch-scoped, so a stray row vanished on the next refresh — but not before
+   * it had chimed, toasted, and here added another branch's money to this
+   * till's day total.
+   *
+   * Filtering on arrival costs one comparison and needs no change to the socket
+   * handshake. Null means "every location" — an owner watching the whole
+   * business on purpose.
+   */
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
+
   const [bills, setBills] = React.useState(initialBills)
   const [search, setSearch] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(initialBills[0]?.id ?? null)
@@ -131,12 +154,14 @@ export function CashierBoard({
   React.useEffect(() => setBills(initialBills), [initialBills])
 
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload)) return
     toast.info(`New order ${payload.orderNumber}`, {
       description: payload.tableNumber ? `Table ${payload.tableNumber}` : undefined,
     })
   })
 
   useSocketEvent(EVENTS.PAYMENT_RECEIVED, (payload: PaymentPayload) => {
+    if (!isOurs(payload)) return
     setBills((current) => current.filter((bill) => bill.id !== payload.orderId))
     setCollected((current) => ({ total: current.total + payload.amount, count: current.count + 1 }))
   })

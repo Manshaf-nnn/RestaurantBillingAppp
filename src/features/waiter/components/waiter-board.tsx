@@ -95,16 +95,39 @@ export function WaiterBoard({
   restaurantName,
   currency,
   locale,
+  branchIds,
 }: {
   initialReady: WaiterOrder[]
   initialServing: WaiterOrder[]
   initialRequests: WaiterRequest[]
   initialTables: WaiterTable[]
   user: { name: string; role: string }
+  /** Locations this screen is showing. Null means all of them. */
+  branchIds: string[] | null
+
   restaurantName: string
   currency: string
   locale: string
 }) {
+
+  /*
+   * Whether a live event belongs on this screen.
+   *
+   * Socket rooms are keyed `r:<restaurantId>:<role>` with no branch segment, so
+   * every board in the chain receives every event. The server render is
+   * branch-scoped, so a stray row vanished on the next refresh — but not before
+   * it had chimed, toasted, and here rang another branch's call bell.
+   *
+   * Filtering on arrival costs one comparison and needs no change to the socket
+   * handshake. Null means "every location" — an owner watching the whole
+   * business on purpose.
+   */
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
+
   const [ready, setReady] = React.useState(initialReady)
   const [serving, setServing] = React.useState(initialServing)
   const [requests, setRequests] = React.useState(initialRequests)
@@ -137,6 +160,7 @@ export function WaiterBoard({
   }, [initialReady, play])
 
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
+    if (!isOurs(payload)) return
     if (payload.status === 'READY') {
       setServing((current) => {
         const promoted = current.find((order) => order.id === payload.orderId)
@@ -172,6 +196,7 @@ export function WaiterBoard({
   })
 
   useSocketEvent(EVENTS.SERVICE_REQUEST_CREATED, (payload: ServiceRequestPayload) => {
+    if (!isOurs(payload)) return
     setRequests((current) =>
       current.some((request) => request.id === payload.id)
         ? current

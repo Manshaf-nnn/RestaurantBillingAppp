@@ -80,6 +80,12 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/feedback': 'Feedback is about the product',
   'dashboard/qr': 'Renders a sheet per branch — filtered by visibleBranchIds, not by one selection',
   'dashboard/reservations': 'Reservation has no branch column; would need a schema change to scope',
+
+  // ── The guest side. These are the pages a QR code opens, so the branch is
+  //    the whole point — only three are legitimately without one.
+  'order/cart': 'The branch travels in the cart (TableSession.branchCode), not in the URL',
+  'order/track/[orderId]': 'One order; authorised by the guest session cookie, not by branch',
+  'order/bill/[orderId]': 'As above',
 }
 
 const ROOT = 'src/app'
@@ -101,7 +107,18 @@ function pages(dir: string, prefix = ''): Array<{ key: string; file: string }> {
 }
 
 function main() {
-  const all = [...pages(join(ROOT, 'dashboard'), 'dashboard')]
+  /*
+   * The guest tree is included deliberately.
+   *
+   * `/order` is where the QR lands, and it was outside this check while being
+   * the flow the branch model exists for — `/order/menu` could have lost its
+   * branch resolution and nothing would have noticed. It is a small tree and
+   * every page in it either resolves a branch or is named above.
+   */
+  const all = [
+    ...pages(join(ROOT, 'dashboard'), 'dashboard'),
+    ...pages(join(ROOT, 'order'), 'order'),
+  ]
 
   const unscoped: string[] = []
   const stale: string[] = []
@@ -109,7 +126,9 @@ function main() {
 
   for (const { key, file } of all) {
     const src = readFileSync(file, 'utf8')
-    const resolves = src.includes('selectedBranch(')
+    // Two helpers, one question: staff pages ask `selectedBranch`, guest pages
+    // ask `resolvePublicBranch`. Either counts as having resolved a branch.
+    const resolves = src.includes('selectedBranch(') || src.includes('resolvePublicBranch(')
 
     if (resolves) {
       scoped += 1
@@ -124,7 +143,10 @@ function main() {
   for (const key of Object.keys(GROUP_WIDE)) {
     const match = all.find((p) => p.key === key)
     if (!match) stale.push(`  ${key} — no such page any more`)
-    else if (readFileSync(match.file, 'utf8').includes('selectedBranch(')) {
+    else if (
+      readFileSync(match.file, 'utf8').includes('selectedBranch(') ||
+      readFileSync(match.file, 'utf8').includes('resolvePublicBranch(')
+    ) {
       // Scoped AND exempt is fine for a page like /dashboard/reports that was
       // listed for another reason, so this is not an error — only reported when
       // the note does not say so.
@@ -134,7 +156,7 @@ function main() {
     }
   }
 
-  console.log(`dashboard pages:      ${all.length}`)
+  console.log(`pages checked:        ${all.length}`)
   console.log(`branch-scoped:        ${scoped}`)
   console.log(`business-wide:        ${Object.keys(GROUP_WIDE).length}`)
 
@@ -147,8 +169,9 @@ function main() {
     console.error(`\n✖ ${unscoped.length} page(s) show branch data without resolving a branch:\n`)
     console.error(unscoped.join('\n\n'))
     console.error(
-      '\nCall `selectedBranch(user, searchParams)` and pass the result into the\n' +
-      'queries — or, if the page really is business-wide, add it to GROUP_WIDE\n' +
+      '\nResolve a branch — `selectedBranch(user, searchParams)` on the staff side,\n' +
+      '`resolvePublicBranch(restaurantId, code)` on the guest side — and pass it\n' +
+      'into the queries. Or, if the page really is business-wide, add it to GROUP_WIDE\n' +
       `in ${__filename.split('/').pop()} with the reason.`,
     )
     process.exit(1)
@@ -159,7 +182,7 @@ function main() {
     process.exit(1)
   }
 
-  console.log('\n✓ every branch-dependent dashboard page resolves a branch')
+  console.log('\n✓ every branch-dependent page resolves a branch')
 }
 
 main()

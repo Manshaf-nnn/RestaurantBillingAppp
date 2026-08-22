@@ -260,6 +260,7 @@ export default async function DashboardPage({
             />
           ) : (
             <LiveOrderFeed
+              branchIds={selection.branchIds}
               currency={restaurant.currency}
               locale={locale}
               initialOrders={recentOrders.map((order) => ({
@@ -267,7 +268,7 @@ export default async function DashboardPage({
                 orderNumber: order.orderNumber,
                 status: order.status,
                 paymentStatus: order.paymentStatus,
-                tableNumber: order.table?.number ?? null,
+                tableNumber: order.tableNumber ?? order.table?.number ?? null,
                 customerName: order.customerName,
                 itemCount: order.items.reduce((total, item) => total + item.quantity, 0),
                 grandTotal: order.grandTotal,

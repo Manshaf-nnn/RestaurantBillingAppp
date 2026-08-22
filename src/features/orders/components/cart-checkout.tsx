@@ -88,15 +88,27 @@ export function CartCheckout({
         return
       }
       startQuote(async () => {
-        const result = await callAction(() => quoteCart({
-          items: state.lines.map((line) => ({
-            foodId: line.foodId,
-            quantity: line.quantity,
-            optionIds: line.options.map((option) => option.optionId),
-          })),
-          couponCode: code || undefined,
-          phone: state.customer.phone || undefined,
-        }))
+        const result = await callAction(() =>
+          quoteCart(
+            {
+              items: state.lines.map((line) => ({
+                foodId: line.foodId,
+                quantity: line.quantity,
+                optionIds: line.options.map((option) => option.optionId),
+              })),
+              couponCode: code || undefined,
+              phone: state.customer.phone || undefined,
+            },
+            undefined,
+            /*
+             * The branch the guest scanned. It was already being passed to
+             * `placeGuestOrder` twelve lines below and dropped here, so the
+             * summary priced at the restaurant's base prices while the menu
+             * they had just browsed priced at the branch's.
+             */
+            state.table?.branchCode ?? null,
+          ),
+        )
 
         if (result.ok) {
           setTotals(result.data.totals)

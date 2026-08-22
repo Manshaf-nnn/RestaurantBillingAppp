@@ -20,6 +20,7 @@ import {
   applyDiscountSchema,
   cancelOrderSchema,
   placeOrderSchema,
+  quoteCartSchema,
   serviceRequestSchema,
   staffOrderSchema,
   tableEntrySchema,
@@ -80,6 +81,10 @@ export async function resolveTable(
     const restaurant = await resolvePublicTenant(slug)
     if (!restaurant) throw new NotFoundError('Restaurant')
 
+    // Unauthenticated and cheap to call in a loop, so it gets the same venue-IP
+    // ceiling as its siblings. Its own guests hit it once per sitting.
+    await enforceRateLimit('publicRead')
+
     const branch = await resolvePublicBranch(restaurant.id, branchCode ?? null)
     if (!branch) throw new NotFoundError('Location')
 
@@ -95,25 +100,18 @@ export async function resolveTable(
 
     if (!table) {
       /*
-       * Named, so the guest can tell the two failures apart: a number that
-       * does not exist anywhere, and a number that exists but at another
-       * branch. The second is the one that happens when somebody scans the
-       * code from the wrong poster, and "not found" would send them looking
-       * for a typo they did not make.
+       * Names THIS branch, never the other one.
+       *
+       * The first version said "Table 2 is at Main Branch, not Branch 02",
+       * which is friendlier for the honest case — somebody scanned the wrong
+       * poster — and is also an enumeration oracle: this action is
+       * unauthenticated, so anyone could walk the numbers and learn the table
+       * layout of every branch in the business. Saying which branch the guest
+       * IS at keeps the useful half; saying which branch they are not at gives
+       * away someone else's floor.
        */
-      const elsewhere = await prisma.restaurantTable.findFirst({
-        where: {
-          restaurantId: restaurant.id,
-          number: data.tableNumber.toUpperCase(),
-          isActive: true,
-        },
-        select: { branch: { select: { name: true } } },
-      })
-
       throw new AppError(
-        elsewhere
-          ? `Table ${data.tableNumber} is at ${elsewhere.branch.name}, not ${branch.name}. Please scan the code on your own table.`
-          : `Table ${data.tableNumber} was not found. Please check the number on your table.`,
+        `Table ${data.tableNumber} is not at ${branch.name}. Please check the number on your table.`,
         404,
         'TABLE_NOT_FOUND',
       )
@@ -162,18 +160,45 @@ export async function resolveTable(
 }
 
 /** Live re-price of the guest cart — the checkout summary calls this. */
+/**
+ * Re-price the cart for the checkout summary.
+ *
+ * ── Why this takes a branch ─────────────────────────────────────────────────
+ *
+ * It did not, and `buildDraft` treats a missing branch as "no restriction"
+ * (`branchOverrides` returns null). Two things followed, and a guest met both:
+ * the menu showed the branch's price and this summary showed the restaurant's
+ * base price; and a dish the branch does not sell quoted happily, then failed
+ * at the last tap with "not on the menu here" — after the guest had typed
+ * their name and phone.
+ *
+ * The value was already in hand: the cart holds `branchCode` beside the table,
+ * and the very next action along passes it. This one dropped it.
+ *
+ * ── Why it is now validated and limited ─────────────────────────────────────
+ *
+ * This is an unauthenticated endpoint that fans out into a database query per
+ * distinct dish, and it took its input raw — no schema, no cap, no rate limit,
+ * while `placeOrderSchema` next door caps the cart at 60 lines. Prices were
+ * never at risk (they are re-read from the row), but the fan-out was.
+ */
 export async function quoteCart(
-  input: { items: Array<{ foodId: string; quantity: number; optionIds: string[] }>; couponCode?: string; phone?: string },
+  input: unknown,
   slug?: string,
+  branchCode?: string | null,
 ) {
-  return runSafe(async () => {
+  return runAction(quoteCartSchema, input, async (data) => {
     const restaurant = await resolvePublicTenant(slug)
     if (!restaurant) throw new NotFoundError('Restaurant')
 
+    await enforceRateLimit('quoteCartBurst')
+
+    const branch = await resolvePublicBranch(restaurant.id, branchCode ?? null)
+
     let customerId: string | null = null
-    if (input.phone) {
+    if (data.phone) {
       const customer = await prisma.customer.findFirst({
-        where: { restaurantId: restaurant.id, phone: input.phone },
+        where: { restaurantId: restaurant.id, phone: data.phone },
         select: { id: true, loyaltyPoints: true },
       })
       customerId = customer?.id ?? null
@@ -181,9 +206,12 @@ export async function quoteCart(
 
     const draft = await buildDraft({
       restaurantId: restaurant.id,
-      items: input.items,
-      couponCode: input.couponCode,
+      items: data.items,
+      couponCode: data.couponCode,
       customerId,
+      // The same branch the menu was priced at, so the summary agrees with what
+      // the guest was looking at a moment ago.
+      branchId: branch?.id ?? null,
     })
 
     return {
@@ -408,6 +436,7 @@ export async function updateGuestOrderItems(
         realtime.orderStatus(restaurant.id, {
           orderId: refreshedOrder.id,
           orderNumber: refreshedOrder.orderNumber,
+          branchId: refreshedOrder.branchId,
           status: refreshedOrder.status,
           tableId: refreshedOrder.tableId,
           tableNumber: refreshedOrder.table?.number ?? null,
@@ -421,9 +450,20 @@ export async function updateGuestOrderItems(
   )
 }
 
+/**
+ * A guest calls for water, plates or the bill.
+ *
+ * `branchCode` is the QR's `?b=`, for the same reason `resolveTable` takes it:
+ * the table must be checked at the branch the guest is actually sitting in.
+ * Without it this looked a table up by `{ id, restaurantId, isActive }` and
+ * nothing else, so an anonymous caller anywhere could ring the call bell on any
+ * table in any branch of the business — and `notify` below then routed it to
+ * that branch's waiters, who would go and look.
+ */
 export async function createServiceRequest(
   input: unknown,
   slug?: string,
+  branchCode?: string | null,
 ): Promise<ActionResult<{ id: string }>> {
   return runAction(
     serviceRequestSchema,
@@ -438,8 +478,19 @@ export async function createServiceRequest(
       await enforceRateLimit('serviceRequest', `guest:${guestSessionId}`)
       await enforceRateLimit('serviceRequestBurst')
 
+      const branch = await resolvePublicBranch(restaurant.id, branchCode ?? null)
+      if (!branch) throw new NotFoundError('Location')
+
       const table = await prisma.restaurantTable.findFirst({
-        where: { id: data.tableId, restaurantId: restaurant.id, isActive: true },
+        where: {
+          id: data.tableId,
+          restaurantId: restaurant.id,
+          // The branch the guest scanned. A table id from another branch is
+          // simply not found here, which is the right answer to give someone
+          // pasting one.
+          branchId: branch.id,
+          isActive: true,
+        },
       })
       if (!table) throw new NotFoundError('Table')
 
@@ -467,6 +518,9 @@ export async function createServiceRequest(
       realtime.serviceRequest(restaurant.id, {
         id: request.id,
         tableId: table.id,
+        // From the table, which is the only thing that knows — a service
+        // request has no branch column of its own.
+        branchId: table.branchId,
         tableNumber: table.number,
         type: request.type,
         note: request.note,
@@ -738,12 +792,26 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
 
 export async function resolveServiceRequest(requestId: string): Promise<ActionResult<{ id: string }>> {
   return runSafe(async () => {
-    const user = await requireTenantUser()
+    /*
+     * Clearing a call bell is floor work, so it needs the floor permission —
+     * this was `requireTenantUser()`, which is every signed-in account
+     * including an accountant.
+     */
+    const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
 
     const request = await prisma.serviceRequest.findFirst({
       where: { id: requestId, restaurantId: user.restaurantId },
+      include: { table: { select: { branchId: true } } },
     })
     if (!request) throw new NotFoundError('Request')
+
+    /*
+     * And it must be their own floor. `ServiceRequest` has no branch column —
+     * it reaches one through the table, which is how `getWaiterBoard` already
+     * scopes the list. Without this a Branch 02 waiter could clear Main's bell
+     * and the guest at Main would wait for someone who was never coming.
+     */
+    await assertRecordBranch(user, request.table, 'service request')
 
     await prisma.serviceRequest.update({
       where: { id: request.id },

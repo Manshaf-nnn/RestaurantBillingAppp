@@ -5,7 +5,7 @@ import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -35,13 +35,22 @@ export default async function CashierPage({
    * Which locations this screen shows — see the note on the kitchen page. A
    * floor screen belongs to the room it is standing in.
    */
-  const { branchIds } = await selectedBranch(user, params)
+  const selection = await selectedBranch(user, params)
+  const { branchIds } = selection
 
   const [menu, bills, today] = await Promise.all([
-    // The till sells its own branch's menu at its own branch's prices. A
-    // cashier confined to Kandy must not be able to ring up a Colombo-only
-    // dish, and must never charge Colombo's price for a shared one.
-    getPublicMenu(user.restaurantId, restaurant.timezone, user.branchId),
+    /*
+     * The till sells its own branch's menu at its own branch's prices. A
+     * cashier confined to Kandy must not be able to ring up a Colombo-only
+     * dish, and must never charge Colombo's price for a shared one.
+     *
+     * `scopeToOne(selection)`, not `user.branchId`: the queue on the same
+     * screen already used the selection, and an owner's `branchId` is null —
+     * so the takeaway menu showed the restaurant's BASE prices while the order
+     * it produced was priced at `actingBranchId`. One screen, two answers.
+     * `/cashier/pos` already did this correctly; now they agree.
+     */
+    getPublicMenu(user.restaurantId, restaurant.timezone, scopeToOne(selection)),
     getCashierQueue(user.restaurantId, branchIds),
     prisma.payment.aggregate({
       where: {
@@ -60,6 +69,9 @@ export default async function CashierPage({
 
   return (
     <CashierBoard
+      // Which locations this screen shows, so live events for another
+      // branch are ignored rather than chiming here.
+      branchIds={branchIds}
       menu={menu}
       startInTakeaway={startInTakeaway}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
@@ -82,7 +94,7 @@ export default async function CashierPage({
         type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
         status: order.status as 'PENDING',
         paymentStatus: order.paymentStatus,
-        tableNumber: order.table?.number ?? null,
+        tableNumber: order.tableNumber ?? order.table?.number ?? null,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         placedAt: order.placedAt.toISOString(),

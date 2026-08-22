@@ -20,6 +20,27 @@ export const tableEntrySchema = z.object({
 })
 export type TableEntryInput = z.infer<typeof tableEntrySchema>
 
+/**
+ * The checkout summary's input.
+ *
+ * Mirrors the item shape of `placeOrderSchema` including its 60-line cap: the
+ * quote is unauthenticated and fans out per distinct dish, so it needs the same
+ * ceiling as the order it precedes.
+ */
+export const quoteCartSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        foodId: z.string().cuid(),
+        quantity: z.coerce.number().int().min(1).max(50),
+        optionIds: z.array(z.string().cuid()).max(20).default([]),
+      }),
+    )
+    .max(60),
+  couponCode: z.string().trim().max(40).optional().or(z.literal('')),
+  phone: z.string().trim().max(30).optional().or(z.literal('')),
+})
+
 export const placeOrderSchema = z.object({
   tableId: z.string().cuid('Select a table'),
   /*
