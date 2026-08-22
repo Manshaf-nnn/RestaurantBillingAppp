@@ -49,7 +49,7 @@ const SERVICE = [
   'branch-isolation-test',
 ]
 
-const RUNTIME = ['page-render-test', 'action-e2e-test']
+const RUNTIME = ['page-render-test', 'action-e2e-test', 'qr-to-kitchen-test']
 
 interface Outcome {
   name: string
