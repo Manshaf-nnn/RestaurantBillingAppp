@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { WaiterBoard, type WaiterOrder } from '@/features/waiter/components/waiter-board'
 import { getWaiterBoard } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -35,12 +36,22 @@ function toWaiterOrder(order: BoardOrder): WaiterOrder {
   }
 }
 
-export default async function WaiterPage() {
+export default async function WaiterPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.WAITER_VIEW, '/waiter')
+
+  /*
+   * Which locations this screen shows — see the note on the kitchen page. A
+   * floor screen belongs to the room it is standing in.
+   */
+  const { branchIds } = await selectedBranch(user, await searchParams)
 
   const [restaurant, board] = await Promise.all([
     requireRestaurant(user.restaurantId),
-    getWaiterBoard(user.restaurantId),
+    getWaiterBoard(user.restaurantId, branchIds),
   ])
 
   return (

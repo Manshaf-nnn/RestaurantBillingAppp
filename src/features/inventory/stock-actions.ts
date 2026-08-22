@@ -10,15 +10,16 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { actingBranchId } from '@/features/dashboard/selected-branch'
 import {
-  adjustStock, receiveStock, setOpeningBalance, transferStock,
+  adjustStock, receiveStock, setOpeningBalance,
 } from './operations'
 import {
   approveStockCount, openStockCount, recordCountLines, submitStockCount,
 } from './stock-count'
 import {
   adjustStockSchema, approveCountSchema, countLinesSchema, openingBalanceSchema,
-  receiveStockSchema, transferStockSchema,
+  receiveStockSchema,
 } from './stock-schema'
 
 /**
@@ -48,6 +49,7 @@ export async function receiveStockAction(input: unknown): Promise<ActionResult<{
     const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
     const posted = await receiveStock({
       restaurantId: user.restaurantId,
+      branchId: await actingBranchId(user),
       itemId: data.itemId,
       quantity: data.quantity,
       unit: data.unit,
@@ -79,7 +81,8 @@ export async function adjustStockAction(input: unknown): Promise<ActionResult<{ 
   return runAction(adjustStockSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_ADJUST)
     const posted = await adjustStock({
-      restaurantId: user.restaurantId, itemId: data.itemId, quantity: data.quantity,
+      restaurantId: user.restaurantId, branchId: await actingBranchId(user),
+      itemId: data.itemId, quantity: data.quantity,
       unit: data.unit, direction: data.direction, reason: data.reason, userId: user.id,
     })
     await audit({
@@ -93,34 +96,25 @@ export async function adjustStockAction(input: unknown): Promise<ActionResult<{ 
   }, 'Stock adjusted.')
 }
 
-export async function transferStockAction(
-  input: unknown,
-): Promise<ActionResult<{ from: number; to: number }>> {
-  return runAction(transferStockSchema, input, async (data) => {
-    const user = await requirePermission(PERMISSIONS.INVENTORY_TRANSFER)
-    const moved = await transferStock({
-      restaurantId: user.restaurantId, fromItemId: data.fromItemId, toItemId: data.toItemId,
-      quantity: data.quantity, unit: data.unit, reason: data.reason || null, userId: user.id,
-    })
-    await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-      action: AUDIT_ACTIONS.STOCK_TRANSFER, entity: 'InventoryItem', entityId: data.fromItemId,
-      after: {
-        to: data.toItemId, quantity: data.quantity,
-        fromBalance: moved.out.balanceAfter, toBalance: moved.in.balanceAfter,
-      },
-    })
-    revalidateInventory(data.fromItemId)
-    revalidateInventory(data.toItemId)
-    return { from: moved.out.balanceAfter, to: moved.in.balanceAfter }
-  }, 'Stock transferred.')
-}
+/*
+ * `transferStockAction` was here and has been removed.
+ *
+ * It moved stock from one InventoryItem row to another and named no branch on
+ * either leg, so `applyLocationDelta` skipped both and no location's balance
+ * ever changed — while the restaurant-wide quantity did. It was a live server
+ * action, reachable by anyone holding INVENTORY_TRANSFER, and no component in
+ * the app ever called it. The real path is `/dashboard/transfers`, which moves
+ * one item between two locations with a request, an approval, a dispatch and a
+ * receipt.
+ */
+
 
 export async function setOpeningBalanceAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
   return runAction(openingBalanceSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_ADJUST)
     const posted = await setOpeningBalance({
-      restaurantId: user.restaurantId, itemId: data.itemId, quantity: data.quantity,
+      restaurantId: user.restaurantId, branchId: await actingBranchId(user),
+      itemId: data.itemId, quantity: data.quantity,
       unit: data.unit, unitCost: await costToMinor(user.restaurantId, data.unitCost), userId: user.id,
     })
     await audit({

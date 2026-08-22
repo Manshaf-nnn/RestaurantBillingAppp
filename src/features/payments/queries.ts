@@ -22,11 +22,18 @@ export interface OnlinePaymentRow {
  * Every payment a guest settled (or declared) online — bank transfer or gateway
  * — so the owner can cross-check them against the bank and confirm receipts.
  */
-export async function getOnlinePayments(restaurantId: string): Promise<OnlinePaymentRow[]> {
+export async function getOnlinePayments(
+  restaurantId: string,
+  branchIds?: string[] | null,
+): Promise<OnlinePaymentRow[]> {
   const rows = await prisma.payment.findMany({
     where: {
       restaurantId,
       OR: [{ method: 'ONLINE' }, { reference: { contains: 'transfer', mode: 'insensitive' } }],
+      // A payment reaches its location through the bill it settled. Without
+      // this, every branch's online receipts and the customer names on them
+      // were readable by anyone holding PAYMENT_COLLECT.
+      ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
     },
     orderBy: { createdAt: 'desc' },
     take: 80,

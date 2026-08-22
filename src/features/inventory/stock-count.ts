@@ -38,7 +38,8 @@ export interface CountLineInput {
 /** Start a count. Empty until lines are added. */
 export async function openStockCount(params: {
   restaurantId: string
-  branchId?: string | null
+  /** Which location. Required, in step with the ledger. */
+  branchId: string
   locationId?: string | null
   userId: string
   notes?: string | null
@@ -51,7 +52,7 @@ export async function openStockCount(params: {
   return prisma.stockCount.create({
     data: {
       restaurantId: params.restaurantId,
-      branchId: params.branchId ?? null,
+      branchId: params.branchId,
       locationId: params.locationId ?? null,
       reference,
       countedById: params.userId,

@@ -204,9 +204,14 @@ async function main() {
 
   console.log('\nNo movement anywhere is missing its branch')
 
-  const orphan = await prisma.stockMovement.count({
-    where: { restaurantId: restaurant.id, branchId: null },
-  })
+  // Raw SQL, because `branchId` is NOT NULL now and Prisma will not type a
+  // `null` filter against it. The check is kept rather than deleted: it is the
+  // one that would notice if the column were ever loosened again.
+  const [{ n }] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*)::bigint AS n FROM "stock_movements"
+    WHERE "restaurantId" = ${restaurant.id} AND "branchId" IS NULL
+  `
+  const orphan = Number(n)
   check('every movement is attributed to a branch', orphan === 0, `${orphan} without one`)
 
   const nullBalance = await prisma.stockMovement.count({

@@ -4,19 +4,27 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, assignableRoles, canManageLocation } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { hashPassword } from '@/server/auth/password'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { generateSignInCode, nextStaffCode } from '@/features/staff/codes'
 import { sendMail, staffInviteEmail } from '@/server/mailer'
-import { locationSchema, storageLocationSchema, updateLocationSchema } from './schema'
+import {
+  locationSchema,
+  storageLocationSchema,
+  updateLocationSchema,
+  updateStorageLocationSchema,
+} from './schema'
 import {
   createLocationWithManager,
+  locationRemovalBlockers,
+  removeBranch,
   requireBranch,
   setBranchManager,
   setDefaultBranch,
   updateBranch,
+  type RemovalBlocker,
 } from './service'
 
 /*
@@ -189,6 +197,38 @@ export async function updateLocationAction(
        * Switching the default off would therefore leave the fallback pointing at
        * a closed site, so the swap has to happen the other way round.
        */
+            /*
+       * Switching a location off strands whatever is still happening there.
+       *
+       * The only check was the default-branch one below. A site with an open
+       * till or a half-eaten dinner could be switched off from under the people
+       * standing in it: the branch vanishes from the switcher and from
+       * `resolveBranchId`, so nobody can reach the drawer to close it.
+       *
+       * Stock and staff are deliberately NOT blockers here — unlike removal.
+       * Switching off is the reversible option, and "we are closed for
+       * refurbishment, the stock stays on the shelf" is exactly what it is for.
+       */
+      if (data.isActive === false && !before.isDefault) {
+        const [openOrders, openDrawers] = await Promise.all([
+          prisma.order.count({
+            where: { branchId: data.branchId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+          }),
+          prisma.cashDrawerSession.count({ where: { branchId: data.branchId, status: 'OPEN' } }),
+        ])
+        if (openOrders > 0 || openDrawers > 0) {
+          const parts = [
+            openOrders > 0 ? `${openOrders} open order${openOrders === 1 ? '' : 's'}` : null,
+            openDrawers > 0 ? `${openDrawers} open cash drawer${openDrawers === 1 ? '' : 's'}` : null,
+          ].filter(Boolean)
+          throw new AppError(
+            `Finish up here first — this location still has ${parts.join(' and ')}.`,
+            409,
+            'BRANCH_STILL_BUSY',
+          )
+        }
+      }
+
       if (data.isActive === false && before.isDefault) {
         throw new AppError(
           'The default location cannot be switched off. Make another location the default first.',
@@ -286,6 +326,144 @@ export async function createStorageLocationAction(
     },
     'Storage area added.',
   )
+}
+
+/**
+ * Rename a storage area, or take it out of use.
+ *
+ * Storage areas could be created and then never touched again — no rename, no
+ * deactivate, no remove — so a typo in "Cold Room" was permanent and a shelf
+ * that had been torn out stayed in every picker.
+ *
+ * The branch is deliberately not editable. A shelf does not move between
+ * buildings, and letting it would silently relocate every batch, count and
+ * receipt recorded against it.
+ */
+export async function updateStorageLocationAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    updateStorageLocationSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+
+      const store = await prisma.storageLocation.findFirst({
+        where: { id: data.storageLocationId, restaurantId: user.restaurantId, deletedAt: null },
+        select: { id: true, branchId: true, name: true },
+      })
+      if (!store) throw new NotFoundError('Storage area')
+      await assertRecordBranch(user, store, 'storage area')
+
+      await prisma.storageLocation.update({
+        where: { id: store.id },
+        data: {
+          ...(data.name !== undefined ? { name: data.name } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        },
+      })
+      return { id: store.id }
+    },
+    'Storage area updated.',
+  )
+}
+
+/**
+ * Remove a storage area.
+ *
+ * Refused while it still holds stock — the same rule as a location, for the
+ * same reason: the shelf is where a balance lives, and deleting it would leave
+ * the stock recorded nowhere. Soft, so the movements that reference it stay
+ * readable.
+ */
+export async function removeStorageLocationAction(
+  storageLocationId: string,
+): Promise<ActionResult<{ id: string }>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+
+    const store = await prisma.storageLocation.findFirst({
+      where: { id: storageLocationId, restaurantId: user.restaurantId, deletedAt: null },
+      select: { id: true, branchId: true, name: true, isDefault: true },
+    })
+    if (!store) throw new NotFoundError('Storage area')
+    await assertRecordBranch(user, store, 'storage area')
+
+    if (store.isDefault) {
+      throw new AppError(
+        'This is the default storage area for its location — make another one the default first.',
+        409,
+        'STORAGE_IS_DEFAULT',
+      )
+    }
+
+    const held = await prisma.inventoryStock.count({
+      where: {
+        storageLocationId,
+        OR: [{ available: { not: 0 } }, { reserved: { not: 0 } }, { inTransit: { not: 0 } }],
+      },
+    })
+    if (held > 0) {
+      throw new AppError(
+        `${held} item${held === 1 ? '' : 's'} still hold stock on this shelf — move it first.`,
+        409,
+        'STORAGE_HAS_STOCK',
+      )
+    }
+
+    await prisma.storageLocation.update({
+      where: { id: store.id },
+      data: { deletedAt: new Date(), isActive: false },
+    })
+    return { id: store.id }
+  }, 'Storage area removed.')
+}
+
+/**
+ * What is standing in the way of removing a location, if anything.
+ *
+ * Read before the button is offered, so the screen can say "3 items still hold
+ * stock here" rather than presenting a delete that will fail.
+ */
+export async function locationRemovalBlockersAction(
+  branchId: string,
+): Promise<ActionResult<{ blockers: RemovalBlocker[] }>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+    await assertBranchAccess(user, branchId)
+    return { blockers: await locationRemovalBlockers(user.restaurantId, branchId) }
+  })
+}
+
+/**
+ * Remove a location.
+ *
+ * Soft — the history stays readable — and refused outright while anything is
+ * still live there. The refusal names what is in the way; see
+ * `locationRemovalBlockers`.
+ */
+export async function removeLocationAction(branchId: string): Promise<ActionResult<{ id: string }>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+    await assertBranchAccess(user, branchId)
+    const before = await requireBranch(user.restaurantId, branchId)
+
+    const result = await removeBranch({ restaurantId: user.restaurantId, branchId })
+
+    await audit({
+      restaurantId: user.restaurantId,
+      branchId,
+      userId: user.id,
+      actorName: user.name,
+      action: AUDIT_ACTIONS.DELETE,
+      entity: 'Branch',
+      entityId: branchId,
+      before: { name: before.name, code: before.code, isActive: before.isActive },
+      after: { removed: true },
+    })
+
+    return result
+  }, 'Location removed.')
 }
 
 /**

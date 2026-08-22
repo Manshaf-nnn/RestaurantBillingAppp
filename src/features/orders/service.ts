@@ -971,6 +971,9 @@ export async function cancelOrder(params: {
 
   await notify({
     restaurantId: order.restaurantId,
+    // Order notifications carry the order's own branch, so a ticket for Kandy
+    // stops ringing the bell in Colombo.
+    branchId: order.branchId,
     type: 'ORDER_CANCELLED',
     title: `Order ${order.orderNumber} cancelled`,
     body: params.reason,
@@ -1029,7 +1032,7 @@ async function broadcastOrder(orderId: string, kind: 'created' | 'status') {
 
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { restaurantId: true, status: true },
+    select: { restaurantId: true, status: true, branchId: true },
   })
   if (!order) return
 
@@ -1037,6 +1040,7 @@ async function broadcastOrder(orderId: string, kind: 'created' | 'status') {
     realtime.orderCreated(order.restaurantId, payload)
     await notify({
       restaurantId: order.restaurantId,
+      branchId: order.branchId,
       type: 'ORDER_PLACED',
       title: `New order ${payload.orderNumber}`,
       body: payload.tableNumber
@@ -1072,6 +1076,7 @@ async function notifyStatusChange(order: Order, tableNumber: string | null) {
   if (!meta) return
   await notify({
     restaurantId: order.restaurantId,
+    branchId: order.branchId,
     type: meta.type,
     title: `${meta.title} — ${order.orderNumber}`,
     body: tableNumber ? `Table ${tableNumber}` : order.customerName,

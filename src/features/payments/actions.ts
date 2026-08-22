@@ -7,7 +7,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { receiptEmail, sendMail } from '@/server/mailer'
@@ -82,6 +82,7 @@ export async function declareGuestPayment(input: unknown): Promise<ActionResult<
 
       await notify({
         restaurantId: restaurant.id,
+        branchId: order.branchId,
         type: 'PAYMENT_RECEIVED',
         title: `Table ${order.table?.number ?? '—'} says they have paid`,
         body: `${order.orderNumber} · ${formatMoney(order.grandTotal - order.paidTotal, restaurant.currency)} — please verify`,
@@ -146,6 +147,17 @@ export async function collectPayment(
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PAYMENT_COLLECT)
 
+      /*
+       * Whose bill. `capturePayment` looks the order up by id and restaurant,
+       * so a cashier confined to Kandy could settle a Colombo bill — and,
+       * through the drawer attached to it, book the cash at Kandy.
+       */
+      const bill = await prisma.order.findFirst({
+        where: { id: data.orderId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      await assertRecordBranch(user, bill, 'order')
+
       const result = await capturePayment({
         restaurantId: user.restaurantId,
         orderId: data.orderId,
@@ -186,6 +198,14 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PAYMENT_REFUND)
+
+      // Same rule as collecting, and it matters more: a refund moves money out.
+      const original = await prisma.payment.findFirst({
+        where: { id: data.paymentId, restaurantId: user.restaurantId },
+        select: { order: { select: { branchId: true } } },
+      })
+      if (!original) throw new NotFoundError('Payment')
+      await assertRecordBranch(user, original.order, 'payment')
 
       const refunded = await refundPayment({
         restaurantId: user.restaurantId,

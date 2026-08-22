@@ -25,7 +25,10 @@ import { execFileSync } from 'node:child_process'
 
 const BASE_URL = process.env.BASE_URL
 
-const STATIC = ['no-bad-server-exports', 'no-function-props', 'no-raw-action-calls']
+const STATIC = [
+  'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
+  'no-unscoped-branch-pages',
+]
 
 const SERVICE = [
   'qa-suite',

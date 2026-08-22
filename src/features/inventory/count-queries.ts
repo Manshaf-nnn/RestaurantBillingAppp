@@ -178,10 +178,15 @@ export interface StockCountSummary {
 
 export async function listStockCounts(params: {
   restaurantId: string
+  /** Locations the viewer may see. Null is unrestricted; [] sees nothing. */
+  branchIds?: string[] | null
   limit?: number
 }): Promise<StockCountSummary[]> {
   const counts = await prisma.stockCount.findMany({
-    where: { restaurantId: params.restaurantId },
+    where: {
+      restaurantId: params.restaurantId,
+      ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+    },
     orderBy: { countedAt: 'desc' },
     take: params.limit ?? 40,
     include: {

@@ -85,7 +85,7 @@ async function main() {
   console.log('\nA correction is always allowed, or the mess cannot be cleaned up')
 
   const corrected = await adjustStock({
-    restaurantId: restaurant.id,
+    restaurantId: restaurant.id, branchId: branch.id,
     itemId: item.id,
     quantity: 3,
     direction: 'OUT',

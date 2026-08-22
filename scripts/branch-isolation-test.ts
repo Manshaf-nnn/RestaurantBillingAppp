@@ -21,6 +21,16 @@ import { placeOrder } from '../src/features/orders/service'
 import { resolvePublicBranch } from '../src/features/branches/public-branch'
 import { getSalesReport } from '../src/features/reports/sales'
 import { visibleBranchIds, canAccessBranch, assignableRoles } from '../src/lib/rbac'
+import { listShiftNotes } from '../src/features/handover/queries'
+import { closeDrawer, listDrawerSessions, openDrawer, recordCashMovement } from '../src/features/cashdrawer/service'
+import { getKitchenQueue } from '../src/features/orders/queries'
+import { getReportSummary } from '../src/features/analytics/queries'
+import { postMovement } from '../src/features/inventory/ledger'
+import {
+  approveTransfer, dispatchTransfer, receiveTransfer, requestTransfer,
+} from '../src/features/transfers/service'
+import { assertApproved, decideApproval, requestApproval } from '../src/features/approvals/service'
+import { locationRemovalBlockers, removeBranch } from '../src/features/branches/service'
 
 let passed = 0
 let failed = 0
@@ -356,6 +366,270 @@ async function main() {
     table1B01.branchId === b01.id && table1Main.branchId === main.id,
   )
 
+
+  // ────────────────────────────────────────────────────────────────────────
+  // The second audit: everything below was written as a claim that FAILED
+  // against the code before this pass, so each one pins a specific reported
+  // symptom rather than restating a rule that already held.
+  // ────────────────────────────────────────────────────────────────────────
+
+  console.log('\n── 13. a handover note stays at the branch it was written at ──')
+
+  const b01Note = await prisma.shiftNote.create({
+    data: {
+      restaurantId: restaurant.id,
+      branchId: b01.id,
+      body: 'Fridge two is running warm',
+      authorName: 'Branch 01 closer',
+    },
+  })
+  await prisma.shiftNote.create({
+    data: {
+      restaurantId: restaurant.id,
+      branchId: main.id,
+      body: 'Card machine needs paper',
+      authorName: 'Main closer',
+    },
+  })
+
+  const atMainNotes = await listShiftNotes(restaurant.id, [main.id])
+  const atB01Notes = await listShiftNotes(restaurant.id, [b01.id])
+  const everyNote = await listShiftNotes(restaurant.id, null)
+
+  check(
+    'Main Branch does not see Branch 01’s note',
+    !atMainNotes.some((n) => n.id === b01Note.id),
+    'this is the bug that was reported in as many words',
+  )
+  check('Branch 01 sees its own', atB01Notes.some((n) => n.id === b01Note.id))
+  check('and the owner on "all locations" sees both', everyNote.length === 2, `${everyNote.length}`)
+  check(
+    'an unassigned user sees none, not all',
+    (await listShiftNotes(restaurant.id, [])).length === 0,
+    'an empty allow-list was read as "no filter"',
+  )
+
+  console.log('\n── 14. cash drawers, and the history that used to vanish ──')
+
+  const b01Cashier = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, branchId: b01.id, role: 'CASHIER',
+      name: 'B01 Cashier', email: `b01c-${stamp}@t.test`, passwordHash: 'x', emailVerifiedAt: new Date(),
+    },
+  })
+  const b02Cashier = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, branchId: b02.id, role: 'CASHIER',
+      name: 'B02 Cashier', email: `b02c-${stamp}@t.test`, passwordHash: 'x', emailVerifiedAt: new Date(),
+    },
+  })
+
+  const b01Drawer = await openDrawer({
+    restaurantId: restaurant.id, userId: b01Cashier.id,
+    branchId: b01.id, userBranchId: b01.id, openingFloat: 500_00,
+  })
+
+  const b02Actor = {
+    id: b02Cashier.id, role: 'CASHIER' as const, branchId: b02.id, canManageOthers: true,
+  }
+  await refuses(
+    'Branch 02 cannot put cash into Branch 01’s drawer',
+    () =>
+      recordCashMovement({
+        restaurantId: restaurant.id, sessionId: b01Drawer.id, actor: b02Actor,
+        type: 'CASH_IN', amount: 100_00, reason: 'test', userId: b02Cashier.id,
+      }),
+    /another location/i,
+  )
+  await refuses(
+    'nor close it',
+    () =>
+      closeDrawer({
+        restaurantId: restaurant.id, sessionId: b01Drawer.id, actor: b02Actor,
+        countedCash: 0, userId: b02Cashier.id,
+      }),
+    /another location/i,
+  )
+
+  const b01Actor = {
+    id: b01Cashier.id, role: 'CASHIER' as const, branchId: b01.id, canManageOthers: true,
+  }
+  await closeDrawer({
+    restaurantId: restaurant.id, sessionId: b01Drawer.id, actor: b01Actor,
+    countedCash: 500_00, userId: b01Cashier.id,
+  })
+
+  const b01History = await listDrawerSessions({ restaurantId: restaurant.id, branchId: b01.id })
+  const b02History = await listDrawerSessions({ restaurantId: restaurant.id, branchId: b02.id })
+  check(
+    'a CLOSED drawer is still in its branch’s history',
+    b01History.some((d) => d.id === b01Drawer.id && d.status === 'CLOSED'),
+    'closing it made it disappear',
+  )
+  check(
+    'and the variance was snapshotted on it',
+    b01History.find((d) => d.id === b01Drawer.id)?.variance === 0,
+  )
+  check('Branch 02 sees none of Branch 01’s drawers', b02History.length === 0, `${b02History.length}`)
+
+  console.log('\n── 15. the kitchen rail is one kitchen’s ──')
+
+  const mainQueue = await getKitchenQueue(restaurant.id, [main.id])
+  const b01Queue = await getKitchenQueue(restaurant.id, [b01.id])
+  check(
+    'Main’s rail holds no Branch 01 ticket',
+    mainQueue.every((o) => o.branchId === main.id),
+    'a chef was reading another building’s orders',
+  )
+  check('and Branch 01’s holds none of Main’s', b01Queue.every((o) => o.branchId === b01.id))
+
+  console.log('\n── 16. the reports screen answers for one branch ──')
+
+  const window = { from: new Date(Date.now() - 86_400_000), to: new Date(Date.now() + 86_400_000) }
+  const groupReport = await getReportSummary(restaurant.id, window)
+  const b01Report = await getReportSummary(restaurant.id, window, [b01.id])
+  const b02Report = await getReportSummary(restaurant.id, window, [b02.id])
+  check(
+    'Branch 02, which sold nothing, reports nothing',
+    b02Report.orderCount === 0,
+    `${b02Report.orderCount} orders leaked in`,
+  )
+  check(
+    'Branch 01 reports its own and not the group’s',
+    b01Report.revenue <= groupReport.revenue && b01Report.orderCount <= groupReport.orderCount,
+    `${b01Report.revenue} vs ${groupReport.revenue}`,
+  )
+
+  console.log('\n── 17. a transfer waits for the owner, and stock waits with it ──')
+
+  const grain = await prisma.inventoryItem.create({
+    data: {
+      restaurantId: restaurant.id, name: `Grain ${stamp}`, unit: 'KG',
+      quantity: 0, costPerUnit: 1_000,
+    },
+  })
+  await prisma.$transaction((tx) =>
+    postMovement(tx, {
+      restaurantId: restaurant.id, branchId: main.id, itemId: grain.id,
+      type: 'OPENING_BALANCE', quantity: 100, unitCost: 1_000,
+    }),
+  )
+
+  const held = async (branchId: string) =>
+    (await prisma.inventoryStock.findFirst({ where: { itemId: grain.id, branchId } }))?.available ?? 0
+
+  const transfer = await requestTransfer({
+    restaurantId: restaurant.id,
+    fromBranchId: main.id,
+    toBranchId: b01.id,
+    lines: [{ itemId: grain.id, quantity: 20 }],
+  })
+  check('a request moves no stock', (await held(main.id)) === 100, `${await held(main.id)}`)
+  check('and none arrives', (await held(b01.id)) === 0, `${await held(b01.id)}`)
+
+  const request = await requestApproval({
+    restaurantId: restaurant.id, branchId: main.id, kind: 'STOCK_TRANSFER',
+    entity: 'StockTransfer', entityId: transfer.id, reason: 'test',
+  })
+  await refuses(
+    'and it cannot be approved before the owner rules on it',
+    () =>
+      assertApproved({
+        restaurantId: restaurant.id, entity: 'StockTransfer',
+        entityId: transfer.id, kind: 'STOCK_TRANSFER',
+      }),
+    /needs approval/i,
+  )
+
+  const requester = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, role: 'MANAGER', branchId: b01.id,
+      name: 'Asker', email: `ask-${stamp}@t.test`, passwordHash: 'x', emailVerifiedAt: new Date(),
+    },
+  })
+  await prisma.approvalRequest.update({
+    where: { id: request.id }, data: { requestedById: requester.id },
+  })
+  await refuses(
+    'and the person who asked cannot be the person who approves',
+    () =>
+      decideApproval({
+        restaurantId: restaurant.id, approvalId: request.id,
+        approve: true, userId: requester.id,
+      }),
+    /own request/i,
+  )
+
+  const decider = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, role: 'OWNER',
+      name: 'Owner', email: `own-${stamp}@t.test`, passwordHash: 'x', emailVerifiedAt: new Date(),
+    },
+  })
+  await decideApproval({
+    restaurantId: restaurant.id, approvalId: request.id, approve: true, userId: decider.id,
+  })
+  await approveTransfer({ restaurantId: restaurant.id, transferId: transfer.id, userId: decider.id })
+  check('approval still moves nothing — it reserves', (await held(main.id)) === 100, `${await held(main.id)}`)
+
+  const transferLine = await prisma.stockTransferLine.findFirstOrThrow({
+    where: { transferId: transfer.id },
+  })
+  await dispatchTransfer({
+    restaurantId: restaurant.id, transferId: transfer.id, userId: decider.id,
+    sent: [{ lineId: transferLine.id, quantity: 20 }],
+  })
+  check('the source falls at dispatch, and only then', (await held(main.id)) === 80, `${await held(main.id)}`)
+  check('the destination has still not received it', (await held(b01.id)) === 0, `${await held(b01.id)}`)
+
+  await receiveTransfer({
+    restaurantId: restaurant.id, transferId: transfer.id, userId: decider.id,
+    lines: [{ lineId: transferLine.id, receivedQty: 20 }],
+  })
+  check('and rises at receipt', (await held(b01.id)) === 20, `${await held(b01.id)}`)
+  check(
+    'a clean delivery completes itself',
+    (await prisma.stockTransfer.findUniqueOrThrow({ where: { id: transfer.id } })).status === 'COMPLETED',
+  )
+
+  console.log('\n── 18. a location holding stock refuses to go ──')
+
+  const blocked = await locationRemovalBlockers(restaurant.id, b01.id)
+  check(
+    'Branch 01 cannot be removed while it holds stock',
+    blocked.some((b) => /hold stock/.test(b.what)),
+    JSON.stringify(blocked.map((b) => b.what)),
+  )
+  check(
+    'the default location can never be removed',
+    (await locationRemovalBlockers(restaurant.id, main.id)).some((b) => /default/i.test(b.what)),
+  )
+  await refuses(
+    'and removing it anyway is refused',
+    () => removeBranch({ restaurantId: restaurant.id, branchId: b01.id }),
+    /cannot be removed/i,
+  )
+
+  const empty = await prisma.branch.create({
+    data: { restaurantId: restaurant.id, name: 'Popup', code: `POP${stamp.slice(-3).toUpperCase()}` },
+  })
+  check(
+    'a location with nothing at it has no blockers',
+    (await locationRemovalBlockers(restaurant.id, empty.id)).length === 0,
+  )
+  await removeBranch({ restaurantId: restaurant.id, branchId: empty.id })
+  const gone = await prisma.branch.findUniqueOrThrow({ where: { id: empty.id } })
+  check('removing it is soft — the row and its history stay', gone.deletedAt !== null)
+  check('and it is switched off', gone.isActive === false)
+
+  await prisma.shiftNote.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.approvalRequest.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.cashMovement.deleteMany({ where: { session: { restaurantId: restaurant.id } } })
+  await prisma.cashDrawerSession.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.stockTransferLine.deleteMany({ where: { transfer: { restaurantId: restaurant.id } } })
+  await prisma.stockTransfer.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.notification.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.auditLog.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.orderItem.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.orderEvent.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.order.deleteMany({ where: { restaurantId: restaurant.id } })
@@ -367,6 +641,7 @@ async function main() {
   await prisma.stockMovement.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.user.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.branch.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   await prisma.$disconnect()

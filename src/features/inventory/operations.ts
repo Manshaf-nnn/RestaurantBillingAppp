@@ -28,7 +28,12 @@ interface Simple extends Actor {
   unit?: StockUnit | null
   reason?: string | null
   notes?: string | null
-  branchId?: string | null
+  /**
+   * Which location. Required since the ledger made it required — a movement
+   * that names no place updates the restaurant's total and no location's
+   * balance, which is how the two drift apart.
+   */
+  branchId: string
   locationId?: string | null
 }
 
@@ -180,73 +185,3 @@ export async function adjustStock(
   )
 }
 
-/**
- * Move stock from one item record to another — between branches, or between
- * stores within a branch.
- *
- * Both legs are written in one transaction. A transfer that debited the source
- * but failed to credit the destination would destroy stock that physically
- * still exists, so the pair is atomic and shares a reference id linking them.
- */
-export async function transferStock(params: {
-  restaurantId: string
-  fromItemId: string
-  toItemId: string
-  quantity: number
-  unit?: StockUnit | null
-  reason?: string | null
-  userId?: string | null
-  toLocationId?: string | null
-}): Promise<{ out: PostedMovement; in: PostedMovement }> {
-  if (params.fromItemId === params.toItemId && !params.toLocationId) {
-    throw new AppError(
-      'Choose a different destination — a transfer to the same place moves nothing',
-      400,
-      'TRANSFER_SAME_ITEM',
-    )
-  }
-
-  const [source, destination] = await Promise.all([
-    prisma.inventoryItem.findFirst({
-      where: { id: params.fromItemId, restaurantId: params.restaurantId },
-      select: { id: true, name: true },
-    }),
-    prisma.inventoryItem.findFirst({
-      where: { id: params.toItemId, restaurantId: params.restaurantId },
-      select: { id: true, name: true },
-    }),
-  ])
-  if (!source || !destination) throw new NotFoundError('Inventory item')
-
-  // Shared so the two halves can be found together in the ledger.
-  const reference = `TRF-${Date.now().toString(36).toUpperCase()}`
-
-  return prisma.$transaction(async (tx) => {
-    const out = await postMovement(tx, {
-      restaurantId: params.restaurantId,
-      itemId: params.fromItemId,
-      type: 'TRANSFER_OUT',
-      quantity: params.quantity,
-      enteredUnit: params.unit,
-      reason: params.reason ?? `Transfer to ${destination.name}`,
-      referenceType: 'Transfer',
-      referenceId: reference,
-      userId: params.userId,
-    })
-
-    const credited = await postMovement(tx, {
-      restaurantId: params.restaurantId,
-      itemId: params.toItemId,
-      type: 'TRANSFER_IN',
-      quantity: params.quantity,
-      enteredUnit: params.unit,
-      reason: params.reason ?? `Transfer from ${source.name}`,
-      referenceType: 'Transfer',
-      referenceId: reference,
-      locationId: params.toLocationId ?? null,
-      userId: params.userId,
-    })
-
-    return { out, in: credited }
-  })
-}

@@ -68,7 +68,7 @@ async function main() {
     })
     await tx.stockBatch.create({
       data: {
-        restaurantId: restaurant.id, itemId: patty.id, batchNo: `B-${stamp}`,
+        restaurantId: restaurant.id, branchId: branch.id, itemId: patty.id, batchNo: `B-${stamp}`,
         receivedQty: 100, remainingQty: 100, unitCost: 100,
         expiryDate: new Date(Date.now() + 5 * 86_400_000),
       },

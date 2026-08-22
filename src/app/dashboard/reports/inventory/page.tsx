@@ -38,9 +38,7 @@ export default async function InventoryReportPage({
    */
   const selection = await selectedBranch(user, p)
   const allowed = selection.branchIds
-  const locations = (await listLocations(user.restaurantId)).filter(
-    (l) => allowed === null || allowed.includes(l.id),
-  )
+  const locations = await listLocations(user.restaurantId, allowed)
   const chosen = scopeToOne(selection)
 
   const days = Math.max(1, Math.ceil((range.to.getTime() - range.from.getTime()) / 86_400_000))

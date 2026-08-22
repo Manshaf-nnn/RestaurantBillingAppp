@@ -7,6 +7,7 @@ import { toAppError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { getReportSummary, resolveRange } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { buildReportWorkbook, toCsv, toExcel } from '@/features/reports/export'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -42,13 +43,47 @@ export async function GET(request: NextRequest) {
       after: { type, format, range: params.get('range') },
     })
 
+    /*
+     * An export is a download, not a screen, and it was neither scoped nor
+     * complete: no branch filter, and `page: 1, perPage: 100`, so a confined
+     * manager could pull the whole group's orders and everyone got only the
+     * first hundred rows of their own.
+     *
+     * The branch comes from the same `?branch=` the reports screen uses, and is
+     * validated against what this user may see.
+     */
+    const { branchIds } = await selectedBranch(user, Object.fromEntries(params))
+
     if (type === 'orders') {
-      const result = await listOrders(user.restaurantId, {
+      // Paged through rather than truncated. The cap is a safety limit on the
+      // size of a single download, not a silent horizon.
+      const EXPORT_LIMIT = 10_000
+      const PER_PAGE = 500
+      const collected: Awaited<ReturnType<typeof listOrders>>['orders'] = []
+      let result = await listOrders(user.restaurantId, {
         from: range.from.toISOString(),
         to: range.to.toISOString(),
-        perPage: 100,
+        branchId: branchIds && branchIds.length === 1 ? branchIds[0] : undefined,
+        perPage: PER_PAGE,
         page: 1,
       })
+      collected.push(...result.orders)
+      for (let page = 2; page <= result.pageCount && collected.length < EXPORT_LIMIT; page += 1) {
+        const next = await listOrders(user.restaurantId, {
+          from: range.from.toISOString(),
+          to: range.to.toISOString(),
+          branchId: branchIds && branchIds.length === 1 ? branchIds[0] : undefined,
+          perPage: PER_PAGE,
+          page,
+        })
+        collected.push(...next.orders)
+      }
+      if (collected.length >= EXPORT_LIMIT) {
+        console.warn(
+          `[export] orders export truncated at ${EXPORT_LIMIT} rows for restaurant ${user.restaurantId}`,
+        )
+      }
+      result = { ...result, orders: collected.slice(0, EXPORT_LIMIT) }
 
       const columns = [
         { header: 'Order #', key: 'orderNumber' },
@@ -79,7 +114,7 @@ export async function GET(request: NextRequest) {
     }
 
     // summary
-    const summary = await getReportSummary(user.restaurantId, range)
+    const summary = await getReportSummary(user.restaurantId, range, branchIds)
 
     if (format === 'xlsx') {
       const buffer = await buildReportWorkbook(summary, restaurant.currency, restaurant.name)

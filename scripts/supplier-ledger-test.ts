@@ -167,6 +167,7 @@ async function main() {
   const ret = await prisma.purchaseReturn.create({
     data: {
       restaurantId: restaurant.id,
+      branchId: branch.id,
       supplierId: abc.id,
       purchaseId: po.id,
       number: `RET-${stamp}`,

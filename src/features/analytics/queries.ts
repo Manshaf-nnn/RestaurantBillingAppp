@@ -59,9 +59,18 @@ export interface DashboardStats {
  * keeps the old restaurant-wide behaviour, which is what a single-site
  * restaurant wants.
  *
- * Tables, customers and low stock stay restaurant-wide even when a branch is
- * chosen where they have no branch dimension of their own — filtering those on
- * an unrelated column would be worse than not filtering them.
+ * Three of these tiles used to stay restaurant-wide on a branch-filtered
+ * dashboard, on the stated grounds that they "have no branch dimension of their
+ * own". That was true of one of them and wrong about the other two:
+ *
+ *   tables      `restaurant_tables.branchId` is NOT NULL. Scoped now.
+ *   low stock   per-branch balances live in `inventory_stock`, which is what
+ *               a location's shelf actually holds. Scoped now — a Kandy
+ *               manager was being alerted about Colombo running out of rice.
+ *   customers   `Customer` genuinely has no branch. A guest belongs to the
+ *               restaurant, not to a site, and inventing a branch for them
+ *               would be worse than leaving the tile group-wide. Unscoped, on
+ *               purpose, and the only one.
  */
 export async function getDashboardStats(
   restaurantId: string,
@@ -103,9 +112,9 @@ export async function getDashboardStats(
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${yesterday.start} AND "placedAt" < ${yesterday.end})::bigint AS orders_yesterday,
       (SELECT COUNT(*) FROM restaurant_tables
-        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true)::bigint          AS tables_total,
+        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true ${atBranch})::bigint AS tables_total,
       (SELECT COUNT(*) FROM restaurant_tables
-        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
+        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true ${atBranch}
           AND status = 'OCCUPIED')::bigint                                             AS tables_occupied,
       (SELECT COUNT(DISTINCT "customerId") FROM orders
         WHERE "restaurantId" = ${restaurantId} AND "customerId" IS NOT NULL ${atBranch}
@@ -119,9 +128,13 @@ export async function getDashboardStats(
       (SELECT COALESCE(SUM("grandTotal" - "paidTotal"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "paymentStatus" IN ('UNPAID', 'PARTIAL'))::bigint                        AS unpaid_total,
-      (SELECT COUNT(*) FROM inventory_items
-        WHERE "restaurantId" = ${restaurantId} AND "isActive" = true
-          AND quantity <= "reorderLevel")::bigint                                      AS low_stock
+      (SELECT COUNT(*) FROM inventory_items i
+        WHERE i."restaurantId" = ${restaurantId} AND i."isActive" = true
+          AND CASE WHEN ${branchId}::text IS NULL
+                   THEN i.quantity
+                   ELSE COALESCE((SELECT SUM(s.available) FROM inventory_stock s
+                                   WHERE s."itemId" = i.id AND s."branchId" = ${branchId}), 0)
+              END <= i."reorderLevel")::bigint                                         AS low_stock
   `
 
   const revenueToday = Number(row?.revenue_today ?? 0)
@@ -485,13 +498,37 @@ export function resolveRange(preset: string, from?: string, to?: string): Report
   }
 }
 
-/** Aggregate figures for the reports screen and its exports. */
-export async function getReportSummary(restaurantId: string, range: ReportRange) {
+/**
+ * Aggregate figures for the reports screen and its exports.
+ *
+ * `branchIds` was not a parameter at all, so `/dashboard/reports` — and the
+ * CSV/XLSX export behind it — showed a branch manager the whole group's
+ * revenue, cost of goods, gross profit, payment mix and top-selling items.
+ * Every other report on the site was already scoped; this was the one that had
+ * never been given the argument.
+ *
+ * The raw-SQL halves take a Prisma fragment rather than string interpolation,
+ * the same way `getDashboardStats` does above.
+ */
+export async function getReportSummary(
+  restaurantId: string,
+  range: ReportRange,
+  branchIds?: string[] | null,
+) {
   const where: Prisma.OrderWhereInput = {
     restaurantId,
     placedAt: { gte: range.from, lte: range.to },
     status: { notIn: ['CANCELLED'] },
+    ...(branchIds ? { branchId: { in: branchIds } } : {}),
   }
+
+  // `IN ()` is a syntax error in Postgres, so an empty allow-list — a confined
+  // user with no location — becomes a predicate that is simply false.
+  const atBranch = branchIds
+    ? branchIds.length
+      ? Prisma.sql`AND o."branchId" IN (${Prisma.join(branchIds)})`
+      : Prisma.sql`AND false`
+    : Prisma.empty
 
   const [orders, cancelled, cost, payments, customers, topItems] = await Promise.all([
     prisma.order.aggregate({
@@ -508,7 +545,12 @@ export async function getReportSummary(restaurantId: string, range: ReportRange)
       _avg: { grandTotal: true },
     }),
     prisma.order.count({
-      where: { restaurantId, placedAt: { gte: range.from, lte: range.to }, status: 'CANCELLED' },
+      where: {
+        restaurantId,
+        placedAt: { gte: range.from, lte: range.to },
+        status: 'CANCELLED',
+        ...(branchIds ? { branchId: { in: branchIds } } : {}),
+      },
     }),
     prisma.$queryRaw<Array<{ cost: bigint | null }>>`
       SELECT SUM(oi."costPrice" * oi.quantity)::bigint AS cost
@@ -517,10 +559,17 @@ export async function getReportSummary(restaurantId: string, range: ReportRange)
       WHERE o."restaurantId" = ${restaurantId}
         AND o."placedAt" BETWEEN ${range.from} AND ${range.to}
         AND o.status <> 'CANCELLED'
+        ${atBranch}
     `,
     prisma.payment.groupBy({
       by: ['method'],
-      where: { restaurantId, status: 'PAID', paidAt: { gte: range.from, lte: range.to } },
+      where: {
+        restaurantId,
+        status: 'PAID',
+        paidAt: { gte: range.from, lte: range.to },
+        // Payments reach a location through their order.
+        ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
+      },
       _sum: { amount: true },
       _count: true,
     }),
@@ -540,6 +589,7 @@ export async function getReportSummary(restaurantId: string, range: ReportRange)
       WHERE o."restaurantId" = ${restaurantId}
         AND o."placedAt" BETWEEN ${range.from} AND ${range.to}
         AND o.status <> 'CANCELLED'
+        ${atBranch}
       GROUP BY oi.name
       ORDER BY revenue DESC NULLS LAST
       LIMIT 20

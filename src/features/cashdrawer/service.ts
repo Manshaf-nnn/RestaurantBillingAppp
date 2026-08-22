@@ -2,7 +2,10 @@ import 'server-only'
 
 import type { CashDrawerSession, CashMovementType, Prisma } from '@prisma/client'
 
-import { AppError, NotFoundError } from '@/lib/errors'
+import type { UserRole } from '@prisma/client'
+
+import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
+import { canAccessBranch } from '@/lib/rbac'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { ensureDefaultBranch, resolveBranchId } from '@/features/branches/service'
 
@@ -139,6 +142,7 @@ export async function recordCashMovement(params: {
   amount: number
   reason: string
   userId: string
+  actor: DrawerActor
 }) {
   if (params.amount <= 0) {
     throw new AppError('Amount must be more than zero', 400, 'MOVEMENT_BAD_AMOUNT')
@@ -146,7 +150,7 @@ export async function recordCashMovement(params: {
   const reason = params.reason.trim()
   if (!reason) throw new AppError('Give a reason for this movement', 400, 'MOVEMENT_NO_REASON')
 
-  const session = await requireOpenSession(params.restaurantId, params.sessionId)
+  const session = await requireOpenSession(params.restaurantId, params.sessionId, params.actor)
 
   return prisma.cashMovement.create({
     data: {
@@ -292,12 +296,13 @@ export async function closeDrawer(params: {
   countedCash: number
   note?: string | null
   userId: string
+  actor: DrawerActor
 }): Promise<{ session: CashDrawerSession; totals: DrawerTotals; variance: number }> {
   if (params.countedCash < 0) {
     throw new AppError('Counted cash cannot be negative', 400, 'DRAWER_BAD_COUNT')
   }
 
-  await requireOpenSession(params.restaurantId, params.sessionId)
+  await requireOpenSession(params.restaurantId, params.sessionId, params.actor)
 
   // Computed before the update so the snapshot reflects the session as counted.
   const totals = await computeDrawerTotals(params.sessionId)
@@ -343,14 +348,48 @@ export async function listDrawerSessions(params: {
   })
 }
 
+/**
+ * Whoever is reaching for a drawer.
+ *
+ * `canManageOthers` is the CASH_DRAWER_MANAGE permission, resolved by the
+ * caller: a cashier operates their own till, a manager reconciles the floor.
+ */
+export interface DrawerActor {
+  id: string
+  role: UserRole
+  branchId?: string | null
+  canManageOthers: boolean
+}
+
+/**
+ * Find an open drawer this person is actually entitled to touch.
+ *
+ * It used to check the restaurant and nothing else, so a session id was the
+ * only thing standing between any CASH_DRAWER_OPERATE holder and another
+ * branch's till — they could add a cash-out to it, or close it against a count
+ * they had not made. Both are money events with somebody else's name on them.
+ *
+ * Two questions, in order, because they have different answers:
+ *
+ *   where   `canAccessBranch` — is this till even in a building you work in
+ *   whose   a cashier may only reach their own; a manager reconciles the floor
+ */
 async function requireOpenSession(
   restaurantId: string,
   sessionId: string,
+  actor: DrawerActor,
 ): Promise<CashDrawerSession> {
   const session = await prisma.cashDrawerSession.findFirst({
     where: { id: sessionId, restaurantId },
   })
   if (!session) throw new NotFoundError('Drawer session')
+
+  if (!canAccessBranch({ role: actor.role, branchId: actor.branchId }, session.branchId)) {
+    throw new ForbiddenError('That drawer belongs to another location')
+  }
+  if (!actor.canManageOthers && session.openedById !== actor.id) {
+    throw new ForbiddenError('That drawer was opened by someone else')
+  }
   if (session.status !== 'OPEN') {
     throw new AppError('That drawer is already closed', 409, 'DRAWER_CLOSED')
   }

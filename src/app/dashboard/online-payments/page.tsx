@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getOnlinePayments } from '@/features/payments/queries'
 import { formatMoney } from '@/lib/money'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -16,11 +17,16 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Online payments' }
 
-export default async function OnlinePaymentsPage() {
+export default async function OnlinePaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.PAYMENT_COLLECT, '/dashboard/online-payments')
+  const { branchIds } = await selectedBranch(user, await searchParams)
   const [restaurant, rows] = await Promise.all([
     requireRestaurant(user.restaurantId),
-    getOnlinePayments(user.restaurantId),
+    getOnlinePayments(user.restaurantId, branchIds),
   ])
 
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale

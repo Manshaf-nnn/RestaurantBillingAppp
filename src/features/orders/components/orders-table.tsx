@@ -89,11 +89,26 @@ export function OrdersTable({
     )
   })
 
+  /**
+   * Change one query parameter and navigate.
+   *
+   * The `next.delete('page')` used to run unconditionally, on the line after
+   * the `set` — so `setParam('page', '2')` set the page and then removed it,
+   * and every Next/Previous click landed back on page 1. Only the newest 25
+   * orders were ever reachable from this screen, which read exactly like a
+   * system that had stopped saving records. Nothing was lost; the door was
+   * jammed.
+   *
+   * Resetting to page 1 is still right for a FILTER — asking for cancelled
+   * orders while sitting on page 7 of all orders should not leave you past the
+   * end of a shorter list — so it now happens for every key except the page
+   * itself.
+   */
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params.toString())
     if (value && value !== 'ALL') next.set(key, value)
     else next.delete(key)
-    next.delete('page')
+    if (key !== 'page') next.delete('page')
     router.push(`/dashboard/orders?${next.toString()}`)
   }
 

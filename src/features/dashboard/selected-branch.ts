@@ -62,6 +62,32 @@ export async function selectedBranch(
 }
 
 /**
+ * The one location a WRITE should land on.
+ *
+ * Pages take their branch from the URL; a server action has no URL, so it reads
+ * the same cookie the switcher writes. That matters for an owner, who has no
+ * home branch of their own: adjusting stock while looking at Branch 01 should
+ * adjust Branch 01, not silently land on the default location — which is what
+ * happened when these actions passed no branch at all and the ledger fell back
+ * to `item.branchId`.
+ *
+ * Order of preference: the branch on screen, then the user's own, then the
+ * restaurant's default. Always validated against what they may reach, so a
+ * stale or tampered cookie cannot aim a write at another site.
+ */
+export async function actingBranchId(
+  user: Pick<TenantUser, 'role' | 'branchId' | 'restaurantId'>,
+): Promise<string> {
+  const { resolveBranchId } = await import('@/features/branches/service')
+  const selection = await selectedBranch(user)
+  return resolveBranchId({
+    restaurantId: user.restaurantId,
+    requestedBranchId: selection.branchId,
+    userBranchId: user.branchId,
+  })
+}
+
+/**
  * The same answer for a page that only needs one id, e.g. a loader whose
  * parameter is `branchId?: string | null`.
  *

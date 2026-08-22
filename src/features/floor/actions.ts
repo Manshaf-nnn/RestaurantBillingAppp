@@ -4,9 +4,9 @@ import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { resolveBranchId } from '@/features/branches/service'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
@@ -53,7 +53,20 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
             where: { id: data.id, restaurantId: user.restaurantId },
           })
           if (!existing) throw new NotFoundError('Table')
-          record = await prisma.restaurantTable.update({ where: { id: data.id }, data: payload })
+          await assertRecordBranch(user, existing, 'table')
+          /*
+           * A table does not move house.
+           *
+           * `payload` carries the branch this user resolved to, so editing a
+           * table's seat count from another location silently dragged the table
+           * — and every order ever taken at it — into that location. Creating a
+           * table still chooses a branch; editing one never changes it.
+           */
+          const { branchId: _ignored, ...withoutBranch } = payload
+          record = await prisma.restaurantTable.update({
+            where: { id: data.id },
+            data: withoutBranch,
+          })
         } else {
           record = await prisma.restaurantTable.create({
             data: { ...payload, restaurantId: user.restaurantId },
@@ -127,8 +140,22 @@ export async function createTablesBulk(input: unknown): Promise<ActionResult<{ c
 export async function updateTableStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(updateTableStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.TABLE_MANAGE)
+    /*
+     * Branch-scoped in the `where`, not checked afterwards.
+     *
+     * These three matched on id + restaurant, so a Branch 01 waiter could flip
+     * a Main Branch table to OCCUPIED — or delete it — by posting its id. Using
+     * `updateMany` with the branch predicate means another location's table
+     * matches nothing and reports as not-found, which is the same answer an
+     * invented id gets.
+     */
+    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const result = await prisma.restaurantTable.updateMany({
-      where: { id: data.id, restaurantId: user.restaurantId },
+      where: {
+        id: data.id,
+        restaurantId: user.restaurantId,
+        ...(reach ? { branchId: { in: reach } } : {}),
+      },
       data: { status: data.status },
     })
     if (result.count === 0) throw new NotFoundError('Table')
@@ -144,8 +171,13 @@ export async function updateTableStatus(input: unknown): Promise<ActionResult<{ 
 export async function setServiceTableStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(serviceTableStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
+    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const result = await prisma.restaurantTable.updateMany({
-      where: { id: data.id, restaurantId: user.restaurantId },
+      where: {
+        id: data.id,
+        restaurantId: user.restaurantId,
+        ...(reach ? { branchId: { in: reach } } : {}),
+      },
       data: { status: data.status },
     })
     if (result.count === 0) throw new NotFoundError('Table')
@@ -166,8 +198,13 @@ export async function deleteTable(id: string): Promise<ActionResult<{ id: string
     })
     if (openOrders > 0) throw new ConflictError('This table has open orders')
 
+    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const result = await prisma.restaurantTable.deleteMany({
-      where: { id, restaurantId: user.restaurantId },
+      where: {
+        id,
+        restaurantId: user.restaurantId,
+        ...(reach ? { branchId: { in: reach } } : {}),
+      },
     })
     if (result.count === 0) throw new NotFoundError('Table')
 

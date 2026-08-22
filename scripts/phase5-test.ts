@@ -7,6 +7,7 @@ import { getVarianceReport } from '../src/features/inventory/variance-report'
 import { setOpeningBalance, adjustStock } from '../src/features/inventory/operations'
 import { recomputeBalance } from '../src/features/inventory/ledger'
 import { openStockCount, recordCountLines, submitStockCount, approveStockCount } from '../src/features/inventory/stock-count'
+import { ensureDefaultBranch } from '../src/features/branches/service'
 
 let pass = 0, fail = 0
 const items: string[] = [], counts: string[] = []
@@ -23,6 +24,16 @@ const day = (offset: number) => new Date(Date.now() + offset * 86_400_000)
 async function main() {
   const shop = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'the-copper-spoon' } })
   const other = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'kava' } })
+
+  /*
+   * Where the stock in this fixture lives.
+   *
+   * The ledger will not post a movement without a location — a movement that
+   * names no place updates the restaurant's total and nobody's balance, which
+   * is exactly the drift these tests exist to catch.
+   */
+  const shopBranch = (await ensureDefaultBranch(shop.id)).id
+  const otherBranch = (await ensureDefaultBranch(other.id)).id
   const user = await prisma.user.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
   const S = Date.now().toString(36)
 
@@ -35,10 +46,10 @@ async function main() {
 
   console.log('\n── 1. Wastage ───────────────────────────────────────────')
   const beef = await mk('Beef')
-  await setOpeningBalance({ restaurantId: shop.id, itemId: beef.id, quantity: 100, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 100, userId: user.id })
 
   const w1 = await recordWastage({
-    restaurantId: shop.id, itemId: beef.id, quantity: 5, reason: 'SPOILED',
+    restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 5, reason: 'SPOILED',
     notes: 'left out overnight', userId: user.id,
   })
   ok('wastage removes stock', await qty(beef.id) === 95, `got ${await qty(beef.id)}`)
@@ -50,10 +61,10 @@ async function main() {
   ok('the movement links back to the record', mv.referenceType === 'Wastage' && mv.referenceId === w1.id)
 
   await throws('reason OTHER with no note is refused',
-    () => recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 1, reason: 'OTHER', userId: user.id }),
+    () => recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 1, reason: 'OTHER', userId: user.id }),
     'WASTAGE_NO_NOTE')
   await throws('zero quantity is refused',
-    () => recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 0, reason: 'BURNT', userId: user.id }),
+    () => recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 0, reason: 'BURNT', userId: user.id }),
     'WASTAGE_BAD_QTY')
 
   console.log('\n── 2. Review ────────────────────────────────────────────')
@@ -64,13 +75,13 @@ async function main() {
     () => reviewWastage({ restaurantId: shop.id, wastageId: w1.id, approve: true, userId: user.id }),
     'WASTAGE_REVIEWED')
 
-  const w2 = await recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 2, reason: 'DROPPED', userId: user.id })
+  const w2 = await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 2, reason: 'DROPPED', userId: user.id })
   const rejected = await reviewWastage({ restaurantId: shop.id, wastageId: w2.id, approve: false, userId: user.id })
   ok('rejecting marks it disputed', rejected.status === 'REJECTED')
   ok('rejecting does NOT restore stock — the food is still gone', await qty(beef.id) === 93, `got ${await qty(beef.id)}`)
 
   console.log('\n── 3. Wastage report ────────────────────────────────────')
-  await recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 3, reason: 'EXPIRED', userId: user.id })
+  await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 3, reason: 'EXPIRED', userId: user.id })
   const report = await getWastageReport({ restaurantId: shop.id, period: 'DAY', includeEmployees: true })
   const beefLine = report.topItems.find((i) => i.itemId === beef.id)
   ok('report totals the day', report.totalRecords >= 3)
@@ -85,16 +96,16 @@ async function main() {
   console.log('\n── 4. Batches and FEFO ──────────────────────────────────')
   const chicken = await mk('Chicken', { trackBatches: true, useFefo: true })
   await prisma.$transaction(async (tx) => {
-    await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-2026-0825', quantity: 20, unitCost: 100_00, expiryDate: day(6) })
-    await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 20, unitCost: 100_00, expiryDate: day(2) })
-    await upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-NO-DATE', quantity: 20, unitCost: 100_00 })
+    await upsertBatch(tx, { restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, batchNo: 'CHK-2026-0825', quantity: 20, unitCost: 100_00, expiryDate: day(6) })
+    await upsertBatch(tx, { restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 20, unitCost: 100_00, expiryDate: day(2) })
+    await upsertBatch(tx, { restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, batchNo: 'CHK-NO-DATE', quantity: 20, unitCost: 100_00 })
 
     // The batches hold 60 kg, so the item balance must too. upsertBatch records
     // a lot; it does not move stock — receiving does both. Without this the
     // fixture wasted 5 kg from a balance of zero, which only passed while the
     // ledger allowed negative stock unconditionally.
     await postMovement(tx, {
-      restaurantId: shop.id, itemId: chicken.id, type: 'OPENING_BALANCE',
+      restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, type: 'OPENING_BALANCE',
       quantity: 60, unitCost: 100_00, userId: user.id,
     })
   })
@@ -109,7 +120,7 @@ async function main() {
   ok('a shortfall is reported, not thrown', big.shortfall === 40, `got ${big.shortfall}`)
 
   const topUp = await prisma.$transaction((tx) =>
-    upsertBatch(tx, { restaurantId: shop.id, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 5, unitCost: 110_00 }))
+    upsertBatch(tx, { restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 5, unitCost: 110_00 }))
   ok('topping up a batch adds to it', topUp.remainingQty === 25, `got ${topUp.remainingQty}`)
 
   console.log('\n── 5. Expiry buckets ────────────────────────────────────')
@@ -132,24 +143,24 @@ async function main() {
 
   console.log('\n── 6. Wastage draws from batches ────────────────────────')
   const before = (await prisma.stockBatch.findFirstOrThrow({ where: { itemId: chicken.id, batchNo: 'CHK-2026-0823' } })).remainingQty
-  await recordWastage({ restaurantId: shop.id, itemId: chicken.id, quantity: 5, reason: 'EXPIRED', userId: user.id })
+  await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, quantity: 5, reason: 'EXPIRED', userId: user.id })
   const after = (await prisma.stockBatch.findFirstOrThrow({ where: { itemId: chicken.id, batchNo: 'CHK-2026-0823' } })).remainingQty
   ok('wastage draws from the earliest-expiring batch', after === before - 5, `${before} -> ${after}`)
 
   console.log('\n── 7. Adjustments ───────────────────────────────────────')
   const before2 = await qty(beef.id)
-  await adjustStock({ restaurantId: shop.id, itemId: beef.id, quantity: 4, direction: 'IN', reason: 'found in back store', userId: user.id })
+  await adjustStock({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 4, direction: 'IN', reason: 'found in back store', userId: user.id })
   ok('ADJUSTMENT_IN adds stock', await qty(beef.id) === before2 + 4)
-  await adjustStock({ restaurantId: shop.id, itemId: beef.id, quantity: 2, direction: 'OUT', reason: 'miscount', userId: user.id })
+  await adjustStock({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 2, direction: 'OUT', reason: 'miscount', userId: user.id })
   ok('ADJUSTMENT_OUT removes stock', await qty(beef.id) === before2 + 2)
   await throws('an adjustment with no reason is refused',
-    () => adjustStock({ restaurantId: shop.id, itemId: beef.id, quantity: 1, direction: 'IN', reason: '', userId: user.id }),
+    () => adjustStock({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 1, direction: 'IN', reason: '', userId: user.id }),
     'ADJUSTMENT_NO_REASON')
 
   console.log('\n── 8. Variance report ───────────────────────────────────')
   const rice = await mk('Rice')
-  await setOpeningBalance({ restaurantId: shop.id, itemId: rice.id, quantity: 100, userId: user.id })
-  const count = await openStockCount({ restaurantId: shop.id, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, quantity: 100, userId: user.id })
+  const count = await openStockCount({ restaurantId: shop.id, branchId: shopBranch, userId: user.id })
   counts.push(count.id)
   await recordCountLines({ restaurantId: shop.id, stockCountId: count.id, lines: [{ itemId: rice.id, countedQty: 96 }] })
   await submitStockCount(shop.id, count.id)
@@ -174,7 +185,7 @@ async function main() {
 
   console.log('\n── 10. Tenant isolation ─────────────────────────────────')
   await throws('wasting another tenant’s item is refused',
-    () => recordWastage({ restaurantId: other.id, itemId: beef.id, quantity: 1, reason: 'BURNT', userId: user.id }))
+    () => recordWastage({ restaurantId: other.id, branchId: otherBranch, itemId: beef.id, quantity: 1, reason: 'BURNT', userId: user.id }))
   const otherReport = await getWastageReport({ restaurantId: other.id, period: 'MONTH' })
   ok('another tenant sees none of this wastage',
     !otherReport.topItems.some((i) => items.includes(i.itemId)))

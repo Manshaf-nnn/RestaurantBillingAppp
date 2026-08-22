@@ -272,6 +272,9 @@ enum LocationType {
 }
 
 enum TransferStatus {
+  /// Being built. Not yet anybody's problem — no stock is reserved and it
+  /// appears in no approval queue until it is submitted.
+  DRAFT
   REQUESTED
   APPROVED
   DISPATCHED
@@ -399,21 +402,21 @@ enum FeedbackCategory {
 // ──────────────────────────────────────────────────────────── tenancy ──────
 
 model Restaurant {
-  id          String  @id @default(cuid())
-  slug        String  @unique
-  name        String
-  tagline     String?
-  description String?
-  logoUrl     String?
-  coverUrl    String?
-  email       String?
-  phone       String?
-  addressLine String?
-  city        String?
-  state       String?
-  country     String? @default("IN")
-  postalCode  String?
-  timezone    String  @default("Asia/Kolkata")
+  id                 String  @id @default(cuid())
+  slug               String  @unique
+  name               String
+  tagline            String?
+  description        String?
+  logoUrl            String?
+  coverUrl           String?
+  email              String?
+  phone              String?
+  addressLine        String?
+  city               String?
+  state              String?
+  country            String? @default("IN")
+  postalCode         String?
+  timezone           String  @default("Asia/Kolkata")
   /// Whether an outward movement may take a balance below zero.
   ///
   /// Off by default, which is what workflow.md asks for. It was hardcoded on:
@@ -424,8 +427,8 @@ model Restaurant {
   /// a guest because a delivery was not keyed in is usually the worse outcome —
   /// so it is the owner's decision rather than ours.
   allowNegativeStock Boolean @default(false)
-  locale      String  @default("en")
-  currency    String  @default("INR")
+  locale             String  @default("en")
+  currency           String  @default("INR")
 
   /// basis points — 500 = 5.00%
   taxRateBps       Int     @default(500)
@@ -840,9 +843,9 @@ model FoodBranch {
   discountPrice Int?
   /// Off here, on elsewhere — distinct from the dish's own `isAvailable`,
   /// which takes it off every menu at once.
-  isAvailable Boolean @default(true)
+  isAvailable   Boolean @default(true)
   /// Overrides the dish's own order on this branch's menu.
-  sortOrder Int?
+  sortOrder     Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1335,13 +1338,13 @@ model InventoryItem {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  name     String
-  sku      String?
-  barcode  String?
-  category String?
+  name        String
+  sku         String?
+  barcode     String?
+  category    String?
   /// The managed category, when one has been chosen. `category` above is kept
   /// in step as a fallback so every existing reader keeps working.
-  categoryId String?
+  categoryId  String?
   categoryRef InventoryCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   /// The unit the ledger is kept in. Every movement is converted to this
@@ -1453,8 +1456,8 @@ model StockMovement {
   batch      StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   expiryDate DateTime?
 
-  branchId     String?
-  branch       Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId     String
+  branch       Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   locationId   String?
   location     StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
   stockCountId String?
@@ -1488,8 +1491,8 @@ model Purchase {
   number String
   status PurchaseStatus @default(DRAFT)
 
-  branchId   String?
-  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId   String
+  branch     Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   locationId String?
   location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
@@ -1651,8 +1654,8 @@ model BranchInstruction {
   status   InstructionStatus   @default(OPEN)
   dueAt    DateTime?
 
-  createdById String?
-  createdBy   User?   @relation("InstructionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById   String?
+  createdBy     User?   @relation("InstructionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   createdByName String
 
   doneById   String?
@@ -1795,6 +1798,16 @@ model ShiftNote {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
+  /// The site the note was written at.
+  ///
+  /// It had no branch at all, and `listShiftNotes` filtered on the restaurant
+  /// alone — so a note left by the closing cashier at Branch 01 appeared on
+  /// Main Branch's handover screen, which is the bug that started this. A
+  /// handover is the most site-specific thing in the building: it is one shift
+  /// telling the next shift, in the same room, what happened.
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
   body       String
   authorId   String?
   authorName String
@@ -1802,6 +1815,7 @@ model ShiftNote {
   createdAt  DateTime @default(now())
 
   @@index([restaurantId, resolved, createdAt])
+  @@index([restaurantId, branchId, resolved, createdAt])
   @@map("shift_notes")
 }
 
@@ -1815,6 +1829,13 @@ model Notification {
   user         User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   audience     NotificationAudience?
 
+  /// Which site this concerns. NULL is meaningful and stays allowed: it is a
+  /// genuine group-wide announcement, and readers include nulls rather than
+  /// filtering them out. Everything driven by an order, a table or a drawer
+  /// carries the branch, so a Branch 01 ticket no longer rings Main's bell.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
   type   NotificationType
   title  String
   body   String?
@@ -1826,6 +1847,7 @@ model Notification {
 
   @@index([restaurantId, createdAt])
   @@index([userId, readAt])
+  @@index([restaurantId, branchId, createdAt])
   @@map("notifications")
 }
 
@@ -1928,6 +1950,9 @@ model Branch {
   instructions     BranchInstruction[]
   goodsReceipts    GoodsReceipt[]
   menu             FoodBranch[]
+  shiftNotes       ShiftNote[]
+  notifications    Notification[]
+  purchaseReturns  PurchaseReturn[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -1946,8 +1971,8 @@ model CashDrawerSession {
   id           String     @id @default(cuid())
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  branchId     String?
-  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
 
   openedById   String
   openedBy     User     @relation("DrawerOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
@@ -2005,8 +2030,8 @@ model StorageLocation {
   id           String     @id @default(cuid())
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  branchId     String?
-  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
 
   name      String
   code      String
@@ -2045,8 +2070,8 @@ model StockCount {
   id           String           @id @default(cuid())
   restaurantId String
   restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  branchId     String?
-  branch       Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId     String
+  branch       Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   locationId   String?
   location     StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
@@ -2273,8 +2298,8 @@ model GoodsReceipt {
   /// onto the wrong shelf in the books and the difference surfaced weeks later
   /// as a variance nobody could explain. Null means "wherever the order said",
   /// which is the ordinary case.
-  branchId   String?
-  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId   String
+  branch     Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   locationId String?
   location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
@@ -2336,6 +2361,14 @@ model PurchaseReturn {
   supplierId   String?
   supplier     Supplier?  @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
+  /// Where the goods went back from. A return is a stock movement out of one
+  /// store room, and it had no branch at all — `createPurchaseReturn` posted
+  /// its ledger row with no branch, so the restaurant-wide quantity fell while
+  /// no location's balance moved. That is the exact drift the reconciliation
+  /// report exists to find.
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
   number String
   reason String
   notes  String?
@@ -2349,6 +2382,7 @@ model PurchaseReturn {
   @@unique([restaurantId, number])
   @@index([restaurantId, createdAt])
   @@index([restaurantId, supplierId])
+  @@index([restaurantId, branchId, createdAt])
   @@map("purchase_returns")
 }
 
@@ -2421,8 +2455,8 @@ model StockBatch {
 
   locationId String?
   location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
-  branchId   String?
-  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId   String
+  branch     Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
 
   receivedAt DateTime @default(now())
   createdAt  DateTime @default(now())
@@ -2471,8 +2505,8 @@ model WastageRecord {
   /// Optional photograph, stored like every other image via /api/media.
   photoUrl   String?
 
-  branchId   String?
-  branch     Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branchId   String
+  branch     Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   locationId String?
   location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
   batchId    String?
@@ -2718,7 +2752,7 @@ model ProductionOrder {
   /// Batches planned, and what was actually achieved.
   /// Labour, power and anything else the run cost beyond its ingredients.
   /// Materials alone understate what a finished item is worth to make.
-  overheadCost   Int   @default(0)
+  overheadCost   Int                       @default(0)
   plannedQty     Float
   actualQty      Float?
   unit           StockUnit?

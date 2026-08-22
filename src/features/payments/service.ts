@@ -331,6 +331,8 @@ export async function capturePayment(params: {
 
   await notify({
     restaurantId: params.restaurantId,
+    // A payment belongs to the site whose bill it settled.
+    branchId: result.order.branchId,
     type: 'PAYMENT_RECEIVED',
     title: `Payment received — ${result.order.orderNumber}`,
     body: `${formatMoney(result.payment.amount, restaurant.currency)} via ${result.payment.method.toLowerCase()}`,
@@ -345,6 +347,7 @@ export async function capturePayment(params: {
 
   await notify({
     restaurantId: params.restaurantId,
+    branchId: result.order.branchId,
     type: 'PAYMENT_RECEIVED',
     title: `Payment received — ${result.order.orderNumber}`,
     body: formatMoney(result.payment.amount, restaurant.currency),

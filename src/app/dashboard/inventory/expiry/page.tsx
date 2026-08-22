@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getExpirySummary, listExpiringStock, type ExpiryBucket } from '@/features/inventory/batches'
 import { formatMoney } from '@/lib/money'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -34,9 +35,15 @@ export default async function ExpiryPage({
   const raw = Number(typeof params.days === 'string' ? params.days : '')
   const periodDays = Number.isFinite(raw) && raw > 0 && raw <= 365 ? raw : 30
 
+
+  // Stock sits at a location, so this list belongs to one. Without it a branch
+  // manager was reading the whole group's shelves.
+  const selection = await selectedBranch(user, params)
+  const branchId = scopeToOne(selection)
+
   const [rows, summary] = await Promise.all([
-    listExpiringStock({ restaurantId: user.restaurantId, periodDays }),
-    getExpirySummary({ restaurantId: user.restaurantId, periodDays }),
+    listExpiringStock({ restaurantId: user.restaurantId, periodDays, branchId }),
+    getExpirySummary({ restaurantId: user.restaurantId, periodDays, branchId }),
   ])
 
   const atRisk =

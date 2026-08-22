@@ -9,6 +9,7 @@ import { getLocationBalance } from '../src/features/inventory/location-stock'
 import { reconcileOrderDepletion } from '../src/features/inventory/depletion'
 import { createPurchaseOrder, setPurchaseStatus } from '../src/features/purchasing/service'
 import { receiveGoods, createPurchaseReturn } from '../src/features/purchasing/receiving'
+import { ensureDefaultBranch } from '../src/features/branches/service'
 import {
   requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer,
 } from '../src/features/transfers/service'
@@ -33,6 +34,15 @@ async function main() {
   const S = Date.now().toString(36)
   const shop = await prisma.restaurant.create({ data: { name: `ABC ${S}`, slug: `abc-${S}`, currency: 'LKR', timezone: 'Asia/Colombo' } })
   const other = await prisma.restaurant.create({ data: { name: `XYZ ${S}`, slug: `xyz-${S}`, currency: 'LKR', timezone: 'Asia/Colombo' } })
+
+  /*
+   * Where the stock in this fixture lives.
+   *
+   * The ledger will not post a movement without a location — a movement that
+   * names no place updates the restaurant's total and nobody's balance, which
+   * is exactly the drift these tests exist to catch.
+   */
+  const otherBranch = (await ensureDefaultBranch(other.id)).id
   shops.push(shop.id, other.id)
   const user = await prisma.user.findFirstOrThrow({ where: { deletedAt: null } })
 
@@ -229,7 +239,7 @@ async function main() {
 
   console.log('\n══ TEST 13 — PURCHASE RETURN ══════════════════════════')
   const rBefore = await avail(patty.id, colombo.id)
-  await createPurchaseReturn({ restaurantId: shop.id, supplierId: supplier.id, purchaseId: po.id, reason: 'quality', userId: user.id, lines: [{ itemId: patty.id, quantity: 10, unit: 'PIECE' }] })
+  await createPurchaseReturn({ restaurantId: shop.id, branchId: colombo.id, supplierId: supplier.id, purchaseId: po.id, reason: 'quality', userId: user.id, lines: [{ itemId: patty.id, quantity: 10, unit: 'PIECE' }] })
   ok('T13.1', 'return reduces stock by 10', await avail(patty.id, colombo.id) === rBefore - 10, String(rBefore - 10), String(await avail(patty.id, colombo.id)))
   ok('T13.2', 'logged as RETURN_TO_SUPPLIER', (await prisma.stockMovement.count({ where: { itemId: patty.id, type: 'RETURN_TO_SUPPLIER' } })) === 1)
 
@@ -238,7 +248,7 @@ async function main() {
   await adjustStock({ restaurantId: shop.id, itemId: patty.id, quantity: 2, direction: 'OUT', reason: 'physical count', userId: user.id, branchId: colombo.id })
   ok('T14.1', 'adjustment reduces by 2', await avail(patty.id, colombo.id) === aBefore - 2, String(aBefore - 2), String(await avail(patty.id, colombo.id)))
   await throws('T14.2', 'an adjustment with no reason is refused',
-    () => adjustStock({ restaurantId: shop.id, itemId: patty.id, quantity: 1, direction: 'IN', reason: '', userId: user.id }), 'HIGH')
+    () => adjustStock({ restaurantId: shop.id, branchId: colombo.id, itemId: patty.id, quantity: 1, direction: 'IN', reason: '', userId: user.id }), 'HIGH')
 
   console.log('\n══ TEST 15 — LEDGER RECONCILIATION ════════════════════')
   const recon: Array<{ name: string; cached: number; ledger: number; diff: number }> = []
@@ -250,13 +260,13 @@ async function main() {
 
   console.log('\n══ TEST 16 — TENANT ISOLATION ═════════════════════════')
   await throws('T16.1', 'cross-tenant stock movement refused',
-    () => prisma.$transaction((tx) => postMovement(tx, { restaurantId: other.id, itemId: patty.id, type: 'SALE', quantity: 1, userId: user.id })))
+    () => prisma.$transaction((tx) => postMovement(tx, { restaurantId: other.id, branchId: otherBranch, itemId: patty.id, type: 'SALE', quantity: 1, userId: user.id })))
   await throws('T16.2', 'cross-tenant transfer refused',
     () => requestTransfer({ restaurantId: other.id, fromBranchId: colombo.id, toBranchId: kandy.id, lines: [{ itemId: patty.id, quantity: 1 }], userId: user.id }))
   await throws('T16.3', 'cross-tenant production refused',
     () => createProductionOrder({ restaurantId: other.id, branchId: ph.id, specId: spec.id, plannedQty: 1, userId: user.id }))
   await throws('T16.4', 'cross-tenant purchase refused',
-    () => createPurchaseOrder({ restaurantId: other.id, lines: [{ itemId: patty.id, quantity: 1, unitCost: 1 }] }))
+    () => createPurchaseOrder({ restaurantId: other.id, branchId: otherBranch, lines: [{ itemId: patty.id, quantity: 1, unitCost: 1 }] }))
   ok('T16.5', 'other tenant sees no stock rows',
     (await prisma.inventoryStock.count({ where: { restaurantId: other.id } })) === 0, '0', '', 'CRITICAL')
 

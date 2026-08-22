@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { Star } from 'lucide-react'
+import { AlertTriangle, Star, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,7 +24,13 @@ import {
   type OpeningHours,
 } from '@/lib/opening-hours'
 import { useAction } from '@/lib/use-action'
-import { setDefaultLocationAction, updateLocationAction } from '../actions'
+import {
+  locationRemovalBlockersAction,
+  removeLocationAction,
+  setDefaultLocationAction,
+  updateLocationAction,
+} from '../actions'
+import type { RemovalBlocker } from '../service'
 
 const TYPES = [
   { value: 'BRANCH', label: 'Branch' },
@@ -247,6 +253,8 @@ export function LocationEditForm({
         </p>
       </div>
 
+      <RemoveLocation location={location} />
+
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <Button onClick={save} disabled={saving || !name.trim()}>
           {saving ? 'Saving…' : 'Save changes'}
@@ -264,5 +272,86 @@ export function LocationEditForm({
         )}
       </div>
     </SectionCard>
+  )
+}
+
+/**
+ * Removing a location, and refusing to when it would lose something.
+ *
+ * Deliberately two steps rather than a confirm dialog. The first press asks the
+ * server what is in the way and shows the answer — "3 items still hold stock
+ * here", with what to do about it — so the common outcome is not "are you
+ * sure?" but a list of work to finish first. Only a location with nothing left
+ * standing gets the second button.
+ *
+ * The removal is soft. Every order taken here, every movement and every closed
+ * drawer stays readable; the location simply leaves the lists. A hard delete is
+ * not on offer at all, and the foreign keys are RESTRICT so that it cannot
+ * happen by accident either.
+ */
+function RemoveLocation({ location }: { location: EditableLocation }) {
+  const router = useRouter()
+  const [blockers, setBlockers] = React.useState<RemovalBlocker[] | null>(null)
+  const { run: check, busy: checking } = useAction()
+  const { run: remove, busy: removing } = useAction()
+
+  const look = () =>
+    check(() => locationRemovalBlockersAction(location.id), {
+      onDone: (result) => setBlockers(result.blockers),
+    })
+
+  const confirm = () =>
+    remove(() => removeLocationAction(location.id), {
+      success: 'Location removed.',
+      onDone: () => router.push('/dashboard/locations'),
+    })
+
+  return (
+    <div className="mt-5 border-t border-border pt-4">
+      {blockers === null ? (
+        <Button variant="outline" onClick={look} disabled={checking}>
+          <Trash2 className="mr-1.5 h-4 w-4" />
+          {checking ? 'Checking…' : 'Remove this location'}
+        </Button>
+      ) : blockers.length > 0 ? (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4" />
+            This location cannot be removed yet
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {blockers.map((b) => (
+              <li key={b.what}>
+                <span className="font-medium">{b.what}</span>
+                <span className="block text-xs text-muted-foreground">{b.fix}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-muted-foreground">
+            You can switch it off instead — that hides it from transfers, new orders and the
+            location switcher while keeping everything it holds.
+          </p>
+          <Button variant="ghost" size="sm" className="mt-2" onClick={() => setBlockers(null)}>
+            Close
+          </Button>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+          <p className="text-sm font-medium">Nothing is left at this location.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Removing it takes it off every list and picker. Its past orders, stock movements and
+            closed drawers stay in your reports.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button variant="destructive" size="sm" onClick={confirm} disabled={removing}>
+              {removing ? 'Removing…' : `Remove ${location.name}`}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setBlockers(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

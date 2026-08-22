@@ -33,10 +33,15 @@ import { applyLocationDelta, assertSufficient } from '@/features/inventory/locat
  */
 
 const ALLOWED: Record<TransferStatus, TransferStatus[]> = {
+  // A draft is still being written. It reserves nothing and appears in nobody's
+  // queue; submitting it is what makes it a request.
+  DRAFT: ['REQUESTED', 'CANCELLED'],
   REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
   APPROVED: ['DISPATCHED', 'CANCELLED'],
   DISPATCHED: ['IN_TRANSIT', 'RECEIVED'],
   IN_TRANSIT: ['RECEIVED'],
+  // Arrived, but short or damaged, so somebody still has to sign the variance
+  // off. A clean delivery skips this and completes on receipt.
   RECEIVED: ['COMPLETED'],
   COMPLETED: [],
   REJECTED: [],
@@ -428,16 +433,51 @@ export async function receiveTransfer(params: {
       })
     }
 
+    /*
+     * A clean delivery is finished; a short one is not.
+     *
+     * Receiving always wrote COMPLETED, which left RECEIVED unreachable — a
+     * state in the machine that nothing could ever enter. That also meant a
+     * transfer where four of twenty kilos went missing closed itself with the
+     * shortfall recorded and nobody asked to look at it.
+     *
+     * So the two outcomes are now different. Everything arrived: COMPLETED, as
+     * before, with no extra clicking for the ordinary case. Something did not:
+     * RECEIVED, which is where the variance waits for someone to accept it —
+     * `RECEIVED → COMPLETED` was already the last edge in the table.
+     */
     const updated = await tx.stockTransfer.update({
       where: { id: transfer.id },
       data: {
-        status: 'COMPLETED',
+        status: variances > 0 ? 'RECEIVED' : 'COMPLETED',
         receivedById: params.userId ?? null,
         receivedAt: new Date(),
       },
     })
 
     return { transfer: updated, variances }
+  })
+}
+
+/**
+ * Sign off a delivery that arrived short or damaged.
+ *
+ * The stock has already moved — `receiveTransfer` credited what actually turned
+ * up — so this changes nothing but the status. It is the human step: somebody
+ * has looked at the shortfall and accepted it.
+ */
+export async function completeTransfer(params: {
+  restaurantId: string
+  transferId: string
+  userId?: string | null
+}): Promise<StockTransfer> {
+  return prisma.$transaction(async (tx) => {
+    const transfer = await load(tx, params.restaurantId, params.transferId)
+    assertTransition(transfer.status, 'COMPLETED')
+    return tx.stockTransfer.update({
+      where: { id: transfer.id },
+      data: { status: 'COMPLETED' },
+    })
   })
 }
 

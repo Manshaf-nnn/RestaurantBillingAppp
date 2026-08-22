@@ -52,6 +52,18 @@ async function main() {
   const cashier = await prisma.user.findFirstOrThrow({
     where: { restaurantId: shop.id, deletedAt: null },
   })
+  /*
+   * The drawer service asks who is reaching for the till: which locations they
+   * may touch, and whether they may touch a drawer somebody else opened. This
+   * fixture is the person who opened it, so both answers are yes.
+   */
+  const atTill = {
+    id: cashier.id,
+    role: cashier.role,
+    branchId: cashier.branchId,
+    canManageOthers: true,
+  }
+
   const foods = await prisma.food.findMany({
     where: { restaurantId: shop.id, deletedAt: null, isAvailable: true },
     take: 3,
@@ -104,6 +116,7 @@ async function main() {
     () =>
       recordCashMovement({
         restaurantId: shop.id,
+        actor: atTill,
         sessionId: drawer.id,
         type: 'CASH_IN',
         amount: 100,
@@ -169,6 +182,7 @@ async function main() {
   console.log('\n── 4. Expected-cash maths ───────────────────────────────')
   await recordCashMovement({
     restaurantId: shop.id,
+    actor: atTill,
     sessionId: drawer.id,
     type: 'CASH_IN',
     amount: 200_00,
@@ -177,6 +191,7 @@ async function main() {
   })
   await recordCashMovement({
     restaurantId: shop.id,
+    actor: atTill,
     sessionId: drawer.id,
     type: 'CASH_OUT',
     amount: 50_00,
@@ -216,6 +231,7 @@ async function main() {
   const SHORT_BY = 25_00
   const closed = await closeDrawer({
     restaurantId: shop.id,
+    actor: atTill,
     sessionId: drawer.id,
     countedCash: afterRefund.expectedCash - SHORT_BY,
     note: 'test close',
@@ -228,6 +244,7 @@ async function main() {
     () =>
       closeDrawer({
         restaurantId: shop.id,
+        actor: atTill,
         sessionId: drawer.id,
         countedCash: 0,
         userId: cashier.id,

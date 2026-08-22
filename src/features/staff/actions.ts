@@ -16,7 +16,12 @@ import {
   visibleBranchIds,
 } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission, type TenantUser } from '@/server/auth/guard'
+import {
+  assertBranchAccess,
+  assertRecordBranch,
+  requirePermission,
+  type TenantUser,
+} from '@/server/auth/guard'
 import { hashPassword } from '@/server/auth/password'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { sendMail, staffInviteEmail } from '@/server/mailer'
@@ -188,6 +193,15 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
         where: { id: data.id, restaurantId: admin.restaurantId },
       })
       if (!target) throw new NotFoundError('Staff member')
+      /*
+       * Whose staff member, not just whose restaurant.
+       *
+       * `homeBranchFor` below already guards the branch this edit sends them
+       * TO. Nothing guarded the branch they are already AT, so a Branch 01
+       * manager holding STAFF_MANAGE could rename a Main Branch cashier,
+       * change their role, or move them to Branch 01 — by id alone.
+       */
+      await assertRecordBranch(admin, target, 'staff member')
       if (target.role === 'OWNER') throw new ForbiddenError('The owner account cannot be edited here')
       if (target.id === admin.id) throw new AppError('Use your profile to edit your own account', 400, 'SELF_EDIT')
       if (!assignableRoles(admin.role).includes(data.role)) {
@@ -276,12 +290,17 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
  * reset the owner's password and take the restaurant — `assignableRoles` already
  * encodes who outranks whom, so it is reused rather than restated.
  */
-async function credentialTarget(adminRole: string, adminRestaurantId: string, adminId: string, userId: string) {
+async function credentialTarget(admin: TenantUser, userId: string) {
   const target = await prisma.user.findFirst({
-    where: { id: userId, restaurantId: adminRestaurantId, deletedAt: null },
-    select: { id: true, name: true, email: true, role: true, staffCode: true },
+    where: { id: userId, restaurantId: admin.restaurantId, deletedAt: null },
+    select: { id: true, name: true, email: true, role: true, staffCode: true, branchId: true },
   })
   if (!target) throw new NotFoundError('Staff member')
+  // Resetting somebody's sign-in code is the strongest thing on this screen —
+  // it hands over their account — so it is guarded by location as well as rank.
+  await assertRecordBranch(admin, target, 'staff member')
+  const adminRole = admin.role
+  const adminId = admin.id
   if (target.id === adminId) {
     throw new AppError('Use your own profile to change your password', 400, 'SELF_EDIT')
   }
@@ -297,7 +316,7 @@ export async function regenerateSignInCode(
 ): Promise<ActionResult<{ id: string; name: string; code: string }>> {
   return runSafe(async () => {
     const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-    const target = await credentialTarget(admin.role, admin.restaurantId, admin.id, userId)
+    const target = await credentialTarget(admin, userId)
 
     const code = await issueSignInCode(target.id)
 
@@ -338,7 +357,7 @@ export async function setStaffPassword(input: unknown): Promise<ActionResult<{ i
     input,
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-      const target = await credentialTarget(admin.role, admin.restaurantId, admin.id, data.userId)
+      const target = await credentialTarget(admin, data.userId)
 
       await prisma.user.update({
         where: { id: target.id },
@@ -380,6 +399,7 @@ export async function removeStaff(id: string): Promise<ActionResult<{ id: string
       where: { id, restaurantId: admin.restaurantId },
     })
     if (!target) throw new NotFoundError('Staff member')
+    await assertRecordBranch(admin, target, 'staff member')
     if (target.role === 'OWNER') throw new ForbiddenError('The owner account cannot be removed')
     if (target.id === admin.id) throw new AppError('You cannot remove your own account', 400, 'SELF_DELETE')
 

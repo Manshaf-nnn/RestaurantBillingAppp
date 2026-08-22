@@ -1,20 +1,25 @@
 /**
- * Repair per-branch stock after the missing-branch bug.
+ * Repair per-branch stock, and check the branch back-fill landed sensibly.
  *
  * Sale postings used to carry no branch, so `applyLocationDelta` skipped them
  * and `InventoryStock.available` only ever went up. Fixing the code stops the
  * drift; it does not undo it. Existing branch balances still overstate what is
  * on the shelf by everything ever sold there, and `assertSufficient` reads those
- * numbers — so transfers are being approved against stock that was eaten weeks
- * ago.
+ * numbers — so transfers were being approved against stock eaten weeks ago.
  *
- * Two steps, in order:
+ * ── What changed, and what this script still does ───────────────────────────
  *
- *   1. Backfill `StockMovement.branchId` for order-linked movements that have
- *      none, from the order's own branch (falling back to the restaurant's
- *      default). Without this the ledger cannot say where the stock went.
- *   2. Rebuild `InventoryStock.available` as the sum of the movements for each
- *      (item, branch, shelf).
+ * Step 1 used to be here: attribute branch-less movements to their order's
+ * branch. It has moved into 20260903090000_branch_isolation_2, which back-fills
+ * every operational table and then makes the column NOT NULL — so a movement
+ * with no location can no longer exist and no longer needs repairing. What is
+ * left in its place is a verification that this is true, plus a per-branch row
+ * census so the back-fill can be eyeballed before anything else is trusted:
+ * anything that could not be resolved from a related record was placed on the
+ * default location, and that is a guess worth looking at once.
+ *
+ * Step 2 is unchanged and is still the point: rebuild `InventoryStock.available`
+ * as the sum of the movements for each (item, branch, shelf).
  *
  * `reserved` and `inTransit` are left alone: those are maintained by the
  * transfer workflow and are not derivable from the movement ledger.
@@ -29,65 +34,53 @@ import { prisma } from '../src/server/db/prisma'
 
 const APPLY = process.argv.includes('--apply')
 
+/** Tables the migration made branch-required. None may hold a NULL. */
+const REQUIRED = [
+  'stock_movements', 'stock_batches', 'wastage_records', 'stock_counts',
+  'purchases', 'goods_receipts', 'purchase_returns', 'cash_drawer_sessions',
+  'storage_locations', 'shift_notes', 'orders', 'restaurant_tables',
+] as const
+
 async function main() {
   console.log(APPLY ? '── APPLYING CHANGES ──\n' : '── dry run: nothing will be written ──\n')
 
-  // ── 1. movements that know their order but not their branch ────────────────
-  const orphans = await prisma.stockMovement.findMany({
-    where: { branchId: null, orderId: { not: null } },
-    select: { id: true, restaurantId: true, orderId: true },
-  })
-
-  const branchForOrder = new Map<string, string | null>()
-  const defaultBranch = new Map<string, string | null>()
-  let attributed = 0
-  let unattributable = 0
-
-  for (const movement of orphans) {
-    const orderId = movement.orderId!
-    if (!branchForOrder.has(orderId)) {
-      const order = await prisma.order.findUnique({
-        where: { id: orderId },
-        select: { branchId: true },
-      })
-      branchForOrder.set(orderId, order?.branchId ?? null)
-    }
-    let branchId = branchForOrder.get(orderId) ?? null
-
-    // A single-location restaurant leaves Order.branchId null; its stock still
-    // lives at the default branch.
-    if (!branchId) {
-      if (!defaultBranch.has(movement.restaurantId)) {
-        const fallback = await prisma.branch.findFirst({
-          where: { restaurantId: movement.restaurantId, deletedAt: null, isDefault: true },
-          select: { id: true },
-        })
-        defaultBranch.set(movement.restaurantId, fallback?.id ?? null)
-      }
-      branchId = defaultBranch.get(movement.restaurantId) ?? null
-    }
-
-    if (!branchId) {
-      unattributable += 1
-      continue
-    }
-    if (APPLY) {
-      await prisma.stockMovement.update({ where: { id: movement.id }, data: { branchId } })
-    }
-    attributed += 1
+  // ── 1. did the back-fill leave anything behind? ────────────────────────────
+  console.log('branch coverage')
+  let unplaced = 0
+  for (const table of REQUIRED) {
+    const rows = await prisma.$queryRawUnsafe<Array<{ total: bigint; missing: bigint }>>(
+      `SELECT COUNT(*)::bigint AS total,
+              COUNT(*) FILTER (WHERE "branchId" IS NULL)::bigint AS missing
+         FROM "${table}"`,
+    )
+    const { total, missing } = rows[0]
+    unplaced += Number(missing)
+    const mark = Number(missing) === 0 ? '✓' : '✗'
+    console.log(`  ${mark} ${table.padEnd(22)} ${String(total).padStart(7)} rows${Number(missing) ? `, ${missing} WITHOUT A BRANCH` : ''}`)
+  }
+  if (unplaced > 0) {
+    console.log('\n  Some rows have no location. The migration should have made that')
+    console.log('  impossible, so this means it has not been applied here yet.')
   }
 
-  console.log(`movements missing a branch:      ${orphans.length}`)
-  console.log(`  attributable to a branch:      ${attributed}`)
-  console.log(`  no branch could be resolved:   ${unattributable}`)
-
-  const stillNull = await prisma.stockMovement.count({ where: { branchId: null } })
-  console.log(`movements with no branch at all: ${stillNull} (opening balances and manual posts predating branches)\n`)
+  // How the movements were spread. A back-fill that put everything on one
+  // location is not wrong — a single-site restaurant looks exactly like that —
+  // but on a multi-site one it is worth a second look before --apply.
+  const spread = await prisma.$queryRaw<Array<{ name: string; code: string; n: bigint }>>`
+    SELECT b."name", b."code", COUNT(m.*)::bigint AS n
+      FROM "branches" b LEFT JOIN "stock_movements" m ON m."branchId" = b."id"
+     GROUP BY b."id", b."name", b."code"
+     ORDER BY n DESC
+  `
+  console.log('\nmovements per location')
+  for (const row of spread) {
+    console.log(`  ${row.name.padEnd(24)} ${row.code.padEnd(8)} ${String(row.n).padStart(7)}`)
+  }
+  console.log()
 
   // ── 2. rebuild available from the ledger ───────────────────────────────────
   const grouped = await prisma.stockMovement.groupBy({
     by: ['restaurantId', 'itemId', 'branchId', 'locationId'],
-    where: { branchId: { not: null } },
     _sum: { quantity: true },
   })
 
@@ -102,7 +95,7 @@ async function main() {
       where: {
         restaurantId: row.restaurantId,
         itemId: row.itemId,
-        branchId: row.branchId!,
+        branchId: row.branchId,
         storageLocationId: row.locationId,
       },
     })
@@ -131,7 +124,7 @@ async function main() {
         data: {
           restaurantId: row.restaurantId,
           itemId: row.itemId,
-          branchId: row.branchId!,
+          branchId: row.branchId,
           storageLocationId: row.locationId,
           available: ledger,
         },

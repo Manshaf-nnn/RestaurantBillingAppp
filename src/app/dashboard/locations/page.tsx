@@ -8,7 +8,7 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { listLocations } from '@/features/transfers/queries'
 import { LocationForm } from '@/features/branches/components/location-form'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, assignableRoles, can, canManageLocation } from '@/lib/rbac'
+import { PERMISSIONS, assignableRoles, can, canManageLocation, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -28,7 +28,7 @@ export default async function LocationsPage() {
 
   const [restaurant, locations, team] = await Promise.all([
     requireRestaurant(user.restaurantId),
-    listLocations(user.restaurantId),
+    listLocations(user.restaurantId, visibleBranchIds(user)),
     /*
      * Candidates for the manager picker on the create form — only fetched when
      * the form will actually render, so a read-only viewer costs nothing.

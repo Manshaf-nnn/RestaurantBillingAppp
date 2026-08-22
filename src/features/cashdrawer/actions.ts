@@ -3,13 +3,35 @@
 import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import { minorUnitFactor } from '@/lib/money'
 import { cashMovementSchema, closeDrawerSchema, openDrawerSchema } from './schema'
-import { closeDrawer, getOpenDrawer, openDrawer, recordCashMovement } from './service'
+import { closeDrawer, getOpenDrawer, openDrawer, recordCashMovement, type DrawerActor } from './service'
+
+/**
+ * Who is reaching for the drawer, in the shape the service checks against.
+ *
+ * `canManageOthers` is decided here rather than in the service, because it is a
+ * permission question and permissions are the actions' business. A cashier
+ * holds CASH_DRAWER_OPERATE and works their own till; a manager also holds
+ * CASH_DRAWER_MANAGE and reconciles the floor.
+ */
+function actorFor(user: {
+  id: string
+  role: DrawerActor['role']
+  branchId?: string | null
+  permissions?: string[]
+}): DrawerActor {
+  return {
+    id: user.id,
+    role: user.role,
+    branchId: user.branchId ?? null,
+    canManageOthers: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
+  }
+}
 
 /** Cashier-facing surfaces that show drawer state. */
 function revalidateDrawer() {
@@ -37,6 +59,14 @@ export async function openDrawerAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.CASH_DRAWER_OPERATE)
+      /*
+       * The posted branch has to be one this person may reach. `openDrawer`
+       * resolves it through `resolveBranchId`, which only checks that the
+       * branch belongs to the restaurant — a tenancy check, not a permission
+       * one — so a Kandy cashier could open a till at Colombo by posting its
+       * id. The module imported this guard and never called it.
+       */
+      await assertBranchAccess(user, data.branchId || null)
 
       const session = await openDrawer({
         restaurantId: user.restaurantId,
@@ -75,6 +105,7 @@ export async function recordCashMovementAction(
 
       const movement = await recordCashMovement({
         restaurantId: user.restaurantId,
+        actor: actorFor(user),
         sessionId: data.sessionId,
         type: data.type,
         amount: await toMinor(user.restaurantId, data.amount),
@@ -111,6 +142,7 @@ export async function closeDrawerAction(
 
       const { session, totals, variance } = await closeDrawer({
         restaurantId: user.restaurantId,
+        actor: actorFor(user),
         sessionId: data.sessionId,
         countedCash: await toMinor(user.restaurantId, data.countedCash),
         note: data.note || null,

@@ -6,7 +6,7 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { resolveStockLocation } from '@/features/branches/service'
 import { resolveCategory } from '@/features/catalog/service'
 import { postMovement } from './ledger'
@@ -28,6 +28,7 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
+      await assertBranchAccess(user, data.branchId)
 
       /*
        * `quantity` is deliberately absent from this payload.
@@ -70,8 +71,18 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
 
       try {
         if (data.id) {
-          const record = await prisma.inventoryItem.update({ where: { id: data.id }, data: payload })
-          return { id: record.id }
+          /*
+           * `updateMany`, for the reason `saveSupplier` above spells out: a
+           * bare primary-key `where` let an id from another restaurant through.
+           * Prisma will not take a non-unique `where` on `update`, so the
+           * tenant-scoped form is the many-variant plus a count check.
+           */
+          const result = await prisma.inventoryItem.updateMany({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            data: payload,
+          })
+          if (result.count === 0) throw new NotFoundError('Inventory item')
+          return { id: data.id }
         }
 
         const record = await prisma.inventoryItem.create({
@@ -111,6 +122,9 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
+      // Posting stock into a location you have nothing to do with is exactly
+      // what this guard exists for; the module never imported it.
+      await assertBranchAccess(user, data.branchId)
 
       const item = await prisma.inventoryItem.findFirst({
         where: { id: data.itemId, restaurantId: user.restaurantId },
@@ -229,9 +243,36 @@ export async function saveSupplier(input: unknown): Promise<ActionResult<{ id: s
       }
 
       try {
-        const record = data.id
-          ? await prisma.supplier.update({ where: { id: data.id }, data: payload })
-          : await prisma.supplier.create({ data: { ...payload, restaurantId: user.restaurantId } })
+        if (data.id) {
+          /*
+           * `updateMany`, not `update`, and the reason is not style.
+           *
+           * This was `update({ where: { id: data.id } })` — a primary-key
+           * lookup with no tenant predicate, so the id decided everything.
+           * Anyone holding SUPPLIER_MANAGE in any restaurant could overwrite
+           * ANOTHER restaurant's supplier by posting its id: name, phone,
+           * email, and `isActive` to hide it. That is a tenancy breach, not a
+           * branch one, and it is the only one the audit found.
+           *
+           * Prisma's `update` cannot take a non-unique `where`, so the fix is
+           * the shape `deleteSupplier` twelve lines below already uses: match
+           * on id AND restaurant, then read the count. A mismatched id updates
+           * nothing and is reported as not-found, which is also what it should
+           * look like from outside — an id belonging to another tenant must
+           * not be distinguishable from an id that does not exist.
+           */
+          const result = await prisma.supplier.updateMany({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            data: payload,
+          })
+          if (result.count === 0) throw new NotFoundError('Supplier')
+          revalidatePath('/dashboard/suppliers')
+          return { id: data.id }
+        }
+
+        const record = await prisma.supplier.create({
+          data: { ...payload, restaurantId: user.restaurantId },
+        })
         revalidatePath('/dashboard/suppliers')
         return { id: record.id }
       } catch (error) {
@@ -264,6 +305,10 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PURCHASE_MANAGE)
+      // The posted location has to be one this user may reach. `resolveStockLocation`
+      // only checks that the branch belongs to the restaurant, which is a
+      // tenancy check, not a permission one.
+      await assertBranchAccess(user, data.branchId)
       const destination = await resolveStockLocation({
         restaurantId: user.restaurantId,
         requestedBranchId: data.branchId,
@@ -287,6 +332,14 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
         const created = await tx.purchase.create({
           data: {
             restaurantId: user.restaurantId,
+            /*
+             * The branch was resolved above and then used only for the stock
+             * movement — the purchase row itself carried none. So the goods
+             * landed at a location while the order that bought them was
+             * invisible to every branch-filtered purchase list, and the spend
+             * could not be attributed to the site that spent it.
+             */
+            branchId: destination,
             supplierId: data.supplierId || null,
             number,
             status: 'RECEIVED',

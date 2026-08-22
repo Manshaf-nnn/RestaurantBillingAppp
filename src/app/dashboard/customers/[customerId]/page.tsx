@@ -7,7 +7,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getCustomerProfile } from '@/features/customers/analytics'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -23,7 +23,11 @@ export default async function CustomerPage({
   const user = await requirePagePermission(PERMISSIONS.CUSTOMER_VIEW, `/dashboard/customers/${customerId}`)
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
-  const c = await getCustomerProfile({ restaurantId: user.restaurantId, customerId })
+  const c = await getCustomerProfile({
+    restaurantId: user.restaurantId,
+    customerId,
+    branchIds: visibleBranchIds(user),
+  })
 
   return (
     <>

@@ -12,7 +12,8 @@ import { Label } from '@/components/ui/label'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import {
-  approveTransferAction, closeTransferAction, dispatchTransferAction, receiveTransferAction,
+  approveTransferAction, closeTransferAction, completeTransferAction,
+  dispatchTransferAction, receiveTransferAction,
 } from '../actions'
 
 const REASONS = [
@@ -247,12 +248,42 @@ export function TransferPanel({
         </SectionCard>
       )}
 
+      {can.receive && detail.status === 'RECEIVED' && (
+        <SectionCard
+          title="Sign off the shortfall"
+          description="This delivery arrived short or damaged. The stock that turned up is already counted in — accepting closes the paperwork on what did not."
+        >
+          <ul className="mb-4 space-y-1 text-sm">
+            {detail.lines
+              .filter((l) => (l.variance ?? 0) !== 0)
+              .map((l) => (
+                <li key={l.id} className="flex items-center justify-between gap-3">
+                  <span>{l.name}</span>
+                  <span className="text-amber-600 tabular-nums dark:text-amber-400">
+                    {l.receivedQty ?? 0} of {l.sentQty ?? 0} {l.unit.toLowerCase()}
+                    {l.varianceReason ? ` · ${l.varianceReason.toLowerCase().replace(/_/g, ' ')}` : ''}
+                  </span>
+                </li>
+              ))}
+          </ul>
+          <Button onClick={() => run(() => completeTransferAction(detail.id), 'Transfer completed.')} disabled={busy}>
+            <PackageCheck className="mr-2 h-4 w-4" />
+            {busy ? 'Completing…' : 'Accept and complete'}
+          </Button>
+        </SectionCard>
+      )}
+
       <SectionCard title="Timeline">
         <ul className="space-y-2 text-sm">
           <Step label="Requested" at={detail.requestedAt} by={detail.requestedByName} />
           <Step label="Approved" at={detail.approvedAt} by={detail.approvedByName} />
           <Step label="Dispatched" at={detail.dispatchedAt} by={detail.dispatchedByName} />
           <Step label="Received" at={detail.receivedAt} by={detail.receivedByName} />
+          <Step
+            label="Completed"
+            at={detail.status === 'COMPLETED' ? detail.receivedAt : null}
+            by={null}
+          />
         </ul>
       </SectionCard>
     </div>

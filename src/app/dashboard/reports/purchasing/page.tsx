@@ -37,9 +37,7 @@ export default async function PurchasingReportPage({
    */
   const selection = await selectedBranch(user, p)
   const allowed = selection.branchIds
-  const locations = (await listLocations(user.restaurantId)).filter(
-    (l) => allowed === null || allowed.includes(l.id),
-  )
+  const locations = await listLocations(user.restaurantId, allowed)
   const chosen = scopeToOne(selection)
 
   const [orders, suggestions, priceMoves, bySupplier] = await Promise.all([
@@ -50,6 +48,11 @@ export default async function PurchasingReportPage({
       where: {
         restaurantId: user.restaurantId,
         recordedAt: { gte: range.from, lte: range.to },
+        // Price history has no branch of its own; it reaches one through the
+        // purchase that recorded the price. Both panels below were chain-wide
+        // while the two above them were scoped, so the page contradicted
+        // itself once a location was chosen.
+        ...(chosen ? { purchase: { branchId: chosen } } : {}),
       },
       include: { item: { select: { name: true, unit: true } }, supplier: { select: { name: true } } },
       orderBy: { recordedAt: 'asc' },
@@ -60,6 +63,7 @@ export default async function PurchasingReportPage({
         restaurantId: user.restaurantId,
         createdAt: { gte: range.from, lte: range.to },
         status: { notIn: ['CANCELLED', 'DRAFT'] },
+        ...(chosen ? { branchId: chosen } : {}),
       },
       _sum: { total: true },
       _count: true,

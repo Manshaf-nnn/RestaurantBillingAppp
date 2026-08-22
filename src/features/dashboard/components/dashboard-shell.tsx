@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import {
   Bell,
+  Building2,
   ExternalLink,
   LogOut,
   Menu,
@@ -72,6 +73,7 @@ export function DashboardShell({
   restaurantName,
   orderUrl,
   trialDaysLeft,
+  unassignedToLocation,
   initialNotifications,
   openTasks = 0,
   children,
@@ -82,6 +84,15 @@ export function DashboardShell({
   restaurantName: string
   orderUrl: string
   trialDaysLeft?: number | null
+  /**
+   * True when this account is tied to one location and has not been given one.
+   *
+   * `visibleBranchIds` fails closed for that case — it returns an empty list,
+   * and `scopeToOne` turns it into a sentinel that matches nothing — which is
+   * the right security answer and a terrible explanation. Every screen went
+   * blank: no orders, no stock, no drawer history, no error. This says why.
+   */
+  unassignedToLocation?: boolean
   initialNotifications: ShellNotification[]
   /**
    * Outstanding instructions for this person. Shown as a count beside "Things
@@ -370,6 +381,17 @@ export function DashboardShell({
             </DropdownMenu>
           </div>
         </header>
+
+        {unassignedToLocation ? (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-warning/10 px-4 py-2 text-sm text-warning lg:px-6">
+            <Building2 className="size-4 shrink-0" />
+            <span className="font-medium">Your account is not assigned to a location.</span>
+            <span className="text-muted-foreground">
+              That is why these screens are empty — ask the owner to set your location on the Staff
+              screen.
+            </span>
+          </div>
+        ) : null}
 
         {typeof trialDaysLeft === 'number' ? (
           <div

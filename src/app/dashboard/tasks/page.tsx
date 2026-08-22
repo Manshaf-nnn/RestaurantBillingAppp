@@ -37,7 +37,7 @@ export default async function TasksPage({
       user,
       branchId: scopeToOne(selection),
     }),
-    canInstruct ? listLocations(user.restaurantId) : Promise.resolve([]),
+    canInstruct ? listLocations(user.restaurantId, visibleBranchIds(user)) : Promise.resolve([]),
   ])
 
   const tasks: TaskView[] = instructions.map((i) => ({

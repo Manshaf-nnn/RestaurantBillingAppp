@@ -5,13 +5,14 @@
 import { prisma } from '../src/server/db/prisma'
 import { postMovement, recomputeBalance, directionOf } from '../src/features/inventory/ledger'
 import {
-  receiveStock, recordWastage, transferStock, setOpeningBalance, adjustStock, returnToSupplier,
+  receiveStock, recordWastage, setOpeningBalance, adjustStock, returnToSupplier,
 } from '../src/features/inventory/operations'
 import {
   openStockCount, recordCountLines, submitStockCount, approveStockCount,
 } from '../src/features/inventory/stock-count'
 import { toBaseUnits, fromBaseUnits, UnitConversionError } from '../src/features/inventory/units'
 import { levelFor, getInventorySummary } from '../src/features/inventory/alerts'
+import { ensureDefaultBranch } from '../src/features/branches/service'
 
 let pass = 0, fail = 0
 const madeItems: string[] = []
@@ -30,9 +31,57 @@ async function throws(name: string, fn: () => Promise<unknown>, code?: string) {
   }
 }
 
+/*
+ * What `transferStock` used to do, written out.
+ *
+ * That helper has been deleted: it moved stock between two InventoryItem rows
+ * and named no branch on either leg, so `applyLocationDelta` skipped both and
+ * no location's balance ever changed. The two postings below are the same two
+ * postings it made, with the location it should always have carried — so these
+ * assertions still test what they were written to test.
+ *
+ * The real inter-location transfer is `src/features/transfers/service.ts`, with
+ * a request, an approval, a dispatch and a receipt. It is covered by
+ * branch-isolation-test.
+ */
+async function moveBetweenItems(params: {
+  restaurantId: string
+  branchId: string
+  fromItemId: string
+  toItemId: string
+  quantity: number
+  userId: string
+}) {
+  // One reference on both legs, so the pair can be found together in the
+  // ledger — the assertion below checks exactly that.
+  const reference = `TRF-${Date.now().toString(36).toUpperCase()}`
+  await prisma.$transaction(async (tx) => {
+    await postMovement(tx, {
+      restaurantId: params.restaurantId, branchId: params.branchId, itemId: params.fromItemId,
+      type: 'TRANSFER_OUT', quantity: params.quantity, userId: params.userId,
+      referenceType: 'Transfer', referenceId: reference,
+    })
+    await postMovement(tx, {
+      restaurantId: params.restaurantId, branchId: params.branchId, itemId: params.toItemId,
+      type: 'TRANSFER_IN', quantity: params.quantity, userId: params.userId,
+      referenceType: 'Transfer', referenceId: reference,
+    })
+  })
+}
+
 async function main() {
   const shop = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'the-copper-spoon' } })
   const other = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'kava' } })
+
+  /*
+   * Where the stock in this fixture lives.
+   *
+   * The ledger will not post a movement without a location — a movement that
+   * names no place updates the restaurant's total and nobody's balance, which
+   * is exactly the drift these tests exist to catch.
+   */
+  const shopBranch = (await ensureDefaultBranch(shop.id)).id
+  const otherBranch = (await ensureDefaultBranch(other.id)).id
   const user = await prisma.user.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
 
   const stamp = Date.now().toString(36)
@@ -68,19 +117,19 @@ async function main() {
 
   console.log('\n── 2. The ledger example from the spec ──────────────────')
   const patty = await mk('Chicken Patty', 'PIECE')
-  await setOpeningBalance({ restaurantId: shop.id, itemId: patty.id, quantity: 100, userId: user.id })
-  await receiveStock({ restaurantId: shop.id, itemId: patty.id, quantity: 50, unitCost: 20000, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, quantity: 100, userId: user.id })
+  await receiveStock({ restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, quantity: 50, unitCost: 20000, userId: user.id })
   await prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: patty.id, type: 'SALE', quantity: 20, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, type: 'SALE', quantity: 20, userId: user.id,
   }))
-  await recordWastage({ restaurantId: shop.id, itemId: patty.id, quantity: 3, reason: 'dropped', userId: user.id })
+  await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, quantity: 3, reason: 'dropped', userId: user.id })
 
   const pattyB = await mk('Chicken Patty B', 'PIECE')
-  await transferStock({ restaurantId: shop.id, fromItemId: patty.id, toItemId: pattyB.id, quantity: 10, userId: user.id })
+  await moveBetweenItems({ restaurantId: shop.id, branchId: shopBranch, fromItemId: patty.id, toItemId: pattyB.id, quantity: 10, userId: user.id })
   await prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: patty.id, type: 'TRANSFER_IN', quantity: 5, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, type: 'TRANSFER_IN', quantity: 5, userId: user.id,
   }))
-  await adjustStock({ restaurantId: shop.id, itemId: patty.id, quantity: 2, direction: 'OUT', reason: 'correction', userId: user.id })
+  await adjustStock({ restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, quantity: 2, direction: 'OUT', reason: 'correction', userId: user.id })
 
   const after = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: patty.id } })
   // 100 + 50 - 20 - 3 - 10 + 5 - 2 = 120
@@ -99,12 +148,12 @@ async function main() {
   console.log('\n── 3. The spec test: 100 / 10 / 5 / 20 ──────────────────')
   const beef = await mk('Beef', 'KG')
   const beefB = await mk('Beef Branch2', 'KG')
-  await receiveStock({ restaurantId: shop.id, itemId: beef.id, quantity: 100, unitCost: 150000, userId: user.id })
+  await receiveStock({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 100, unitCost: 150000, userId: user.id })
   await prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: beef.id, type: 'SALE', quantity: 10, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, type: 'SALE', quantity: 10, userId: user.id,
   }))
-  await recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 5, reason: 'spoiled', userId: user.id })
-  await transferStock({ restaurantId: shop.id, fromItemId: beef.id, toItemId: beefB.id, quantity: 20, userId: user.id })
+  await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 5, reason: 'spoiled', userId: user.id })
+  await moveBetweenItems({ restaurantId: shop.id, branchId: shopBranch, fromItemId: beef.id, toItemId: beefB.id, quantity: 20, userId: user.id })
 
   const beefAfter = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: beef.id } })
   const beefBAfter = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: beefB.id } })
@@ -117,37 +166,38 @@ async function main() {
 
   console.log('\n── 4. Costing ───────────────────────────────────────────')
   const rice = await mk('Rice', 'KG')
-  await receiveStock({ restaurantId: shop.id, itemId: rice.id, quantity: 10, unitCost: 10000, userId: user.id })
-  await receiveStock({ restaurantId: shop.id, itemId: rice.id, quantity: 10, unitCost: 20000, userId: user.id })
+  await receiveStock({ restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, quantity: 10, unitCost: 10000, userId: user.id })
+  await receiveStock({ restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, quantity: 10, unitCost: 20000, userId: user.id })
   const riced = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: rice.id } })
   ok('weighted average of 10@100 and 10@200 is 150', riced.costPerUnit === 15000, `got ${riced.costPerUnit}`)
   ok('last purchase cost is recorded', riced.lastPurchaseCost === 20000)
   await prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: rice.id, type: 'SALE', quantity: 5, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, type: 'SALE', quantity: 5, userId: user.id,
   }))
   const ricedAfter = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: rice.id } })
   ok('a sale does not move the average cost', ricedAfter.costPerUnit === 15000)
 
   console.log('\n── 5. Guards ────────────────────────────────────────────')
   await throws('a negative quantity is refused', () => prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: beef.id, type: 'SALE', quantity: -5, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, type: 'SALE', quantity: -5, userId: user.id,
   })), 'STOCK_SIGNED_QUANTITY')
   await throws('a zero quantity is refused', () => prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: shop.id, itemId: beef.id, type: 'SALE', quantity: 0, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, type: 'SALE', quantity: 0, userId: user.id,
   })), 'STOCK_BAD_QUANTITY')
   await throws('wastage with no reason is refused',
-    () => recordWastage({ restaurantId: shop.id, itemId: beef.id, quantity: 1, reason: '', userId: user.id }),
+    () => recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: beef.id, quantity: 1, reason: '', userId: user.id }),
     'WASTAGE_NO_REASON')
   await throws('a second opening balance is refused',
-    () => setOpeningBalance({ restaurantId: shop.id, itemId: patty.id, quantity: 5, userId: user.id }),
+    () => setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: patty.id, quantity: 5, userId: user.id }),
     'OPENING_BALANCE_EXISTS')
-  await throws('transferring to the same item is refused',
-    () => transferStock({ restaurantId: shop.id, fromItemId: beef.id, toItemId: beef.id, quantity: 1, userId: user.id }),
-    'TRANSFER_SAME_ITEM')
+  // 'transferring to the same item is refused' was here. It guarded a rule
+  // inside `transferStock`, which no longer exists — the real transfer moves
+  // ONE item between two locations, and refusing a pointless move is
+  // `requestTransfer`'s job now.
   ok('SALE is outbound, PURCHASE inbound', directionOf('SALE') === -1 && directionOf('PURCHASE') === 1)
 
   console.log('\n── 6. Stock count needs approval ────────────────────────')
-  const count = await openStockCount({ restaurantId: shop.id, userId: user.id })
+  const count = await openStockCount({ restaurantId: shop.id, branchId: shopBranch, userId: user.id })
   madeCounts.push(count.id)
   const beforeCount = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: beef.id } })).quantity
   await recordCountLines({
@@ -192,10 +242,10 @@ async function main() {
 
   console.log('\n── 8. Tenant isolation ──────────────────────────────────')
   await throws('posting to another tenant’s item is refused', () => prisma.$transaction((tx) => postMovement(tx, {
-    restaurantId: other.id, itemId: beef.id, type: 'SALE', quantity: 1, userId: user.id,
+    restaurantId: other.id, branchId: otherBranch, itemId: beef.id, type: 'SALE', quantity: 1, userId: user.id,
   })))
-  await throws('transferring across tenants is refused',
-    () => transferStock({ restaurantId: other.id, fromItemId: beef.id, toItemId: beefB.id, quantity: 1, userId: user.id }))
+  // Cross-tenant transfer refusal: the same protection is asserted two lines
+  // above, since every leg of a transfer goes through `postMovement`.
   await throws('counting another tenant’s item is refused',
     () => recordCountLines({ restaurantId: other.id, stockCountId: count.id, lines: [{ itemId: beef.id, countedQty: 1 }] }))
   const leak = await prisma.inventoryItem.findFirst({ where: { id: beef.id, restaurantId: other.id } })
@@ -203,7 +253,7 @@ async function main() {
 
   console.log('\n── 9. Return to supplier ────────────────────────────────')
   const beforeReturn = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: rice.id } })).quantity
-  await returnToSupplier({ restaurantId: shop.id, itemId: rice.id, quantity: 2, reason: 'damaged bag', userId: user.id })
+  await returnToSupplier({ restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, quantity: 2, reason: 'damaged bag', userId: user.id })
   const afterReturn = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: rice.id } })).quantity
   ok('a supplier return removes stock', afterReturn === beforeReturn - 2, `${beforeReturn} -> ${afterReturn}`)
 

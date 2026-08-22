@@ -127,23 +127,13 @@ export async function globalSearch(params: {
           where: {
             restaurantId,
             /*
-             * Two independent OR groups, so they go in an AND rather than
-             * fighting over the same key: one for the search term, one for the
-             * location. A receipt records where it landed and older ones fall
-             * back to the order's branch, so both have to be considered.
+             * The search term is an OR across two columns; the location is a
+             * plain predicate. Keeping them in an AND stops the two from
+             * fighting over the same `OR` key.
              */
             AND: [
               { OR: [{ number: contains }, { supplierRef: contains }] },
-              ...(allowed === null
-                ? []
-                : [
-                    {
-                      OR: [
-                        { branchId: { in: allowed } },
-                        { branchId: null, purchase: { branchId: { in: allowed } } },
-                      ],
-                    },
-                  ]),
+              ...(allowed === null ? [] : [{ branchId: { in: allowed } }]),
             ],
           },
           select: {

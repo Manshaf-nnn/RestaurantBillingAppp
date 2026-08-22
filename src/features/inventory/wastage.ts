@@ -47,7 +47,8 @@ export async function recordWastage(params: {
   reasonNote?: string | null
   notes?: string | null
   photoUrl?: string | null
-  branchId?: string | null
+  /** Which location. Required, in step with the ledger. */
+  branchId: string
   locationId?: string | null
   batchId?: string | null
   userId?: string | null
@@ -100,7 +101,7 @@ export async function recordWastage(params: {
         reasonNote: params.reasonNote?.trim() || null,
         notes: params.notes?.trim() || null,
         photoUrl: params.photoUrl?.trim() || null,
-        branchId: params.branchId ?? null,
+        branchId: params.branchId,
         locationId: params.locationId ?? null,
         batchId: params.batchId ?? null,
         createdById: params.userId ?? null,

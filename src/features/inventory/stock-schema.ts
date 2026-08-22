@@ -35,14 +35,6 @@ export const adjustStockSchema = z.object({
   reason: z.string().trim().min(2, 'Give a reason').max(200),
 })
 
-export const transferStockSchema = z.object({
-  fromItemId: z.string().min(1),
-  toItemId: z.string().min(1),
-  quantity,
-  unit: z.enum(UNITS).optional(),
-  reason: z.string().trim().max(200).optional().or(z.literal('')),
-})
-
 export const openingBalanceSchema = z.object({
   itemId: z.string().min(1),
   quantity,

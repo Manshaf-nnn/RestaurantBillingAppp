@@ -301,6 +301,13 @@ export async function createPurchaseReturn(params: {
   restaurantId: string
   supplierId?: string | null
   purchaseId?: string | null
+  /**
+   * Where the goods left from. Required, and it was missing entirely: the
+   * return posted its ledger row with no branch, so `applyLocationDelta`
+   * skipped it — the restaurant-wide quantity fell and no location's balance
+   * moved. Reconciliation would report that as unexplained drift for ever.
+   */
+  branchId: string
   reason: string
   notes?: string | null
   lines: Array<{ itemId: string; quantity: number; unit?: StockUnit | null; unitCost?: number }>
@@ -327,6 +334,7 @@ export async function createPurchaseReturn(params: {
     const record = await tx.purchaseReturn.create({
       data: {
         restaurantId: params.restaurantId,
+        branchId: params.branchId,
         supplierId: params.supplierId ?? null,
         purchaseId: params.purchaseId ?? null,
         number,
@@ -356,6 +364,7 @@ export async function createPurchaseReturn(params: {
         referenceType: 'PurchaseReturn',
         referenceId: record.id,
         purchaseId: params.purchaseId ?? null,
+        branchId: params.branchId,
         userId: params.userId,
       })
     }

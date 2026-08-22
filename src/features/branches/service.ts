@@ -193,6 +193,148 @@ export async function updateBranch(params: {
   })
 }
 
+
+/**
+ * Why a location cannot be removed, if it cannot.
+ *
+ * There has never been any way to delete a location. `Branch.deletedAt` exists,
+ * every query reads it, and nothing has ever written it — so a warehouse opened
+ * by mistake stayed on the list for good.
+ *
+ * The reason it was never built is real, though: a branch is the parent of
+ * orders, stock, staff, drawers and transfers, and half of those foreign keys
+ * are RESTRICT while `InventoryStock` is CASCADE. Deleting one carelessly would
+ * either fail with a constraint error nobody can read, or silently destroy that
+ * location's stock positions.
+ *
+ * So the check runs first and answers in words. Each entry is something a
+ * person can act on — move the stock, close the drawer, reassign the staff —
+ * rather than a foreign-key name.
+ */
+export interface RemovalBlocker {
+  what: string
+  count: number
+  fix: string
+}
+
+export async function locationRemovalBlockers(
+  restaurantId: string,
+  branchId: string,
+): Promise<RemovalBlocker[]> {
+  const branch = await requireBranch(restaurantId, branchId)
+
+  const [stock, openOrders, openDrawers, staff, transfers, purchases] = await Promise.all([
+    prisma.inventoryStock.count({
+      where: { branchId, OR: [{ available: { not: 0 } }, { reserved: { not: 0 } }, { inTransit: { not: 0 } }] },
+    }),
+    prisma.order.count({ where: { branchId, status: { notIn: ['COMPLETED', 'CANCELLED'] } } }),
+    prisma.cashDrawerSession.count({ where: { branchId, status: 'OPEN' } }),
+    prisma.user.count({ where: { branchId, deletedAt: null } }),
+    prisma.stockTransfer.count({
+      where: {
+        OR: [{ fromBranchId: branchId }, { toBranchId: branchId }],
+        status: { notIn: ['COMPLETED', 'REJECTED', 'CANCELLED'] },
+      },
+    }),
+    prisma.purchase.count({ where: { branchId, status: { notIn: ['RECEIVED', 'CANCELLED'] } } }),
+  ])
+
+  const blockers: RemovalBlocker[] = []
+  if (branch.isDefault) {
+    blockers.push({
+      what: 'This is the default location',
+      count: 1,
+      fix: 'Make another location the default first — unassigned records are counted here.',
+    })
+  }
+  if (stock > 0) {
+    blockers.push({
+      what: `${stock} item${stock === 1 ? '' : 's'} still hold stock here`,
+      count: stock,
+      fix: 'Transfer the stock to another location, or write it off.',
+    })
+  }
+  if (openOrders > 0) {
+    blockers.push({
+      what: `${openOrders} order${openOrders === 1 ? ' is' : 's are'} still open`,
+      count: openOrders,
+      fix: 'Complete or cancel them.',
+    })
+  }
+  if (openDrawers > 0) {
+    blockers.push({
+      what: `${openDrawers} cash drawer${openDrawers === 1 ? ' is' : 's are'} still open`,
+      count: openDrawers,
+      fix: 'Close the drawer against a count.',
+    })
+  }
+  if (staff > 0) {
+    blockers.push({
+      what: `${staff} staff member${staff === 1 ? ' is' : 's are'} assigned here`,
+      count: staff,
+      fix: 'Move them to another location on the Staff screen.',
+    })
+  }
+  if (transfers > 0) {
+    blockers.push({
+      what: `${transfers} transfer${transfers === 1 ? ' is' : 's are'} in progress`,
+      count: transfers,
+      fix: 'Finish or cancel them.',
+    })
+  }
+  if (purchases > 0) {
+    blockers.push({
+      what: `${purchases} purchase order${purchases === 1 ? ' is' : 's are'} not yet received`,
+      count: purchases,
+      fix: 'Receive or cancel them.',
+    })
+  }
+  return blockers
+}
+
+/**
+ * Remove a location.
+ *
+ * Soft, always: `deletedAt` is set and the row stays. Its history — every order
+ * ever taken there, every movement, every closed drawer — has to remain
+ * readable, and the foreign keys are RESTRICT precisely so that a hard delete
+ * cannot take that history with it. What "removed" buys is that it disappears
+ * from every list, picker and switcher, which is what the owner is actually
+ * asking for.
+ *
+ * The blockers above are checked again here rather than trusted from the
+ * screen: the check and the act are separate round trips, and something can
+ * change in between.
+ */
+export async function removeBranch(params: {
+  restaurantId: string
+  branchId: string
+}): Promise<{ id: string }> {
+  const blockers = await locationRemovalBlockers(params.restaurantId, params.branchId)
+  if (blockers.length > 0) {
+    throw new AppError(
+      `This location cannot be removed yet: ${blockers.map((b) => b.what.toLowerCase()).join('; ')}.`,
+      409,
+      'BRANCH_NOT_REMOVABLE',
+    )
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Storage areas belong to the location and go with it. They hold no stock —
+    // that was one of the blockers — so nothing is lost.
+    await tx.storageLocation.updateMany({
+      where: { branchId: params.branchId, deletedAt: null },
+      data: { deletedAt: new Date(), isActive: false },
+    })
+    await tx.branch.update({
+      where: { id: params.branchId },
+      data: { deletedAt: new Date(), isActive: false },
+    })
+  })
+
+  return { id: params.branchId }
+}
+
 /**
  * Put someone in charge of a location, and keep the two facts from disagreeing.
  *

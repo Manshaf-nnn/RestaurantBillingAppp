@@ -10,6 +10,15 @@ export interface NotifyInput {
   title: string
   body?: string | null
   audience?: NotificationAudience
+  /**
+   * Which location this concerns. Optional, and null is meaningful: it marks a
+   * genuine business-wide announcement, which readers include alongside their
+   * own branch's.
+   *
+   * Without it every broadcast reached every branch's bell, so a Kandy waiter
+   * was told a table was ready in Colombo.
+   */
+  branchId?: string | null
   userId?: string | null
   /** Also push to the guest tracking screen for this order. */
   orderId?: string | null
@@ -35,6 +44,7 @@ export async function notify(input: NotifyInput) {
   const record = await prisma.notification.create({
     data: {
       restaurantId: input.restaurantId,
+      branchId: input.branchId ?? null,
       userId: input.userId ?? null,
       audience: input.audience ?? null,
       type: input.type,

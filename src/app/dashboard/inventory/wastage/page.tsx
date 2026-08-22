@@ -5,6 +5,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { WastageBoard, type WastageRow } from '@/features/inventory/components/wastage-board'
 import { getWastageReport, WASTAGE_REASON_LABELS } from '@/features/inventory/wastage'
 import { formatMoney } from '@/lib/money'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS, can} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -26,6 +27,15 @@ export default async function WastagePage({
   const period = params.period === 'WEEK' || params.period === 'MONTH' ? params.period : 'DAY'
   const canApprove = can(user, PERMISSIONS.INVENTORY_WASTAGE_APPROVE)
 
+  /*
+   * Wastage happens at a location. The item CATALOGUE below stays
+   * restaurant-wide on purpose — it is the picker for "what did you throw
+   * away", and a shared list of ingredients is the same split the menu uses.
+   * The records and the report are the branch data.
+   */
+  const selection = await selectedBranch(user, params)
+  const branchId = scopeToOne(selection)
+
   const [items, records, report] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId: user.restaurantId, isActive: true },
@@ -33,7 +43,10 @@ export default async function WastagePage({
       orderBy: { name: 'asc' },
     }),
     prisma.wastageRecord.findMany({
-      where: { restaurantId: user.restaurantId },
+      where: {
+        restaurantId: user.restaurantId,
+        ...(selection.branchIds ? { branchId: { in: selection.branchIds } } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 40,
       include: {
@@ -45,6 +58,7 @@ export default async function WastagePage({
     getWastageReport({
       restaurantId: user.restaurantId,
       period,
+      branchId,
       // Naming who wasted what is sensitive; only managers see it.
       includeEmployees: canApprove,
     }),

@@ -72,6 +72,8 @@ const PAGES = [
 const BOUNDARY = ['This page could not load', 'Something went wrong', 'Application error']
 
 const minted: string[] = []
+/** Accounts this run created purely to probe with, removed at the end. */
+const throwaway: string[] = []
 
 /** A signed-in browser's cookie header for this user, as the real login sets it. */
 async function signIn(user: { id: string; restaurantId: string | null; role: string; name: string | null; email: string }) {
@@ -275,7 +277,29 @@ async function main() {
       where: { deletedAt: null, isActive: true },
       _count: { _all: true },
     })
-    const multiSite = counts.filter((row) => row._count._all > 1).map((row) => row.restaurantId)
+    const everyMultiSite = counts.filter((row) => row._count._all > 1).map((row) => row.restaurantId)
+
+    /*
+     * Prefer a tenant whose orders are actually spread across branches.
+     *
+     * Any multi-site tenant proves the branch filter; only one with records at
+     * more than one location can prove that another location's records are
+     * withheld. Picking the first multi-site tenant meant the probes below kept
+     * reporting "no such record" — a green run that had checked nothing.
+     */
+    const spread = await prisma.order.groupBy({
+      by: ['restaurantId', 'branchId'],
+      where: { restaurantId: { in: everyMultiSite } },
+      _count: { _all: true },
+    })
+    const branchesWithOrders = new Map<string, number>()
+    for (const row of spread) {
+      branchesWithOrders.set(row.restaurantId, (branchesWithOrders.get(row.restaurantId) ?? 0) + 1)
+    }
+    const multiSite = [
+      ...everyMultiSite.filter((id) => (branchesWithOrders.get(id) ?? 0) > 1),
+      ...everyMultiSite.filter((id) => (branchesWithOrders.get(id) ?? 0) <= 1),
+    ]
 
     const twoBranchOwner = multiSite.length
       ? await prisma.user.findFirst({
@@ -326,6 +350,128 @@ async function main() {
     } else {
       console.log('  · no multi-location tenant in this database — branch switching not checked')
     }
+
+    /*
+     * "A Branch Manager cannot access another branch by URL or API
+     * manipulation" — the spec's own checkbox, asked of a real server.
+     *
+     * A confined manager is signed in and pointed at detail routes belonging to
+     * a location they have nothing to do with. Anything that is not a 404 or a
+     * redirect is a leak: a 200 means the page rendered another site's order,
+     * transfer, purchase or stock position to somebody who may not see it.
+     *
+     * This is the half that unit tests cannot reach. The guards live in page
+     * components, and a page component only runs when a page is served.
+     */
+    if (twoBranchOwner && two.length === 2) {
+      const [mine, theirs] = two
+      /*
+       * Made, not found.
+       *
+       * Looking for an existing confined manager meant the check skipped on any
+       * database that happened not to have one — which is most of them, and
+       * exactly the databases where the leak would go unnoticed. A throwaway
+       * account tied to one branch is three columns and is removed at the end,
+       * and it makes this run everywhere.
+       */
+      const confined = await prisma.user.findFirst({
+        where: {
+          restaurantId: twoBranchOwner.restaurantId ?? undefined,
+          branchId: mine.id,
+          role: { in: ['MANAGER', 'CASHIER', 'WAITER', 'WAREHOUSE_STAFF'] },
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { id: true, restaurantId: true, role: true, name: true, email: true },
+      }) ?? await prisma.user.create({
+        data: {
+          restaurantId: twoBranchOwner.restaurantId!,
+          branchId: mine.id,
+          role: 'MANAGER',
+          name: `Probe ${mine.name}`,
+          email: `probe-${Math.random().toString(36).slice(2, 10)}@render.test`,
+          passwordHash: 'not-a-real-login',
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true, restaurantId: true, role: true, name: true, email: true },
+      })
+      if (confined.email.endsWith('@render.test')) throwaway.push(confined.id)
+
+      {
+        const cookieFor = await signIn(confined)
+
+        /*
+         * Any record at any branch this person may not see — not specifically
+         * `theirs`. Pinning the search to one branch meant the probe skipped
+         * whenever that branch happened to have no orders, which is most of the
+         * time on a small database and precisely when a leak would go unseen.
+         */
+        const tenant = twoBranchOwner.restaurantId ?? undefined
+        const elsewhere = { not: mine.id }
+        const [order, transfer, purchase] = await Promise.all([
+          prisma.order.findFirst({
+            where: { restaurantId: tenant, branchId: elsewhere },
+            select: { id: true },
+          }),
+          prisma.stockTransfer.findFirst({
+            where: { restaurantId: tenant, fromBranchId: elsewhere, toBranchId: elsewhere },
+            select: { id: true },
+          }),
+          prisma.purchase.findFirst({
+            where: { restaurantId: tenant, branchId: elsewhere },
+            select: { id: true },
+          }),
+        ])
+
+        /*
+         * Each probe carries a marker that ONLY the real page renders.
+         *
+         * Status alone is not the test. `notFound()` in a nested route renders
+         * this app's not-found page, and Next serves that with 200 — so a
+         * status check reports a leak where the guard fired correctly, which is
+         * exactly what it did on the first run of this block. What actually
+         * matters is whether the record's contents reached the browser, so that
+         * is what is asserted; the status is reported alongside it.
+         */
+        const probes: Array<{ path: string; exists: boolean; marker: string }> = [
+          { path: `/dashboard/locations/${theirs.id}`, exists: true, marker: 'Storage areas' },
+          { path: `/dashboard/orders/${order?.id ?? 'none'}`, exists: Boolean(order), marker: 'Order timeline' },
+          { path: `/dashboard/transfers/${transfer?.id ?? 'none'}`, exists: Boolean(transfer), marker: 'Timeline' },
+          { path: `/dashboard/purchases/${purchase?.id ?? 'none'}`, exists: Boolean(purchase), marker: 'Order lines' },
+        ]
+
+        for (const probe of probes) {
+          if (!probe.exists) {
+            // Honest skip, not a pass. No tenant in this database holds a
+            // record of that kind at a branch the probe user cannot see, so
+            // there is nothing to ask for. The same rule is proved at the
+            // service layer by branch-isolation-test, which builds a fixture
+            // with records at three branches on purpose.
+            console.log(
+              `  · ${probe.path.replace(/\/[^/]*$/, '/…')} — nothing at another branch to probe for` +
+              ' (covered by branch-isolation-test)',
+            )
+            continue
+          }
+          const response = await fetch(`${BASE}${probe.path}`, {
+            headers: { cookie: cookieFor },
+            redirect: 'manual',
+          })
+          const body = response.status === 200 ? await response.text() : ''
+          const served = body.includes(probe.marker)
+
+          if (!served) {
+            passed += 1
+            console.log(
+              `  ✓ ${probe.path} withheld from a ${confined.role} at ${mine.name} (HTTP ${response.status})`,
+            )
+          } else {
+            failed.push(`${probe.path} served another branch's record`)
+            console.log(`  ✗ ${probe.path} rendered "${probe.marker}" — another location's record was served`)
+          }
+        }
+      }
+    }
   }
 
   // The diagnostics are only worth anything if they answer, so check them here
@@ -349,6 +495,7 @@ async function main() {
   }
 
   await prisma.session.deleteMany({ where: { id: { in: minted } } }).catch(() => {})
+  await prisma.user.deleteMany({ where: { id: { in: throwaway } } }).catch(() => {})
   await prisma.$disconnect()
 
   console.log(`\n═══ ${passed} rendered, ${failed.length} failed ═══\n`)

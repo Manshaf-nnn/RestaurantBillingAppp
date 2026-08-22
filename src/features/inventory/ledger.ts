@@ -108,7 +108,17 @@ export interface PostMovementParams {
   notes?: string | null
   referenceType?: string | null
   referenceId?: string | null
-  branchId?: string | null
+  /**
+   * Where this happened. Required, and deliberately.
+   *
+   * It was optional, falling back to `item.branchId` and then to null — and
+   * `applyLocationDelta` returns early on a null branch, so a movement with no
+   * location moved the restaurant-wide quantity while no location's balance
+   * changed. That is the drift the reconciliation report was built to find,
+   * and the ledger was manufacturing it. Two callers were relying on the
+   * fallback; both turned out to be posting at a location they knew.
+   */
+  branchId: string
   locationId?: string | null
   userId?: string | null
   batchNo?: string | null
@@ -231,7 +241,7 @@ export async function postMovement(
       notes: params.notes ?? null,
       referenceType: params.referenceType ?? null,
       referenceId: params.referenceId ?? null,
-      branchId: params.branchId ?? item.branchId ?? null,
+      branchId: params.branchId,
       locationId: params.locationId ?? item.locationId ?? null,
       userId: params.userId ?? null,
       batchNo: params.batchNo ?? null,

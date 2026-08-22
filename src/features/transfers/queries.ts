@@ -40,9 +40,25 @@ export interface LocationSummary {
  * problem, not a negative asset, and letting it subtract would understate what
  * the restaurant actually holds.
  */
-export async function listLocations(restaurantId: string): Promise<LocationSummary[]> {
+/**
+ * Every location, for the locations screen.
+ *
+ * `branchIds` narrows it to what the viewer may see. It had no such parameter,
+ * and `BRANCH_VIEW` is held by cashiers, warehouse staff and site-confined
+ * managers — so anyone could read every branch's name, stock value, staff count
+ * and low-stock position from `/dashboard/locations`. The detail page one click
+ * away was guarded; the list was not.
+ */
+export async function listLocations(
+  restaurantId: string,
+  branchIds?: string[] | null,
+): Promise<LocationSummary[]> {
   const branches = await prisma.branch.findMany({
-    where: { restaurantId, deletedAt: null },
+    where: {
+      restaurantId,
+      deletedAt: null,
+      ...(branchIds ? { id: { in: branchIds } } : {}),
+    },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
     include: {
       manager: { select: { id: true, name: true } },
@@ -180,7 +196,11 @@ export async function getLocationDetail(params: {
       manager: {
         select: { id: true, name: true, email: true, phone: true, staffCode: true, signInCode: true },
       },
-      storageLocations: { where: { deletedAt: null }, select: { id: true, name: true } },
+      storageLocations: {
+        where: { deletedAt: null },
+        select: { id: true, name: true, code: true, isDefault: true },
+        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      },
     },
   })
   if (!branch) throw new NotFoundError('Location')
@@ -218,15 +238,10 @@ export async function getLocationDetail(params: {
       orderBy: [{ expectedAt: 'asc' }, { createdAt: 'asc' }],
       take: 10,
     }),
-    // Delivered here — including anything diverted here from another order.
+    // Delivered here — including anything diverted here from another order,
+    // which is why this reads the receipt's branch and not the purchase's.
     prisma.goodsReceipt.findMany({
-      where: {
-        restaurantId: params.restaurantId,
-        OR: [
-          { branchId: branch.id },
-          { branchId: null, purchase: { branchId: branch.id } },
-        ],
-      },
+      where: { restaurantId: params.restaurantId, branchId: branch.id },
       select: {
         id: true, number: true, receivedAt: true, supplierRef: true,
         purchase: { select: { id: true, number: true, supplier: { select: { name: true } } } },

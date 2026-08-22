@@ -640,16 +640,10 @@ export async function listRecentReceipts(params: {
   const receipts = await prisma.goodsReceipt.findMany({
     where: {
       restaurantId: params.restaurantId,
-      ...(params.branchId
-        ? {
-            // Either recorded against this location, or against an order for it
-            // and never diverted.
-            OR: [
-              { branchId: params.branchId },
-              { branchId: null, purchase: { branchId: params.branchId } },
-            ],
-          }
-        : {}),
+      // Where the delivery actually landed. A receipt can be diverted to a
+      // location its order never named, so this is the receipt's own branch
+      // rather than the order's.
+      ...(params.branchId ? { branchId: params.branchId } : {}),
     },
     orderBy: { receivedAt: 'desc' },
     take: params.limit ?? 20,

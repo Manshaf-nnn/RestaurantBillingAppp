@@ -7,6 +7,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { StartCountButton } from '@/features/inventory/components/start-count-button'
 import { listStockCounts } from '@/features/inventory/count-queries'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 
@@ -20,12 +21,18 @@ const STATUS = {
   CANCELLED: { label: 'Cancelled', variant: 'destructive' as const },
 }
 
-export default async function StockCountsPage() {
+export default async function StockCountsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(
     PERMISSIONS.INVENTORY_COUNT,
     '/dashboard/inventory/counts',
   )
-  const counts = await listStockCounts({ restaurantId: user.restaurantId })
+  // A stock count is a count of one location's shelves.
+  const { branchIds } = await selectedBranch(user, await searchParams)
+  const counts = await listStockCounts({ restaurantId: user.restaurantId, branchIds })
 
   return (
     <>

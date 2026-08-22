@@ -4,6 +4,7 @@ import { reconcileOrderDepletion } from '../src/features/inventory/depletion'
 import { resolveRecipe } from '../src/features/inventory/recipe-resolver'
 import { getFoodCost } from '../src/features/inventory/food-cost'
 import { setOpeningBalance } from '../src/features/inventory/operations'
+import { ensureDefaultBranch } from '../src/features/branches/service'
 
 let pass = 0, fail = 0
 const items: string[] = [], foods: string[] = [], recipes: string[] = [], orders: string[] = []
@@ -19,6 +20,15 @@ const qty = async (id: string) => (await prisma.inventoryItem.findUniqueOrThrow(
 
 async function main() {
   const shop = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'the-copper-spoon' } })
+
+  /*
+   * Where the stock in this fixture lives.
+   *
+   * The ledger will not post a movement without a location — a movement that
+   * names no place updates the restaurant's total and nobody's balance, which
+   * is exactly the drift these tests exist to catch.
+   */
+  const shopBranch = (await ensureDefaultBranch(shop.id)).id
   const user = await prisma.user.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
   const category = await prisma.category.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
   // Orders carry a required branch now.
@@ -49,7 +59,7 @@ async function main() {
   const sauce = await mkItem('Sauce', 'GRAM', 30)
 
   for (const [item, q] of [[bun, 10], [patty, 10], [cheese, 10], [lettuce, 1000], [sauce, 1000]] as const) {
-    await setOpeningBalance({ restaurantId: shop.id, itemId: item.id, quantity: q, userId: user.id })
+    await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: item.id, quantity: q, userId: user.id })
   }
   ok('opening balances set', await qty(bun.id) === 10 && await qty(lettuce.id) === 1000)
 
@@ -133,8 +143,8 @@ async function main() {
   console.log('\n── 6. Prep recipe with yield ────────────────────────────')
   const mayo = await mkItem('Mayonnaise', 'GRAM', 40)
   const ketchup = await mkItem('Ketchup', 'GRAM', 20)
-  await setOpeningBalance({ restaurantId: shop.id, itemId: mayo.id, quantity: 5000, userId: user.id })
-  await setOpeningBalance({ restaurantId: shop.id, itemId: ketchup.id, quantity: 5000, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: mayo.id, quantity: 5000, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: ketchup.id, quantity: 5000, userId: user.id })
 
   // One batch yields 2 kg: 1500 g mayo + 500 g ketchup.
   const sauceRecipe = await prisma.recipe.create({

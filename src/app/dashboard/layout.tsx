@@ -42,12 +42,31 @@ export default async function DashboardLayout({ children }: { children: React.Re
     ? Math.max(0, Math.ceil((tenant.trialEndsAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
     : null
 
+  // Computed before the queries, because the notification filter below needs
+  // it too. The switcher only offers what this user is allowed to see, so a
+  // branch manager cannot reach another site's figures by picking it from a
+  // menu.
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+
   const [restaurant, notifications, openTasks, allLocations] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.notification.findMany({
       where: {
         restaurantId: user.restaurantId,
-        OR: [{ userId: user.id }, { userId: null }],
+        /*
+         * Two independent conditions, so they go in an AND rather than
+         * competing for the same `OR` key: who it is for, and where it is
+         * about.
+         *
+         * A null branch is included deliberately — it marks a business-wide
+         * announcement, and the whole point of keeping that column nullable is
+         * that "everyone" stays sayable. What is excluded is another branch's
+         * operational noise, which is what used to fill this bell.
+         */
+        AND: [
+          { OR: [{ userId: user.id }, { userId: null }] },
+          ...(reach ? [{ OR: [{ branchId: null }, { branchId: { in: reach } }] }] : []),
+        ],
       },
       orderBy: { createdAt: 'desc' },
       take: 30,
@@ -59,9 +78,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     listSwitchableLocations(user.restaurantId),
   ])
 
-  // The switcher only offers what this user is allowed to see, so a branch
-  // manager cannot reach another site's figures by picking it from a menu.
-  const allowedBranchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const allowedBranchIds = reach
   const locations = allLocations
     .filter((l) => allowedBranchIds === null || allowedBranchIds.includes(l.id))
     .map((l) => ({
@@ -79,6 +96,9 @@ locations={locations}
             restaurantName={restaurant.name}
       orderUrl={`${appUrl()}/order?r=${restaurant.slug}`}
       trialDaysLeft={trialDaysLeft}
+      // An empty allow-list means "confined, with nowhere to look" — the one
+      // case where a blank dashboard is correct and needs saying out loud.
+      unassignedToLocation={reach !== null && reach.length === 0}
       openTasks={openTasks}
       user={{
         id: user.id,

@@ -65,27 +65,30 @@ async function main() {
   })
   check('and honours an explicit choice', chosen === warehouse.id)
 
-  console.log('\nWhy the fallback matters: a branch-less movement still vanishes')
+  console.log('\nA branch-less movement can no longer be written at all')
 
   /*
-   * This is the old behaviour, reproduced deliberately. postMovement still
-   * accepts a null branch — a single-location restaurant that has never thought
-   * about locations relies on it — so the guarantee lives in the resolver, and
-   * this asserts what happens without it.
+   * This block used to reproduce the old behaviour on purpose: post with a null
+   * branch, watch the restaurant total rise while no location row appeared, and
+   * assert that gap so the resolver's value was visible. `postMovement` accepted
+   * a null branch, and the guarantee lived in the resolver alone.
+   *
+   * It does not accept one any more. `PostMovementParams.branchId` is required
+   * and `stock_movements.branchId` is NOT NULL, so the gap is closed by the
+   * type and by the database rather than by remembering to call the resolver —
+   * which is a better guarantee than the one this test was protecting.
+   *
+   * What is asserted now is that the door is actually shut: every movement this
+   * restaurant has, from every path above, is attributed to a location.
    */
-  const ghost = await prisma.inventoryItem.create({
-    data: { restaurantId: restaurant.id, name: 'Ghost', unit: 'KG', quantity: 0, costPerUnit: 100 },
-  })
-  await setOpeningBalance({
-    restaurantId: restaurant.id, itemId: ghost.id, quantity: 40, unitCost: 100, branchId: null,
-  })
-  const ghostItem = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: ghost.id } })
-  const ghostRows = await prisma.inventoryStock.count({ where: { itemId: ghost.id } })
-  check('the restaurant total still rises', ghostItem.quantity === 40, `${ghostItem.quantity}`)
+  const unplaced = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*)::bigint AS n FROM "stock_movements"
+    WHERE "restaurantId" = ${restaurant.id} AND "branchId" IS NULL
+  `
   check(
-    'but it sits at NO location — exactly the bug the resolver prevents',
-    ghostRows === 0,
-    `${ghostRows} location rows`,
+    'no movement in this restaurant is missing its location',
+    Number(unplaced[0]?.n ?? 0) === 0,
+    `${unplaced[0]?.n} unplaced`,
   )
 
   console.log('\n25 kg of sugar into the warehouse')

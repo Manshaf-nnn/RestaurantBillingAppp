@@ -228,6 +228,10 @@ export async function getPaymentsReport(params: {
         restaurantId: params.restaurantId,
         paidAt: { gte: params.range.from, lte: params.range.to },
         status: { in: ['PAID', 'REFUNDED'] },
+        // The cash-variance figure ten lines below was already branch-scoped
+        // and this was not, so the two halves of the same panel could never be
+        // reconciled against each other.
+        ...(params.branchIds ? { order: { branchId: { in: params.branchIds } } } : {}),
       },
       _sum: { amount: true },
       _count: true,

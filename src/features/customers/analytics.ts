@@ -40,16 +40,25 @@ export interface CustomerProfile {
 export async function getCustomerProfile(params: {
   restaurantId: string
   customerId: string
+  /** Locations the viewer may see. Null means all of them. */
+  branchIds?: string[] | null
 }): Promise<CustomerProfile> {
   const customer = await prisma.customer.findFirstOrThrow({
     where: { id: params.customerId, restaurantId: params.restaurantId },
   })
 
+  /*
+   * The customer record is restaurant-wide — a guest belongs to the business,
+   * not to a site, and merging them per branch would fork loyalty and history.
+   * Their ORDERS are branch data, though, so a site manager sees what this
+   * customer spent at their site, not across the group.
+   */
   const orders = await prisma.order.findMany({
     where: {
       customerId: customer.id,
       restaurantId: params.restaurantId,
       status: { not: 'CANCELLED' },
+      ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
     },
     orderBy: { placedAt: 'desc' },
     take: 100,

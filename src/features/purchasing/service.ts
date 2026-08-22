@@ -119,7 +119,8 @@ function totalsFor(lines: PurchaseLineInput[], discount: number, taxTotal: numbe
 export async function createPurchaseOrder(params: {
   restaurantId: string
   supplierId?: string | null
-  branchId?: string | null
+  /** Which location is buying. Required — the spend belongs to a site. */
+  branchId: string
   locationId?: string | null
   lines: PurchaseLineInput[]
   discount?: number
@@ -146,7 +147,7 @@ export async function createPurchaseOrder(params: {
       data: {
         restaurantId: params.restaurantId,
         supplierId: params.supplierId ?? null,
-        branchId: params.branchId ?? null,
+        branchId: params.branchId,
         locationId: params.locationId ?? null,
         number,
         status: 'DRAFT',
@@ -262,7 +263,7 @@ export async function updatePurchaseOrder(params: {
       data: {
         ...money,
         ...(params.supplierId !== undefined ? { supplierId: params.supplierId || null } : {}),
-        ...(params.branchId !== undefined ? { branchId: params.branchId || null } : {}),
+        ...(params.branchId ? { branchId: params.branchId } : {}),
         ...(params.locationId !== undefined ? { locationId: params.locationId || null } : {}),
         expectedAt: params.expectedAt ?? null,
         notes: params.notes?.trim() || null,

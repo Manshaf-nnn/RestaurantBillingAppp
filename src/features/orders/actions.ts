@@ -408,6 +408,8 @@ export async function createServiceRequest(
 
       await notify({
         restaurantId: restaurant.id,
+        // The table knows which building it is in.
+        branchId: table.branchId,
         type: 'SERVICE_REQUEST',
         title: `Table ${table.number} needs ${data.type.toLowerCase().replace('_', ' ')}`,
         body: data.note || null,

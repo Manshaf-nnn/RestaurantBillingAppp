@@ -158,16 +158,11 @@ export async function getItemHistory(params: {
         itemId: item.id,
         receipt: {
           restaurantId: params.restaurantId,
-          // A delivery records where it landed; older ones fall back to the
-          // order's branch, so both have to be considered.
-          ...(params.branchIds
-            ? {
-                OR: [
-                  { branchId: { in: params.branchIds } },
-                  { branchId: null, purchase: { branchId: { in: params.branchIds } } },
-                ],
-              }
-            : {}),
+          // Every receipt records where it landed — the branch became required
+          // in 20260903090000_branch_isolation_2, and older rows were
+          // back-filled from their order — so there is no second arm to
+          // consider any more.
+          ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
         },
       },
       orderBy: { createdAt: 'desc' },

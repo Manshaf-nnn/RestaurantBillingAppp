@@ -8,8 +8,10 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { notifyLocation } from '@/features/instructions/service'
+import { assertApproved, requestApproval } from '@/features/approvals/service'
+import { prisma } from '@/server/db/prisma'
 import {
-  approveTransfer, assertTransferSide, closeTransfer, dispatchTransfer, receiveTransfer,
+  approveTransfer, assertTransferSide, closeTransfer, completeTransfer, dispatchTransfer, receiveTransfer,
   requestTransfer, transferEnds,
 } from './service'
 
@@ -54,6 +56,16 @@ export async function requestTransferAction(
        * offering to push it out.
        */
       assertTransferSide(user, { fromBranchId: data.fromBranchId, toBranchId: data.toBranchId }, 'EITHER')
+
+      // Names for the approval queue, so the owner reads "Main → Kandy" rather
+      // than two cuids.
+      const named = await prisma.branch.findMany({
+        where: { id: { in: [data.fromBranchId, data.toBranchId] }, restaurantId: user.restaurantId },
+        select: { id: true, name: true },
+      })
+      const nameOf = (id: string) => named.find((b) => b.id === id)?.name ?? 'another location'
+      const ends = { from: nameOf(data.fromBranchId), to: nameOf(data.toBranchId) }
+
       const transfer = await requestTransfer({
         restaurantId: user.restaurantId,
         fromBranchId: data.fromBranchId,
@@ -82,6 +94,38 @@ export async function requestTransferAction(
         data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
       })
 
+      /*
+       * A cross-branch move needs the owner's word.
+       *
+       * This is the wire that has never been connected. `ApprovalRequest`, the
+       * queue component, `/dashboard/approvals` and `decideApproval` were all
+       * built and correct, and nothing in the application ever called
+       * `requestApproval` — so the Approvals tab rendered, empty, for ever.
+       *
+       * Only cross-branch. Shuffling stock between two shelves inside one site
+       * is that site's own business, and routing it to the owner would bury the
+       * queue in exactly the noise that makes people stop reading it.
+       */
+      if (data.fromBranchId !== data.toBranchId) {
+        await requestApproval({
+          restaurantId: user.restaurantId,
+          // The SOURCE branch, because approval reserves the source's stock and
+          // it is the source that gives something up.
+          branchId: data.fromBranchId,
+          kind: 'STOCK_TRANSFER',
+          entity: 'StockTransfer',
+          entityId: transfer.id,
+          reason: `${transfer.number}: ${data.lines.length} item${data.lines.length === 1 ? '' : 's'} from ${ends.from} to ${ends.to}`,
+          payload: {
+            number: transfer.number,
+            fromBranchId: data.fromBranchId,
+            toBranchId: data.toBranchId,
+            lines: data.lines.length,
+          },
+          userId: user.id,
+        })
+      }
+
       touch(transfer.id)
       return { id: transfer.id, number: transfer.number }
     },
@@ -96,6 +140,29 @@ export async function approveTransferAction(transferId: string): Promise<ActionR
     // Approval reserves stock at the sending location, so that is whose call it is.
     const ends = await transferEnds(user.restaurantId, transferId)
     assertTransferSide(user, ends, 'SOURCE')
+
+    /*
+     * A cross-branch move waits for the owner.
+     *
+     * The permission answers "may this person approve transfers"; it never
+     * answered "may they approve stock leaving the business's own network". A
+     * branch manager holds TRANSFER_APPROVE and could sign off pulling twenty
+     * kilos out of the warehouse without anyone above them seeing it.
+     *
+     * `assertApproved` reads the request raised when the transfer was
+     * submitted, and refuses with APPROVAL_REQUIRED until an owner or admin has
+     * ruled on it. A move between two shelves in one branch raises no request
+     * and needs none, which is why this is not asked in that case.
+     */
+    if (ends.fromBranchId !== ends.toBranchId) {
+      await assertApproved({
+        restaurantId: user.restaurantId,
+        entity: 'StockTransfer',
+        entityId: transferId,
+        kind: 'STOCK_TRANSFER',
+      })
+    }
+
     const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
     await audit({
       restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
@@ -215,6 +282,42 @@ export async function receiveTransferAction(
     },
     'Received into stock.',
   )
+}
+
+/**
+ * Accept a delivery that arrived short or damaged.
+ *
+ * The stock has already moved; this is the human step that closes the paperwork
+ * on the shortfall. Only the destination can do it — they are the ones who
+ * counted what turned up.
+ */
+export async function completeTransferAction(transferId: string): Promise<ActionResult<{ id: string }>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.TRANSFER_RECEIVE)
+    const ends = await transferEnds(user.restaurantId, transferId)
+    assertTransferSide(user, ends, 'DESTINATION')
+
+    const transfer = await completeTransfer({
+      restaurantId: user.restaurantId,
+      transferId,
+      userId: user.id,
+    })
+    await audit({
+      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      action: AUDIT_ACTIONS.TRANSFER_CLOSED, entity: 'StockTransfer', entityId: transfer.id,
+      after: { number: transfer.number, status: 'COMPLETED', variancesAccepted: true },
+    })
+    await notifyLocation({
+      restaurantId: user.restaurantId,
+      branchId: ends.fromBranchId,
+      title: `Variance accepted: ${transfer.number}`,
+      body: `${user.name} has signed off the shortfall.`,
+      data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
+    })
+
+    touch(transfer.id)
+    return { id: transfer.id }
+  }, 'Transfer completed.')
 }
 
 export async function closeTransferAction(input: unknown): Promise<ActionResult<{ id: string }>> {

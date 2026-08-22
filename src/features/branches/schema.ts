@@ -129,3 +129,10 @@ export const storageLocationSchema = z.object({
   name: z.string().trim().min(2, 'Name the storage area').max(60),
   code: z.string().trim().min(1).max(12),
 })
+
+/** Renaming a shelf, or taking it out of use. The branch never moves. */
+export const updateStorageLocationSchema = z.object({
+  storageLocationId: z.string().min(1),
+  name: z.string().trim().min(2, 'Name the storage area').max(60).optional(),
+  isActive: z.boolean().optional(),
+})

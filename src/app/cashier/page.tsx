@@ -5,6 +5,7 @@ import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -30,17 +31,27 @@ export default async function CashierPage({
 
   const restaurant = await requireRestaurant(user.restaurantId)
 
+  /*
+   * Which locations this screen shows — see the note on the kitchen page. A
+   * floor screen belongs to the room it is standing in.
+   */
+  const { branchIds } = await selectedBranch(user, params)
+
   const [menu, bills, today] = await Promise.all([
     // The till sells its own branch's menu at its own branch's prices. A
     // cashier confined to Kandy must not be able to ring up a Colombo-only
     // dish, and must never charge Colombo's price for a shared one.
     getPublicMenu(user.restaurantId, restaurant.timezone, user.branchId),
-    getCashierQueue(user.restaurantId),
+    getCashierQueue(user.restaurantId, branchIds),
     prisma.payment.aggregate({
       where: {
         restaurantId: user.restaurantId,
         status: 'PAID',
         paidAt: { gte: startOfDay },
+        // A payment has no branch of its own — it reaches one through its
+        // order, whose branch is required. Without this the till's "taken
+        // today" was the whole chain's takings.
+        ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
       },
       _sum: { amount: true },
       _count: true,

@@ -8,6 +8,7 @@ import { getReorderSuggestions, getPriceTrend } from '../src/features/purchasing
 import { allocateFefo, listExpiringStock } from '../src/features/inventory/batches'
 import { setOpeningBalance } from '../src/features/inventory/operations'
 import { recomputeBalance } from '../src/features/inventory/ledger'
+import { ensureDefaultBranch } from '../src/features/branches/service'
 
 let pass = 0, fail = 0
 const items: string[] = [], suppliers: string[] = [], pos: string[] = []
@@ -24,6 +25,16 @@ const qty = async (id: string) => (await prisma.inventoryItem.findUniqueOrThrow(
 async function main() {
   const shop = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'the-copper-spoon' } })
   const other = await prisma.restaurant.findFirstOrThrow({ where: { slug: 'kava' } })
+
+  /*
+   * Where the stock in this fixture lives.
+   *
+   * The ledger will not post a movement without a location — a movement that
+   * names no place updates the restaurant's total and nobody's balance, which
+   * is exactly the drift these tests exist to catch.
+   */
+  const shopBranch = (await ensureDefaultBranch(shop.id)).id
+  const otherBranch = (await ensureDefaultBranch(other.id)).id
   const user = await prisma.user.findFirstOrThrow({ where: { restaurantId: shop.id, deletedAt: null } })
   const S = Date.now().toString(36)
 
@@ -63,7 +74,7 @@ async function main() {
 
   console.log('\n── 2. Purchase order ────────────────────────────────────')
   const po = await createPurchaseOrder({
-    restaurantId: shop.id, supplierId: supplier.id, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, supplierId: supplier.id, userId: user.id,
     lines: [{ itemId: chicken.id, quantity: 100, unit: 'BOX', unitCost: 1_000_00 }],
     taxTotal: 5_000_00,
   })
@@ -125,7 +136,7 @@ async function main() {
   })
   items.push(rice.id)
   const po2 = await createPurchaseOrder({
-    restaurantId: shop.id, supplierId: supplier.id, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, supplierId: supplier.id, userId: user.id,
     lines: [{ itemId: rice.id, quantity: 100, unit: 'KG', unitCost: 500_00 }],
   })
   pos.push(po2.id)
@@ -145,7 +156,7 @@ async function main() {
   console.log('\n── 7. Purchase return ───────────────────────────────────')
   const before = await qty(rice.id)
   const ret = await createPurchaseReturn({
-    restaurantId: shop.id, supplierId: supplier.id, purchaseId: po2.id, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, supplierId: supplier.id, purchaseId: po2.id, userId: user.id,
     reason: 'quality complaint',
     lines: [{ itemId: rice.id, quantity: 15, unit: 'KG' }],
   })
@@ -157,7 +168,7 @@ async function main() {
   ok('logged as RETURN_TO_SUPPLIER', retRow.type === 'RETURN_TO_SUPPLIER')
   ok('the return references its record', retRow.referenceType === 'PurchaseReturn' && retRow.referenceId === ret.id)
   await throws('a return with no reason is refused',
-    () => createPurchaseReturn({ restaurantId: shop.id, reason: '', lines: [{ itemId: rice.id, quantity: 1 }], userId: user.id }),
+    () => createPurchaseReturn({ restaurantId: shop.id, branchId: shopBranch, reason: '', lines: [{ itemId: rice.id, quantity: 1 }], userId: user.id }),
     'RETURN_NO_REASON')
 
   console.log('\n── 8. Ledger reconciles ─────────────────────────────────')
@@ -177,7 +188,7 @@ async function main() {
     data: { restaurantId: shop.id, name: `Onion ${S}`, unit: 'KG', reorderLevel: 20, maxStock: 50 },
   })
   items.push(low.id)
-  await setOpeningBalance({ restaurantId: shop.id, itemId: low.id, quantity: 12, userId: user.id })
+  await setOpeningBalance({ restaurantId: shop.id, branchId: shopBranch, itemId: low.id, quantity: 12, userId: user.id })
   await upsertSupplierItem({
     restaurantId: shop.id, supplierId: supplier.id, itemId: low.id, price: 200_00, leadTimeDays: 1,
   })
@@ -196,7 +207,7 @@ async function main() {
   })
   items.push(milk.id)
   const po3 = await createPurchaseOrder({
-    restaurantId: shop.id, supplierId: supplier.id, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, supplierId: supplier.id, userId: user.id,
     lines: [{ itemId: milk.id, quantity: 50, unit: 'LITRE', unitCost: 300_00 }],
   })
   pos.push(po3.id)
@@ -238,7 +249,7 @@ async function main() {
   })
   items.push(cream.id)
   const po4 = await createPurchaseOrder({
-    restaurantId: shop.id, userId: user.id,
+    restaurantId: shop.id, branchId: shopBranch, userId: user.id,
     lines: [{ itemId: cream.id, quantity: 10, unit: 'LITRE', unitCost: 500_00 }],
   })
   pos.push(po4.id)
@@ -257,7 +268,7 @@ async function main() {
 
   console.log('\n── 12. Tenant isolation ─────────────────────────────────')
   await throws('creating a PO for another tenant’s item is refused',
-    () => createPurchaseOrder({ restaurantId: other.id, lines: [{ itemId: chicken.id, quantity: 1, unitCost: 1 }] }))
+    () => createPurchaseOrder({ restaurantId: other.id, branchId: otherBranch, lines: [{ itemId: chicken.id, quantity: 1, unitCost: 1 }] }))
   await throws('receiving another tenant’s PO is refused',
     () => receiveGoods({ restaurantId: other.id, purchaseId: po.id, lines: [], userId: user.id }))
   await throws('linking another tenant’s item to a supplier is refused',

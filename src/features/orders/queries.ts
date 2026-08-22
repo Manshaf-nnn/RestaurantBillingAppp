@@ -62,11 +62,28 @@ export async function getGuestOrders(restaurantId: string, tableId?: string) {
   })
 }
 
+/**
+ * The live floor screens, all branch-scoped.
+ *
+ * These three took a restaurant id and nothing else, so a chef in Kandy watched
+ * Colombo's tickets arrive on the rail and a waiter's board listed tables in a
+ * building they had never been to. It is the most visible form of the leak, and
+ * the fix is one predicate in each query.
+ *
+ * `branchIds` follows the house convention: `null` means every location (an
+ * owner deliberately looking at the whole business), an array narrows, and an
+ * EMPTY array must return nothing — never everything.
+ */
+function atBranch(branchIds?: string[] | null) {
+  return branchIds ? { branchId: { in: branchIds } } : {}
+}
+
 /** The kitchen rail: everything still cooking, oldest first. */
-export async function getKitchenQueue(restaurantId: string) {
+export async function getKitchenQueue(restaurantId: string, branchIds?: string[] | null) {
   return prisma.order.findMany({
     where: {
       restaurantId,
+      ...atBranch(branchIds),
       status: { in: ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'] },
     },
     include: {
@@ -78,20 +95,22 @@ export async function getKitchenQueue(restaurantId: string) {
   })
 }
 
-export async function getKitchenStats(restaurantId: string) {
+export async function getKitchenStats(restaurantId: string, branchIds?: string[] | null) {
   const startOfDay = new Date()
   startOfDay.setHours(0, 0, 0, 0)
+  const here = atBranch(branchIds)
 
   const [pending, preparing, ready, completedToday, timings] = await Promise.all([
-    prisma.order.count({ where: { restaurantId, status: 'PENDING' } }),
-    prisma.order.count({ where: { restaurantId, status: { in: ['ACCEPTED', 'PREPARING'] } } }),
-    prisma.order.count({ where: { restaurantId, status: 'READY' } }),
+    prisma.order.count({ where: { restaurantId, ...here, status: 'PENDING' } }),
+    prisma.order.count({ where: { restaurantId, ...here, status: { in: ['ACCEPTED', 'PREPARING'] } } }),
+    prisma.order.count({ where: { restaurantId, ...here, status: 'READY' } }),
     prisma.order.count({
-      where: { restaurantId, status: { in: ['SERVED', 'COMPLETED'] }, placedAt: { gte: startOfDay } },
+      where: { restaurantId, ...here, status: { in: ['SERVED', 'COMPLETED'] }, placedAt: { gte: startOfDay } },
     }),
     prisma.order.findMany({
       where: {
         restaurantId,
+        ...here,
         readyAt: { not: null },
         acceptedAt: { not: null },
         placedAt: { gte: startOfDay },
@@ -114,26 +133,33 @@ export async function getKitchenStats(restaurantId: string) {
 }
 
 /** Ready-to-serve orders plus open guest requests, for the waiter station. */
-export async function getWaiterBoard(restaurantId: string) {
+export async function getWaiterBoard(restaurantId: string, branchIds?: string[] | null) {
+  const here = atBranch(branchIds)
   const [ready, serving, requests, tables] = await Promise.all([
     prisma.order.findMany({
-      where: { restaurantId, status: 'READY' },
+      where: { restaurantId, ...here, status: 'READY' },
       include: { items: true, table: { select: { id: true, number: true } } },
       orderBy: { readyAt: 'asc' },
     }),
     prisma.order.findMany({
-      where: { restaurantId, status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] } },
+      where: { restaurantId, ...here, status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] } },
       include: { items: true, table: { select: { id: true, number: true } } },
       orderBy: { placedAt: 'asc' },
       take: 40,
     }),
     prisma.serviceRequest.findMany({
-      where: { restaurantId, status: 'OPEN' },
+      // A service request has no branch of its own; it reaches one through the
+      // table the guest is sitting at, which is required and always set.
+      where: {
+        restaurantId,
+        status: 'OPEN',
+        ...(branchIds ? { table: { branchId: { in: branchIds } } } : {}),
+      },
       include: { table: { select: { id: true, number: true } } },
       orderBy: { createdAt: 'asc' },
     }),
     prisma.restaurantTable.findMany({
-      where: { restaurantId, isActive: true },
+      where: { restaurantId, ...here, isActive: true },
       orderBy: [{ sortOrder: 'asc' }, { number: 'asc' }],
       include: {
         orders: {
@@ -214,10 +240,13 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
 }
 
 /** Unpaid bills waiting at the till. */
-export async function getCashierQueue(restaurantId: string) {
+export async function getCashierQueue(restaurantId: string, branchIds?: string[] | null) {
   return prisma.order.findMany({
     where: {
       restaurantId,
+      // The till at Colombo settles Colombo's bills. The menu on this same
+      // screen was already branch-scoped; the queue beside it was not.
+      ...atBranch(branchIds),
       status: { notIn: ['CANCELLED'] },
       // Show unpaid/partially-paid bills plus takeaway orders (so cashier
       // can keep a copy of takeaway orders even after payment until the

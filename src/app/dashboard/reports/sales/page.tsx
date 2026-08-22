@@ -35,9 +35,7 @@ export default async function SalesReportPage({
    */
   const selection = await selectedBranch(user, p)
   const allowed = selection.branchIds
-  const locations = (await listLocations(user.restaurantId)).filter(
-    (l) => allowed === null || allowed.includes(l.id),
-  )
+  const locations = await listLocations(user.restaurantId, allowed)
   const chosen = selection.branchId
   const branchIds = selection.branchIds
 

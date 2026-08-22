@@ -76,9 +76,12 @@ export async function reconcileOrderDepletion(
    * reads exactly that number, so transfers were being approved against stock
    * that had already been eaten.
    *
-   * A single-location restaurant leaves `Order.branchId` null, so fall back to
-   * the default branch rather than to nothing; otherwise the same bug simply
-   * moves to the restaurants least likely to spot it.
+   * `Order.branchId` has been NOT NULL since 20260902090000_branch_isolation,
+   * so the first arm answers for every real order. The default-branch lookup
+   * stays as the answer for the case where no order row was locked at all, and
+   * the throw below replaces what used to be a silent `?? null` — a null here
+   * would post a movement with no location, which is the exact bug this whole
+   * comment is about.
    */
   const branchId =
     locked[0]?.branchId ??
@@ -87,8 +90,11 @@ export async function reconcileOrderDepletion(
         where: { restaurantId: params.restaurantId, deletedAt: null, isDefault: true },
         select: { id: true },
       })
-    )?.id ??
-    null
+    )?.id
+
+  if (!branchId) {
+    throw new Error('This restaurant has no location — stock cannot be depleted against one')
+  }
 
   const desired = params.releaseAll
     ? { totals: new Map<string, number>(), problems: [] as string[] }

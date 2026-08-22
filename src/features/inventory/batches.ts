@@ -42,7 +42,8 @@ export async function upsertBatch(
     unitCost?: number
     expiryDate?: Date | null
     locationId?: string | null
-    branchId?: string | null
+    /** Which location. Required, in step with the ledger. */
+    branchId: string
   },
 ): Promise<StockBatch> {
   const existing = await tx.stockBatch.findFirst({
@@ -73,7 +74,7 @@ export async function upsertBatch(
       unitCost: params.unitCost ?? 0,
       expiryDate: params.expiryDate ?? null,
       locationId: params.locationId ?? null,
-      branchId: params.branchId ?? null,
+      branchId: params.branchId,
     },
   })
 }
@@ -230,6 +231,10 @@ export async function listExpiringStock(params: {
 export async function getExpirySummary(params: {
   restaurantId: string
   periodDays?: number
+  // `listExpiringStock` below has always taken a branch; this signature did
+  // not, so the summary tiles counted the whole business while the table
+  // under them counted one location.
+  branchId?: string | null
 }): Promise<Record<ExpiryBucket, { count: number; value: number }>> {
   const rows = await listExpiringStock(params)
   const empty = { count: 0, value: 0 }

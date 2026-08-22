@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
 import { runAction, type ActionResult } from '@/lib/action'
+import { NotFoundError } from '@/lib/errors'
 import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { resolveStockLocation } from '@/features/branches/service'
@@ -304,8 +305,35 @@ export async function createPurchaseReturnAction(
   return runAction(returnSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.PURCHASE_RETURN)
 
+    /*
+     * This action had neither guard — not `assertBranchAccess` on anything
+     * posted, nor `assertRecordBranch` on the order being returned against —
+     * so any PURCHASE_RETURN holder could send another location's delivery
+     * back to the supplier by pasting its id.
+     *
+     * The branch comes from the purchase where there is one, because that is
+     * where the goods physically are, and falls back to the user's own site
+     * for a return with no order behind it.
+     */
+    const against = data.purchaseId
+      ? await prisma.purchase.findFirst({
+          where: { id: data.purchaseId, restaurantId: user.restaurantId },
+          select: { branchId: true },
+        })
+      : null
+    if (data.purchaseId && !against) throw new NotFoundError('Purchase order')
+    await assertRecordBranch(user, against, 'purchase order')
+
+    const branchId = await resolveStockLocation({
+      restaurantId: user.restaurantId,
+      requestedBranchId: against?.branchId ?? null,
+      userBranchId: user.branchId,
+    })
+    await assertBranchAccess(user, branchId)
+
     const record = await createPurchaseReturn({
       restaurantId: user.restaurantId,
+      branchId,
       purchaseId: data.purchaseId || null,
       supplierId: data.supplierId || null,
       reason: data.reason,
