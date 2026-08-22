@@ -306,6 +306,36 @@ async function main() {
   })
   check('no order exists without a branch', branchless === (await prisma.order.count({ where: { restaurantId: restaurant.id } })))
 
+  console.log('\n── switching branch is a server decision ──')
+
+  /*
+   * The switcher used to push the new URL from the browser, and Next answered
+   * it from a prefetch cache whose key drops the query string — so picking a
+   * second branch rendered the first one's tree while the URL bar updated.
+   * `switchBranch` moves the decision to the server, where no client cache can
+   * answer it.
+   *
+   * The redirect itself cannot be exercised here (it throws a framework signal
+   * and needs a request context), so what is pinned is the part that protects
+   * data: the branch is validated against what the caller may see, exactly as
+   * the cookie path already was.
+   */
+  const confined = { role: 'MANAGER' as const, branchId: b01.id }
+
+  check(
+    'a confined manager may switch to their own branch',
+    canAccessBranch(confined, b01.id),
+  )
+  check(
+    'and may not switch to another',
+    !canAccessBranch(confined, b02.id),
+    'the switcher would have become a way to read another branch',
+  )
+  check(
+    'an owner may switch to any of them',
+    canAccessBranch({ role: 'OWNER', branchId: null }, b02.id),
+  )
+
   console.log('\n── 12. enforcement, not filtering ──')
 
   const colomboOrder = await prisma.order.findFirstOrThrow({ where: { id: order.id } })

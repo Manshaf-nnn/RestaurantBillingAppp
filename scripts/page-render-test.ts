@@ -71,6 +71,26 @@ const PAGES = [
 /** The dashboard error boundary's own words — the failure signal. */
 const BOUNDARY = ['This page could not load', 'Something went wrong', 'Application error']
 
+const minted: string[] = []
+
+/** A signed-in browser's cookie header for this user, as the real login sets it. */
+async function signIn(user: { id: string; restaurantId: string | null; role: string; name: string | null; email: string }) {
+  const refresh = generateToken()
+  const session = await prisma.session.create({
+    data: {
+      userId: user.id,
+      refreshTokenHash: hashToken(refresh),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    },
+  })
+  const access = await signAccessToken({
+    sub: user.id, rid: user.restaurantId, role: user.role,
+    name: user.name, email: user.email, sid: session.id,
+  } as Parameters<typeof signAccessToken>[0])
+  minted.push(session.id)
+  return `${ACCESS_COOKIE}=${access}; ${REFRESH_COOKIE}=${refresh}`
+}
+
 async function main() {
   const reachable = await fetch(BASE, { redirect: 'manual' }).then(() => true).catch(() => false)
   if (!reachable) {
@@ -108,19 +128,7 @@ async function main() {
     process.exit(1)
   }
 
-  const refresh = generateToken()
-  const session = await prisma.session.create({
-    data: {
-      userId: user.id,
-      refreshTokenHash: hashToken(refresh),
-      expiresAt: new Date(Date.now() + 86_400_000),
-    },
-  })
-  const access = await signAccessToken({
-    sub: user.id, rid: user.restaurantId, role: user.role,
-    name: user.name, email: user.email, sid: session.id,
-  })
-  const cookie = `${ACCESS_COOKIE}=${access}; ${REFRESH_COOKIE}=${refresh}`
+  const cookie = await signIn(user)
 
   console.log(`owner ${user.email} · ${user.restaurant.name} · ${user.restaurant.currency}/${user.restaurant.locale}\n`)
 
@@ -243,6 +251,81 @@ async function main() {
         console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
       }
     }
+
+    /*
+     * And the switch actually takes.
+     *
+     * Rendering without error is not the same as rendering the branch that was
+     * asked for — the reported bug was a page that returned 200 and showed the
+     * wrong location's figures. So fetch the dashboard for two different
+     * branches and require the responses to differ and each to name its own.
+     *
+     * This pins the server half. The half that broke was Next's client
+     * prefetch cache, which no server-side fetch can exercise; that one is
+     * checked by clicking it.
+     */
+    /*
+     * On a tenant with two locations — not necessarily the one above, since most
+     * restaurants in this database have a single site and the check would then
+     * never run. Signing in as that tenant's owner is a few lines and makes the
+     * assertion mean something on every database.
+     */
+    const counts = await prisma.branch.groupBy({
+      by: ['restaurantId'],
+      where: { deletedAt: null, isActive: true },
+      _count: { _all: true },
+    })
+    const multiSite = counts.filter((row) => row._count._all > 1).map((row) => row.restaurantId)
+
+    const twoBranchOwner = multiSite.length
+      ? await prisma.user.findFirst({
+          where: { restaurantId: { in: multiSite }, role: 'OWNER', isActive: true, deletedAt: null },
+          select: { id: true, restaurantId: true, role: true, name: true, email: true },
+        })
+      : null
+
+    const two = twoBranchOwner
+      ? await prisma.branch.findMany({
+          where: { restaurantId: twoBranchOwner.restaurantId ?? undefined, deletedAt: null, isActive: true },
+          select: { id: true, name: true },
+          orderBy: { createdAt: 'asc' },
+          take: 2,
+        })
+      : []
+
+    if (twoBranchOwner && two.length === 2 && two[0].name !== two[1].name) {
+      const theirs = await signIn(twoBranchOwner)
+      const [a, b] = await Promise.all(
+        two.map((row) =>
+          fetch(`${BASE}/dashboard?branch=${row.id}`, { headers: { cookie: theirs } }).then((r) => r.text()),
+        ),
+      )
+
+      /*
+       * The marker is `branch=<id>` in the nav links, not the branch NAME.
+       * Every location's name and id appear in both responses regardless —
+       * the switcher lists all of them — so a name check passes even when the
+       * wrong branch rendered. The shell threads the ACTIVE branch through
+       * every sidebar link, so that query string appears for the selected
+       * branch and no other. It is the page saying which branch it thinks it
+       * is on, which is precisely what was reported wrong.
+       */
+      const correct =
+        a.includes(`branch=${two[0].id}`) && !a.includes(`branch=${two[1].id}`) &&
+        b.includes(`branch=${two[1].id}`) && !b.includes(`branch=${two[0].id}`)
+
+      if (correct) {
+        passed += 1
+        console.log(`  ✓ /dashboard follows ?branch= (${two[0].name} vs ${two[1].name})`)
+      } else {
+        failed.push('/dashboard?branch= served the wrong branch')
+        console.log(
+          `  ✗ /dashboard did not follow ?branch= — ${a === b ? 'identical HTML for both' : 'named the wrong location'}`,
+        )
+      }
+    } else {
+      console.log('  · no multi-location tenant in this database — branch switching not checked')
+    }
   }
 
   // The diagnostics are only worth anything if they answer, so check them here
@@ -265,7 +348,7 @@ async function main() {
     console.log(`  ${ok ? '✓' : '✗'} ${path} — ${ok ? describe(body) : `HTTP ${response.status} ${JSON.stringify(body).slice(0, 80)}`}`)
   }
 
-  await prisma.session.delete({ where: { id: session.id } }).catch(() => {})
+  await prisma.session.deleteMany({ where: { id: { in: minted } } }).catch(() => {})
   await prisma.$disconnect()
 
   console.log(`\n═══ ${passed} rendered, ${failed.length} failed ═══\n`)

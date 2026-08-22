@@ -17,21 +17,31 @@ const nextConfig = {
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'exceljs', 'nodemailer', 'ioredis'],
   experimental: {
     /*
-     * Keep a visited page in the client router cache for half a minute.
+     * `dynamic: 0` is Next's own default, and it is stated here rather than
+     * deleted so that nobody raises it again.
      *
-     * Next 15 defaults `dynamic` to 0, so every dynamic page — which here means
-     * every page — is refetched from the server on re-visit, including on the
-     * back button. Stepping from Inventory to Purchasing and back re-rendered
-     * Inventory from scratch, and that instant blank is a large part of what
-     * people describe as the app reloading.
+     * It was 30, added to stop the app feeling like it reloaded on every
+     * sidebar click. That bought a smoother back button and paid for it with
+     * wrong figures on screen, which is never a trade worth making.
      *
-     * Thirty seconds is chosen against how this data actually behaves: stock,
-     * purchases and suppliers do not change second to second, and the screens
-     * that DO — kitchen, cashier, the dashboard — carry `<AutoRefresh>`, which
-     * calls `router.refresh()` on a real change and blows the cache away. So
-     * live screens stay live and static ones stop flickering.
+     * The mechanism, because it is not obvious: a `router.push` runs as
+     * `PrefetchKind.TEMPORARY`, and Next builds the prefetch cache key from the
+     * pathname with the **search string dropped** for anything short of
+     * `PrefetchKind.FULL`. So `/dashboard?branch=A` and `/dashboard?branch=B`
+     * are one entry keyed `/dashboard`, and picking a second branch was
+     * answered with the first one's tree while the URL bar updated anyway.
+     * Worse, the staleness window slides on every use, so toggling between two
+     * branches kept the wrong entry alive instead of ageing it out. It is a
+     * per-tab cache and the aliasing is guarded to production, which is exactly
+     * why the same URL pasted into a second browser looked fine.
+     *
+     * What actually fixed the reload feel was `src/app/dashboard/loading.tsx`,
+     * added in the same pass and still doing the job.
+     *
+     * `static` stays: a static page serving a slightly old copy of itself
+     * cannot show anyone another branch's money.
      */
-    staleTimes: { dynamic: 30, static: 180 },
+    staleTimes: { dynamic: 0, static: 180 },
   },
   images: {
     // Allow any HTTPS image URL owners paste for menu photos/logos.

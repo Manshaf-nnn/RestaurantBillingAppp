@@ -7,6 +7,7 @@ import {
   Package,
   Receipt,
   ShoppingBag,
+  Store,
   TrendingUp,
   Users,
   Wallet,
@@ -107,6 +108,19 @@ export default async function DashboardPage({
         }
         actions={
           <>
+            {/*
+              Names the location on the page itself, not only in the top bar.
+              The complaint that started this was "I picked another branch and
+              it still shows the main one" — so when a branch IS selected, the
+              screen should say so somewhere the eye lands, and every figure
+              below this line is that branch's.
+            */}
+            {branch ? (
+              <Badge variant="secondary" className="mr-1">
+                <Store className="mr-1 h-3 w-3" />
+                {branch.name}
+              </Badge>
+            ) : null}
             <Button variant="outline" asChild>
               <Link href="/dashboard/reports">
                 <TrendingUp /> Reports

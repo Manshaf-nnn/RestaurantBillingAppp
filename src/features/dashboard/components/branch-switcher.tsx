@@ -2,21 +2,21 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import {
   ArrowUpRight,
   Building2,
   Check,
   ChevronDown,
   Factory,
+  Loader2,
   Settings2,
   Store,
   Warehouse,
 } from 'lucide-react'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/primitives'
-import { callAction } from '@/lib/use-action'
-import { rememberBranch } from '../actions'
+import { switchBranch } from '../actions'
 
 const ICONS = {
   BRANCH: Store,
@@ -71,42 +71,48 @@ export interface SwitchableLocation {
  * alongside it is only a memory of the last choice.
  */
 export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] }) {
-  const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
   const [open, setOpen] = React.useState(false)
+  /*
+   * `useTransition`, not `useAction`.
+   *
+   * `switchBranch` redirects rather than returning a result — `redirect()`
+   * throws a signal the framework catches — so there is no `ActionResult` for
+   * `useAction` to inspect. A transition is the pairing that fits: `isPending`
+   * stays true across the action AND the navigation it triggers, so the trigger
+   * reads "Switching…" until the new branch is actually on screen rather than
+   * flicking back to idle halfway.
+   */
+  const [busy, startSwitch] = React.useTransition()
 
   const current = params.get('branch')
   const active = locations.find((l) => l.id === current) ?? null
 
   if (locations.length < 2) return null
 
+  /*
+   * One server call, and nothing else.
+   *
+   * This used to push the new URL from the browser and then ask the router to
+   * refresh. It did not work: Next answers a `router.push` from its prefetch
+   * cache, whose key drops the query string, so `?branch=A` and `?branch=B`
+   * share one entry and the second navigation renders the first one's tree.
+   * The URL bar changed and the figures did not. See the note on
+   * `switchBranch` for the full mechanism.
+   *
+   * `switchBranch` writes the cookie, invalidates and redirects on the server,
+   * where no client cache can answer. `useAction` keeps `busy` true until the
+   * redirect lands, so the trigger shows it is working.
+   */
   const choose = (id: string | null) => {
-    const next = new URLSearchParams(params.toString())
-    if (id) next.set('branch', id)
-    else next.delete('branch')
     setOpen(false)
-
-    // Fire and forget: the navigation below is what the user sees, and a failed
-    // cookie write should never hold it up or show them an error. The worst case
-    // is that tomorrow's first page load says "all locations".
-    void callAction(() => rememberBranch(id))
-
-    const qs = next.toString()
-    router.push(qs ? `${pathname}?${qs}` : pathname)
-
-    /*
-     * And then force the page to re-render.
-     *
-     * `experimental.staleTimes.dynamic` in next.config.mjs keeps a visited page
-     * in the client router cache for half a minute — which is what stops the
-     * app feeling like it reloads on every sidebar click. The side effect is
-     * that switching Kandy → All → Kandy inside that window would be served
-     * from the cache with figures that never move, which looks exactly like a
-     * broken control. Changing location is precisely the moment the cache must
-     * not win.
-     */
-    router.refresh()
+    startSwitch(async () => {
+      // action-redirects: `switchBranch` ends in `redirect()`, which throws the
+      // signal Next uses to navigate. `callAction` would catch it and report a
+      // failure, leaving the page exactly where it was.
+      await switchBranch({ branchId: id, path: pathname })
+    })
   }
 
   const Icon = active ? ICONS[active.type] ?? Building2 : Building2
@@ -116,11 +122,19 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm transition-colors hover:bg-muted"
+          disabled={busy}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm transition-colors hover:bg-muted disabled:opacity-70"
           aria-label="Change location"
+          aria-busy={busy}
         >
-          <Icon className="h-4 w-4 text-muted-foreground" />
-          <span className="max-w-[10rem] truncate">{active ? active.name : 'All locations'}</span>
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Icon className="h-4 w-4 text-muted-foreground" />
+          )}
+          <span className="max-w-[10rem] truncate">
+            {busy ? 'Switching…' : active ? active.name : 'All locations'}
+          </span>
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </button>
       </PopoverTrigger>

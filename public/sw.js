@@ -10,7 +10,9 @@
  * activate handler purges every cache that doesn't match, so stale favicons
  * and pages are dropped on the next visit.
  */
-const VERSION = 'tf-v2'
+// Bumped to tf-v3 so the activate handler drops `tf-v2-pages`, which had been
+// hoarding rendered dashboard HTML since it was written.
+const VERSION = 'tf-v3'
 const STATIC_CACHE = `${VERSION}-static`
 const PAGE_CACHE = `${VERSION}-pages`
 const OFFLINE_URL = '/offline'
@@ -50,14 +52,32 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (request.mode === 'navigate') {
+    /*
+     * Signed-in pages are fetched but never stored.
+     *
+     * The offline shell is for guests and for the stations; a dashboard page is
+     * somebody's takings, staff list and supplier balances rendered into HTML.
+     * Keeping that in a cache with no TTL and no size cap — purged only when a
+     * human edits VERSION above — means it can be replayed on any network
+     * hiccup, to whoever is holding the device by then. An offline copy of last
+     * Tuesday's revenue is worth less than not storing it.
+     */
+    const isPrivate = url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/admin')
+
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          caches.open(PAGE_CACHE).then((cache) => cache.put(request, copy))
+          if (!isPrivate) {
+            const copy = response.clone()
+            caches.open(PAGE_CACHE).then((cache) => cache.put(request, copy))
+          }
           return response
         })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match(OFFLINE_URL))),
+        .catch(() =>
+          isPrivate
+            ? caches.match(OFFLINE_URL)
+            : caches.match(request).then((cached) => cached || caches.match(OFFLINE_URL)),
+        ),
     )
     return
   }

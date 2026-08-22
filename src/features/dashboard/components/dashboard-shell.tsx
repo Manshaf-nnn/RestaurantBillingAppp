@@ -133,7 +133,19 @@ export function DashboardShell({
    */
   const branchParam = searchParams.get('branch')
   const withBranch = React.useCallback(
-    (href: string) => (branchParam ? `${href}?branch=${encodeURIComponent(branchParam)}` : href),
+    (href: string) => {
+      if (!branchParam) return href
+      /*
+       * `?` or `&`, depending on what is already there. Two nav entries carry a
+       * query string of their own — `/cashier/pos?type=TAKEAWAY` and its
+       * DELIVERY twin — and blind concatenation produced
+       * `…?type=TAKEAWAY?branch=…`, a URL where the second parameter is
+       * unreadable. Harmless today because the till does not read the branch,
+       * and a trap the moment it does.
+       */
+      const separator = href.includes('?') ? '&' : '?'
+      return `${href}${separator}branch=${encodeURIComponent(branchParam)}`
+    },
     [branchParam],
   )
 
@@ -182,7 +194,13 @@ export function DashboardShell({
     <div className="flex min-h-dvh">
       {/* ── desktop sidebar ─────────────────────────────────────── */}
       <aside className="glass-chrome sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r lg:flex">
-        <Link href="/dashboard" className="flex h-16 items-center gap-2.5 border-b px-5">
+        {/*
+          Carries the branch like every other link. Clicking the logo used to
+          drop it, landing on a bare /dashboard where the cookie decided — so
+          the switcher read "All locations" while the figures were still one
+          branch's, or the other way about.
+        */}
+        <Link href={withBranch('/dashboard')} className="flex h-16 items-center gap-2.5 border-b px-5">
           <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
             <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain p-0.5" />
           </span>
@@ -228,7 +246,7 @@ export function DashboardShell({
             <Menu />
           </Button>
 
-          <Link href="/dashboard" className="flex items-center gap-2 lg:hidden">
+          <Link href={withBranch('/dashboard')} className="flex items-center gap-2 lg:hidden">
             <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
               <Image src="/logo-mark.png" alt="TableFlow" width={512} height={512} className="size-full object-contain p-0.5" />
             </span>

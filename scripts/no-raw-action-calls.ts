@@ -64,6 +64,22 @@ for (const file of walk('src')) {
 
   const lines = src.split('\n')
   lines.forEach((line, i) => {
+    /*
+     * An action that REDIRECTS cannot be wrapped.
+     *
+     * `redirect()` works by throwing a signal the framework catches, and
+     * `callAction` converts every rejection into `{ ok: false }` — so wrapping
+     * one would swallow the navigation and turn the call into a silent no-op.
+     * That is the exact failure this guard exists to prevent, arrived at from
+     * the other direction.
+     *
+     * The exemption is opt-in and has to be written on the line above, so it is
+     * a decision somebody made rather than a hole anybody can fall into.
+     */
+    // Anywhere in the comment block immediately above, so the exemption can be
+    // explained properly rather than crammed onto one line.
+    if (lines.slice(Math.max(0, i - 6), i).some((prev) => prev.includes('action-redirects'))) return
+
     for (const name of actions) {
       // Only calls, and only where the result is actually awaited.
       const call = new RegExp(`\\bawait\\s+${name}\\s*\\(`)
