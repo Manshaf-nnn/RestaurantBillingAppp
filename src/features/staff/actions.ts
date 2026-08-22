@@ -12,6 +12,7 @@ import {
   canManageLocation,
   PERMISSIONS,
   ROLE_LABELS,
+  requiresOwnBranch,
   seesAllLocations,
   visibleBranchIds,
 } from '@/lib/rbac'
@@ -53,10 +54,28 @@ import {
 async function homeBranchFor(
   admin: TenantUser,
   branchId: string | null | undefined,
+  /** The role being given to the account, not the admin's own. */
+  role: UserRole,
 ): Promise<string | null> {
   const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
 
   if (!branchId) {
+    /*
+     * Some roles cannot use "every location" — it blinds them.
+     *
+     * This function only ever asked whether the ADMIN was allowed to grant
+     * every location. It never asked whether the new account's role could make
+     * any sense of one. For a chef, cashier or waiter `visibleBranchIds`
+     * returns `[]` with no branch, so an owner — who may grant anything —
+     * could create an account whose every screen is empty, and find out when
+     * somebody stood in front of one.
+     */
+    if (requiresOwnBranch(role)) {
+      throw new ForbiddenError(
+        `A ${ROLE_LABELS[role].toLowerCase()} must be assigned to a location — without one their screens show nothing at all.`,
+      )
+    }
+
     /*
      * "Every location" is only somebody's to grant if they have every location.
      *
@@ -127,7 +146,7 @@ export async function inviteStaff(
 
       // Resolved before anything is written, so a bad location cannot leave a
       // half-made account behind.
-      const branchId = await homeBranchFor(admin, data.branchId)
+      const branchId = await homeBranchFor(admin, data.branchId, data.role)
 
       /*
        * The sign-in code is the password. A waiter is handed a card with their
@@ -209,7 +228,7 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
       }
       assertScopeAllowed(admin, data.role)
 
-      const branchId = await homeBranchFor(admin, data.branchId)
+      const branchId = await homeBranchFor(admin, data.branchId, data.role)
 
       /*
        * Two facts have to stay in step: `User.branchId` decides what someone

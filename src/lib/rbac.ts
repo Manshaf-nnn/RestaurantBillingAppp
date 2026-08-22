@@ -418,6 +418,25 @@ export function seesAllLocations(role: UserRole, branchId?: string | null): bool
   return SITE_SCOPED_WHEN_ASSIGNED.includes(role) && !branchId
 }
 
+/**
+ * True when leaving this role's location blank would blind them.
+ *
+ * "All locations" means two opposite things depending on the role, and the
+ * Staff screen offered it to both. For an accountant or a group manager a blank
+ * branch genuinely means the whole business. For a chef, a cashier or a waiter
+ * `visibleBranchIds` returns `[]` — they see NOTHING — and the form's own hint
+ * said "they see every site". So an owner could add a kitchen account, leave
+ * the default, and create an account whose screen would be empty for ever, with
+ * no error at the time and the symptom appearing hours later in another room.
+ *
+ * Derived from the same two lists `seesAllLocations` reads rather than written
+ * out again, so a role that changes category later cannot be left behind in a
+ * third copy.
+ */
+export function requiresOwnBranch(role: UserRole): boolean {
+  return !CROSS_LOCATION_ROLES.includes(role) && !SITE_SCOPED_WHEN_ASSIGNED.includes(role)
+}
+
 export function visibleBranchIds(subject: {
   role: UserRole
   branchId?: string | null

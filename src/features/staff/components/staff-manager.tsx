@@ -40,7 +40,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Alert } from '@/components/ui/feedback'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { initials } from '@/lib/utils'
-import { ROLE_LABELS } from '@/lib/rbac'
+import { ROLE_LABELS, requiresOwnBranch } from '@/lib/rbac'
 import { useRouter } from 'next/navigation'
 
 import { useAction } from '@/lib/use-action'
@@ -296,24 +296,55 @@ export function StaffManager({
  * site's figures, which is what a group manager should do and what a site
  * manager should not.
  */
+/**
+ * Picking a role can invalidate the location already chosen.
+ *
+ * The trap is not the default — it is choosing KITCHEN after "All locations"
+ * is already selected. Left alone the field would show an option that is no
+ * longer offered, and the server would refuse the submit. Snapping to the
+ * first real location keeps the form honest and the correction invisible.
+ */
+function branchForRole(role: UserRole, current: string, locations: StaffLocation[]): string {
+  if (!requiresOwnBranch(role)) return current
+  if (current !== ALL_LOCATIONS) return current
+  return locations[0]?.id ?? current
+}
+
 function WorksAtField({
   value,
   onChange,
   locations,
+  role,
   canAssignAllLocations = true,
 }: {
   value: string
   onChange: (value: string) => void
   locations: StaffLocation[]
+  /** The role being given, which decides what a blank location would MEAN. */
+  role: UserRole
   canAssignAllLocations?: boolean
 }) {
+  /*
+   * "All locations" means opposite things depending on the role.
+   *
+   * For an accountant or a group manager, blank genuinely means the whole
+   * business. For a chef, cashier or waiter, `visibleBranchIds` returns an
+   * empty list — they see NOTHING — while this field's hint cheerfully said
+   * "they see every site". Offering it to those roles is offering an account
+   * that will look broken on a screen in another room, hours later.
+   */
+  const mustHaveOne = requiresOwnBranch(role)
+  const offerAll = canAssignAllLocations && !mustHaveOne
+
   return (
     <Field
       label="Works at"
       hint={
-        canAssignAllLocations
-          ? 'All locations means they see every site. Pick one to confine them to it.'
-          : 'They will see this location and no other.'
+        mustHaveOne
+          ? `A ${ROLE_LABELS[role].toLowerCase()} works at one place — their screens show that location's orders and nothing else.`
+          : canAssignAllLocations
+            ? 'All locations means they see every site. Pick one to confine them to it.'
+            : 'They will see this location and no other.'
       }
     >
       <Select value={value} onValueChange={onChange}>
@@ -327,9 +358,7 @@ function WorksAtField({
             the server refuses it — this stops the dropdown promising something
             that would fail.
           */}
-          {canAssignAllLocations ? (
-            <SelectItem value={ALL_LOCATIONS}>All locations</SelectItem>
-          ) : null}
+          {offerAll ? <SelectItem value={ALL_LOCATIONS}>All locations</SelectItem> : null}
           {locations.map((location) => (
             <SelectItem key={location.id} value={location.id}>
               {location.name}
@@ -355,12 +384,26 @@ function InviteDialog({
   locations: StaffLocation[]
   canAssignAllLocations?: boolean
 }) {
-  const [form, setForm] = React.useState({
-    name: '', email: '', phone: '',
-    role: roles[0] ?? 'WAITER',
-    // A site manager cannot grant "all locations", so their new hire starts at
-    // the only location they have — never at a value the server will refuse.
-    branchId: canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
+  const [form, setForm] = React.useState(() => {
+    const role = roles[0] ?? 'WAITER'
+    return {
+      name: '', email: '', phone: '',
+      role,
+      /*
+       * Never open on a value the field will not offer.
+       *
+       * A site manager cannot grant "all locations", so their new hire starts
+       * at the only location they have. And a role that requires its own
+       * branch — a waiter, which is the default — must not start on "all
+       * locations" either: the option is not in the list for them, so the
+       * field would render blank and the server would refuse the submit.
+       */
+      branchId: branchForRole(
+        role,
+        canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
+        locations,
+      ),
+    }
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -368,13 +411,15 @@ function InviteDialog({
 
   React.useEffect(() => {
     if (open) {
+      const role = roles[0] ?? 'WAITER'
       setForm({
-        name: '', email: '', phone: '', role: roles[0] ?? 'WAITER', branchId: ALL_LOCATIONS,
+        name: '', email: '', phone: '', role,
+        branchId: branchForRole(role, ALL_LOCATIONS, locations),
       })
       setError(null)
       setCredentials(null)
     }
-  }, [open, roles])
+  }, [open, roles, locations])
 
   const invite = async () => {
     setSaving(true)
@@ -437,7 +482,16 @@ function InviteDialog({
               <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </Field>
             <Field label="Role" required>
-              <Select value={form.role} onValueChange={(value) => setForm({ ...form, role: value as UserRole })}>
+              <Select
+                value={form.role}
+                onValueChange={(value) =>
+                  setForm({
+                    ...form,
+                    role: value as UserRole,
+                    branchId: branchForRole(value as UserRole, form.branchId, locations),
+                  })
+                }
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -454,6 +508,7 @@ function InviteDialog({
               value={form.branchId}
               onChange={(branchId) => setForm({ ...form, branchId })}
               locations={locations}
+              role={form.role}
               canAssignAllLocations={canAssignAllLocations}
             />
             <DialogFooter>
@@ -497,11 +552,14 @@ function EditDialog({
         phone: member.phone ?? '',
         role: member.role,
         isActive: member.isActive,
-        branchId: member.branchId ?? ALL_LOCATIONS,
+        // An existing account may already be in the blind state this change
+        // prevents; open on a real location rather than on an option that is
+        // no longer offered for their role.
+        branchId: branchForRole(member.role, member.branchId ?? ALL_LOCATIONS, locations),
       })
       setError(null)
     }
-  }, [member])
+  }, [member, locations])
 
   const save = async () => {
     if (!member) return
@@ -539,7 +597,16 @@ function EditDialog({
           <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
         </Field>
         <Field label="Role" required>
-          <Select value={form.role} onValueChange={(value) => setForm({ ...form, role: value as UserRole })}>
+          <Select
+            value={form.role}
+            onValueChange={(value) =>
+              setForm({
+                ...form,
+                role: value as UserRole,
+                branchId: branchForRole(value as UserRole, form.branchId, locations),
+              })
+            }
+          >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -556,6 +623,7 @@ function EditDialog({
           value={form.branchId}
           onChange={(branchId) => setForm({ ...form, branchId })}
           locations={locations}
+          role={form.role}
           canAssignAllLocations={canAssignAllLocations}
         />
         <label className="flex items-center gap-2 text-sm">

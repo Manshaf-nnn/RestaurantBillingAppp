@@ -299,6 +299,60 @@ async function main() {
     if (row) await prisma.restaurantTable.delete({ where: { id: row.id } }).catch(() => {})
   }
 
+  /*
+   * A kitchen account cannot be created without a location.
+   *
+   * `homeBranchFor` used to ask only whether the ADMIN could grant "every
+   * location". An owner can, so leaving the field on its default produced a
+   * KITCHEN account with no branch — and `visibleBranchIds` gives those roles
+   * an EMPTY list, so every screen they opened was blank. No error at the time;
+   * the symptom turned up hours later on a display in another room.
+   *
+   * Driven here rather than in the service suite because `inviteStaff` goes
+   * through `requirePermission`, which reads the session cookie.
+   */
+  console.log('\nA role that would be blinded cannot be created without a location')
+
+  const inviteId = ids.get('inviteStaff')
+  // `stamp` is upper-case (it doubles as a branch code) and emails are stored
+  // lower-cased, so a case-sensitive lookup afterwards would miss the row and
+  // report "not created" for an account that was.
+  const mark = stamp.toLowerCase()
+  if (!inviteId) {
+    check('inviteStaff found in the bundle', false, 'not present')
+  } else {
+    const blind = await callAction(
+      '/dashboard/staff',
+      inviteId,
+      [{ name: `Blind chef ${mark}`, email: `blind-${mark}@e2e.test`, phone: '', role: 'KITCHEN', branchId: null }],
+      cookie,
+    )
+    check(
+      'a KITCHEN account with no location is refused',
+      blind.body.includes('"ok":false') || blind.body.includes('must be assigned to a location'),
+      blind.body.slice(0, 200).replace(/\s+/g, ' '),
+    )
+    const leaked = await prisma.user.findFirst({ where: { email: `blind-${mark}@e2e.test` } })
+    check('and no account was created', !leaked)
+    if (leaked) await prisma.user.delete({ where: { id: leaked.id } }).catch(() => {})
+
+    // A MANAGER with no location is a group manager and must still work.
+    const groupManager = await callAction(
+      '/dashboard/staff',
+      inviteId,
+      [{ name: `Group mgr ${mark}`, email: `group-${mark}@e2e.test`, phone: '', role: 'MANAGER', branchId: null }],
+      cookie,
+    )
+    check(
+      'a MANAGER with no location is still allowed — that is a group manager',
+      !groupManager.body.includes('"ok":false'),
+      groupManager.body.slice(0, 200).replace(/\s+/g, ' '),
+    )
+    const made = await prisma.user.findFirst({ where: { email: `group-${mark}@e2e.test` } })
+    check('and that account exists', Boolean(made))
+    if (made) await prisma.user.deleteMany({ where: { id: made.id } }).catch(() => {})
+  }
+
   await prisma.session.delete({ where: { id: session.id } }).catch(() => {})
   await prisma.$disconnect()
 

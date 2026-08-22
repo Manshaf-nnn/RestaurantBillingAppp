@@ -20,7 +20,9 @@ import { applyBranchOverrides, replaceFoodBranches } from '../src/features/menu/
 import { placeOrder } from '../src/features/orders/service'
 import { resolvePublicBranch } from '../src/features/branches/public-branch'
 import { getSalesReport } from '../src/features/reports/sales'
-import { visibleBranchIds, canAccessBranch, assignableRoles } from '../src/lib/rbac'
+import {
+  visibleBranchIds, canAccessBranch, assignableRoles, requiresOwnBranch,
+} from '../src/lib/rbac'
 import { listShiftNotes } from '../src/features/handover/queries'
 import { closeDrawer, listDrawerSessions, openDrawer, recordCashMovement } from '../src/features/cashdrawer/service'
 import { getKitchenQueue } from '../src/features/orders/queries'
@@ -644,6 +646,42 @@ async function main() {
   check('removing it is soft — the row and its history stay', gone.deletedAt !== null)
   check('and it is switched off', gone.isActive === false)
 
+
+
+  console.log('\n── 23. a role that would be blinded must have a location ──')
+
+  /*
+   * "All locations" means opposite things depending on the role, and the Staff
+   * screen offered it to both. For an accountant it means the whole business;
+   * for a chef `visibleBranchIds` returns `[]` — they see NOTHING — while the
+   * field's hint said "they see every site". So an owner could add a kitchen
+   * account, leave the default, and create an account whose every screen would
+   * be empty, discovering it hours later on a screen in another room.
+   */
+  check(
+    'a chef must have one',
+    requiresOwnBranch('KITCHEN') && requiresOwnBranch('CASHIER') &&
+      requiresOwnBranch('WAITER') && requiresOwnBranch('WAREHOUSE_STAFF'),
+  )
+  check(
+    'a manager need not — blank means group manager, which is a real job',
+    !requiresOwnBranch('MANAGER'),
+  )
+  check(
+    'nor an owner, admin or accountant',
+    !requiresOwnBranch('OWNER') && !requiresOwnBranch('ADMIN') && !requiresOwnBranch('ACCOUNTANT'),
+  )
+
+  // And the two agree: exactly the roles that need their own branch are the
+  // ones that see nothing without one.
+  const blindWithoutOne = (['KITCHEN', 'CASHIER', 'WAITER', 'WAREHOUSE_STAFF'] as const).every(
+    (role) => (visibleBranchIds({ role, branchId: null }) ?? ['all']).length === 0,
+  )
+  check(
+    'and those are exactly the roles that see nothing without one',
+    blindWithoutOne,
+    'the predicate and visibleBranchIds have drifted apart',
+  )
 
   console.log('\n── 20. the guest is seated at the branch they scanned ──')
 
