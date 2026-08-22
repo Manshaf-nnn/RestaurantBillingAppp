@@ -83,7 +83,8 @@ const GROUP_WIDE: Record<string, string> = {
 
   // ── The guest side. These are the pages a QR code opens, so the branch is
   //    the whole point — only three are legitimately without one.
-  'order/cart': 'The branch travels in the cart (TableSession.branchCode), not in the URL',
+  'order': 'IS the branch chooser — the one page that must not assume a branch',
+  'order/cart': 'Legacy redirect to the canonical /order/<slug>/<branch>/cart',
   'order/track/[orderId]': 'One order; authorised by the guest session cookie, not by branch',
   'order/bill/[orderId]': 'As above',
 }

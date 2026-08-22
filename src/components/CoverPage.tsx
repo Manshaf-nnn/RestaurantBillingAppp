@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 
 import { Alert } from '@/components/ui/feedback'
 import { resolveTable } from '@/features/orders/actions'
+import { guestPath } from '@/features/orders/guest-path'
 import { useCart } from '@/features/orders/cart-store'
 
 interface Props {
@@ -35,6 +36,8 @@ interface Props {
    * — so a guest at Branch 01 was seated at Main's table 1 and their order
    * printed in Main's kitchen.
    */
+  /** The restaurant slug, so every link from here keeps the branch. */
+  slug?: string
   branchCode?: string | null
   /** Named when it is not the main site, so a guest can see they scanned right. */
   branchName?: string | null
@@ -116,7 +119,17 @@ export default function CoverPage(props: Props) {
       } else {
         toast.success(`Table ${result.data.tableNumber} — welcome!`)
       }
-      router.push('/order/menu')
+      /*
+       * Carry the branch. This was a bare `/order/menu`, which is where the
+       * branch was lost: from here on it lived only in the `ros_b` cookie, and
+       * a guest correctly seated at Branch 02 browsed Main's menu at Main's
+       * prices whenever that cookie was stale, blocked or absent.
+       */
+      router.push(
+        props.slug && props.branchCode
+          ? guestPath(props.slug, props.branchCode, 'menu')
+          : '/order/menu',
+      )
     } catch { setError('Something went wrong') }
     finally { setPending(false) }
   }

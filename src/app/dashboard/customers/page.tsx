@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 
 import { CustomersManager } from '@/features/staff/components/customers-manager'
-import { can, PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS , customersAtBranch, visibleBranchIds} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -15,7 +15,9 @@ export default async function CustomersPage() {
   const [restaurant, customers] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.customer.findMany({
-      where: { restaurantId: user.restaurantId },
+      // Each branch sees the people who have ordered there. See
+      // `customersAtBranch` for why the RECORD stays whole.
+      where: { restaurantId: user.restaurantId, ...customersAtBranch(visibleBranchIds(user)) },
       orderBy: [{ lastOrderAt: 'desc' }, { createdAt: 'desc' }],
       take: 500,
     }),

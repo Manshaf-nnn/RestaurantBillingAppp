@@ -113,8 +113,29 @@ export async function middleware(request: NextRequest) {
   // `/order?r=<slug>` is what a shared-domain QR code encodes. Persist the slug
   // so every later navigation inside the guest app stays on that tenant.
   if (pathname.startsWith('/order')) {
-    const slug = request.nextUrl.searchParams.get('r')
-    const branch = request.nextUrl.searchParams.get('b')
+    /*
+     * The canonical guest link now carries both in the PATH:
+     *
+     *     /order/<restaurant-slug>/<branch-code>[/menu|/cart]
+     *
+     * The pages below read them from `params` and treat that as the truth. The
+     * cookies are still written, for two reasons: the outer `/order/layout.tsx`
+     * resolves the tenant before the `[slug]` segment is visible to it, and the
+     * order-tracking pages sit outside the branch tree. They are a convenience
+     * now, not the carrier — which is the whole point of the change. A branch
+     * that only ever lived in a cookie is a branch that gets lost, and a lost
+     * branch used to silently become Main.
+     *
+     * `?r=` and `?b=` are still read so older printed cards keep working.
+     */
+    const segments = pathname.split('/').filter(Boolean) // ['order', slug?, branch?, …]
+    const fromPath = segments[0] === 'order' ? segments.slice(1) : []
+    const reserved = new Set(['track', 'bill', 'menu', 'cart'])
+    const pathSlug = fromPath[0] && !reserved.has(fromPath[0]) ? fromPath[0] : null
+    const pathBranch = pathSlug ? fromPath[1] ?? null : null
+
+    const slug = pathSlug ?? request.nextUrl.searchParams.get('r')
+    const branch = pathBranch ?? request.nextUrl.searchParams.get('b')
     const validSlug = Boolean(slug && /^[a-z0-9-]{1,60}$/i.test(slug))
     const validBranch = Boolean(branch && /^[A-Za-z0-9-]{1,12}$/.test(branch))
 

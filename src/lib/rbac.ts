@@ -464,3 +464,29 @@ export function canAccessBranch(
   const ids = visibleBranchIds(subject)
   return ids === null || ids.includes(branchId)
 }
+
+/**
+ * Which customers a branch may see.
+ *
+ * A guest belongs to the business, not to a site — `Customer` is keyed
+ * `(restaurantId, phone)` and their loyalty points are a single counter on that
+ * row, with no ledger behind it. Forking the record per branch would split a
+ * regular in two and halve their points with no way to rebuild them.
+ *
+ * So the record stays whole and the VISIBILITY narrows: a branch sees the
+ * people who have ordered there. Reached through the orders, which is the only
+ * thing that knows where someone has actually been.
+ *
+ * A customer with no orders at all — added by hand on the Customers screen —
+ * belongs to no branch yet, so they stay visible to everyone rather than
+ * disappearing the moment they are created.
+ */
+export function customersAtBranch(branchIds: string[] | null) {
+  if (!branchIds) return {}
+  return {
+    OR: [
+      { orders: { some: { branchId: { in: branchIds } } } },
+      { orders: { none: {} } },
+    ],
+  }
+}

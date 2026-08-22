@@ -49,8 +49,29 @@ export async function resolvePublicBranch(
   restaurantId: string,
   code?: string | null,
 ): Promise<PublicBranch | null> {
-  const fromCookie = code ? null : (await cookies()).get(BRANCH_COOKIE)?.value ?? null
-  const wanted = (code ?? fromCookie)?.trim().toUpperCase() || null
+  /*
+   * "Supplied" means supplied — not "supplied and non-blank".
+   *
+   * This was `const wanted = (code ?? fromCookie)?.trim().toUpperCase() || null`,
+   * and that `|| null` quietly undid the guarantee two paragraphs below. A
+   * `?b=` with an empty value, or one that trimmed to nothing, collapsed to
+   * `null` and skipped the refusal entirely — falling through to the DEFAULT
+   * branch while looking, to every caller, exactly like "no code given".
+   *
+   * The checkout could reach it too: the cart sends `branchCode ?? ''`, and the
+   * schema permits the empty string. So a guest whose cart had lost its branch
+   * was priced at Main's prices with no error at any layer.
+   *
+   * Asked-and-blank is now asked-and-wrong, which is what it is.
+   */
+  const asked = typeof code === 'string'
+  const supplied = asked ? code.trim().toUpperCase() : null
+  const fromCookie = asked ? null : (await cookies()).get(BRANCH_COOKIE)?.value?.trim().toUpperCase() || null
+  const wanted = supplied || fromCookie
+
+  if (asked && !supplied) {
+    throw new NotFoundError('That code does not match a location here')
+  }
 
   if (wanted) {
     const match = await prisma.branch.findFirst({
@@ -80,7 +101,7 @@ export async function resolvePublicBranch(
      * below: that is the smudged-QR and the single-site case, and a guest with
      * a damaged sticker should get a menu rather than an error page.
      */
-    if (code) {
+    if (asked) {
       throw new NotFoundError('That code does not match a location here')
     }
   }
@@ -105,6 +126,9 @@ export async function orderableBranches(restaurantId: string) {
       id: true,
       name: true,
       code: true,
+      // Shown on the "which branch are you at?" screen, where two locations of
+      // the same chain are otherwise told apart only by name.
+      address: true,
       isDefault: true,
       tables: {
         where: { isActive: true },

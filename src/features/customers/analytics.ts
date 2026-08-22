@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { customersAtBranch } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -48,10 +49,14 @@ export async function getCustomerProfile(params: {
   })
 
   /*
-   * The customer record is restaurant-wide — a guest belongs to the business,
-   * not to a site, and merging them per branch would fork loyalty and history.
-   * Their ORDERS are branch data, though, so a site manager sees what this
-   * customer spent at their site, not across the group.
+   * The customer RECORD is restaurant-wide — a guest belongs to the business,
+   * not to a site, and their loyalty points are one counter with no ledger
+   * behind it, so forking the row per branch would halve a regular's balance
+   * with no way to rebuild it.
+   *
+   * What narrows is who each branch SEES, and what it sees of them: this order
+   * list is the branch's own, so a site manager reads what this customer spent
+   * at their site rather than across the group.
    */
   const orders = await prisma.order.findMany({
     where: {
@@ -142,13 +147,18 @@ export async function getCustomerAnalytics(params: {
   restaurantId: string
   since?: Date
   lapsedAfterDays?: number
+  /** Locations the viewer may see. Null means all of them. */
+  branchIds?: string[] | null
 }): Promise<CustomerAnalytics> {
   const lapsedAfter = params.lapsedAfterDays ?? 45
   const since = params.since ?? new Date(Date.now() - 30 * 86_400_000)
   const lapsedBefore = new Date(Date.now() - lapsedAfter * 86_400_000)
 
   const customers = await prisma.customer.findMany({
-    where: { restaurantId: params.restaurantId },
+    where: {
+      restaurantId: params.restaurantId,
+      ...customersAtBranch(params.branchIds ?? null),
+    },
     select: {
       id: true, name: true, phone: true, group: true, marketingConsent: true,
       totalSpent: true, totalOrders: true, lastOrderAt: true, createdAt: true,

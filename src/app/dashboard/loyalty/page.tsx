@@ -5,7 +5,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { EmptyState } from '@/components/ui/feedback'
 import { LoyaltyManager } from '@/features/loyalty/components/loyalty-manager'
 import { getLoyaltyOverview } from '@/features/loyalty/queries'
-import { can, PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { formatMoney } from '@/lib/money'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -18,7 +18,7 @@ export default async function LoyaltyPage() {
   const user = await requirePagePermission(PERMISSIONS.SETTINGS_VIEW, '/dashboard/loyalty')
   const [restaurant, overview] = await Promise.all([
     requireRestaurant(user.restaurantId),
-    getLoyaltyOverview(user.restaurantId),
+    getLoyaltyOverview(user.restaurantId, visibleBranchIds(user)),
   ])
 
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale

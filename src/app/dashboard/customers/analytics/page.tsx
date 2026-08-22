@@ -7,7 +7,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { ReportTable } from '@/features/reports/components/report-table'
 import { getCustomerAnalytics } from '@/features/customers/analytics'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -18,7 +18,11 @@ export default async function CustomerAnalyticsPage() {
   const user = await requirePagePermission(PERMISSIONS.CUSTOMER_VIEW, '/dashboard/customers/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
-  const data = await getCustomerAnalytics({ restaurantId: user.restaurantId })
+  const data = await getCustomerAnalytics({
+    restaurantId: user.restaurantId,
+    // Each branch reads its own guests. See `customersAtBranch`.
+    branchIds: visibleBranchIds(user),
+  })
 
   const retention = data.totalCustomers > 0
     ? Math.round((data.returning / data.totalCustomers) * 100)

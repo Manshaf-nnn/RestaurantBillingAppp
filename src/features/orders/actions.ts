@@ -111,7 +111,7 @@ export async function resolveTable(
        * away someone else's floor.
        */
       throw new AppError(
-        `Table ${data.tableNumber} is not at ${branch.name}. Please check the number on your table.`,
+        'This table is not available. Please check the number on your table.',
         404,
         'TABLE_NOT_FOUND',
       )
@@ -193,7 +193,10 @@ export async function quoteCart(
 
     await enforceRateLimit('quoteCartBurst')
 
-    const branch = await resolvePublicBranch(restaurant.id, branchCode ?? null)
+    // Same rule as `placeGuestOrder`: a blank code means the cart never had
+    // one, not that the guest asked for nothing.
+    const asserted = branchCode?.trim() || null
+    const branch = asserted ? await resolvePublicBranch(restaurant.id, asserted) : null
 
     let customerId: string | null = null
     if (data.phone) {
@@ -255,7 +258,22 @@ export async function placeGuestOrder(
        * `placeOrder` now refuses outright if this disagrees with the table's
        * own branch, rather than quietly preferring one.
        */
-      const branch = await resolvePublicBranch(restaurant.id, data.branchCode ?? null)
+      /*
+       * Only assert a branch if the guest's cart actually carries one.
+       *
+       * A blank code is now an error rather than a silent default, which is
+       * right — but the cart is allowed not to have one (an older cart still in
+       * localStorage from before the code was carried). In that case the TABLE
+       * decides, which is `placeOrder`'s documented fallback and the more
+       * truthful answer anyway: the guest is sitting at a specific table, and
+       * that table knows its own branch.
+       *
+       * Passing a cookie-derived branch here instead would be worse than
+       * useless — it could disagree with the table and trip the mismatch guard
+       * on a perfectly ordinary order.
+       */
+      const asserted = data.branchCode?.trim() || null
+      const branch = asserted ? await resolvePublicBranch(restaurant.id, asserted) : null
 
       const order = await placeOrderService({
         restaurantId: restaurant.id,

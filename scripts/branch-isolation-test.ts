@@ -21,7 +21,7 @@ import { placeOrder } from '../src/features/orders/service'
 import { resolvePublicBranch } from '../src/features/branches/public-branch'
 import { getSalesReport } from '../src/features/reports/sales'
 import {
-  visibleBranchIds, canAccessBranch, assignableRoles, requiresOwnBranch,
+  visibleBranchIds, canAccessBranch, assignableRoles, requiresOwnBranch, customersAtBranch,
 } from '../src/lib/rbac'
 import { listShiftNotes } from '../src/features/handover/queries'
 import { closeDrawer, listDrawerSessions, openDrawer, recordCashMovement } from '../src/features/cashdrawer/service'
@@ -727,14 +727,22 @@ async function main() {
    * floor. Telling the guest where they are is useful; telling them where they
    * are not is somebody else's business.
    */
+  /*
+   * The wording the owner asked for, verbatim.
+   *
+   * It named the guest's own branch for a while — friendlier for somebody who
+   * scanned the wrong poster — and the owner chose the plain version. It is
+   * also the safer of the two: `resolveTable` is unauthenticated, so naming any
+   * branch at all lets a stranger map which numbers exist where.
+   */
   check(
-    'the refusal names this branch',
-    !wrongPoster.ok && /Branch 01/.test(wrongPoster.error),
+    'the refusal is the plain "not available"',
+    !wrongPoster.ok && /this table is not available/i.test(wrongPoster.error),
     !wrongPoster.ok ? wrongPoster.error : '',
   )
   check(
-    'and does not disclose the branch that does have it',
-    !wrongPoster.ok && !/Main Branch/.test(wrongPoster.error),
+    'and names no branch at all',
+    !wrongPoster.ok && !/Main Branch/.test(wrongPoster.error) && !/Branch 01/.test(wrongPoster.error),
     !wrongPoster.ok ? wrongPoster.error : '',
   )
 
@@ -796,6 +804,69 @@ async function main() {
    * session, which is where the rest of this codebase's authenticated actions
    * are exercised.
    */
+
+
+  console.log('\n── 24. each branch sees its own customers ──')
+
+  /*
+   * The record stays whole; the visibility narrows.
+   *
+   * `Customer` is keyed `(restaurantId, phone)` and loyalty is a single counter
+   * on that row with no ledger behind it, so forking the record per branch
+   * would halve a regular's points with no way to rebuild them. What a branch
+   * sees instead is the people who have ordered there.
+   */
+  const [b01Customer, mainCustomer] = await Promise.all([
+    prisma.customer.create({
+      data: { restaurantId: restaurant.id, name: 'B01 regular', phone: `07${stamp}01` },
+    }),
+    prisma.customer.create({
+      data: { restaurantId: restaurant.id, name: 'Main regular', phone: `07${stamp}02` },
+    }),
+  ])
+  const neverOrdered = await prisma.customer.create({
+    data: { restaurantId: restaurant.id, name: 'Newly added', phone: `07${stamp}03` },
+  })
+
+  await prisma.order.updateMany({
+    where: { id: b01Order.id },
+    data: { customerId: b01Customer.id },
+  })
+  await prisma.order.create({
+    data: {
+      restaurantId: restaurant.id, branchId: main.id, customerId: mainCustomer.id,
+      orderNumber: `CUST-${stamp}`, customerName: 'Main regular',
+      customerPhone: mainCustomer.phone, grandTotal: 1000,
+    },
+  })
+
+  const seenBy = async (branchIds: string[] | null) =>
+    (await prisma.customer.findMany({
+      where: { restaurantId: restaurant.id, ...customersAtBranch(branchIds) },
+      select: { id: true },
+    })).map((c) => c.id)
+
+  const custAtB01 = await seenBy([b01.id])
+  const atMainOnly = await seenBy([main.id])
+  const custAtAll = await seenBy(null)
+
+  check('Branch 01 sees its own customer', custAtB01.includes(b01Customer.id))
+  check(
+    'and not the one who only ordered at Main',
+    !custAtB01.includes(mainCustomer.id),
+    'another branch’s customer was listed',
+  )
+  check('Main sees theirs', atMainOnly.includes(mainCustomer.id) && !atMainOnly.includes(b01Customer.id))
+  check('the owner sees both', custAtAll.includes(b01Customer.id) && custAtAll.includes(mainCustomer.id))
+  check(
+    'a customer with no orders yet is visible to everyone',
+    custAtB01.includes(neverOrdered.id) && atMainOnly.includes(neverOrdered.id),
+    'someone added by hand vanished the moment they were created',
+  )
+  check(
+    'and their loyalty points are untouched by any of it',
+    (await prisma.customer.findUniqueOrThrow({ where: { id: b01Customer.id } })).loyaltyPoints === 0,
+  )
 
   await prisma.shiftNote.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.approvalRequest.deleteMany({ where: { restaurantId: restaurant.id } })

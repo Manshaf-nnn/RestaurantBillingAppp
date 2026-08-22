@@ -510,10 +510,28 @@ async function main() {
     ])
 
     for (const branch of codes) {
-      const response = await fetch(
+      /*
+       * An old card redirects to the canonical link, and the canonical link
+       * serves the branch.
+       *
+       * `?b=` used to render the landing screen directly. It now sends the
+       * guest to `/order/<slug>/<code>`, where the branch is a path segment
+       * that cannot be dropped by a navigation or expire with a cookie — which
+       * is the whole point of the change. Both halves are checked: the old link
+       * still works, and where it lands is right.
+       */
+      const legacy = await fetch(
         `${BASE}/order?r=${restaurant!.slug}&b=${encodeURIComponent(branch.code)}`,
         { redirect: 'manual' },
       )
+      const target = legacy.headers.get('location') ?? ''
+      const redirected =
+        legacy.status >= 300 && legacy.status < 400 &&
+        target.includes(`/order/${restaurant!.slug}/${branch.code}`)
+
+      const response = redirected
+        ? await fetch(new URL(target, BASE), { redirect: 'manual' })
+        : legacy
       const body = response.status === 200 ? await response.text() : ''
 
       /*
@@ -522,9 +540,10 @@ async function main() {
        * assertion differs by branch, and for the default one the check is that
        * the page renders at all rather than 404ing on a code it should know.
        */
-      const ok = branch.isDefault
-        ? response.status === 200
-        : response.status === 200 && body.includes(branch.name)
+      // Every branch is named now, default or not: the old rule hid the label
+      // exactly when the branch had silently fallen back to the default, which
+      // is the one case worth seeing.
+      const ok = redirected && response.status === 200 && body.includes(branch.name)
 
       if (ok) {
         passed += 1
@@ -532,8 +551,10 @@ async function main() {
       } else {
         failed.push(`/order?b=${branch.code} did not reach ${branch.name}`)
         console.log(
-          `  ✗ ?b=${branch.code} did not reach ${branch.name} — HTTP ${response.status}` +
-          (response.status === 200 ? ', and the page did not name it' : ''),
+          `  ✗ ?b=${branch.code} did not reach ${branch.name} — ` +
+          (redirected
+            ? `HTTP ${response.status}${response.status === 200 ? ', and the page did not name it' : ''}`
+            : `it did not redirect to the canonical link (HTTP ${legacy.status} → ${target || 'nowhere'})`),
         )
       }
     }

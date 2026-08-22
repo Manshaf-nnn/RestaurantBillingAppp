@@ -166,7 +166,11 @@ async function main() {
 
   console.log('\n── 1. the guest scans Branch 02’s QR ──')
 
-  const landing = await fetch(`${BASE}/order?r=${restaurant.slug}&b=QB02`, { redirect: 'manual' })
+  // The canonical link: the branch is a path segment, so it cannot be dropped
+  // by a navigation, expire with a cookie, or be silently absent.
+  const branchUrl = `${BASE}/order/${restaurant.slug}/QB02`
+
+  const landing = await fetch(branchUrl, { redirect: 'manual' })
   const landingBody = landing.status === 200 ? await landing.text() : ''
   check('the landing screen opens', landing.status === 200, `HTTP ${landing.status}`)
   check(
@@ -174,17 +178,49 @@ async function main() {
     landingBody.includes('Branch 02'),
     'the guest cannot tell which place they are ordering from',
   )
-  check(
-    'and the middleware wrote the branch cookie',
-    (landing.headers.get('set-cookie') ?? '').includes('ros_b=QB02'),
-    landing.headers.get('set-cookie') ?? '(no set-cookie)',
-  )
 
-  const bogus = await fetch(`${BASE}/order?r=${restaurant.slug}&b=NOSUCH`, { redirect: 'manual' })
+  const bogus = await fetch(`${BASE}/order/${restaurant.slug}/NOSUCH`, { redirect: 'manual' })
   check(
     'a code that matches no location is refused, not quietly served as Main',
     bogus.status !== 200 || !(await bogus.text()).includes('Main Branch'),
     `HTTP ${bogus.status} — a guessed code got somebody else’s menu`,
+  )
+
+  /*
+   * The regression that kept escaping every previous round.
+   *
+   * A branch-less link — an older printed card, the dashboard's own "Guest
+   * menu" shortcut, a shared URL — used to resolve silently to the DEFAULT
+   * branch. Worse, it did so via a 12-hour cookie, so testing Main once poisoned
+   * every later scan. Every test written so far exercised a FRESH scan, which
+   * is exactly the case that worked.
+   *
+   * With a stale cookie deliberately set to Main, a branch-less entry must now
+   * ASK rather than assume.
+   */
+  const staleMain = 'ros_b=QMAIN; ros_r=' + restaurant.slug
+  const branchless = await fetch(`${BASE}/order?r=${restaurant.slug}`, {
+    headers: { cookie: staleMain },
+    redirect: 'manual',
+  })
+  const chooser = branchless.status === 200 ? await branchless.text() : ''
+  check(
+    'a branch-less link with a stale Main cookie does NOT serve Main',
+    branchless.status === 200 && chooser.includes('Branch 02') && chooser.includes('Main Branch'),
+    `HTTP ${branchless.status} — it should offer a choice, not pick one`,
+  )
+  check(
+    'it asks which location the guest is at',
+    /which of our locations|which one are you at/i.test(chooser),
+    chooser.slice(0, 200).replace(/\s+/g, ' '),
+  )
+
+  // And the canonical link still wins over that same stale cookie.
+  const overCookie = await fetch(branchUrl, { headers: { cookie: staleMain } })
+  check(
+    'the path beats a stale cookie',
+    overCookie.status === 200 && (await overCookie.text()).includes('Branch 02'),
+    `HTTP ${overCookie.status}`,
   )
 
   console.log('\n── 2. table 2 belongs to Main, not here ──')
@@ -196,8 +232,10 @@ async function main() {
     'the guest was seated at Main’s table 2 — the reported bug',
   )
   check(
-    'the refusal names Branch 02 and not Main',
-    !wrongTable.ok && /Branch 02/.test(wrongTable.error) && !/Main Branch/.test(wrongTable.error),
+    'and says "This table is not available" without naming any branch',
+    !wrongTable.ok &&
+      /this table is not available/i.test(wrongTable.error) &&
+      !/Main Branch/.test(wrongTable.error),
     !wrongTable.ok ? wrongTable.error : '',
   )
 
@@ -221,6 +259,22 @@ async function main() {
   const menu = await fetch(
     `${BASE}/api/public/menu?r=${restaurant.slug}&b=QB02`,
   ).then((r) => (r.ok ? r.json() : null))
+
+  // The menu PAGE, reached the way a guest reaches it — a navigation, with the
+  // branch in the path. This is where the branch used to be lost: `CoverPage`
+  // pushed a bare `/order/menu` and the cookie took over from there.
+  const menuPage = await fetch(`${branchUrl}/menu`, { headers: { cookie: staleMain } })
+  const menuHtml = menuPage.status === 200 ? await menuPage.text() : ''
+  check(
+    'the menu page names Branch 02 even with a stale Main cookie',
+    menuPage.status === 200 && menuHtml.includes('Branch 02'),
+    `HTTP ${menuPage.status}`,
+  )
+  check(
+    'and does not offer the Main-only dish',
+    !menuHtml.includes('Main-only noodles'),
+    'the menu page served another branch’s dishes',
+  )
   check(
     'the branch menu offers the shared dish',
     JSON.stringify(menu ?? {}).includes('Rice and curry'),

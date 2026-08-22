@@ -1,28 +1,23 @@
-import { notFound } from 'next/navigation'
-import type { Metadata } from 'next'
+import { notFound, redirect } from 'next/navigation'
 
-import { CartCheckout } from '@/features/orders/components/cart-checkout'
+import { guestPath } from '@/features/orders/guest-path'
+import { orderableBranches } from '@/features/branches/public-branch'
 import { resolvePublicTenant } from '@/server/db/tenant'
-import { BrandTheme } from '@/features/orders/components/brand-theme'
 
 export const dynamic = 'force-dynamic'
 
-export const metadata: Metadata = { title: 'Your order' }
-
-export default async function CartPage() {
+/**
+ * The old branch-less cart URL. Kept as a redirect, not a page.
+ *
+ * See the note on the legacy menu route: anything still pointing here is sent
+ * to the canonical URL, and where the branch is unknowable on a multi-branch
+ * restaurant it goes to the chooser rather than quietly picking the default.
+ */
+export default async function LegacyCartPage() {
   const restaurant = await resolvePublicTenant()
   if (!restaurant) notFound()
 
-  return (
-    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
-      <CartCheckout
-        currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-        taxLabel={restaurant.taxLabel}
-        restaurantName={restaurant.name}
-        loyaltyEnabled={restaurant.loyaltyEnabled}
-        loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
-      />
-    </BrandTheme>
-  )
+  const all = await orderableBranches(restaurant.id)
+  if (all.length === 1) redirect(guestPath(restaurant.slug, all[0].code, 'cart'))
+  redirect(`/order?r=${encodeURIComponent(restaurant.slug)}`)
 }

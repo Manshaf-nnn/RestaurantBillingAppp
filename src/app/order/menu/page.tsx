@@ -1,20 +1,20 @@
-import { notFound } from 'next/navigation'
-import type { Metadata } from 'next'
+import { notFound, redirect } from 'next/navigation'
 
-import { getPublicMenu } from '@/features/menu/queries'
-import { resolvePublicBranch } from '@/features/branches/public-branch'
-import { BrandTheme } from '@/features/orders/components/brand-theme'
-import { MenuBrowser } from '@/features/orders/components/menu-browser'
+import { guestPath } from '@/features/orders/guest-path'
+import { orderableBranches, resolvePublicBranch } from '@/features/branches/public-branch'
 import { resolvePublicTenant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 
-export async function generateMetadata(): Promise<Metadata> {
-  const restaurant = await resolvePublicTenant()
-  return { title: restaurant ? `${restaurant.name} — Menu` : 'Menu' }
-}
-
-export default async function MenuPage({
+/**
+ * The old branch-less menu URL. Kept as a redirect, not a page.
+ *
+ * Anything still pointing here — a bookmark, a browser's back stack, a link in
+ * an old email — is sent to the canonical `/order/<slug>/<branch>/menu`. Where
+ * the branch cannot be established and there is more than one, it goes to the
+ * chooser rather than guessing, which is what this URL used to do.
+ */
+export default async function LegacyMenuPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
@@ -22,42 +22,19 @@ export default async function MenuPage({
   const restaurant = await resolvePublicTenant()
   if (!restaurant) notFound()
 
-  /*
-   * Which branch this guest is in: their menu, and their prices.
-   *
-   * `?b=` first, then the cookie the middleware wrote, then the restaurant's
-   * default. Reading the URL as well as the cookie matters on a phone that
-   * drops cookies — an in-app browser, a private window — where the cookie
-   * alone would silently show another branch's menu at another branch's prices.
-   */
   const params = await searchParams
-  const branchCode = typeof params.b === 'string' ? params.b : null
-  /*
-   * A code that matches no location is `notFound()`, not an error boundary.
-   *
-   * `resolvePublicBranch` refuses an explicitly-supplied code that matches
-   * nothing, rather than quietly serving the default branch. That is the right
-   * answer for an API caller; for a guest holding a phone it has to look like a
-   * page that does not exist, not like the software falling over.
-   */
-  const branch = await resolvePublicBranch(restaurant.id, branchCode).catch(() => null)
-  if (branchCode && !branch) notFound()
-  const menu = await getPublicMenu(restaurant.id, restaurant.timezone, branch?.id ?? null)
+  const asked = typeof params.b === 'string' ? params.b.trim() : ''
 
-  return (
-    <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
-      <MenuBrowser
-        menu={menu}
-        restaurantName={restaurant.name}
-        logoUrl={restaurant.logoUrl}
-        currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
-        loyalty={{
-          enabled: restaurant.loyaltyEnabled,
-          earnRateX100: restaurant.loyaltyEarnRateX100,
-          pointValue: restaurant.loyaltyPointValue,
-        }}
-      />
-    </BrandTheme>
-  )
+  const branch = asked
+    ? await resolvePublicBranch(restaurant.id, asked).catch(() => null)
+    : await (async () => {
+        const all = await orderableBranches(restaurant.id)
+        if (all.length === 1) return all[0]
+        // More than one and nothing to go on: the cookie is the only hint left,
+        // and it is exactly what used to be wrong. Ask instead.
+        return null
+      })()
+
+  if (!branch) redirect(`/order?r=${encodeURIComponent(restaurant.slug)}`)
+  redirect(guestPath(restaurant.slug, branch.code, 'menu'))
 }

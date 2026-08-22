@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { createServiceRequest } from '../actions'
 import { useCart } from '../cart-store'
+import { guestPath } from '@/features/orders/guest-path'
 import { ItemSheet } from './item-sheet'
 import { callAction } from '@/lib/use-action'
 
@@ -57,6 +58,10 @@ export function MenuBrowser({
   currency,
   locale,
   loyalty,
+  slug,
+  branchCode,
+  branchName = null,
+  taxLabel,
 }: {
   menu: PublicMenu
   restaurantName: string
@@ -64,6 +69,18 @@ export function MenuBrowser({
   currency: string
   locale: string
   loyalty?: { enabled: boolean; earnRateX100: number; pointValue: number }
+  taxLabel?: string | null
+  /**
+   * Where this guest is, carried in the URL of every screen.
+   *
+   * These used to be absent: the branch lived in a query parameter on the first
+   * page and a cookie thereafter, so every link below dropped it and a stale
+   * cookie silently substituted the default branch.
+   */
+  slug: string
+  branchCode: string
+  /** Shown when the restaurant has more than one place to order from. */
+  branchName?: string | null
 }) {
   const router = useRouter()
   const { state, itemCount, subtotal, hydrated } = useCart()
@@ -87,7 +104,7 @@ export function MenuBrowser({
 
   // Without a table the guest has skipped the entry screen — send them back.
   React.useEffect(() => {
-    if (hydrated && !state.table) router.replace('/order')
+    if (hydrated && !state.table) router.replace(guestPath(slug, branchCode))
   }, [hydrated, state.table, router])
 
   const filtered = React.useMemo(() => {
@@ -152,7 +169,7 @@ export function MenuBrowser({
       >
         <div className="flex items-center gap-2.5 px-4 py-3">
           <Link
-            href="/order"
+            href={guestPath(slug, branchCode)}
             aria-label="Back"
             className="guest-control flex size-9 shrink-0 items-center justify-center rounded-xl border transition-opacity active:opacity-70"
           >
@@ -170,10 +187,18 @@ export function MenuBrowser({
 
           <div className="min-w-0 flex-1">
             <p className="guest-ink truncate text-sm font-semibold leading-tight">{restaurantName}</p>
-            {state.table ? (
-              <p className="guest-ink-muted text-xs">
-                Table {state.table.tableNumber}
-                {state.table.label ? ` · ${state.table.label}` : ''}
+            {/*
+              The branch, named. This header never said which location it was
+              showing, so a guest browsing the wrong branch's menu at the wrong
+              branch's prices had nothing on screen to tell them — and neither
+              did an owner testing their own QR codes.
+            */}
+            {branchName || state.table ? (
+              <p className="guest-ink-muted truncate text-xs">
+                {branchName}
+                {branchName && state.table ? ' · ' : ''}
+                {state.table ? `Table ${state.table.tableNumber}` : ''}
+                {state.table?.label ? ` · ${state.table.label}` : ''}
               </p>
             ) : null}
           </div>
@@ -500,7 +525,7 @@ export function MenuBrowser({
       {itemCount > 0 ? (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-lg p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <Link
-            href="/order/cart"
+            href={guestPath(slug, branchCode, 'cart')}
             style={{
               backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
               boxShadow: '0 12px 34px rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.45)',

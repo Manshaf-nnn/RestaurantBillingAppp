@@ -1,9 +1,10 @@
-import { notFound } from 'next/navigation'
+import Link from 'next/link'
+import { notFound, redirect } from 'next/navigation'
 import type { Metadata } from 'next'
+import { MapPin } from 'lucide-react'
 
-import { TableEntry } from '@/features/orders/components/table-entry'
-import { isOpenNow, parseOpeningHours, todayLabel } from '@/lib/opening-hours'
-import { resolvePublicBranch } from '@/features/branches/public-branch'
+import { guestPath } from '@/features/orders/guest-path'
+import { orderableBranches } from '@/features/branches/public-branch'
 import { resolvePublicTenant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -16,6 +17,25 @@ export async function generateMetadata(): Promise<Metadata> {
   }
 }
 
+/**
+ * The old entry point, and the reason this whole class of bug existed.
+ *
+ * `/order?r=<slug>` carries no branch. It used to fall through to the
+ * restaurant's DEFAULT branch and say nothing — so an older printed card, a
+ * shared link, or the dashboard's own "Guest menu" shortcut quietly seated
+ * every guest at Main. They were then shown Main's tables, and typing a number
+ * that only exists at Main got them "table 2 already has an open bill" instead
+ * of "that table is not here". Three rounds of fixing the table lookup could
+ * not touch it, because the lookup was never what was wrong.
+ *
+ * It now does one of three things, and never the fourth:
+ *
+ *   ?b= given          → redirect to the canonical /order/<slug>/<code>
+ *   one branch only    → redirect there; a single-site restaurant notices nothing
+ *   more than one      → ASK. A page that says "which branch are you at?"
+ *
+ * What it will not do is guess.
+ */
 export default async function OrderEntryPage({
   searchParams,
 }: {
@@ -25,51 +45,60 @@ export default async function OrderEntryPage({
   if (!restaurant) notFound()
 
   const params = await searchParams
-  const hours = parseOpeningHours(restaurant.openingHours)
-
-  /*
-   * A table QR carries `?t=`, so the guest never types anything.
-   *
-   * The number is only a suggestion here — `resolveTable` looks it up at this
-   * branch and refuses one that does not exist there, so a guessed or edited
-   * URL cannot seat someone at a table that is not theirs. Pre-filling saves a
-   * step for the honest case without weakening the check.
-   *
-   * That claim was not true until now: `resolveTable` searched by number
-   * alone, and since numbers restart per branch it returned an arbitrary
-   * table — in practice the main branch's. Both halves are fixed; the code is
-   * threaded through explicitly below so the answer does not depend on a
-   * cookie surviving the trip.
-   */
+  const branchCode = typeof params.b === 'string' ? params.b.trim() : ''
   const table = typeof params.t === 'string' ? params.t : ''
-  const branchCode = typeof params.b === 'string' ? params.b : null
-  /*
-   * A code that matches no location is `notFound()`, not an error boundary.
-   *
-   * `resolvePublicBranch` refuses an explicitly-supplied code that matches
-   * nothing, rather than quietly serving the default branch. That is the right
-   * answer for an API caller; for a guest holding a phone it has to look like a
-   * page that does not exist, not like the software falling over.
-   */
-  const branch = await resolvePublicBranch(restaurant.id, branchCode).catch(() => null)
-  if (branchCode && !branch) notFound()
+  const tail = table ? `?t=${encodeURIComponent(table)}` : ''
+
+  const branches = await orderableBranches(restaurant.id)
+  if (branches.length === 0) notFound()
+
+  // A card that names its branch goes straight there — old printed QR codes
+  // keep working, and land on the canonical URL from now on.
+  const named = branchCode
+    ? branches.find((b) => b.code.toUpperCase() === branchCode.toUpperCase())
+    : null
+  if (named) redirect(`${guestPath(restaurant.slug, named.code)}${tail}`)
+
+  // Nothing to choose between.
+  if (branches.length === 1) {
+    redirect(`${guestPath(restaurant.slug, branches[0].code)}${tail}`)
+  }
 
   return (
-    <TableEntry
-      restaurantName={restaurant.name}
-      tagline={restaurant.tagline}
-      logoUrl={restaurant.logoUrl}
-      coverUrl={restaurant.coverUrl}
-      city={restaurant.city}
-      isOpen={isOpenNow(hours, restaurant.timezone)}
-      openingLabel={todayLabel(hours, restaurant.timezone)}
-      initialTable={table}
-      // Threaded to `resolveTable` so the table number is looked up at the
-      // branch that was scanned, not at whichever one happens to answer first.
-      branchCode={branchCode}
-      // Named so a guest can see at a glance that they scanned the right code —
-      // two branches of the same chain look identical on a phone otherwise.
-      branchName={branch && !branch.isDefault ? branch.name : null}
-    />
+    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center gap-6 px-5 py-12">
+      <header className="text-center">
+        <h1 className="text-2xl font-semibold">{restaurant.name}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {branchCode
+            ? 'That code did not match one of our locations. Which one are you at?'
+            : 'Which of our locations are you at?'}
+        </p>
+      </header>
+
+      <ul className="space-y-2">
+        {branches.map((branch) => (
+          <li key={branch.id}>
+            <Link
+              href={`${guestPath(restaurant.slug, branch.code)}${tail}`}
+              className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 text-left transition-colors hover:bg-muted"
+            >
+              <MapPin className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{branch.name}</span>
+                {branch.address ? (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {branch.address}
+                  </span>
+                ) : null}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      <p className="text-center text-xs text-muted-foreground">
+        The QR code on your table takes you straight to the right one.
+      </p>
+    </main>
   )
 }

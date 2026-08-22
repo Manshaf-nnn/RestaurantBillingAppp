@@ -1,3 +1,4 @@
+import { customersAtBranch } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 
 export interface LoyaltyMember {
@@ -18,15 +19,26 @@ export interface LoyaltyOverview {
 
 /** Programme snapshot: how many guests are collecting points, the total points
  *  outstanding, and the most loyal guests. */
-export async function getLoyaltyOverview(restaurantId: string): Promise<LoyaltyOverview> {
+export async function getLoyaltyOverview(
+  restaurantId: string,
+  /**
+   * Locations the viewer may see. Null means all of them.
+   *
+   * The programme itself is restaurant-wide — one earn rate, one point value,
+   * set on `Restaurant` — but the members list is people, and a branch manager
+   * reads their own. The liability figure narrows with it, which is the honest
+   * pairing: it should total the members shown, not a wider set.
+   */
+  branchIds?: string[] | null,
+): Promise<LoyaltyOverview> {
   const [sum, members, top] = await Promise.all([
     prisma.customer.aggregate({
-      where: { restaurantId, loyaltyPoints: { gt: 0 } },
+      where: { restaurantId, loyaltyPoints: { gt: 0 }, ...customersAtBranch(branchIds ?? null) },
       _sum: { loyaltyPoints: true },
     }),
-    prisma.customer.count({ where: { restaurantId, loyaltyPoints: { gt: 0 } } }),
+    prisma.customer.count({ where: { restaurantId, loyaltyPoints: { gt: 0 }, ...customersAtBranch(branchIds ?? null) } }),
     prisma.customer.findMany({
-      where: { restaurantId, loyaltyPoints: { gt: 0 } },
+      where: { restaurantId, loyaltyPoints: { gt: 0 }, ...customersAtBranch(branchIds ?? null) },
       orderBy: { loyaltyPoints: 'desc' },
       take: 8,
       select: {

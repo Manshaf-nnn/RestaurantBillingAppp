@@ -94,6 +94,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <DashboardShell
 locations={locations}
             restaurantName={restaurant.name}
+      /*
+       * Deliberately branch-less, and safe now.
+       *
+       * This "Guest menu" shortcut has no branch in it, and until now that
+       * meant it silently opened the DEFAULT location — pinning the owner's
+       * `ros_b` cookie to Main for twelve hours and making every subsequent
+       * scan of another branch's card behave as though it were Main. It is the
+       * likeliest way this bug was being reproduced.
+       *
+       * `/order` is a branch chooser now: one location goes straight through,
+       * more than one asks. So this link can stay honest about not knowing.
+       */
       orderUrl={`${appUrl()}/order?r=${restaurant.slug}`}
       trialDaysLeft={trialDaysLeft}
       // An empty allow-list means "confined, with nowhere to look" — the one

@@ -29,6 +29,7 @@ import { placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
 import { pointsEarned, type OrderTotals } from '../pricing'
 import { callAction } from '@/lib/use-action'
+import { guestPath } from '@/features/orders/guest-path'
 
 interface Props {
   currency: string
@@ -37,6 +38,16 @@ interface Props {
   restaurantName: string
   loyaltyEnabled: boolean
   loyaltyEarnRateX100: number
+  /**
+   * Where this guest is, carried in the URL of every screen.
+   *
+   * The cart page took no params at all before, so the quote came back at the
+   * restaurant's BASE prices while the menu the guest had just browsed used the
+   * branch's — and a dish the branch does not sell was refused only at the
+   * final tap.
+   */
+  slug: string
+  branchCode: string
 }
 
 export function CartCheckout({
@@ -46,6 +57,8 @@ export function CartCheckout({
   restaurantName,
   loyaltyEnabled,
   loyaltyEarnRateX100,
+  slug,
+  branchCode,
 }: Props) {
   const router = useRouter()
   const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines } =
@@ -76,7 +89,7 @@ export function CartCheckout({
   const [quoting, startQuote] = React.useTransition()
 
   React.useEffect(() => {
-    if (hydrated && !state.table) router.replace('/order')
+    if (hydrated && !state.table) router.replace(guestPath(slug, branchCode))
   }, [hydrated, state.table, router])
 
   // Re-quote whenever the basket or coupon changes — totals always come from
@@ -140,7 +153,7 @@ export function CartCheckout({
     // survive into a callback, since `state` could change before it runs.
     const table = state.table
     if (!table) {
-      router.replace('/order')
+      router.replace(guestPath(slug, branchCode))
       return
     }
 

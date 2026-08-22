@@ -4,6 +4,7 @@ import { QrPoster } from '@/features/settings/components/qr-poster'
 import { orderableBranches } from '@/features/branches/public-branch'
 import { toQrDataUrl } from '@/features/payments/service'
 import { appUrl } from '@/lib/env'
+import { guestPath } from '@/features/orders/guest-path'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -39,6 +40,14 @@ export default async function QrPage() {
     (branch) => allowed === null || allowed.includes(branch.id),
   )
 
+  /*
+   * The canonical guest link carries the branch in the PATH.
+   *
+   * `/order?r=<slug>&b=<CODE>` still works — old printed cards redirect — but
+   * everything printed from now on names its branch in a way that cannot be
+   * dropped by a navigation or expire with a cookie. That is what was going
+   * wrong: a card without a branch resolved silently to the default location.
+   */
   const base = `${appUrl()}/order?r=${restaurant.slug}`
 
   /*
@@ -49,7 +58,7 @@ export default async function QrPage() {
    */
   const sheets = await Promise.all(
     branches.map(async (branch) => {
-      const branchUrl = `${base}&b=${branch.code}`
+      const branchUrl = `${appUrl()}${guestPath(restaurant.slug, branch.code)}`
       return {
         id: branch.id,
         name: branch.name,
@@ -59,7 +68,7 @@ export default async function QrPage() {
         qr: await toQrDataUrl(branchUrl),
         tables: await Promise.all(
           branch.tables.map(async (table) => {
-            const url = `${branchUrl}&t=${encodeURIComponent(table.number)}`
+            const url = `${branchUrl}?t=${encodeURIComponent(table.number)}`
             return {
               id: table.id,
               number: table.number,
