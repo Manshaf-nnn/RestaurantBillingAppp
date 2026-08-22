@@ -1,9 +1,15 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 
 import { KitchenBoard } from '@/features/kitchen/components/kitchen-board'
 import { readPaperWidths } from '@/features/printing/paper'
 import { getKitchenQueue, getKitchenStats, readOptions } from '@/features/orders/queries'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
+import {
+  listStationBranches,
+  scopeToOne,
+  selectedBranch,
+} from '@/features/dashboard/selected-branch'
+import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -33,7 +39,39 @@ export default async function KitchenPage({
  * everything — which is the one case where a combined view is meaningful, since
  * the owner is not cooking.
  */
-  const { branchIds } = await selectedBranch(user, await searchParams)
+
+  /*
+   * A station shows ONE location, always.
+   *
+   * `selectedBranch` returns null branchIds for an owner on "All locations",
+   * and this page passed that straight into its query — so an order taken at
+   * Branch 02 appeared on this rail AND on every other branch's. Reading it as
+   * "the order went to both kitchens" is exactly right.
+   *
+   * `scopeToOne` narrows to a single branch where one is determinable: a
+   * confined account gets their own and cannot widen it. Where it is not — an
+   * owner who has not chosen — the screen asks rather than showing everything.
+   */
+  const selection = await selectedBranch(user, await searchParams)
+  const branchId = scopeToOne(selection)
+
+  if (!branchId) {
+    const choices = await listStationBranches(user)
+    if (choices.length > 1) {
+      return (
+        <StationBranchPicker
+          title="Kitchen display"
+          description="Which kitchen is this screen for? It will show that location&rsquo;s tickets and no others."
+          branches={choices}
+          basePath="/kitchen"
+        />
+      )
+    }
+    if (choices.length === 1) redirect(`/kitchen?branch=${choices[0].id}`)
+  }
+
+  const branchIds = branchId ? [branchId] : selection.branchIds
+
 
   const [restaurant, queue, stats] = await Promise.all([
     requireRestaurant(user.restaurantId),

@@ -156,6 +156,13 @@ async function main() {
       passwordHash: 'x', emailVerifiedAt: new Date(),
     },
   })
+  const owner = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, role: 'OWNER',
+      name: 'The owner', email: `owner-${stamp}@qr.test`,
+      passwordHash: 'x', emailVerifiedAt: new Date(),
+    },
+  })
   const chefNowhere = await prisma.user.create({
     data: {
       restaurantId: restaurant.id, role: 'KITCHEN',
@@ -380,6 +387,44 @@ async function main() {
     'and appending ?branch= does not widen a kitchen user’s view',
     !forcedScreen.includes('Main-only noodles'),
     'a kitchen account reached another branch by editing the URL',
+  )
+
+  /*
+   * The owner's own kitchen screen must not be every kitchen.
+   *
+   * This is what was reported after the branch routing was fixed: the ticket
+   * DID reach Branch 02's kitchen, and it also appeared on Main's. Both were
+   * being viewed by an account that can see every location, and `/kitchen`
+   * passed "all locations" straight into its query — so one order showed on
+   * every rail in the business at once, which reads exactly like it having been
+   * sent to both kitchens.
+   *
+   * A rail is a screen in a room. It shows one location or it asks which.
+   */
+  const ownerAtKitchen = await fetch(`${BASE}/kitchen`, {
+    headers: { cookie: await signIn(owner) },
+  })
+  const ownerScreen = ownerAtKitchen.status === 200 ? await ownerAtKitchen.text() : ''
+  check(
+    'an owner opening the kitchen is asked which one, not shown all of them',
+    ownerScreen.includes('Which kitchen is this screen for') ||
+      !ownerScreen.includes(order.orderNumber),
+    'the ticket appeared on a rail that belongs to no particular branch',
+  )
+  check(
+    'and the choice offered is the real list of locations',
+    !ownerScreen.includes('Which kitchen is this screen for') ||
+      (ownerScreen.includes('Main Branch') && ownerScreen.includes('Branch 02')),
+    'the picker did not list the branches',
+  )
+
+  const ownerAtMain = await fetch(`${BASE}/kitchen?branch=${main.id}`, {
+    headers: { cookie: await signIn(owner) },
+  })
+  check(
+    'and once they pick Main, Branch 02’s ticket is not on it',
+    !(ownerAtMain.status === 200 ? await ownerAtMain.text() : '').includes(order.orderNumber),
+    'this is the symptom reported: one order on two kitchen displays',
   )
 
   console.log('\n── 6. a kitchen account with no location assigned ──')

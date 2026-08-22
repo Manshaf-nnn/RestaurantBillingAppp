@@ -1,11 +1,17 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 
 import { CashierBoard } from '@/features/cashier/components/cashier-board'
 import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import {
+  listStationBranches,
+  scopeToOne,
+  selectedBranch,
+} from '@/features/dashboard/selected-branch'
+import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -36,7 +42,30 @@ export default async function CashierPage({
    * floor screen belongs to the room it is standing in.
    */
   const selection = await selectedBranch(user, params)
-  const { branchIds } = selection
+
+  /*
+   * A till is one counter in one room — see `StationBranchPicker`. This screen
+   * also RINGS UP orders, so an ambiguous branch here does not merely show the
+   * wrong bills, it files new ones against whatever the switcher happened to
+   * be on.
+   */
+  const chosen = scopeToOne(selection)
+  if (!chosen) {
+    const choices = await listStationBranches(user)
+    if (choices.length > 1) {
+      return (
+        <StationBranchPicker
+          title="Cashier"
+          description="Which counter is this screen for? It will show that location&rsquo;s bills, and ring up new orders there."
+          branches={choices}
+          basePath="/cashier"
+        />
+      )
+    }
+    if (choices.length === 1) redirect(`/cashier?branch=${choices[0].id}`)
+  }
+
+  const branchIds = chosen ? [chosen] : selection.branchIds
 
   const [menu, bills, today] = await Promise.all([
     /*
@@ -50,7 +79,7 @@ export default async function CashierPage({
      * it produced was priced at `actingBranchId`. One screen, two answers.
      * `/cashier/pos` already did this correctly; now they agree.
      */
-    getPublicMenu(user.restaurantId, restaurant.timezone, scopeToOne(selection)),
+    getPublicMenu(user.restaurantId, restaurant.timezone, chosen),
     getCashierQueue(user.restaurantId, branchIds),
     prisma.payment.aggregate({
       where: {

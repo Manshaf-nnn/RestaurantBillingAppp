@@ -100,3 +100,30 @@ export function scopeToOne(selection: BranchSelection): string | null {
   if (selection.branchIds && selection.branchIds.length === 1) return selection.branchIds[0]
   return null
 }
+
+/**
+ * The locations a station screen may be pointed at.
+ *
+ * Orderable branches only — a warehouse has no kitchen and no floor — narrowed
+ * to what this user may reach. Used by `/kitchen`, `/waiter` and `/cashier`
+ * when the viewer has not picked one, so those screens can ask instead of
+ * showing every branch's work at once.
+ */
+export async function listStationBranches(
+  user: Pick<TenantUser, 'role' | 'branchId' | 'restaurantId'>,
+): Promise<Array<{ id: string; name: string }>> {
+  const { prisma } = await import('@/server/db/prisma')
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+
+  return prisma.branch.findMany({
+    where: {
+      restaurantId: user.restaurantId,
+      deletedAt: null,
+      isActive: true,
+      type: 'BRANCH',
+      ...(reach ? { id: { in: reach } } : {}),
+    },
+    select: { id: true, name: true },
+    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+  })
+}

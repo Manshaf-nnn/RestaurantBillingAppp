@@ -1,8 +1,14 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 
 import { PosTerminal } from '@/features/cashier/components/pos-terminal'
 import { getPublicMenu } from '@/features/menu/queries'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import {
+  listStationBranches,
+  scopeToOne,
+  selectedBranch,
+} from '@/features/dashboard/selected-branch'
+import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -36,6 +42,29 @@ export default async function PosPage({
    */
   const selection = await selectedBranch(user, await searchParams)
   const branchId = scopeToOne(selection)
+
+  /*
+   * This screen RINGS UP orders, so it cannot be ambiguous about where.
+   *
+   * With no branch chosen, the table list showed every branch's tables and the
+   * menu fell back to the restaurant's base prices — and the order that came
+   * out landed on whatever `actingBranchId` resolved from the cookie. One
+   * screen, three different answers about which location it was working at.
+   */
+  if (!branchId) {
+    const choices = await listStationBranches(user)
+    if (choices.length > 1) {
+      return (
+        <StationBranchPicker
+          title="New order"
+          description="Which counter are you ringing up at? Its menu, its prices and its tables."
+          branches={choices}
+          basePath="/cashier/pos"
+        />
+      )
+    }
+    if (choices.length === 1) redirect(`/cashier/pos?branch=${choices[0].id}`)
+  }
 
   const [menu, tables, servers] = await Promise.all([
     getPublicMenu(user.restaurantId, restaurant.timezone, branchId),
