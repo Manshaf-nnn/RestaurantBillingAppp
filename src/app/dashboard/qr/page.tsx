@@ -73,14 +73,26 @@ export default async function QrPage() {
     }),
   )
 
+  /*
+   * The branch-less code is offered only when there is nowhere else it could
+   * mean.
+   *
+   * `/order?r=<slug>` carries no `b=`, so it resolves to the restaurant's
+   * DEFAULT branch. For the single-site restaurant that most of these are, that
+   * is exactly right and nothing changes. For a chain it is a code that files
+   * every scan against Main however far from Main the table is — and once it is
+   * printed there is nothing about it to say so. Each branch's own sheet below
+   * is the answer, and it always was; this stops the ambiguous one being
+   * printed alongside it.
+   */
+  const singleSite = sheets.length < 2
+
   return (
     <QrPoster
       restaurantName={restaurant.name}
       branches={sheets}
-      // Kept for the single-branch case, which is most restaurants: the plain
-      // restaurant code still works and still resolves to the default branch.
-      orderUrl={base}
-      qrDataUrl={await toQrDataUrl(base)}
+      orderUrl={singleSite ? base : null}
+      qrDataUrl={singleSite ? await toQrDataUrl(base) : null}
     />
   )
 }

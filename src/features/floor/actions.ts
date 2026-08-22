@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { resolveBranchId } from '@/features/branches/service'
@@ -15,6 +16,7 @@ import {
   reservationSchema,
   serviceTableStatusSchema,
   tableSchema,
+  moveTableSchema,
   updateTableStatusSchema,
 } from './schema'
 
@@ -30,11 +32,22 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
       // Never trust the posted id, and never leave it unset: a table without a
       // branch cannot be reached by a QR.
       await assertBranchAccess(user, data.branchId || null)
-      const branchId = await resolveBranchId({
-        restaurantId: user.restaurantId,
-        requestedBranchId: data.branchId || null,
-        userBranchId: user.branchId,
-      })
+      /*
+       * The branch on screen, not the caller's home branch.
+       *
+       * `resolveBranchId(..., userBranchId)` was the fallback, and an owner has
+       * no home branch — so with the form sending nothing, both candidates were
+       * null and every table an owner created landed on the restaurant's
+       * DEFAULT branch, whatever the switcher said. That is why every table in
+       * this system sits at Main, why Branch 01's QR sheet had no table cards,
+       * and ultimately why guests scanning Branch 01 reached Main's kitchen.
+       *
+       * The form now sends a branch explicitly. `actingBranchId` reads the same
+       * cookie the switcher writes and is the belt to that braces: a payload
+       * without one still lands where the owner is looking, never on Main by
+       * default.
+       */
+      const branchId = data.branchId || (await actingBranchId(user))
 
       const payload = {
         branchId,
@@ -94,6 +107,90 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
   )
 }
 
+/**
+ * Move a table to another location.
+ *
+ * `saveTable` deliberately refuses to change a table's branch: it used to
+ * overwrite it with the editor's own, silently relocating the table and every
+ * order ever taken at it. That guard prevents the accident and leaves no way to
+ * correct one — and correcting them is exactly what is needed, because every
+ * table in this system was created at the default branch by the bug above.
+ *
+ * So the move is its own act, with its own guard. Both ends are checked, and a
+ * table with an unfinished order does not move: the order would follow the
+ * table into a building where nobody is cooking it.
+ */
+export async function moveTable(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    moveTableSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.TABLE_MANAGE)
+
+      const table = await prisma.restaurantTable.findFirst({
+        where: { id: data.id, restaurantId: user.restaurantId },
+        select: { id: true, number: true, branchId: true },
+      })
+      if (!table) throw new NotFoundError('Table')
+
+      // Both ends: you may not move a table out of a location you cannot see,
+      // nor into one.
+      await assertRecordBranch(user, table, 'table')
+      await assertBranchAccess(user, data.branchId)
+
+      if (table.branchId === data.branchId) {
+        throw new ConflictError('That table is already at this location')
+      }
+
+      const destination = await prisma.branch.findFirst({
+        where: {
+          id: data.branchId,
+          restaurantId: user.restaurantId,
+          deletedAt: null,
+          isActive: true,
+          // Guests sit at branches. A warehouse has no dining room.
+          type: 'BRANCH',
+        },
+        select: { id: true, name: true },
+      })
+      if (!destination) throw new NotFoundError('Location')
+
+      const openOrders = await prisma.order.count({
+        where: {
+          tableId: table.id,
+          restaurantId: user.restaurantId,
+          status: { notIn: ['COMPLETED', 'CANCELLED'] },
+        },
+      })
+      if (openOrders > 0) {
+        throw new ConflictError(
+          `Table ${table.number} has ${openOrders} open order${openOrders === 1 ? '' : 's'} — settle or cancel ${openOrders === 1 ? 'it' : 'them'} first.`,
+        )
+      }
+
+      const clash = await prisma.restaurantTable.findFirst({
+        where: { restaurantId: user.restaurantId, branchId: destination.id, number: table.number },
+        select: { id: true },
+      })
+      if (clash) {
+        throw new ConflictError(
+          `${destination.name} already has a table numbered ${table.number}.`,
+        )
+      }
+
+      await prisma.restaurantTable.update({
+        where: { id: table.id },
+        data: { branchId: destination.id },
+      })
+
+      revalidatePath('/dashboard/tables')
+      revalidatePath('/dashboard/qr')
+      return { id: table.id }
+    },
+    'Table moved.',
+  )
+}
+
 export async function createTablesBulk(input: unknown): Promise<ActionResult<{ created: number }>> {
   return runAction(
     bulkTablesSchema,
@@ -102,11 +199,9 @@ export async function createTablesBulk(input: unknown): Promise<ActionResult<{ c
       const user = await requirePermission(PERMISSIONS.TABLE_MANAGE)
 
       await assertBranchAccess(user, data.branchId || null)
-      const branchId = await resolveBranchId({
-        restaurantId: user.restaurantId,
-        requestedBranchId: data.branchId || null,
-        userBranchId: user.branchId,
-      })
+      // See `saveTable` above for why this is the acting branch and not the
+      // caller's home branch.
+      const branchId = data.branchId || (await actingBranchId(user))
 
       // Numbers taken AT THIS BRANCH. Restaurant-wide would refuse to create
       // Kandy's table 1 because Colombo already has one.

@@ -31,6 +31,7 @@ import {
 } from '../src/features/transfers/service'
 import { assertApproved, decideApproval, requestApproval } from '../src/features/approvals/service'
 import { locationRemovalBlockers, removeBranch } from '../src/features/branches/service'
+import { resolveTable } from '../src/features/orders/actions'
 
 let passed = 0
 let failed = 0
@@ -621,6 +622,107 @@ async function main() {
   const gone = await prisma.branch.findUniqueOrThrow({ where: { id: empty.id } })
   check('removing it is soft — the row and its history stay', gone.deletedAt !== null)
   check('and it is switched off', gone.isActive === false)
+
+
+  console.log('\n── 20. the guest is seated at the branch they scanned ──')
+
+  const seatedB01 = await resolveTable({ tableNumber: '1' }, restaurant.slug, 'B01')
+  const seatedMain = await resolveTable({ tableNumber: '1' }, restaurant.slug, 'MAIN')
+
+  check(
+    'scanning Branch 01 and typing 1 gives BRANCH 01’s table 1',
+    seatedB01.ok && seatedB01.data.tableId === table1B01.id,
+    seatedB01.ok
+      ? seatedB01.data.tableId === table1Main.id
+        ? 'it returned Main’s table — the reported bug'
+        : seatedB01.data.tableId
+      : seatedB01.error,
+  )
+  check(
+    'scanning Main and typing 1 gives MAIN’s table 1',
+    seatedMain.ok && seatedMain.data.tableId === table1Main.id,
+    seatedMain.ok ? seatedMain.data.tableId : seatedMain.error,
+  )
+  check(
+    'and the answer names the branch it resolved',
+    seatedB01.ok && seatedB01.data.branchCode === 'B01' && seatedB01.data.branchName === 'Branch 01',
+  )
+
+  // A number that exists only at Main is refused at Branch 01, and says where
+  // it actually is — "not found" would send the guest hunting for a typo.
+  await prisma.restaurantTable.create({
+    data: { restaurantId: restaurant.id, branchId: main.id, number: '99', capacity: 2 },
+  })
+  const wrongPoster = await resolveTable({ tableNumber: '99' }, restaurant.slug, 'B01')
+  check(
+    'a table that is only at Main is refused at Branch 01',
+    !wrongPoster.ok,
+    'the guest was seated at another branch’s table',
+  )
+  check(
+    'and the refusal says which branch it is at',
+    !wrongPoster.ok && /Main Branch/.test(wrongPoster.error) && /Branch 01/.test(wrongPoster.error),
+    !wrongPoster.ok ? wrongPoster.error : '',
+  )
+
+  console.log('\n── 21. the ticket reaches the branch that was scanned ──')
+
+  const b01Order = await placeOrder({
+    restaurantId: restaurant.id,
+    branchId: b01.id,
+    tableId: table1B01.id,
+    type: 'DINE_IN',
+    channel: 'QR',
+    customerName: 'Scanner',
+    customerPhone: `07${stamp.slice(-8).padEnd(8, '9')}`,
+    items: [{ foodId: burger.id, quantity: 1, optionIds: [] }],
+  })
+  check('the order is stamped Branch 01', b01Order.branchId === b01.id, `${b01Order.branchId}`)
+
+  const b01Rail = await getKitchenQueue(restaurant.id, [b01.id])
+  const mainRail = await getKitchenQueue(restaurant.id, [main.id])
+  check(
+    'it is on Branch 01’s kitchen rail',
+    b01Rail.some((o) => o.id === b01Order.id),
+  )
+  check(
+    'and NOT on Main’s',
+    !mainRail.some((o) => o.id === b01Order.id),
+    'this is the symptom that was reported',
+  )
+
+  // The silent override that carried the bug: a table at one branch and a
+  // branch id from another used to resolve quietly in the table's favour.
+  await refuses(
+    'a table and a branch that disagree are refused, not reconciled',
+    () =>
+      placeOrder({
+        restaurantId: restaurant.id,
+        branchId: main.id,
+        tableId: table1B01.id,
+        type: 'DINE_IN',
+        channel: 'QR',
+        customerName: 'Confused',
+        customerPhone: `07${stamp.slice(-8).padEnd(8, '7')}`,
+        items: [{ foodId: burger.id, quantity: 1, optionIds: [] }],
+      }),
+    /different location/i,
+  )
+
+  /*
+   * Creating and moving a table are NOT tested here.
+   *
+   * Both go through `requirePermission`, which reads the session cookie, and
+   * there is no request scope in a plain node process — the action returns
+   * "cookies was called outside a request scope" rather than doing anything.
+   * Testing them here would mean either mocking the session, which proves
+   * nothing about the guard, or moving the branch decision out of the action
+   * into a service that exists only to be tested.
+   *
+   * They are driven over real HTTP in `action-e2e-test.ts` instead, with a real
+   * session, which is where the rest of this codebase's authenticated actions
+   * are exercised.
+   */
 
   await prisma.shiftNote.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.approvalRequest.deleteMany({ where: { restaurantId: restaurant.id } })

@@ -45,6 +45,7 @@ export default async function KitchenPage({
     <KitchenBoard
       restaurantName={restaurant.name}
       paperWidth={readPaperWidths(restaurant.printerConfig).kitchen}
+      branchIds={branchIds}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       initialStats={stats}
       initialTickets={queue.map((order) => ({

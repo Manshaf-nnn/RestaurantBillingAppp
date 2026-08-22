@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 
 import { resolvePublicBranch } from '@/features/branches/public-branch'
+import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
@@ -37,14 +38,41 @@ import { computeTotals, estimatePrepMinutes } from './pricing'
 // ── guest surface ────────────────────────────────────────────────────────────
 
 /** Validates the table number typed on the QR landing screen. */
+/**
+ * Turn the number on the table card into a table, at the branch that was
+ * scanned.
+ *
+ * ── The bug this fixes ──────────────────────────────────────────────────────
+ *
+ * The lookup was `{ restaurantId, number, isActive }` — no branch. Table
+ * numbers restart per branch (`@@unique([restaurantId, branchId, number])`), so
+ * "1" exists at every location and `findFirst` returned an arbitrary one: in
+ * practice the oldest row, which is the main branch's. A guest who scanned
+ * Branch 01's code and typed 1 was seated at MAIN's table 1, `placeOrder` took
+ * the branch from the table, and the ticket printed in Main's kitchen. That is
+ * the reported bug, and this is where it started.
+ *
+ * `branchCode` is what the QR carried in `?b=`. It is passed explicitly where
+ * the page has it and falls back to the `ros_b` cookie the middleware wrote —
+ * the cookie matters because a guest moves from the landing screen to the menu
+ * to the cart and only the first of those carries the query string.
+ */
 export async function resolveTable(
   input: unknown,
   slug?: string,
+  branchCode?: string | null,
 ): Promise<
   ActionResult<{
     tableId: string
     tableNumber: string
     label: string | null
+    /**
+     * The branch this table is at, returned so the rest of the guest's visit
+     * carries it explicitly. The cart is reached by navigation, long after the
+     * QR's `?b=` has gone, and a cookie is not something to bet an order on.
+     */
+    branchCode: string
+    branchName: string
     openBill: { orders: number; itemCount: number; outstanding: number } | null
   }>
 > {
@@ -52,9 +80,13 @@ export async function resolveTable(
     const restaurant = await resolvePublicTenant(slug)
     if (!restaurant) throw new NotFoundError('Restaurant')
 
+    const branch = await resolvePublicBranch(restaurant.id, branchCode ?? null)
+    if (!branch) throw new NotFoundError('Location')
+
     const table = await prisma.restaurantTable.findFirst({
       where: {
         restaurantId: restaurant.id,
+        branchId: branch.id,
         number: data.tableNumber.toUpperCase(),
         isActive: true,
       },
@@ -62,8 +94,26 @@ export async function resolveTable(
     })
 
     if (!table) {
+      /*
+       * Named, so the guest can tell the two failures apart: a number that
+       * does not exist anywhere, and a number that exists but at another
+       * branch. The second is the one that happens when somebody scans the
+       * code from the wrong poster, and "not found" would send them looking
+       * for a typo they did not make.
+       */
+      const elsewhere = await prisma.restaurantTable.findFirst({
+        where: {
+          restaurantId: restaurant.id,
+          number: data.tableNumber.toUpperCase(),
+          isActive: true,
+        },
+        select: { branch: { select: { name: true } } },
+      })
+
       throw new AppError(
-        `Table ${data.tableNumber} was not found. Please check the number on your table.`,
+        elsewhere
+          ? `Table ${data.tableNumber} is at ${elsewhere.branch.name}, not ${branch.name}. Please scan the code on your own table.`
+          : `Table ${data.tableNumber} was not found. Please check the number on your table.`,
         404,
         'TABLE_NOT_FOUND',
       )
@@ -100,7 +150,14 @@ export async function resolveTable(
         }
       : null
 
-    return { tableId: table.id, tableNumber: table.number, label: table.label, openBill }
+    return {
+      tableId: table.id,
+      tableNumber: table.number,
+      label: table.label,
+      branchCode: branch.code,
+      branchName: branch.name,
+      openBill,
+    }
   })
 }
 
@@ -158,10 +215,19 @@ export async function placeGuestOrder(
       // Backstop against someone cycling cookies from the same connection.
       await enforceRateLimit('placeOrderBurst')
 
-      // The branch this guest is ordering from. `placeOrder` prefers the
-      // table's own branch where there is one, so this is the answer for a
-      // takeaway or counter order with no table.
-      const branch = await resolvePublicBranch(restaurant.id)
+      /*
+       * The branch this guest scanned, passed explicitly.
+       *
+       * This read the `ros_b` cookie alone. A cookie is the right carrier for
+       * the second and third page of a visit — only the first URL carries the
+       * query string — but leaning on it for the order itself means any
+       * browser that drops it silently files the order against the
+       * restaurant's DEFAULT branch, with no error anywhere.
+       *
+       * `placeOrder` now refuses outright if this disagrees with the table's
+       * own branch, rather than quietly preferring one.
+       */
+      const branch = await resolvePublicBranch(restaurant.id, data.branchCode ?? null)
 
       const order = await placeOrderService({
         restaurantId: restaurant.id,
@@ -314,6 +380,7 @@ export async function updateGuestOrderItems(
         const payload = {
           id: refreshedOrder.id,
           orderNumber: refreshedOrder.orderNumber,
+          branchId: refreshedOrder.branchId,
           status: refreshedOrder.status,
           type: refreshedOrder.type,
           tableId: refreshedOrder.tableId,
@@ -560,11 +627,18 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
         // enters is attributed to staff rather than to the guest's own device.
         channel: data.type === 'COUNTER' ? 'COUNTER' : 'STAFF',
         /*
-         * Was `user.branchId ?? null`, which is null for an owner — so every
-         * order an owner rang up was branchless. `placeOrder` resolves this
-         * through the table first and the default last, and never returns null.
+         * The location the till is working at.
+         *
+         * This was `user.branchId ?? null`. An owner has no home branch, so it
+         * was null, and `placeOrder` fell through to the restaurant's DEFAULT
+         * branch — an owner ringing up a takeaway while looking at Branch 01
+         * filed it against Main. `actingBranchId` reads the branch the switcher
+         * is showing, validated against what this user may reach.
+         *
+         * A table still decides where there is one, and now disagreeing with it
+         * is an error rather than a silent override.
          */
-        branchId: user.branchId ?? null,
+        branchId: data.tableId ? null : await actingBranchId(user),
         // Falls back to whoever is signed in, so a waiter taking their own
         // order is attributed without having to pick themselves from a list.
         servedById: data.servedById || user.id,

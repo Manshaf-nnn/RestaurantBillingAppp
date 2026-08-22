@@ -5,10 +5,10 @@ export const tableSchema = z.object({
   /*
    * Which branch this table stands in.
    *
-   * Blank resolves to the caller's branch, or the restaurant's default — a
-   * single-site restaurant never has to think about it. The column was
-   * nullable and no screen ever wrote it, so table numbers could not restart
-   * per branch and a QR could not say which kitchen an order belonged to.
+   * The form sends it now. Blank falls back to the branch the switcher is
+   * showing (`actingBranchId`), so a single-site restaurant never has to think
+   * about it — but it no longer silently means "the default branch", which is
+   * what put every table in this system at Main.
    */
   branchId: z.string().min(1).optional().or(z.literal('')),
   number: z
@@ -68,3 +68,10 @@ export const reservationSchema = z.object({
   notes: z.string().trim().max(300).optional().or(z.literal('')),
 })
 export type ReservationInput = z.infer<typeof reservationSchema>
+
+/** Moving a table between locations. Deliberate, and its own act. */
+export const moveTableSchema = z.object({
+  id: z.string().cuid(),
+  branchId: z.string().min(1, 'Choose a location'),
+})
+export type MoveTableInput = z.infer<typeof moveTableSchema>

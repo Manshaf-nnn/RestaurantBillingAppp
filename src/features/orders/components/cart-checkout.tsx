@@ -136,6 +136,9 @@ export function CartCheckout({
     const result = await callAction(() => placeGuestOrder({
       idempotencyKey: idempotencyKey.current,
       tableId: table.tableId,
+      // The branch the guest actually scanned, so the order cannot be filed
+      // against the default one by a lost cookie.
+      branchCode: table.branchCode ?? '',
       customerName: state.customer.name,
       customerPhone: state.customer.phone,
       customerEmail: state.customer.email || '',

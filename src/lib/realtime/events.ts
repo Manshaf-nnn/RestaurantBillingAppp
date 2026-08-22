@@ -46,6 +46,17 @@ export type EventName = (typeof EVENTS)[keyof typeof EVENTS]
 export interface OrderSummaryPayload {
   id: string
   orderNumber: string
+  /**
+   * Which location the order belongs to.
+   *
+   * Rooms are keyed `r:<restaurantId>:<role>` with no branch segment, so every
+   * kitchen, waiter and cashier screen in the chain receives every order the
+   * moment it is placed — the ticket appears with a chime, and only the next
+   * server render (which IS branch-scoped) prunes it away again. Carrying the
+   * branch on the payload lets each board ignore what is not its own on
+   * arrival, without changing the socket handshake.
+   */
+  branchId: string
   status: OrderStatus
   type: string
   tableId: string | null

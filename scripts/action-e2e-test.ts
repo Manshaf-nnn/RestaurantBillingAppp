@@ -99,18 +99,38 @@ async function main() {
   }
   console.log(`server actions discovered in the client bundle: ${ids.size}\n`)
 
-  const user = await prisma.user.findFirst({
-    where: {
-      role: 'OWNER',
+  /*
+   * Prefer an owner whose restaurant has somewhere ELSE to put a table.
+   *
+   * The table checks below need two orderable branches to mean anything, and
+   * picking the first owner in the database meant they reported "one orderable
+   * location" and skipped — a green run that had checked nothing about the bug
+   * it was written for.
+   */
+  const eligible = {
+    role: 'OWNER' as const,
+    isActive: true,
+    deletedAt: null,
+    restaurant: {
+      status: 'ACTIVE' as const,
       isActive: true,
-      deletedAt: null,
-      restaurant: {
-        status: 'ACTIVE',
-        isActive: true,
-        OR: [{ plan: { not: 'TRIAL' } }, { trialEndsAt: null }, { trialEndsAt: { gt: new Date() } }],
-      },
+      OR: [{ plan: { not: 'TRIAL' as const } }, { trialEndsAt: null }, { trialEndsAt: { gt: new Date() } }],
     },
+  }
+
+  const orderable = await prisma.branch.groupBy({
+    by: ['restaurantId'],
+    where: { deletedAt: null, isActive: true, type: 'BRANCH' },
+    _count: { _all: true },
   })
+  const multiSite = orderable.filter((row) => row._count._all > 1).map((row) => row.restaurantId)
+
+  const user =
+    (multiSite.length
+      ? await prisma.user.findFirst({
+          where: { ...eligible, restaurantId: { in: multiSite } },
+        })
+      : null) ?? (await prisma.user.findFirst({ where: eligible }))
   if (!user?.restaurantId) {
     console.error('No owner of an active, in-trial restaurant — every action would redirect.')
     process.exit(1)
@@ -201,6 +221,82 @@ async function main() {
     const leaked = await prisma.branch.findFirst({ where: { code: 'NOPE' } })
     check('and nothing was written', !leaked)
     if (leaked) await prisma.branch.delete({ where: { id: leaked.id } }).catch(() => {})
+  }
+
+  /*
+   * A table lands at the branch it was asked for, not at the default one.
+   *
+   * This is the reported bug, and it can only be tested here: `saveTable` goes
+   * through `requirePermission`, which reads the session cookie, so a
+   * service-level test cannot reach it at all. The owner signing in below has
+   * no `branchId` of their own — which is exactly the case that broke, because
+   * the old fallback chain ended at the restaurant's DEFAULT branch.
+   */
+  console.log('\nAdd a table at a specific location')
+
+  const saveTableId = ids.get('saveTable')
+  const moveTableId = ids.get('moveTable')
+
+  const branches = await prisma.branch.findMany({
+    where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true, type: 'BRANCH' },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true, name: true, isDefault: true },
+  })
+  const other = branches.find((b) => !b.isDefault)
+
+  if (!saveTableId) {
+    check('saveTable found in the bundle', false, 'not present')
+  } else if (!other) {
+    console.log('  · this tenant has one orderable location — nothing to add a table AT')
+  } else {
+    const number = `E${stamp}`
+    const made = await callAction(
+      '/dashboard/tables',
+      saveTableId,
+      [{ branchId: other.id, number, capacity: 4, status: 'AVAILABLE', label: '', area: '', notes: '' }],
+      cookie,
+    )
+    check(
+      'the action replies with an RSC payload',
+      made.status === 200 && made.type.includes('text/x-component'),
+      `HTTP ${made.status}, content-type ${made.type || '(none)'}`,
+    )
+
+    const row = await prisma.restaurantTable.findFirst({
+      where: { restaurantId: user.restaurantId, number },
+      select: { id: true, branchId: true },
+    })
+    check('the table exists', Boolean(row), 'no row found')
+    check(
+      `and it is at ${other.name}, not the default location`,
+      row?.branchId === other.id,
+      row?.branchId === branches[0]?.id
+        ? 'it landed on the default branch — the reported bug'
+        : `${row?.branchId}`,
+    )
+
+    // Moving it back is the recovery path for the tables already stranded at
+    // the default branch by that bug.
+    if (row && moveTableId) {
+      const moved = await callAction(
+        '/dashboard/tables',
+        moveTableId,
+        [{ id: row.id, branchId: branches[0].id }],
+        cookie,
+      )
+      check(
+        'an idle table moves to another location',
+        moved.status === 200 && !moved.body.includes('"ok":false'),
+        moved.body.slice(0, 160).replace(/\s+/g, ' '),
+      )
+      const after = await prisma.restaurantTable.findUnique({
+        where: { id: row.id },
+        select: { branchId: true },
+      })
+      check('and the move actually landed', after?.branchId === branches[0].id)
+    }
+
+    if (row) await prisma.restaurantTable.delete({ where: { id: row.id } }).catch(() => {})
   }
 
   await prisma.session.delete({ where: { id: session.id } }).catch(() => {})

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 
 import { PosTerminal } from '@/features/cashier/components/pos-terminal'
 import { getPublicMenu } from '@/features/menu/queries'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -20,13 +21,30 @@ export default async function PosPage({
 }) {
   const user = await requirePagePermission(PERMISSIONS.ORDER_CREATE, '/cashier/pos')
   const restaurant = await requireRestaurant(user.restaurantId)
+
+  /*
+   * The till works at one location.
+   *
+   * The MENU was already scoped by `user.branchId` and the TABLE LIST was not,
+   * so the same screen sold Kandy's menu against a list containing Colombo's
+   * tables — and picking one filed the order at Colombo, because the table
+   * decides the branch. For an owner, whose `branchId` is null, the menu was
+   * the restaurant's base prices and the list was every table in the business.
+   *
+   * `selectedBranch` answers for both: a confined cashier gets their own site
+   * and cannot widen it; an owner gets whatever the top bar is showing.
+   */
+  const selection = await selectedBranch(user, await searchParams)
+  const branchId = scopeToOne(selection)
+
   const [menu, tables, servers] = await Promise.all([
-    // The till sells its own branch's menu at its own branch's prices. A
-    // cashier confined to Kandy must not be able to ring up a Colombo-only
-    // dish, and must never charge Colombo's price for a shared one.
-    getPublicMenu(user.restaurantId, restaurant.timezone, user.branchId),
+    getPublicMenu(user.restaurantId, restaurant.timezone, branchId),
     prisma.restaurantTable.findMany({
-      where: { restaurantId: user.restaurantId, isActive: true },
+      where: {
+        restaurantId: user.restaurantId,
+        isActive: true,
+        ...(branchId ? { branchId } : {}),
+      },
       select: { id: true, number: true, area: true, status: true },
       orderBy: { number: 'asc' },
     }),

@@ -14,13 +14,27 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: restaurant ? `${restaurant.name} — Menu` : 'Menu' }
 }
 
-export default async function MenuPage() {
+export default async function MenuPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const restaurant = await resolvePublicTenant()
   if (!restaurant) notFound()
 
-  // Which branch this guest is in, from the QR's code (via the cookie the
-  // middleware set) or the restaurant's default. Their menu and their prices.
-  const branch = await resolvePublicBranch(restaurant.id)
+  /*
+   * Which branch this guest is in: their menu, and their prices.
+   *
+   * `?b=` first, then the cookie the middleware wrote, then the restaurant's
+   * default. Reading the URL as well as the cookie matters on a phone that
+   * drops cookies — an in-app browser, a private window — where the cookie
+   * alone would silently show another branch's menu at another branch's prices.
+   */
+  const params = await searchParams
+  const branch = await resolvePublicBranch(
+    restaurant.id,
+    typeof params.b === 'string' ? params.b : null,
+  )
   const menu = await getPublicMenu(restaurant.id, restaurant.timezone, branch?.id ?? null)
 
   return (

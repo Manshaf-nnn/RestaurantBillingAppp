@@ -22,6 +22,13 @@ export type TableEntryInput = z.infer<typeof tableEntrySchema>
 
 export const placeOrderSchema = z.object({
   tableId: z.string().cuid('Select a table'),
+  /*
+   * The branch code from the QR (`?b=`), carried through the cart so the order
+   * does not depend on a cookie surviving three page loads on somebody's phone.
+   * Optional: a single-site restaurant's code has no `b`, and the cookie or the
+   * default branch answers.
+   */
+  branchCode: z.string().trim().max(12).optional().or(z.literal('')),
   customerName: z.string().trim().min(2, 'Enter your name').max(60),
   customerPhone: phoneSchema,
   customerEmail: z.string().trim().email('Enter a valid email').max(255).optional().or(z.literal('')),

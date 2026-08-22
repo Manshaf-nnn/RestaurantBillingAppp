@@ -476,6 +476,69 @@ async function main() {
 
   // The diagnostics are only worth anything if they answer, so check them here
   // rather than discovering they 500 at the moment something else is on fire.
+  /*
+   * The guest side: does scanning a branch's QR reach that branch?
+   *
+   * This is the only check that exercises the middleware, the `?b=` code and
+   * `resolvePublicBranch` together, over real HTTP, exactly as a phone does.
+   * Everything else about the guest flow is proved at the service layer by
+   * branch-isolation-test; this is the wire between them.
+   */
+  console.log('\nScanning a branch QR')
+
+  const scannable = await prisma.branch.groupBy({
+    by: ['restaurantId'],
+    where: { deletedAt: null, isActive: true, type: 'BRANCH' },
+    _count: { _all: true },
+  })
+  const chain = scannable.find((row) => row._count._all > 1)
+
+  if (!chain) {
+    console.log('  · no restaurant with two orderable locations — QR scanning not checked')
+  } else {
+    const [restaurant, codes] = await Promise.all([
+      prisma.restaurant.findUnique({
+        where: { id: chain.restaurantId },
+        select: { slug: true },
+      }),
+      prisma.branch.findMany({
+        where: { restaurantId: chain.restaurantId, deletedAt: null, isActive: true, type: 'BRANCH' },
+        select: { code: true, name: true, isDefault: true },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        take: 2,
+      }),
+    ])
+
+    for (const branch of codes) {
+      const response = await fetch(
+        `${BASE}/order?r=${restaurant!.slug}&b=${encodeURIComponent(branch.code)}`,
+        { redirect: 'manual' },
+      )
+      const body = response.status === 200 ? await response.text() : ''
+
+      /*
+       * The landing screen names the branch only when it is NOT the default —
+       * a single-site guest should not be told they are at "Main". So the
+       * assertion differs by branch, and for the default one the check is that
+       * the page renders at all rather than 404ing on a code it should know.
+       */
+      const ok = branch.isDefault
+        ? response.status === 200
+        : response.status === 200 && body.includes(branch.name)
+
+      if (ok) {
+        passed += 1
+        console.log(`  ✓ ?b=${branch.code} reaches ${branch.name}`)
+      } else {
+        failed.push(`/order?b=${branch.code} did not reach ${branch.name}`)
+        console.log(
+          `  ✗ ?b=${branch.code} did not reach ${branch.name} — HTTP ${response.status}` +
+          (response.status === 200 ? ', and the page did not name it' : ''),
+        )
+      }
+    }
+  }
+
   console.log('\nDiagnostics')
   for (const [path, describe] of [
     ['/api/health/db', (d: Record<string, unknown>) => `healthy=${d.healthy} migrations=${d.migrationsApplied}`],

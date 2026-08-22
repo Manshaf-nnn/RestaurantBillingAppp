@@ -75,13 +75,37 @@ export function KitchenBoard({
   user,
   restaurantName,
   paperWidth,
+  branchIds,
 }: {
   initialTickets: KitchenTicket[]
   initialStats: KitchenStats
   user: { name: string; role: string }
   restaurantName: string
   paperWidth: PaperWidth
+  /**
+   * The locations this rail is showing. Null means every one of them — an
+   * owner deliberately watching the whole business.
+   */
+  branchIds: string[] | null
 }) {
+  /*
+   * Whether a live event belongs on this screen.
+   *
+   * Socket rooms are keyed `r:<restaurantId>:kitchen` with no branch segment,
+   * so every kitchen in the chain receives every order the instant it is
+   * placed. The server render is branch-scoped, so the stray ticket vanished
+   * on the next refresh — but not before it had chimed, flashed for six
+   * seconds and told a chef in Kandy to start cooking for Colombo.
+   *
+   * Filtering on arrival fixes that without touching the socket handshake or
+   * the room names, which would mean threading the branch through the
+   * connection and into `server.mjs` for the same outcome.
+   */
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
   const [tickets, setTickets] = React.useState(initialTickets)
   const [stats, setStats] = React.useState(initialStats)
   const [search, setSearch] = React.useState('')
@@ -128,6 +152,7 @@ export function KitchenBoard({
   })
 
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload)) return
     setTickets((current) =>
       current.some((ticket) => ticket.id === payload.id) ? current : [...current, toTicket(payload)],
     )
@@ -151,6 +176,7 @@ export function KitchenBoard({
   })
 
   useSocketEvent(EVENTS.ORDER_UPDATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload)) return
     setTickets((current) =>
       current.map((ticket) => (ticket.id === payload.id ? toTicket(payload) : ticket)),
     )

@@ -424,9 +424,22 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
    * and then discovering the branch would ring the order up at the restaurant's
    * base prices and store it against a location charging something else.
    *
-   * The table wins where there is one — a guest at Kandy's table 4 is ordering
-   * from Kandy whatever the caller believed — then the caller's branch, then
-   * the restaurant's default. `resolveBranchId` never returns null.
+   * The table decides where there is one — a guest at Kandy's table 4 is
+   * ordering from Kandy — then the caller's branch, then the restaurant's
+   * default. `resolveBranchId` never returns null.
+   *
+   * ── Why a disagreement is now an error ──────────────────────────────────
+   *
+   * This was `seatedAt?.branchId ?? …`, so the table won OUTRIGHT and silently.
+   * That is fine when the caller offered no opinion, and dangerous when it did:
+   * a guest who scanned Branch 01's QR, and whose `?b=` and cookie both said
+   * Branch 01, was seated at Main's table 1 by `resolveTable` (which ignored
+   * the branch) and the order was filed at Main — the correct branch discarded
+   * without a word, and the ticket printed in the wrong kitchen.
+   *
+   * `resolveTable` is fixed, so the two agree in normal operation. If they ever
+   * disagree again the answer is not to pick one: something upstream is wrong,
+   * and an order is about to be routed to a kitchen that is not expecting it.
    */
   const seatedAt = params.tableId
     ? await prisma.restaurantTable.findFirst({
@@ -434,6 +447,14 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
         select: { branchId: true },
       })
     : null
+
+  if (seatedAt && params.branchId && seatedAt.branchId !== params.branchId) {
+    throw new AppError(
+      'That table is at a different location from the one you are ordering from. Please scan the code on your own table.',
+      409,
+      'BRANCH_TABLE_MISMATCH',
+    )
+  }
 
   const branchId =
     seatedAt?.branchId ??
@@ -1001,6 +1022,7 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
   return {
     id: order.id,
     orderNumber: order.orderNumber,
+    branchId: order.branchId,
     status: order.status,
     type: order.type,
     tableId: order.tableId,

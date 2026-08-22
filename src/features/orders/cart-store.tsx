@@ -38,6 +38,18 @@ export interface TableSession {
   tableId: string
   tableNumber: string
   label: string | null
+  /**
+   * The branch this table is at, carried from the QR through to the order.
+   *
+   * The guest goes landing screen → menu → cart, and only the first of those
+   * URLs has the QR's `?b=` on it. This used to be left entirely to the
+   * `ros_b` cookie, which meant a browser that dropped it filed the order
+   * against the restaurant's default branch with no error. Holding it in the
+   * cart alongside the table makes the two agree by construction — and
+   * `placeOrder` now refuses them if they ever disagree.
+   */
+  branchCode?: string
+  branchName?: string
   /** Set when the table already has an unsettled bill the guest is joining. */
   openBill?: {
     orders: number

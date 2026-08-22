@@ -37,8 +37,20 @@ export function QrPoster({
   branches = [],
 }: {
   restaurantName: string
-  orderUrl: string
-  qrDataUrl: string
+  /**
+   * The branch-less ordering link, or null once the restaurant has more than
+   * one place to order from.
+   *
+   * `/order?r=<slug>` carries no `b=`, so `resolvePublicBranch` falls through
+   * to the restaurant's DEFAULT branch. On a single site that is simply
+   * correct. On a chain it is a code that quietly files every scan against
+   * Main — printed, laminated and stuck to a table at Branch 01, it is
+   * indistinguishable from the right one and there is no way to tell from the
+   * poster that it is wrong. The per-branch and per-table sheets below say
+   * which place they belong to.
+   */
+  orderUrl: string | null
+  qrDataUrl: string | null
   branches?: BranchQr[]
 }) {
   const printRef = React.useRef<HTMLDivElement>(null)
@@ -141,6 +153,7 @@ export function QrPoster({
   }
 
   const download = () => {
+    if (!qrDataUrl) return
     const link = document.createElement('a')
     link.href = qrDataUrl
     link.download = `${restaurantName.toLowerCase().replace(/\s+/g, '-')}-qr.png`
@@ -157,16 +170,31 @@ export function QrPoster({
             : 'One code for the whole restaurant — guests enter their table number after scanning'
         }
         actions={
-          <>
-            <Button variant="outline" onClick={download}>
-              <Download /> PNG
-            </Button>
-            <Button onClick={printPoster}>
-              <Printer /> Print poster
-            </Button>
-          </>
+          orderUrl && qrDataUrl ? (
+            <>
+              <Button variant="outline" onClick={download}>
+                <Download /> PNG
+              </Button>
+              <Button onClick={printPoster}>
+                <Printer /> Print poster
+              </Button>
+            </>
+          ) : null
         }
       />
+
+      {!orderUrl ? (
+        <SectionCard title="One code per location">
+          <p className="text-sm text-muted-foreground">
+            You have more than one place guests can order from, so there is no single code for the
+            whole business — a code that does not name a branch sends every order to{' '}
+            <span className="font-medium text-foreground">
+              {branches.find((b) => b.isDefault)?.name ?? 'your default location'}
+            </span>
+            , whichever table it is stuck to. Print each location&rsquo;s own sheet below.
+          </p>
+        </SectionCard>
+      ) : null}
 
       {/*
         `min-w-0` on both columns.
@@ -177,6 +205,7 @@ export function QrPoster({
         itself truncates. Every card on the page inherited that width and the
         whole page scrolled sideways.
       */}
+      {orderUrl && qrDataUrl ? (
       <div className="grid gap-5 lg:grid-cols-2">
         <SectionCard title="Your QR code" className="min-w-0">
           <div ref={printRef} className="flex flex-col items-center gap-4 py-4">
@@ -245,6 +274,7 @@ export function QrPoster({
           </SectionCard>
         </div>
       </div>
+      ) : null}
 
       {/* ── one code per location, and per table ─────────────────── */}
       {branches.length > 1 ? (

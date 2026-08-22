@@ -27,6 +27,15 @@ interface Props {
   openingLabel: string | null
   /** From a table QR — the guest then types nothing at all. */
   initialTable?: string
+  /**
+   * The branch code the QR carried.
+   *
+   * Passed to `resolveTable` so "table 1" means table 1 AT THIS BRANCH. Table
+   * numbers restart per branch, and the lookup used to search by number alone
+   * — so a guest at Branch 01 was seated at Main's table 1 and their order
+   * printed in Main's kitchen.
+   */
+  branchCode?: string | null
   /** Named when it is not the main site, so a guest can see they scanned right. */
   branchName?: string | null
 }
@@ -95,7 +104,7 @@ export default function CoverPage(props: Props) {
     if (!trimmed) { setError('Enter the number printed on your table'); return }
     try {
       setPending(true)
-      const result = await resolveTable({ tableNumber: trimmed })
+      const result = await resolveTable({ tableNumber: trimmed }, undefined, props.branchCode)
       if (!result.ok) { setError(result.error); setPending(false); return }
       setTable(result.data)
       // Say so up front if the table is mid-service. Finding out only at the

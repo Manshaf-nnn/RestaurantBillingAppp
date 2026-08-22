@@ -30,13 +30,20 @@ export default async function OrderEntryPage({
   /*
    * A table QR carries `?t=`, so the guest never types anything.
    *
-   * The number is only a suggestion here — `resolveTable` still looks it up at
-   * this branch and refuses one that does not exist, so a guessed or edited
+   * The number is only a suggestion here — `resolveTable` looks it up at this
+   * branch and refuses one that does not exist there, so a guessed or edited
    * URL cannot seat someone at a table that is not theirs. Pre-filling saves a
    * step for the honest case without weakening the check.
+   *
+   * That claim was not true until now: `resolveTable` searched by number
+   * alone, and since numbers restart per branch it returned an arbitrary
+   * table — in practice the main branch's. Both halves are fixed; the code is
+   * threaded through explicitly below so the answer does not depend on a
+   * cookie surviving the trip.
    */
   const table = typeof params.t === 'string' ? params.t : ''
-  const branch = await resolvePublicBranch(restaurant.id)
+  const branchCode = typeof params.b === 'string' ? params.b : null
+  const branch = await resolvePublicBranch(restaurant.id, branchCode)
 
   return (
     <TableEntry
@@ -48,6 +55,9 @@ export default async function OrderEntryPage({
       isOpen={isOpenNow(hours, restaurant.timezone)}
       openingLabel={todayLabel(hours, restaurant.timezone)}
       initialTable={table}
+      // Threaded to `resolveTable` so the table number is looked up at the
+      // branch that was scanned, not at whichever one happens to answer first.
+      branchCode={branchCode}
       // Named so a guest can see at a glance that they scanned the right code —
       // two branches of the same chain look identical on a phone otherwise.
       branchName={branch && !branch.isDefault ? branch.name : null}
