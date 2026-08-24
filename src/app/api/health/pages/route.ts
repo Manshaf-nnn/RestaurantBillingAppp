@@ -107,7 +107,10 @@ export async function GET() {
           select: { id: true, action: true, createdAt: true },
         })],
       ['dashboard: stats', async () =>
-        (await import('@/features/analytics/queries')).getDashboardStats(rid)],
+        (await import('@/features/analytics/queries')).getDashboardStats({
+          restaurantId: rid,
+          range: (await import('@/features/reports/range')).resolveRange({ preset: 'TODAY' }),
+        })],
       ['dashboard: locations', async () =>
         (await import('@/features/transfers/queries')).listSwitchableLocations(rid)],
       ['locations: list', async () =>

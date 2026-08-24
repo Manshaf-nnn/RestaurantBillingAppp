@@ -14,6 +14,7 @@
  *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/branch-isolation-test.ts
  */
+import { customRange } from '../src/features/reports/range'
 import { prisma } from '../src/server/db/prisma'
 import { getManagedMenu, getPublicMenu } from '../src/features/menu/queries'
 import { applyBranchOverrides, replaceFoodBranches } from '../src/features/menu/branch-menu'
@@ -307,12 +308,7 @@ async function main() {
 
   console.log('\n── 11. reports respect the branch ──')
 
-  const range = {
-    from: new Date(Date.now() - 86_400_000),
-    to: new Date(Date.now() + 86_400_000),
-    preset: 'TODAY' as const,
-    label: 'Today',
-  }
+  const range = customRange(new Date(Date.now() - 86_400_000), new Date(Date.now() + 86_400_000))
 
   const b01Sales = await getSalesReport({
     restaurantId: restaurant.id,

@@ -47,6 +47,7 @@ const SERVICE = [
   'search-test',
   'locations-test',
   'branch-isolation-test',
+  'dashboard-period-test',
 ]
 
 const RUNTIME = [

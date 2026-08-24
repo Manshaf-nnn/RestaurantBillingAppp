@@ -8,6 +8,7 @@
  *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/reconciliation-test.ts
  */
+import { customRange } from '../src/features/reports/range'
 import { prisma } from '../src/server/db/prisma'
 import { postMovement } from '../src/features/inventory/ledger'
 import { getReconciliationReport } from '../src/features/reports/reconciliation'
@@ -50,12 +51,7 @@ async function main() {
   await post('SALE', 30)
   await post('WASTAGE', 5)
 
-  const range = {
-    from: new Date(Date.now() - 86_400_000),
-    to: new Date(Date.now() + 86_400_000),
-    label: 'test',
-    preset: 'CUSTOM' as const,
-  }
+  const range = customRange(new Date(Date.now() - 86_400_000), new Date(Date.now() + 86_400_000))
 
   console.log('\nThe ladder adds up')
 

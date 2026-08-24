@@ -4,7 +4,8 @@ import { PageHeader, StatCard } from '@/features/dashboard/components/page-heade
 import { ReportFilters } from '@/features/reports/components/report-filters'
 import { ReportTable } from '@/features/reports/components/report-table'
 import { resolveRange } from '@/features/reports/range'
-import { listPurchaseOrders } from '@/features/purchasing/queries'
+import { listAwaitingDelivery, listPurchaseOrders } from '@/features/purchasing/queries'
+import { getPurchaseSummary } from '@/features/analytics/purchase-summary'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
@@ -40,8 +41,30 @@ export default async function PurchasingReportPage({
   const locations = await listLocations(user.restaurantId, allowed)
   const chosen = scopeToOne(selection)
 
-  const [orders, suggestions, priceMoves, bySupplier] = await Promise.all([
+  const [summary, orders, awaiting, suggestions, priceMoves, bySupplier] = await Promise.all([
+    /*
+     * The headline figures come from a SQL aggregate now.
+     *
+     * They used to be computed from the 200 rows fetched below, filtered in
+     * JavaScript: any window holding more than 200 purchase orders reported a
+     * spend that was quietly too small, and "still outstanding" counted only
+     * what happened to be in that page of rows while ignoring the chosen range
+     * entirely. The list below is still capped — it is a preview and says so —
+     * but the numbers above it are no longer derived from it.
+     */
+    getPurchaseSummary({
+      restaurantId: user.restaurantId,
+      range,
+      branchIds: selection.branchIds,
+    }),
     listPurchaseOrders({ restaurantId: user.restaurantId, limit: 200, branchId: chosen }),
+    /*
+     * The outstanding table is its own query rather than a filter over those
+     * 200 rows, so it is complete. It also drops orders whose every line is
+     * settled even when the status has not caught up — see the note at the end
+     * of `listAwaitingDelivery`, which the JavaScript filter here did not do.
+     */
+    listAwaitingDelivery({ restaurantId: user.restaurantId, branchId: chosen }),
     getReorderSuggestions({ restaurantId: user.restaurantId, branchId: chosen }),
     // Price history over the window, so a supplier raising prices is visible.
     prisma.purchasePriceHistory.findMany({
@@ -69,17 +92,6 @@ export default async function PurchasingReportPage({
       _count: true,
     }),
   ])
-
-  const inWindow = orders.filter((o) => {
-    const at = new Date(o.createdAt)
-    return at >= range.from && at <= range.to
-  })
-  const outstanding = orders.filter((o) =>
-    ['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED'].includes(o.status),
-  )
-  const spend = inWindow
-    .filter((o) => !['CANCELLED', 'DRAFT'].includes(o.status))
-    .reduce((s, o) => s + o.total, 0)
 
   // First and latest price per item, so the trend is one row not a chart.
   const trend = new Map<string, { itemId: string; name: string; unit: string; first: number; latest: number; supplier: string | null; buys: number }>()
@@ -128,9 +140,13 @@ export default async function PurchasingReportPage({
       />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Spend" value={money(spend)} />
-        <StatCard label="Orders placed" value={String(inWindow.length)} />
-        <StatCard label="Still outstanding" value={String(outstanding.length)} />
+        <StatCard label="Spend" value={money(summary.spend)} />
+        <StatCard label="Orders placed" value={String(summary.ordersPlaced)} />
+        <StatCard
+          label="Still outstanding"
+          value={String(summary.outstandingCount)}
+          hint={summary.overdueCount > 0 ? `${summary.overdueCount} overdue` : undefined}
+        />
         <StatCard label="Needs ordering" value={String(suggestions.length)} />
       </div>
 
@@ -176,7 +192,13 @@ export default async function PurchasingReportPage({
             { key: 'receivedPercent', label: 'Received', align: 'right', format: 'percent' },
             { key: 'total', label: 'Value', align: 'right', format: 'money' },
           ]}
-          rows={outstanding as unknown as Array<Record<string, unknown>>}
+          rows={
+            awaiting.map((po) => ({
+              ...po,
+              receivedPercent:
+                po.orderedQty > 0 ? Math.round((po.receivedQty / po.orderedQty) * 100) : 0,
+            })) as unknown as Array<Record<string, unknown>>
+          }
           hrefTemplate="/dashboard/purchases/{id}"
           filename="outstanding-purchase-orders"
           empty="Nothing outstanding."

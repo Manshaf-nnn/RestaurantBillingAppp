@@ -15,6 +15,7 @@
  *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/cogs-test.ts
  */
+import { customRange } from '../src/features/reports/range'
 import { prisma } from '../src/server/db/prisma'
 import { postMovement } from '../src/features/inventory/ledger'
 import { updateOrderStatus } from '../src/features/orders/service'
@@ -119,12 +120,7 @@ async function main() {
 
   console.log('\nThe reports agree with each other')
 
-  const range = {
-    from: new Date(Date.now() - 86_400_000),
-    to: new Date(Date.now() + 86_400_000),
-    label: 'test',
-    preset: 'CUSTOM' as const,
-  }
+  const range = customRange(new Date(Date.now() - 86_400_000), new Date(Date.now() + 86_400_000))
   const profit = await getProfitReport({ restaurantId: restaurant.id, range })
   const sales = await getSalesReport({ restaurantId: restaurant.id, range })
 

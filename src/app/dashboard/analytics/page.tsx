@@ -11,7 +11,7 @@ import {
 import {
   getPeakHours,
   getPopularItems,
-  getSalesSeries,
+  getRevenueSeries,
   getStaffPerformance,
 } from '@/features/analytics/queries'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
@@ -20,6 +20,7 @@ import { formatMoney } from '@/lib/money'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { resolveRange } from '@/features/reports/range'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,10 +36,20 @@ export default async function AnalyticsPage({
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
   const branchId = scopeToOne(await selectedBranch(user, await searchParams))
 
+  // This page keeps its fixed 30-day window; only the dashboard is selectable.
+  // It moves to the shared resolver anyway so its days are the restaurant's,
+  // not the server's — the same correction the trend chart just got.
+  const range = resolveRange({ preset: 'LAST_30', timeZone: restaurant.timezone })
+
   const [series, peak, popular, staff] = await Promise.all([
-    getSalesSeries(user.restaurantId, 30, branchId),
-    getPeakHours(user.restaurantId, 30, branchId),
-    getPopularItems(user.restaurantId, 30, 10, branchId),
+    getRevenueSeries({ restaurantId: user.restaurantId, range, branchIds: branchId ? [branchId] : null }),
+    getPeakHours(user.restaurantId, 30, branchId, restaurant.timezone),
+    getPopularItems({
+      restaurantId: user.restaurantId,
+      range,
+      limit: 10,
+      branchIds: branchId ? [branchId] : null,
+    }),
     getStaffPerformance(user.restaurantId, 30, branchId),
   ])
 

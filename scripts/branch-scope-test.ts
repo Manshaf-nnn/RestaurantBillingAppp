@@ -24,7 +24,8 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/branch-scope-test.ts
  */
 import { prisma } from '../src/server/db/prisma'
-import { getDashboardStats, getSalesSeries, getStaffPerformance } from '../src/features/analytics/queries'
+import { getDashboardStats, getRevenueSeries, getStaffPerformance } from '../src/features/analytics/queries'
+import { customRange, resolveRange } from '../src/features/reports/range'
 import { listOrders } from '../src/features/orders/queries'
 import { getReorderSuggestions } from '../src/features/purchasing/suggestions'
 import { scopeToOne } from '../src/features/dashboard/selected-branch'
@@ -93,15 +94,16 @@ async function main() {
 
   console.log('\n── the numbers follow the switcher ──')
 
-  const all = await getDashboardStats(restaurant.id)
-  check('unfiltered shows every location', all.revenueToday === 35_000, `${all.revenueToday}`)
+  const statsRange = resolveRange({ preset: 'TODAY', timeZone: restaurant.timezone })
+  const all = await getDashboardStats({ restaurantId: restaurant.id, range: statsRange })
+  check('unfiltered shows every location', all.revenue === 35_000, `${all.revenue}`)
 
-  const atColombo = await getDashboardStats(restaurant.id, colombo.id)
-  check('Colombo shows only Colombo', atColombo.revenueToday === 30_000, `${atColombo.revenueToday}`)
-  check('and its order count too', atColombo.ordersToday === 3, `${atColombo.ordersToday}`)
+  const atColombo = await getDashboardStats({ restaurantId: restaurant.id, range: statsRange, branchIds: [colombo.id] })
+  check('Colombo shows only Colombo', atColombo.revenue === 30_000, `${atColombo.revenue}`)
+  check('and its order count too', atColombo.orders === 3, `${atColombo.orders}`)
 
-  const atKandy = await getDashboardStats(restaurant.id, kandy.id)
-  check('Kandy shows only Kandy', atKandy.revenueToday === 5_000, `${atKandy.revenueToday}`)
+  const atKandy = await getDashboardStats({ restaurantId: restaurant.id, range: statsRange, branchIds: [kandy.id] })
+  check('Kandy shows only Kandy', atKandy.revenue === 5_000, `${atKandy.revenue}`)
 
   /*
    * The whole point. If these were ever equal, the branch predicate is missing
@@ -110,13 +112,13 @@ async function main() {
    */
   check(
     'the two locations disagree',
-    atColombo.revenueToday !== atKandy.revenueToday,
+    atColombo.revenue !== atKandy.revenue,
     'both returned the same figure, which means nothing is being filtered',
   )
   check(
     'and they sum to the group',
-    atColombo.revenueToday + atKandy.revenueToday === all.revenueToday,
-    `${atColombo.revenueToday} + ${atKandy.revenueToday} vs ${all.revenueToday}`,
+    atColombo.revenue + atKandy.revenue === all.revenue,
+    `${atColombo.revenue} + ${atKandy.revenue} vs ${all.revenue}`,
   )
 
   console.log('\n── the same holds for the lists ──')
@@ -128,13 +130,22 @@ async function main() {
   check('order list narrows to Kandy', kandyOrders.total === 1, `${kandyOrders.total}`)
   check('and is whole when unfiltered', everyOrder.total === 4, `${everyOrder.total}`)
 
-  const colomboSeries = await getSalesSeries(restaurant.id, 2, colombo.id)
-  const kandySeries = await getSalesSeries(restaurant.id, 2, kandy.id)
+  const seriesRange = customRange(new Date(Date.now() - 86_400_000), new Date(Date.now() + 3_600_000))
+  const colomboSeries = await getRevenueSeries({
+    restaurantId: restaurant.id,
+    range: seriesRange,
+    branchIds: [colombo.id],
+  })
+  const kandySeries = await getRevenueSeries({
+    restaurantId: restaurant.id,
+    range: seriesRange,
+    branchIds: [kandy.id],
+  })
   check(
     'the trend chart is per location',
-    colomboSeries.reduce((s, p) => s + p.revenue, 0) === 30_000 &&
-      kandySeries.reduce((s, p) => s + p.revenue, 0) === 5_000,
-    `${colomboSeries.reduce((s, p) => s + p.revenue, 0)} / ${kandySeries.reduce((s, p) => s + p.revenue, 0)}`,
+    colomboSeries.reduce((s: number, p) => s + p.revenue, 0) === 30_000 &&
+      kandySeries.reduce((s: number, p) => s + p.revenue, 0) === 5_000,
+    `${colomboSeries.reduce((s: number, p) => s + p.revenue, 0)} / ${kandySeries.reduce((s: number, p) => s + p.revenue, 0)}`,
   )
 
   const staffAtKandy = await getStaffPerformance(restaurant.id, 2, kandy.id)
@@ -215,8 +226,8 @@ async function main() {
   const nothing = await listOrders(restaurant.id, { branchId: confined })
   check('so their order list is empty, not complete', nothing.total === 0, `${nothing.total} orders leaked`)
 
-  const noFigures = await getDashboardStats(restaurant.id, confined)
-  check('and their dashboard is zero, not the group total', noFigures.revenueToday === 0, `${noFigures.revenueToday}`)
+  const noFigures = await getDashboardStats({ restaurantId: restaurant.id, range: statsRange, branchIds: confined ? [confined] : [] })
+  check('and their dashboard is zero, not the group total', noFigures.revenue === 0, `${noFigures.revenue}`)
 
   // A user with one location resolves to that location even with nothing chosen.
   check(

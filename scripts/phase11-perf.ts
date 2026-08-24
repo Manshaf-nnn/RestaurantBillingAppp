@@ -126,7 +126,7 @@ async function main() {
   const wide = resolveRange({ preset: 'LAST_30' })
 
   const timings: number[] = []
-  timings.push(await timed('dashboard stats', () => getDashboardStats(shop.id)))
+  timings.push(await timed('dashboard stats', () => getDashboardStats({ restaurantId: shop.id, range: resolveRange({ preset: 'TODAY' }) })))
   timings.push(await timed('sales report — this month', () => getSalesReport({ restaurantId: shop.id, range: month })))
   timings.push(await timed('sales report — one branch', () => getSalesReport({ restaurantId: shop.id, range: month, branchIds: [branches[0].id] })))
   timings.push(await timed('gross profit — last 30 days', () => getProfitReport({ restaurantId: shop.id, range: wide })))

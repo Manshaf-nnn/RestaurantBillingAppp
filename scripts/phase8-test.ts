@@ -1,6 +1,6 @@
 /** Phase 8: reporting — ranges, sales, payments, gross profit, comparison. */
 import { prisma } from '../src/server/db/prisma'
-import { resolveRange, RANGE_LABELS } from '../src/features/reports/range'
+import { resolveRange, RANGE_LABELS, DASHBOARD_PRESETS } from '../src/features/reports/range'
 import { getSalesReport, getPaymentsReport } from '../src/features/reports/sales'
 import { getProfitReport, getBranchComparison } from '../src/features/reports/profit'
 
@@ -36,7 +36,23 @@ async function main() {
     (huge.to.getTime() - huge.from.getTime()) / 86_400_000 <= 401)
   const junk = resolveRange({ preset: 'NONSENSE', now })
   ok('an unknown preset falls back to today', junk.preset === 'TODAY')
-  ok('every preset has a label', Object.keys(RANGE_LABELS).length === 8)
+  /*
+   * Counting the labels was the old check, and it failed the moment THIS_YEAR
+   * and LAST_90 were added — not because anything was wrong, but because the
+   * assertion was a headcount wearing the name of a property. It now checks the
+   * property: every label is a real string, and every preset the dashboard
+   * offers has one, so a new preset without a label fails and a new preset with
+   * one does not.
+   */
+  ok(
+    'every label is a non-empty string',
+    Object.values(RANGE_LABELS).every((label) => typeof label === 'string' && label.length > 0),
+  )
+  ok(
+    'every dashboard preset has a label',
+    DASHBOARD_PRESETS.every((preset) => Boolean(RANGE_LABELS[preset])),
+    DASHBOARD_PRESETS.filter((preset) => !RANGE_LABELS[preset]).join(', '),
+  )
 
   console.log('\n── 2. Test data ─────────────────────────────────────────')
   const shop = await prisma.restaurant.create({
