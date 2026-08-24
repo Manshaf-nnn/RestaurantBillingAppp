@@ -42,10 +42,26 @@ import {
   describePermissions,
   permissionsForFeatures,
 } from '../src/features/access/features'
+import {
+  assertNoEscalation,
+  assertPresetScopeAllowed,
+  templateFor,
+} from '../src/features/access/service'
 import type { UserRole } from '@prisma/client'
 
 let passed = 0
 let failed = 0
+
+/** Assert that a guard throws, and throws for the right reason. */
+function refuses(name: string, run: () => unknown, expect: RegExp) {
+  try {
+    run()
+    check(name, false, 'it was allowed')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    check(name, expect.test(message), `wrong error: ${message}`)
+  }
+}
 
 function check(name: string, ok: boolean, detail = '') {
   if (ok) {
@@ -372,6 +388,91 @@ async function main() {
     'even though their role grants plenty',
     permissionsFor(strandedSubject).size > 5,
     'permissions decide what, the branch decides where',
+  )
+
+  // ── 9. nobody may build a role stronger than themselves ───────────────────
+  console.log('\n── 9. no escalation through the role builder ──')
+
+  /*
+   * This is the load-bearing check of the whole feature. Creating roles is
+   * `staff.manage`, which every MANAGER holds — so without it a manager could
+   * save a role carrying `settings.manage`, assign it to an account they
+   * control, and sign in holding powers their own account never had. That is
+   * privilege escalation with extra steps, and it is the obvious way to attack
+   * a system whose whole point is letting people define permission sets.
+   */
+  const siteManager = { role: 'MANAGER' as UserRole, branchId: second.id }
+
+  refuses(
+    'a manager cannot grant what they do not hold',
+    () => assertNoEscalation(siteManager as never, [PERMISSIONS.SETTINGS_MANAGE]),
+    /cannot grant what you do not have/i,
+  )
+  check(
+    'but may grant what they do',
+    (() => {
+      try {
+        assertNoEscalation(siteManager as never, [PERMISSIONS.ORDER_VIEW, PERMISSIONS.TABLE_VIEW])
+        return true
+      } catch {
+        return false
+      }
+    })(),
+  )
+  check(
+    'an owner may grant anything',
+    (() => {
+      try {
+        assertNoEscalation({ role: 'OWNER', branchId: null } as never, [
+          PERMISSIONS.SETTINGS_MANAGE,
+          PERMISSIONS.PAYMENT_REFUND,
+        ])
+        return true
+      } catch {
+        return false
+      }
+    })(),
+  )
+
+  /*
+   * Rank is not reach. ACCOUNTANT is assignable by a manager AND is
+   * cross-location, so basing a role on it would hand sight of every branch to
+   * somebody created by a person confined to one site — the same gap
+   * `assertScopeAllowed` closes on the staff form.
+   */
+  refuses(
+    'a site manager cannot base a role on a cross-location preset',
+    () => assertPresetScopeAllowed(siteManager as never, 'ACCOUNTANT'),
+    /sees every location and you do not/i,
+  )
+  check(
+    'an owner can',
+    (() => {
+      try {
+        assertPresetScopeAllowed({ role: 'OWNER', branchId: null } as never, 'ACCOUNTANT')
+        return true
+      } catch {
+        return false
+      }
+    })(),
+  )
+
+  /*
+   * A template is narrowed rather than refused, so cloning Administrator as a
+   * manager gives a manager's version and they can carry on.
+   */
+  const managerTemplate = templateFor(siteManager as never, 'ADMIN')
+  check(
+    'copying a template drops what the copier cannot grant',
+    !managerTemplate.includes(PERMISSIONS.SETTINGS_MANAGE) &&
+      managerTemplate.includes(PERMISSIONS.ORDER_VIEW),
+    `${managerTemplate.length} of ${ROLE_PERMISSIONS.ADMIN.length}`,
+  )
+  const ownerTemplate = templateFor({ role: 'OWNER', branchId: null } as never, 'ADMIN')
+  check(
+    'and an owner copying it gets the whole thing',
+    ownerTemplate.length === ROLE_PERMISSIONS.ADMIN.length,
+    `${ownerTemplate.length} of ${ROLE_PERMISSIONS.ADMIN.length}`,
   )
 
   // ── cleanup ───────────────────────────────────────────────────────────────

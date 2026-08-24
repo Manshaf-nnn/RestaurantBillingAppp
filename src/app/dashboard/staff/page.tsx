@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { listBranches } from '@/features/branches/service'
+import { listRoles } from '@/features/access/service'
 import { StaffManager } from '@/features/staff/components/staff-manager'
 import { assignableRoles, can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -23,7 +24,7 @@ export default async function StaffPage() {
    */
   const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
 
-  const [staff, locations] = await Promise.all([
+  const [staff, locations, customRoles] = await Promise.all([
     prisma.user.findMany({
       where: {
         restaurantId: user.restaurantId,
@@ -43,6 +44,8 @@ export default async function StaffPage() {
         lastLoginAt: true,
         branchId: true,
         branch: { select: { name: true } },
+        staffRoleId: true,
+        staffRole: { select: { name: true } },
       },
     }),
     /*
@@ -52,6 +55,12 @@ export default async function StaffPage() {
      * the form, handing a site-scoped account the whole chain.
      */
     listBranches(user.restaurantId),
+    /*
+     * Only the active ones. A switched-off role is not somebody to assign — the
+     * action refuses it — and listing it in the picker would look like an
+     * option that fails on save for no visible reason.
+     */
+    listRoles(user.restaurantId, reach).then((roles) => roles.filter((role) => role.isActive)),
   ])
 
   /*
@@ -74,6 +83,20 @@ export default async function StaffPage() {
        * that was the escalation route to an unscoped accountant account.
        */
       canAssignAllLocations={reach === null}
+      /*
+       * Only offered to somebody who may manage staff at all. `assignRole`
+       * re-checks it, and also refuses a role carrying permissions this person
+       * does not hold — assigning is granting.
+       */
+      customRoles={
+        can(user, PERMISSIONS.STAFF_MANAGE)
+          ? customRoles.map((role) => ({
+              id: role.id,
+              name: role.name,
+              presetLabel: role.presetLabel,
+            }))
+          : undefined
+      }
       staff={staff.map((member) => ({
         id: member.id,
         name: member.name,
@@ -84,6 +107,8 @@ export default async function StaffPage() {
         lastLoginAt: member.lastLoginAt?.toISOString() ?? null,
         branchId: member.branchId,
         branchName: member.branch?.name ?? null,
+        staffRoleId: member.staffRoleId,
+        staffRoleName: member.staffRole?.name ?? null,
       }))}
     />
   )

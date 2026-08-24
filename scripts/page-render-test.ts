@@ -49,6 +49,7 @@ const PAGES = [
   '/dashboard/suppliers',
   '/dashboard/recipes',
   '/dashboard/staff',
+  '/dashboard/roles',
   '/dashboard/staff/codes',
   '/dashboard/menu',
   '/dashboard/orders',

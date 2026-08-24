@@ -34,6 +34,7 @@ import {
   BadgeCheck,
   ListTodo,
   PackageCheck,
+  KeyRound,
 } from 'lucide-react'
 
 import { PERMISSIONS, type Permission } from '@/lib/rbac'
@@ -231,6 +232,14 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/customers/analytics', label: 'Customer insights', icon: UserSearch, permission: PERMISSIONS.CUSTOMER_ANALYTICS },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
+      {
+        // Next to Staff, because "who works here" and "what may they do" are
+        // the same question asked twice.
+        href: '/dashboard/roles',
+        label: 'Roles & access',
+        icon: KeyRound,
+        permission: PERMISSIONS.STAFF_MANAGE,
+      },
       { href: '/dashboard/staff/codes', label: 'Staff codes', icon: BadgeCheck, permission: PERMISSIONS.STAFF_VIEW },
       { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
       { href: '/dashboard/feedback', label: 'Feedback', icon: Smile, permission: PERMISSIONS.FEEDBACK_VIEW },

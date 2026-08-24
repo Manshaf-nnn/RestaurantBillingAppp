@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Avatar, AvatarFallback } from '@/components/ui/primitives'
+import { assignRole } from '@/features/access/actions'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { RoleBadge } from '@/components/ui/status'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -58,6 +59,25 @@ export interface StaffMember {
   /** null means every location — see ALL_LOCATIONS below. */
   branchId: string | null
   branchName: string | null
+  /** The restaurant's own role, when they are in one. */
+  staffRoleId: string | null
+  staffRoleName: string | null
+}
+
+/** A custom role that can be given to somebody on this screen. */
+/**
+ * The "no custom role" option.
+ *
+ * Radix's Select treats `value=""` as "nothing selected" and refuses to render
+ * a placeholder for it, so the empty case needs a real value. Mapped back to
+ * null on save. Same reason `ALL_LOCATIONS` exists a few lines below.
+ */
+const NO_CUSTOM_ROLE = '__default__'
+
+export interface AssignableRole {
+  id: string
+  name: string
+  presetLabel: string
 }
 
 export interface StaffLocation {
@@ -84,12 +104,15 @@ export function StaffManager({
   canManage,
   currentUserId,
   canAssignAllLocations = true,
+  customRoles,
 }: {
   staff: StaffMember[]
   assignableRoles: UserRole[]
   locations: StaffLocation[]
   canManage: boolean
   currentUserId: string
+  /** The restaurant's own roles, for the picker in the edit dialog. */
+  customRoles?: AssignableRole[]
   /**
    * Whether "All locations" may be chosen. False for a site manager — granting
    * sight of every branch is not theirs to grant, and the server refuses it.
@@ -208,6 +231,17 @@ export function StaffManager({
                   </TableCell>
                   <TableCell>
                     <RoleBadge role={member.role} />
+                    {/*
+                      Both, not one or the other. The custom role is what they
+                      can actually do; the built-in still decides where they
+                      land and whether they are tied to a site, so hiding it
+                      would leave the "Works at" column beside it unexplained.
+                    */}
+                    {member.staffRoleName ? (
+                      <span className="mt-1 block truncate text-xs text-muted-foreground">
+                        {member.staffRoleName}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-sm">
                     {member.branchName ?? (
@@ -272,6 +306,7 @@ export function StaffManager({
         locations={locations}
         onClose={() => setEditing(null)}
         canAssignAllLocations={canAssignAllLocations}
+        customRoles={customRoles}
       />
       <PasswordDialog member={passwordFor} onClose={() => setPasswordFor(null)} />
 
@@ -532,16 +567,26 @@ function EditDialog({
   locations,
   onClose,
   canAssignAllLocations = true,
+  customRoles,
 }: {
   member: StaffMember | null
   roles: UserRole[]
   locations: StaffLocation[]
   onClose: () => void
   canAssignAllLocations?: boolean
+  customRoles?: AssignableRole[]
 }) {
   const [form, setForm] = React.useState({
     name: '', phone: '', role: 'WAITER' as UserRole, isActive: true, branchId: ALL_LOCATIONS,
   })
+  /*
+   * Kept apart from `form` because it is saved by a different action.
+   * `updateStaff` owns the person's own details; `assignRole` owns which role
+   * they are in, and it runs its own escalation checks. Folding the two into
+   * one payload would mean one of the two sets of checks running on data the
+   * other action validated.
+   */
+  const [staffRoleId, setStaffRoleId] = React.useState<string>('')
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -557,6 +602,7 @@ function EditDialog({
         // no longer offered for their role.
         branchId: branchForRole(member.role, member.branchId ?? ALL_LOCATIONS, locations),
       })
+      setStaffRoleId(member.staffRoleId ?? '')
       setError(null)
     }
   }, [member, locations])
@@ -571,11 +617,26 @@ function EditDialog({
         branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId,
       }),
     )
-    setSaving(false)
     if (!result.ok) {
+      setSaving(false)
       setError(result.error)
       return
     }
+
+    // Only when it changed: assigning is an audited event, and re-saving the
+    // same value would fill the log with entries recording nothing.
+    if ((member.staffRoleId ?? '') !== staffRoleId) {
+      const assigned = await callAction(() =>
+        assignRole({ userId: member.id, staffRoleId: staffRoleId || null }),
+      )
+      if (!assigned.ok) {
+        setSaving(false)
+        setError(assigned.error)
+        return
+      }
+    }
+
+    setSaving(false)
     toast.success('Staff member updated')
     onClose()
   }
@@ -626,6 +687,29 @@ function EditDialog({
           role={form.role}
           canAssignAllLocations={canAssignAllLocations}
         />
+        {customRoles && customRoles.length > 0 ? (
+          <Field label="Custom access">
+            <Select value={staffRoleId || NO_CUSTOM_ROLE} onValueChange={(v) => setStaffRoleId(v === NO_CUSTOM_ROLE ? '' : v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_CUSTOM_ROLE}>
+                  Default for {ROLE_LABELS[form.role]}
+                </SelectItem>
+                {customRoles.map((role) => (
+                  <SelectItem key={role.id} value={role.id}>
+                    {role.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              A custom role replaces the default features for this person. Manage them under
+              Roles &amp; access.
+            </p>
+          </Field>
+        ) : null}
         <label className="flex items-center gap-2 text-sm">
           <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />
           Active — can sign in

@@ -98,6 +98,16 @@ export const AUDIT_ACTIONS = {
   STOCK_ADJUSTED: 'inventory.adjusted',
   SETTINGS_UPDATED: 'settings.updated',
   STAFF_INVITED: 'staff.invited',
+  /*
+   * Changing what a role may do is a permission change, and permission changes
+   * are the ones an owner most needs to be able to reconstruct afterwards —
+   * "who gave the new starter the refund button" is not answerable from the
+   * role row alone, because it only holds the current answer.
+   */
+  ROLE_CREATED: 'role.created',
+  ROLE_UPDATED: 'role.updated',
+  ROLE_DELETED: 'role.deleted',
+  ROLE_ASSIGNED: 'role.assigned',
   REPORT_EXPORTED: 'report.exported',
 
   ORDER_ITEM_VOIDED: 'order.item_voided',
