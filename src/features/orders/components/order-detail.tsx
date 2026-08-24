@@ -24,6 +24,8 @@ import { OrderStatusBadge, ORDER_STATUS_META, PaymentStatusBadge, VegIndicator }
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
+import { buildReceipt } from '@/features/printing/receipt'
+import type { PaperWidth } from '@/features/printing/paper'
 import { cancelOrder, updateOrderStatus } from '../actions'
 import { callAction } from '@/lib/use-action'
 
@@ -83,7 +85,13 @@ export function OrderDetail({
   order: OrderDetailView
   currency: string
   locale: string
-  restaurant: { name: string; addressLine: string | null; phone: string | null }
+  restaurant: {
+    name: string
+    addressLine: string | null
+    phone: string | null
+    /** Thermal paper widths chosen in Settings. */
+    paper: { receipt: PaperWidth; kitchen: PaperWidth }
+  }
   canUpdate: boolean
   canCancel: boolean
 }) {
@@ -126,29 +134,40 @@ export function OrderDetail({
   const next = NEXT_STATUS[status]
   const terminal = status === 'COMPLETED' || status === 'CANCELLED'
 
+  /*
+   * The shared builder, so this screen, the till and the cashier board print
+   * the same thing. This used to be a third hand-written copy of the same
+   * mapping — which is how one of them ends up omitting a row the others show.
+   */
   const print = () =>
-    printReceipt({
-      restaurantName: restaurant.name,
-      addressLine: restaurant.addressLine,
-      phone: restaurant.phone,
-      orderNumber: order.orderNumber,
-      tableNumber: order.tableNumber,
-      customerName: order.customerName,
-      placedAt: order.placedAt,
-      lines: order.items.map((item) => ({
-        name: item.name,
-        optionsLabel: item.optionsLabel,
-        quantity: item.quantity,
-        lineTotal: money(item.lineTotal),
-      })),
-      totals: [
-        { label: 'Subtotal', value: money(order.subtotal) },
-        ...(order.discountTotal ? [{ label: 'Discount', value: `-${money(order.discountTotal)}` }] : []),
-        ...(order.serviceCharge ? [{ label: 'Service', value: money(order.serviceCharge) }] : []),
-        ...(order.taxTotal ? [{ label: order.taxLabel, value: money(order.taxTotal) }] : []),
-        { label: 'TOTAL', value: money(order.grandTotal), strong: true },
-      ],
-    })
+    printReceipt(
+      buildReceipt(
+        {
+          orderNumber: order.orderNumber,
+          placedAt: order.placedAt,
+          tableNumber: order.tableNumber,
+          customerName: order.customerName,
+          items: order.items,
+          subtotal: order.subtotal,
+          discountTotal: order.discountTotal,
+          serviceCharge: order.serviceCharge,
+          taxTotal: order.taxTotal,
+          grandTotal: order.grandTotal,
+        },
+        {
+          name: restaurant.name,
+          currency,
+          locale,
+          taxLabel: order.taxLabel,
+          paper: restaurant.paper,
+          addressLine: restaurant.addressLine,
+          phone: restaurant.phone,
+        },
+      ),
+      // Was omitted, so this screen silently printed 58mm whatever the owner
+      // had chosen in Settings.
+      restaurant.paper.receipt,
+    )
 
   return (
     <div className="space-y-5">

@@ -67,7 +67,7 @@ export default async function CashierPage({
 
   const branchIds = chosen ? [chosen] : selection.branchIds
 
-  const [menu, bills, today] = await Promise.all([
+  const [menu, bills, tables, today] = await Promise.all([
     /*
      * The till sells its own branch's menu at its own branch's prices. A
      * cashier confined to Kandy must not be able to ring up a Colombo-only
@@ -81,6 +81,19 @@ export default async function CashierPage({
      */
     getPublicMenu(user.restaurantId, restaurant.timezone, chosen),
     getCashierQueue(user.restaurantId, branchIds),
+    /*
+     * The order dialog can take a dine-in now, and a dine-in needs a table.
+     * Same query the till runs.
+     */
+    prisma.restaurantTable.findMany({
+      where: {
+        restaurantId: user.restaurantId,
+        isActive: true,
+        ...(chosen ? { branchId: chosen } : {}),
+      },
+      select: { id: true, number: true, area: true },
+      orderBy: { number: 'asc' },
+    }),
     prisma.payment.aggregate({
       where: {
         restaurantId: user.restaurantId,
@@ -117,6 +130,7 @@ export default async function CashierPage({
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
         phone: restaurant.phone,
       }}
+      tables={tables}
       initialBills={bills.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,

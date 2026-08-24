@@ -1,5 +1,5 @@
 import 'server-only'
-import type { Order, OrderStatus, Prisma } from '@prisma/client'
+import type { Order, OrderItem, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
@@ -367,7 +367,14 @@ export interface PlaceOrderParams {
   servedById?: string | null
 }
 
-export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
+/**
+ * An order with the lines that were priced onto it.
+ *
+ * Assignable to `Order`, so nothing that only wanted the header had to change.
+ */
+export type PlacedOrder = Order & { items: OrderItem[] }
+
+export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder> {
   /*
    * Has this exact cart already been placed?
    *
@@ -380,6 +387,9 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
   if (params.idempotencyKey) {
     const existing = await prisma.order.findFirst({
       where: { restaurantId: params.restaurantId, idempotencyKey: params.idempotencyKey },
+      // Same shape as a fresh placement, so a caller building a bill from the
+      // result gets one whether this was the first tap or the second.
+      include: { items: true },
     })
     if (existing) return existing
   }
@@ -523,7 +533,17 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
       // could never succeed — the retry lives around the whole transaction, in
       // `placeOrder` below.
       const orderNumber = await nextOrderNumber(tx, params.restaurantId, restaurant.timezone)
-      const created: Order = await tx.order.create({
+      /*
+       * The lines come back with the order.
+       *
+       * A bill printed at the till needs the priced lines, and re-reading the
+       * order to get them would be a second round trip for rows Postgres has
+       * just written. `include` costs nothing here — same statement — and
+       * `Order & { items }` still satisfies every caller that only wanted an
+       * `Order`.
+       */
+      const created: PlacedOrder = await tx.order.create({
+        include: { items: true },
             data: {
               restaurantId: params.restaurantId,
               orderNumber,
@@ -658,7 +678,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
     'P2028', // could not start a transaction in the given time
     'P1017', // server closed the connection
   ])
-  let order: Order | null = null
+  let order: PlacedOrder | null = null
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -680,6 +700,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<Order> {
       ) {
         const winner = await prisma.order.findFirst({
           where: { restaurantId: params.restaurantId, idempotencyKey: params.idempotencyKey },
+          include: { items: true },
         })
         if (winner) return winner
       }

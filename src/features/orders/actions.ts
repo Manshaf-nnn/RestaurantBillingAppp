@@ -35,6 +35,7 @@ import {
   updateOrderStatus as updateOrderStatusService,
 } from './service'
 import { computeTotals, estimatePrepMinutes } from './pricing'
+import { readOptions } from './queries'
 
 // ── guest surface ────────────────────────────────────────────────────────────
 
@@ -684,7 +685,42 @@ export async function cancelOrder(input: unknown): Promise<ActionResult<{ id: st
   )
 }
 
-export async function createStaffOrder(input: unknown): Promise<ActionResult<{ orderId: string; orderNumber: string }>> {
+/**
+ * The bill a till can print, straight back from placing the order.
+ *
+ * ── Why the totals must come from here ──────────────────────────────────────
+ *
+ * The POS knows a subtotal — `price × quantity` — and nothing else. No tax, no
+ * service charge, no discount, no rounding. Its own screen says so: "Tax and
+ * service charge are added on the bill." Printing that number would hand the
+ * guest a total the restaurant does not charge, and the difference would show
+ * up later as an unexplained gap between the till and the takings.
+ *
+ * `placeOrder` has already computed and persisted the real figures through
+ * `computeTotals`. Returning them costs nothing — the order and its lines come
+ * back from the insert — and it makes it impossible for the printed bill and
+ * the database row to disagree, because they are the same numbers.
+ */
+export interface StaffOrderBill {
+  orderId: string
+  orderNumber: string
+  placedAt: string
+  tableNumber: string | null
+  customerName: string
+  items: Array<{
+    name: string
+    optionsLabel?: string
+    quantity: number
+    lineTotal: number
+  }>
+  subtotal: number
+  discountTotal: number
+  serviceCharge: number
+  taxTotal: number
+  grandTotal: number
+}
+
+export async function createStaffOrder(input: unknown): Promise<ActionResult<StaffOrderBill>> {
   return runAction(
     staffOrderSchema,
     input,
@@ -744,7 +780,31 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<{ o
 
       revalidatePath('/dashboard/orders')
       revalidatePath('/cashier')
-      return { orderId: order.id, orderNumber: order.orderNumber }
+
+      return {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        placedAt: order.placedAt.toISOString(),
+        tableNumber: order.tableNumber,
+        customerName: order.customerName,
+        items: order.items.map((item) => ({
+          name: item.name,
+          // The same shape every other receipt uses — `readOptions` parses the
+          // options JSON, and an empty selection becomes no label at all
+          // rather than an empty line under the dish.
+          optionsLabel:
+            readOptions(item.options)
+              .map((option) => option.name)
+              .join(', ') || undefined,
+          quantity: item.quantity,
+          lineTotal: item.lineTotal,
+        })),
+        subtotal: order.subtotal,
+        discountTotal: order.discountTotal,
+        serviceCharge: order.serviceCharge,
+        taxTotal: order.taxTotal,
+        grandTotal: order.grandTotal,
+      }
     },
     'Order created.',
   )

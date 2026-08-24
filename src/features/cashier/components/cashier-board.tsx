@@ -44,7 +44,8 @@ import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/rea
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { downloadReceipt, printReceipt, type PaperWidth } from '@/features/printing/print'
+import { downloadReceipt, printReceipt } from '@/features/printing/print'
+import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import {
@@ -55,6 +56,11 @@ import {
 } from '@/features/cashier/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
+import {
+  MenuPicker,
+  OrderTypeChips,
+  type OrderType,
+} from './menu-picker'
 
 export interface CashierBill {
   id: string
@@ -96,6 +102,7 @@ export function CashierBoard({
   menu,
   startInTakeaway = false,
   branchIds,
+  tables = [],
 }: {
   initialBills: CashierBill[]
   todayTotal: number
@@ -105,16 +112,9 @@ export function CashierBoard({
   branchIds: string[] | null
   menu: PublicMenu
   startInTakeaway?: boolean
-  restaurant: {
-    name: string
-    currency: string
-    locale: string
-    taxLabel: string
-    /** Thermal paper widths chosen in Settings. */
-    paper: { receipt: PaperWidth; kitchen: PaperWidth }
-    addressLine: string | null
-    phone: string | null
-  }
+  /** Free tables, so the dialog can take a dine-in order. */
+  tables?: Array<{ id: string; number: string; area: string | null }>
+  restaurant: ReceiptRestaurant
 }) {
 
   /*
@@ -142,7 +142,25 @@ export function CashierBoard({
   const [filter, setFilter] = React.useState<BillFilter>('ACTIVE')
   const [collected, setCollected] = React.useState({ total: todayTotal, count: todayCount })
   const [takeawayOpen, setTakeawayOpen] = React.useState(startInTakeaway)
-  const [menuSearch, setMenuSearch] = React.useState('')
+  /*
+   * The dialog can ring up anything now, not only takeaway.
+   *
+   * It used to hard-code TAKEAWAY, so a cashier taking a delivery over the
+   * phone had to leave the bill queue they were working in and go to the POS
+   * tab. Same four types as the till, from the same component.
+   */
+  const [orderType, setOrderType] = React.useState<OrderType>('TAKEAWAY')
+  const [tableId, setTableId] = React.useState('')
+
+  /*
+   * One key per order, so a double-click places one.
+   *
+   * `placeOrder` has honoured `idempotencyKey` since it was written and neither
+   * order-entry screen ever sent one. It is minted per cart and only replaced
+   * once an order actually lands, so a retry after a dropped connection
+   * resolves to the same order rather than a second one.
+   */
+  const orderKey = React.useRef(newOrderKey())
   const [customerName, setCustomerName] = React.useState('')
   const [customerPhone, setCustomerPhone] = React.useState('')
   const [notes, setNotes] = React.useState('')
@@ -205,14 +223,6 @@ export function CashierBoard({
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
-  const availableMenu = React.useMemo(
-    () =>
-      menu.items.filter(
-        (item) => item.isAvailable && (menuSearch.trim() === '' || item.name.toLowerCase().includes(menuSearch.trim().toLowerCase())),
-      ),
-    [menu.items, menuSearch],
-  )
-
   const takeawayLines = React.useMemo(
     () =>
       menu.items
@@ -246,6 +256,12 @@ export function CashierBoard({
       setTakeawayError('Enter the customer name and phone number.')
       return
     }
+    // Same rule the till enforces: the kitchen has nowhere to send a dine-in
+    // order that names no table.
+    if (orderType === 'DINE_IN' && !tableId) {
+      setTakeawayError('Choose a table for a dine-in order.')
+      return
+    }
 
     const items = menu.items
       .filter((item) => takeawayCart[item.id])
@@ -265,12 +281,13 @@ export function CashierBoard({
     setTakeawayError(null)
 
     const result = await callAction(() => createStaffOrder({
-      type: 'TAKEAWAY',
-      tableId: '',
+      type: orderType,
+      tableId: orderType === 'DINE_IN' ? tableId : '',
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerEmail: '',
       notes,
+      idempotencyKey: orderKey.current,
       items,
     }))
 
@@ -286,34 +303,46 @@ export function CashierBoard({
     setCustomerName('')
     setCustomerPhone('')
     setNotes('')
-    setMenuSearch('')
-    const next = { ...result.data, orderNumber: result.data.orderNumber }
-    toast.success(`Takeaway order ${result.data.orderNumber} is now in the kitchen`)
+    setTableId('')
+    orderKey.current = newOrderKey()
+
+    const bill = result.data
+    toast.success(`Order ${bill.orderNumber} is now in the kitchen`)
+
+    /*
+     * The optimistic row carries the SERVER's totals.
+     *
+     * It used to insert `serviceCharge: 0, taxTotal: 0, grandTotal:
+     * takeawayTotal` — the naive line-sum — so the queue showed a total the
+     * restaurant does not charge until the next poll quietly corrected it. A
+     * cashier who settled in that window took the wrong money. The action now
+     * returns what it wrote, so there is nothing to guess.
+     */
     setBills((current) => [
       {
-        id: next.orderId,
-        orderNumber: next.orderNumber,
-        type: 'TAKEAWAY',
+        id: bill.orderId,
+        orderNumber: bill.orderNumber,
+        type: orderType === 'COUNTER' ? 'TAKEAWAY' : orderType,
         status: 'PENDING',
         paymentStatus: 'UNPAID',
-        tableNumber: null,
-        customerName: customerName.trim(),
+        tableNumber: bill.tableNumber,
+        customerName: bill.customerName,
         customerPhone: customerPhone.trim(),
-        placedAt: new Date().toISOString(),
+        placedAt: bill.placedAt,
         heldAt: null,
         holdReason: null,
-        subtotal: takeawayTotal,
-        discountTotal: 0,
-        serviceCharge: 0,
-        taxTotal: 0,
-        grandTotal: takeawayTotal,
+        subtotal: bill.subtotal,
+        discountTotal: bill.discountTotal,
+        serviceCharge: bill.serviceCharge,
+        taxTotal: bill.taxTotal,
+        grandTotal: bill.grandTotal,
         paidTotal: 0,
-        items: takeawayLines.map((entry) => ({
-          id: `${entry.id}-takeaway`,
+        items: bill.items.map((entry, index) => ({
+          id: `${bill.orderId}-${index}`,
           name: entry.name,
-          optionsLabel: '',
+          optionsLabel: entry.optionsLabel ?? '',
           quantity: entry.quantity,
-          lineTotal: entry.price * entry.quantity,
+          lineTotal: entry.lineTotal,
         })),
       },
       ...current,
@@ -386,66 +415,57 @@ export function CashierBoard({
         </div>
 
         <Button size="sm" onClick={() => setTakeawayOpen(true)}>
-          <Plus /> New takeaway
+          <Plus /> New order
         </Button>
       </div>
 
       <Dialog open={takeawayOpen} onOpenChange={setTakeawayOpen}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Create takeaway order</DialogTitle>
-            <DialogDescription>Pick menu items, add customer details, and send it straight to the kitchen.</DialogDescription>
+            <DialogTitle>Create an order</DialogTitle>
+            <DialogDescription>Tap a dish to add it, then send it straight to the kitchen.</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
             <div className="space-y-3">
-              <Input
-                value={menuSearch}
-                onChange={(event) => setMenuSearch(event.target.value)}
-                placeholder="Search menu items…"
+              <OrderTypeChips value={orderType} onChange={setOrderType} />
+
+              {/*
+                The same picker the till uses. This dialog used to draw its own
+                list — text rows with no photograph, where the card was not
+                clickable and the word "Add" beside the ± buttons was a span
+                that did nothing. It was reading the same menu, `imageUrl` and
+                all; it just never used it.
+              */}
+              <MenuPicker
+                menu={menu}
+                quantityOf={(id) => takeawayCart[id] ?? 0}
+                onAdd={addTakeawayItem}
+                money={(minor) => formatMoney(minor, restaurant.currency, restaurant.locale)}
+                compact
               />
-
-              <div className="grid max-h-[420px] gap-3 overflow-y-auto pr-1 md:grid-cols-2">
-                {availableMenu.length === 0 ? (
-                  <div className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground md:col-span-2">
-                    No menu items match this search.
-                  </div>
-                ) : (
-                  availableMenu.map((item) => (
-                    <div key={item.id} className="rounded-xl border bg-card p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold">{item.name}</p>
-                          {item.description ? (
-                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.description}</p>
-                          ) : null}
-                        </div>
-                        <Badge variant="secondary">{formatMoney(item.price, restaurant.currency, restaurant.locale)}</Badge>
-                      </div>
-
-                      <div className="mt-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button variant="outline" size="icon-sm" onClick={() => changeTakeawayQty(item.id, -1)}>
-                            −
-                          </Button>
-                          <span className="w-5 text-center text-sm font-semibold tabular-nums">
-                            {takeawayCart[item.id] ?? 0}
-                          </span>
-                          <Button variant="outline" size="icon-sm" onClick={() => addTakeawayItem(item)}>
-                            +
-                          </Button>
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {takeawayCart[item.id] ? `${takeawayCart[item.id]} selected` : 'Add'}
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
             </div>
 
             <div className="space-y-3 rounded-xl border bg-muted/30 p-3">
+              {orderType === 'DINE_IN' ? (
+                <div>
+                  <label className="mb-1 block text-sm font-medium" htmlFor="cb-table">Table</label>
+                  <select
+                    id="cb-table"
+                    value={tableId}
+                    onChange={(event) => setTableId(event.target.value)}
+                    className="h-10 w-full rounded-md border bg-background px-2 text-sm"
+                  >
+                    <option value="">Choose a table…</option>
+                    {tables.map((table) => (
+                      <option key={table.id} value={table.id}>
+                        Table {table.number}
+                        {table.area ? ` · ${table.area}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               <div>
                 <label className="mb-1 block text-sm font-medium">Customer name</label>
                 <Input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="John Doe" />
@@ -465,7 +485,7 @@ export function CashierBoard({
               </div>
 
               <div className="rounded-lg border bg-background p-3">
-                <p className="text-sm font-semibold">Takeaway bill</p>
+                <p className="text-sm font-semibold">Order</p>
                 {takeawayLines.length === 0 ? (
                   <p className="mt-2 text-xs text-muted-foreground">No items selected yet.</p>
                 ) : (
@@ -565,7 +585,7 @@ export function CashierBoard({
                             onClick={(e) => {
                               e.stopPropagation()
                               try {
-                                printReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
+                                printReceipt(buildReceipt(bill, restaurant), restaurant.paper.receipt)
                               } catch (err) {
                                 toast.error('Unable to print receipt')
                               }
@@ -614,54 +634,6 @@ export function CashierBoard({
   )
 }
 
-function buildReceiptForBill(
-  bill: CashierBill,
-  restaurant: {
-    name: string
-    currency: string
-    locale: string
-    taxLabel: string
-    /** Thermal paper widths chosen in Settings. */
-    paper: { receipt: PaperWidth; kitchen: PaperWidth }
-    addressLine: string | null
-    phone: string | null
-  },
-  paymentMethod?: string | null,
-) {
-  return {
-    restaurantName: restaurant.name,
-    addressLine: restaurant.addressLine,
-    phone: restaurant.phone,
-    orderNumber: bill.orderNumber,
-    tableNumber: bill.tableNumber,
-    customerName: bill.customerName,
-    placedAt: bill.placedAt,
-    paymentMethod,
-    lines: bill.items.map((item) => ({
-      name: item.name,
-      optionsLabel: item.optionsLabel,
-      quantity: item.quantity,
-      lineTotal: formatMoney(item.lineTotal, restaurant.currency, restaurant.locale),
-    })),
-    totals: [
-      { label: 'Subtotal', value: formatMoney(bill.subtotal, restaurant.currency, restaurant.locale) },
-      ...(bill.discountTotal
-        ? [{ label: 'Discount', value: `-${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}` }]
-        : []),
-      ...(bill.serviceCharge
-        ? [{ label: 'Service', value: formatMoney(bill.serviceCharge, restaurant.currency, restaurant.locale) }]
-        : []),
-      ...(bill.taxTotal
-        ? [{ label: restaurant.taxLabel, value: formatMoney(bill.taxTotal, restaurant.currency, restaurant.locale) }]
-        : []),
-      {
-        label: 'TOTAL',
-        value: formatMoney(bill.grandTotal, restaurant.currency, restaurant.locale),
-        strong: true,
-      },
-    ],
-  }
-}
 
 function BillingDetailPanel({
   bill,
@@ -669,16 +641,7 @@ function BillingDetailPanel({
   otherBills,
 }: {
   bill: CashierBill
-  restaurant: {
-    name: string
-    currency: string
-    locale: string
-    taxLabel: string
-    /** Thermal paper widths chosen in Settings. */
-    paper: { receipt: PaperWidth; kitchen: PaperWidth }
-    addressLine: string | null
-    phone: string | null
-  }
+  restaurant: ReceiptRestaurant
   otherBills: CashierBill[]
 }) {
   const [splitOpen, setSplitOpen] = React.useState(false)
@@ -687,7 +650,7 @@ function BillingDetailPanel({
 
   const print = () => {
     try {
-      printReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
+      printReceipt(buildReceipt(bill, restaurant), restaurant.paper.receipt)
     } catch {
       toast.error('Unable to print receipt')
     }
@@ -695,7 +658,7 @@ function BillingDetailPanel({
 
   const download = () => {
     try {
-      downloadReceipt(buildReceiptForBill(bill, restaurant), restaurant.paper.receipt)
+      downloadReceipt(buildReceipt(bill, restaurant), restaurant.paper.receipt)
       toast.success('Receipt saved')
     } catch {
       toast.error('Unable to save receipt')
@@ -868,16 +831,7 @@ function BillPanel({
   onSettled,
 }: {
   bill: CashierBill
-  restaurant: {
-    name: string
-    currency: string
-    locale: string
-    taxLabel: string
-    /** Thermal paper widths chosen in Settings. */
-    paper: { receipt: PaperWidth; kitchen: PaperWidth }
-    addressLine: string | null
-    phone: string | null
-  }
+  restaurant: ReceiptRestaurant
   onSettled: (billId: string, amount: number, fullySettled: boolean) => void
 }) {
   const due = Math.max(0, bill.grandTotal - bill.paidTotal)
@@ -932,7 +886,7 @@ function BillPanel({
   }
 
   const print = () => {
-    printReceipt(buildReceiptForBill(bill, restaurant, method), restaurant.paper.receipt)
+    printReceipt(buildReceipt(bill, restaurant, { paymentMethod: method }), restaurant.paper.receipt)
   }
 
   return (
@@ -1427,4 +1381,16 @@ function quickCash(amountMinor: number, currency: string): number[] {
   const rounds = [50, 100, 200, 500, 1000, 2000]
   const presets = rounds.filter((value) => value > major).slice(0, 3)
   return [amountMinor, ...presets.map((value) => value * factor)]
+}
+
+/**
+ * A key for one order.
+ *
+ * `crypto.randomUUID` needs a secure context and a recent engine, which a
+ * counter tablet may not have; the fallback only has to be unique among the
+ * orders one till places.
+ */
+function newOrderKey(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `cb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }

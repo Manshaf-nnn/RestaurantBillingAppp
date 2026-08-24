@@ -50,6 +50,7 @@ const SERVICE = [
   'dashboard-period-test',
   'role-permissions-test',
   'access-links-test',
+  'pos-billing-test',
 ]
 
 const RUNTIME = [

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 
 import { PosTerminal } from '@/features/cashier/components/pos-terminal'
+import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import {
   listStationBranches,
@@ -16,7 +17,7 @@ import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 
-export const metadata: Metadata = { title: 'New order' }
+export const metadata: Metadata = { title: 'POS' }
 
 const TYPES = new Set(['COUNTER', 'TAKEAWAY', 'DELIVERY', 'DINE_IN'])
 
@@ -56,7 +57,7 @@ export default async function PosPage({
     if (choices.length > 1) {
       return (
         <StationBranchPicker
-          title="New order"
+          title="POS"
           description="Which counter are you ringing up at? Its menu, its prices and its tables."
           branches={choices}
           basePath="/cashier/pos"
@@ -98,15 +99,31 @@ export default async function PosPage({
   return (
     <div className="mx-auto w-full max-w-7xl p-4 pb-24 lg:pb-4">
       <header className="mb-4">
-        <h1 className="text-xl font-semibold">New order</h1>
+        <h1 className="text-xl font-semibold">POS</h1>
         <p className="text-sm text-muted-foreground">
-          Tap a dish to add it. Adjust quantity with − and +.
+          Tap a dish to add it. Adjust quantity with − and +, then send it to the kitchen and
+          print the bill.
         </p>
       </header>
       <PosTerminal
         menu={menu}
         currency={restaurant.currency}
         initialType={initialType}
+        /*
+         * What a printed bill needs in its header. The same wiring the cashier
+         * board has always used — see `app/cashier/page.tsx` — including the
+         * 'en' → 'en-IN' locale coercion the other receipt call sites make, and
+         * the owner's 58mm/80mm choice from Settings.
+         */
+        restaurant={{
+          name: restaurant.name,
+          currency: restaurant.currency,
+          locale: restaurant.locale === 'en' ? 'en-IN' : restaurant.locale,
+          taxLabel: restaurant.taxLabel,
+          paper: readPaperWidths(restaurant.printerConfig),
+          addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
+          phone: restaurant.phone,
+        }}
         tables={tables.map((t) => ({ ...t, status: t.status as string }))}
         servers={servers.map((s) => ({ ...s, role: s.role as string }))}
         currentUserId={user.id}

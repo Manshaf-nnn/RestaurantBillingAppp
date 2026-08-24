@@ -132,10 +132,37 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
       { href: '/waiter', label: 'Waiter station', icon: HandPlatter, permission: PERMISSIONS.WAITER_VIEW },
-      { href: '/cashier/pos', label: 'New order', icon: HandPlatter, permission: PERMISSIONS.ORDER_CREATE },
-      { href: '/cashier/pos?type=TAKEAWAY', label: 'Takeaway', icon: HandPlatter, permission: PERMISSIONS.ORDER_CREATE },
-      { href: '/cashier/pos?type=DELIVERY', label: 'Delivery', icon: HandPlatter, permission: PERMISSIONS.ORDER_CREATE },
-      { href: '/cashier', label: 'Cashier', icon: CreditCard, permission: PERMISSIONS.PAYMENT_COLLECT },
+      /*
+       * One entry, because there was only ever one screen.
+       *
+       * "New order", "Takeaway" and "Delivery" all pointed at /cashier/pos and
+       * differed by a `?type=` the page reads once to seed a useState — while
+       * the screen itself carries Dine in / Counter / Takeaway / Delivery chips
+       * across the top. Three menu entries for a control already on the page.
+       *
+       * Two live bugs went with the duplication, and both disappear here rather
+       * than needing a fix:
+       *
+       *   Takeaway and Delivery could never highlight. The active check below
+       *   compares `usePathname()`, which excludes the query string, so on
+       *   /cashier/pos?type=TAKEAWAY it was always "New order" that lit up.
+       *
+       *   `?type=` was dropped whenever the till had not chosen a branch yet —
+       *   the branch redirect and the station picker both rebuild the URL as
+       *   /cashier/pos?branch=…, so "Takeaway" landed you on Counter.
+       *
+       * The page still reads `?type=`, so an old bookmark keeps working.
+       */
+      { href: '/cashier/pos', label: 'POS', icon: HandPlatter, permission: PERMISSIONS.ORDER_CREATE },
+      {
+        href: '/cashier',
+        label: 'Cashier',
+        icon: CreditCard,
+        permission: PERMISSIONS.PAYMENT_COLLECT,
+        // Exact, or `pathname.startsWith('/cashier/')` lights this up at the
+        // same time as POS for anyone holding both permissions.
+        exact: true,
+      },
       {
         href: '/dashboard/online-payments',
         label: 'Online payments',

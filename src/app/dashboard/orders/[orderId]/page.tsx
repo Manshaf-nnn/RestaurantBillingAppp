@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 
+import { readPaperWidths } from '@/features/printing/paper'
 import { OrderDetail } from '@/features/orders/components/order-detail'
 import { getOrderForStaff, readOptions } from '@/features/orders/queries'
 import { can, canAccessBranch, PERMISSIONS } from '@/lib/rbac'
@@ -43,6 +44,9 @@ export default async function OrderDetailPage({
         name: restaurant.name,
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
         phone: restaurant.phone,
+        // The owner's chosen thermal width. This screen used to print 58mm
+        // regardless, because it called printReceipt without one.
+        paper: readPaperWidths(restaurant.printerConfig),
       }}
       canUpdate={can(user, PERMISSIONS.ORDER_UPDATE_STATUS)}
       canCancel={can(user, PERMISSIONS.ORDER_CANCEL)}
