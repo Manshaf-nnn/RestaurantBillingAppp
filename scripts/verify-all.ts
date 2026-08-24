@@ -51,6 +51,7 @@ const SERVICE = [
   'role-permissions-test',
   'access-links-test',
   'pos-billing-test',
+  'variant-order-test',
 ]
 
 const RUNTIME = [

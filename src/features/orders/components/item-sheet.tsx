@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/input'
 import { Checkbox, RadioGroup, RadioGroupItem, Separator } from '@/components/ui/primitives'
 import { SpiceLevelIndicator, VegIndicator } from '@/components/ui/status'
 import { formatMoney } from '@/lib/money'
+import { optionPriceLabel } from '@/features/menu/variant-pricing'
 import { cn } from '@/lib/utils'
 import type { PublicMenuItem } from '@/features/menu/queries'
 import { SPICE_LABELS } from '../pricing'
@@ -87,6 +88,16 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
       return { ...current, [groupId]: [...existing, optionId] }
     })
   }
+
+  /**
+   * How one option reads beside its name.
+   *
+   * A size shows the price of the dish at that size; an add-on shows what it
+   * adds. One shared rule so the guest sheet, the till and the owner's editor
+   * can never describe the same option differently.
+   */
+  const priceLabel = (option: { priceDelta: number }, group: { kind: string; maxSelect: number }) =>
+    optionPriceLabel(option, group, item.price, (minor) => formatMoney(minor, currency, locale))
 
   const submit = () => {
     addItem(item, chosen, quantity, notes)
@@ -196,10 +207,9 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
                           }
                         />
                         <span className="flex-1 text-sm">{option.name}</span>
-                        {option.priceDelta !== 0 ? (
+                        {priceLabel(option, group) ? (
                           <span className="text-sm font-medium text-muted-foreground">
-                            {option.priceDelta > 0 ? '+' : ''}
-                            {formatMoney(option.priceDelta, currency, locale)}
+                            {priceLabel(option, group)}
                           </span>
                         ) : null}
                       </label>
@@ -222,10 +232,17 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
                       >
                         <RadioGroupItem value={option.id} disabled={!option.isAvailable} />
                         <span className="flex-1 text-sm">{option.name}</span>
-                        {option.priceDelta !== 0 ? (
-                          <span className="text-sm font-medium text-muted-foreground">
-                            {option.priceDelta > 0 ? '+' : ''}
-                            {formatMoney(option.priceDelta, currency, locale)}
+                        {priceLabel(option, group) ? (
+                          /*
+                            A size shows what the dish COSTS at that size —
+                            "Full · Rs 1,400" — not "+Rs 550". Nobody prints a
+                            difference on a menu, and a guest should not have to
+                            add two numbers to know what they are paying. An
+                            add-on still reads as "+Rs 300", because that is
+                            genuinely what it is. See `variant-pricing.ts`.
+                          */
+                          <span className="text-sm font-semibold tabular-nums">
+                            {priceLabel(option, group)}
                           </span>
                         ) : null}
                       </label>

@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { Loader2, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -279,6 +279,53 @@ export function FoodDialog({
   const removeGroup = (index: number) =>
     set('variantGroups', form.variantGroups.filter((_, i) => i !== index))
 
+  /**
+   * The dish's own price, as a number, for converting sizes to real prices.
+   *
+   * Read live from the Pricing tab rather than captured once: raising the base
+   * has to move every size in front of the owner, not silently behind them.
+   */
+  const basePrice = Number(form.price) || 0
+
+  /**
+   * Move a row up or down.
+   *
+   * `sortOrder` is derived from array position at save, so reordering is
+   * reordering the array and nothing else. Buttons rather than drag: no new
+   * dependency, and it works from a keyboard, which drag does not.
+   */
+  const moveGroup = (index: number, by: -1 | 1) =>
+    set('variantGroups', swap(form.variantGroups, index, index + by))
+
+  const moveOption = (groupIndex: number, index: number, by: -1 | 1) =>
+    updateGroup(groupIndex, {
+      options: swap(form.variantGroups[groupIndex].options, index, index + by),
+    })
+
+  /**
+   * Which option is pre-selected for the guest.
+   *
+   * Exactly one per single-choice group, so picking a new default clears the
+   * old one — two defaults on a radio group is a state the guest sheet cannot
+   * render. `isDefault` used to be set only on the first option of a brand-new
+   * group and hard-coded false for every one added after, so "Normal" could not
+   * be made the default once the dish had been saved.
+   */
+  const setDefaultOption = (groupIndex: number, optionIndex: number) =>
+    updateGroup(groupIndex, {
+      options: form.variantGroups[groupIndex].options.map((option, i) => ({
+        ...option,
+        isDefault: i === optionIndex,
+      })),
+    })
+
+  const setOptionField = (groupIndex: number, optionIndex: number, patch: Partial<OptionRow>) =>
+    updateGroup(groupIndex, {
+      options: form.variantGroups[groupIndex].options.map((option, i) =>
+        i === optionIndex ? { ...option, ...patch } : option,
+      ),
+    })
+
   const save = async () => {
     setErrors({})
     const nextErrors: Record<string, string> = {}
@@ -534,6 +581,26 @@ export function FoodDialog({
                           />
                         </label>
                       ) : null}
+                      <div className="flex shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={groupIndex === 0}
+                          onClick={() => moveGroup(groupIndex, -1)}
+                          aria-label="Move group up"
+                        >
+                          <ChevronUp />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={groupIndex === form.variantGroups.length - 1}
+                          onClick={() => moveGroup(groupIndex, 1)}
+                          aria-label="Move group down"
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </div>
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -547,33 +614,112 @@ export function FoodDialog({
                     <Separator className="my-3" />
 
                     <div className="space-y-2">
-                      {group.options.map((option, optionIndex) => (
+                      {/*
+                        Column labels, because a bare row of inputs gives no
+                        clue what the number means or what the round button and
+                        the tick do.
+                      */}
+                      <div className="flex items-center gap-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                        {group.kind === 'VARIANT' && group.maxSelect <= 1 ? (
+                          <span className="w-4 shrink-0" title="Pre-selected">•</span>
+                        ) : null}
+                        <span className="flex-1">Option</span>
+                        <span className="w-28">
+                          {group.kind === 'VARIANT' && group.maxSelect <= 1 ? 'Price' : 'Adds'}
+                        </span>
+                        <span className="w-6 shrink-0" title="On sale">On</span>
+                        <span className="w-[5.5rem] shrink-0" />
+                      </div>
+
+                      {group.options.map((option, optionIndex) => {
+                        const asPrice = group.kind === 'VARIANT' && group.maxSelect <= 1
+                        return (
                         <div key={optionIndex} className="flex items-center gap-2">
+                          {/*
+                            Which one is ticked when the guest opens the sheet.
+                            Only meaningful for a single-choice group — an
+                            add-on group has no "the" default.
+                          */}
+                          {asPrice ? (
+                            <button
+                              type="button"
+                              onClick={() => setDefaultOption(groupIndex, optionIndex)}
+                              aria-label={`Make ${option.name || 'this option'} the default`}
+                              title="Pre-selected for the guest"
+                              className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${
+                                option.isDefault ? 'border-primary bg-primary' : 'border-input'
+                              }`}
+                            >
+                              {option.isDefault ? (
+                                <span className="size-1.5 rounded-full bg-primary-foreground" />
+                              ) : null}
+                            </button>
+                          ) : null}
+
                           <Input
                             value={option.name}
                             onChange={(e) =>
-                              updateGroup(groupIndex, {
-                                options: group.options.map((o, i) =>
-                                  i === optionIndex ? { ...o, name: e.target.value } : o,
-                                ),
-                              })
+                              setOptionField(groupIndex, optionIndex, { name: e.target.value })
                             }
                             placeholder="Option name"
                           />
+
+                          {/*
+                            The PRICE, not the difference.
+
+                            This was a bare number meaning "+550 on top of the
+                            dish". An owner asked what a full portion costs
+                            should not have to add two numbers together, and the
+                            spec writes it the way people say it: Full — 1400.
+                            The difference is still what gets stored, so a rise
+                            in the dish's price carries every size with it —
+                            `variant-pricing.ts` owns the conversion.
+                          */}
                           <Input
                             type="number"
-                            value={option.priceDelta}
+                            value={asPrice ? round2(basePrice + option.priceDelta) : option.priceDelta}
                             onChange={(e) =>
-                              updateGroup(groupIndex, {
-                                options: group.options.map((o, i) =>
-                                  i === optionIndex ? { ...o, priceDelta: Number(e.target.value) } : o,
-                                ),
+                              setOptionField(groupIndex, optionIndex, {
+                                priceDelta: asPrice
+                                  ? round2(Number(e.target.value) - basePrice)
+                                  : Number(e.target.value),
                               })
                             }
-                            placeholder="+0"
-                            className="w-24"
-                            title="Price difference"
+                            className="w-28"
+                            title={asPrice ? `What this size costs (${currency})` : `Added to the price (${currency})`}
                           />
+
+                          {/* 86 a size without deleting it. */}
+                          <label className="flex shrink-0 items-center gap-1 text-xs" title="On sale">
+                            <Checkbox
+                              checked={option.isAvailable}
+                              onCheckedChange={(v) =>
+                                setOptionField(groupIndex, optionIndex, { isAvailable: Boolean(v) })
+                              }
+                            />
+                          </label>
+
+                          <div className="flex shrink-0">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={optionIndex === 0}
+                              onClick={() => moveOption(groupIndex, optionIndex, -1)}
+                              aria-label="Move option up"
+                            >
+                              <ChevronUp />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={optionIndex === group.options.length - 1}
+                              onClick={() => moveOption(groupIndex, optionIndex, 1)}
+                              aria-label="Move option down"
+                            >
+                              <ChevronDown />
+                            </Button>
+                          </div>
+
                           <Button
                             variant="ghost"
                             size="icon-sm"
@@ -587,7 +733,8 @@ export function FoodDialog({
                             <Trash2 className="text-muted-foreground" />
                           </Button>
                         </div>
-                      ))}
+                        )
+                      })}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -872,4 +1019,24 @@ function Toggle({
       {label}
     </label>
   )
+}
+
+/** Two rows swapped, or the same array when the move would fall off an end. */
+function swap<T>(rows: T[], from: number, to: number): T[] {
+  if (to < 0 || to >= rows.length) return rows
+  const next = [...rows]
+  ;[next[from], next[to]] = [next[to], next[from]]
+  return next
+}
+
+/**
+ * Money, to two places.
+ *
+ * Converting a price to a difference and back drifts in floating point —
+ * 1400 − 850 lands on 550.0000000000001 often enough to show up in an input
+ * box. The value is major units at this point; `parseMoney` turns it into
+ * minor units on save.
+ */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
 }

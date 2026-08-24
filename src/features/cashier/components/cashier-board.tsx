@@ -61,6 +61,19 @@ import {
   OrderTypeChips,
   type OrderType,
 } from './menu-picker'
+import { OptionDialog } from './option-dialog'
+
+/** One line of a counter order: a dish, its chosen options, and a quantity. */
+interface TakeawayLine {
+  key: string
+  foodId: string
+  name: string
+  quantity: number
+  /** The dish's price plus whatever was chosen on it. */
+  unitPrice: number
+  options: Array<{ id: string; name: string; priceDelta: number }>
+  notes: string
+}
 
 export interface CashierBill {
   id: string
@@ -164,7 +177,17 @@ export function CashierBoard({
   const [customerName, setCustomerName] = React.useState('')
   const [customerPhone, setCustomerPhone] = React.useState('')
   const [notes, setNotes] = React.useState('')
-  const [takeawayCart, setTakeawayCart] = React.useState<Record<string, number>>({})
+  /*
+   * A list, not a `Record<foodId, qty>`.
+   *
+   * The map could only ever hold one entry per dish, which made a Normal and a
+   * Full of the same rice impossible to put on one order — and it is why this
+   * dialog sent `optionIds: []`. Same line shape and same collapse rule as the
+   * till and the guest cart.
+   */
+  const [takeawayCart, setTakeawayCart] = React.useState<TakeawayLine[]>([])
+  /** The dish whose sizes are being chosen, if any. */
+  const [choosing, setChoosing] = React.useState<PublicMenuItem | null>(null)
   const [creatingTakeaway, setCreatingTakeaway] = React.useState(false)
   const [takeawayError, setTakeawayError] = React.useState<string | null>(null)
 
@@ -223,32 +246,55 @@ export function CashierBoard({
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
-  const takeawayLines = React.useMemo(
-    () =>
-      menu.items
-        .filter((item) => takeawayCart[item.id])
-        .map((item) => ({ id: item.id, name: item.name, quantity: takeawayCart[item.id], price: item.price })),
-    [menu.items, takeawayCart],
-  )
-
+  const takeawayLines = takeawayCart
   const takeawayTotal = React.useMemo(
-    () => takeawayLines.reduce((sum, item) => sum + item.price * item.quantity, 0),
-    [takeawayLines],
+    () => takeawayCart.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0),
+    [takeawayCart],
   )
 
+  /** Ask when there is a size to pick; add straight away when there is not. */
   const addTakeawayItem = (item: PublicMenuItem) => {
-    setTakeawayCart((current) => ({ ...current, [item.id]: (current[item.id] ?? 0) + 1 }))
+    if (item.groups.length > 0) {
+      setChoosing(item)
+      return
+    }
+    pushTakeawayLine(item, [], 1, '')
   }
 
-  const changeTakeawayQty = (itemId: string, delta: number) => {
+  const pushTakeawayLine = (
+    item: PublicMenuItem,
+    optionIds: string[],
+    quantity: number,
+    lineNotes: string,
+  ) => {
+    const chosen = item.groups.flatMap((group) =>
+      group.options
+        .filter((option) => optionIds.includes(option.id))
+        .map((option) => ({ id: option.id, name: option.name, priceDelta: option.priceDelta })),
+    )
+    const key = `${item.id}::${[...optionIds].sort().join(',')}::${lineNotes.trim().toLowerCase()}`
+    const unitPrice = item.price + chosen.reduce((sum, option) => sum + option.priceDelta, 0)
+
     setTakeawayCart((current) => {
-      const next = (current[itemId] ?? 0) + delta
-      if (next <= 0) {
-        const { [itemId]: _removed, ...rest } = current
-        return rest
+      const found = current.find((line) => line.key === key)
+      if (!found) {
+        return [
+          ...current,
+          { key, foodId: item.id, name: item.name, quantity, unitPrice, options: chosen, notes: lineNotes },
+        ]
       }
-      return { ...current, [itemId]: next }
+      return current.map((line) =>
+        line.key === key ? { ...line, quantity: Math.min(50, line.quantity + quantity) } : line,
+      )
     })
+  }
+
+  const changeTakeawayQty = (key: string, delta: number) => {
+    setTakeawayCart((current) =>
+      current
+        .map((line) => (line.key === key ? { ...line, quantity: line.quantity + delta } : line))
+        .filter((line) => line.quantity > 0),
+    )
   }
 
   const submitTakeawayOrder = async () => {
@@ -263,14 +309,12 @@ export function CashierBoard({
       return
     }
 
-    const items = menu.items
-      .filter((item) => takeawayCart[item.id])
-      .map((item) => ({
-        foodId: item.id,
-        quantity: takeawayCart[item.id],
-        optionIds: [],
-        notes: '',
-      }))
+    const items = takeawayCart.map((line) => ({
+      foodId: line.foodId,
+      quantity: line.quantity,
+      optionIds: line.options.map((option) => option.id),
+      notes: line.notes,
+    }))
 
     if (!items.length) {
       setTakeawayError('Add at least one menu item to the takeaway order.')
@@ -299,7 +343,7 @@ export function CashierBoard({
     }
 
     setTakeawayOpen(false)
-    setTakeawayCart({})
+    setTakeawayCart([])
     setCustomerName('')
     setCustomerPhone('')
     setNotes('')
@@ -439,7 +483,12 @@ export function CashierBoard({
               */}
               <MenuPicker
                 menu={menu}
-                quantityOf={(id) => takeawayCart[id] ?? 0}
+                quantityOf={(id) =>
+                  takeawayCart.reduce(
+                    (total, line) => (line.foodId === id ? total + line.quantity : total),
+                    0,
+                  )
+                }
                 onAdd={addTakeawayItem}
                 money={(minor) => formatMoney(minor, restaurant.currency, restaurant.locale)}
                 compact
@@ -490,13 +539,47 @@ export function CashierBoard({
                   <p className="mt-2 text-xs text-muted-foreground">No items selected yet.</p>
                 ) : (
                   <div className="mt-2 space-y-2 text-sm">
-                    {takeawayLines.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between gap-3">
-                        <span>
-                          {item.quantity} × {item.name}
-                        </span>
-                        <span className="tabular-nums">
-                          {formatMoney(item.price * item.quantity, restaurant.currency, restaurant.locale)}
+                    {/*
+                      Editable, not a read-out. This was a list of text, so a
+                      cashier who mis-tapped had to close the dialog and start
+                      over. `changeTakeawayQty` existed and had no caller here.
+                    */}
+                    {takeawayLines.map((line) => (
+                      <div key={line.key} className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate">{line.name}</p>
+                          {line.options.length > 0 ? (
+                            <p className="truncate text-xs text-primary">
+                              {line.options.map((option) => option.name).join(' · ')}
+                            </p>
+                          ) : null}
+                          {line.notes ? (
+                            <p className="truncate text-xs text-muted-foreground">{line.notes}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label={`One fewer ${line.name}`}
+                            onClick={() => changeTakeawayQty(line.key, -1)}
+                          >
+                            −
+                          </Button>
+                          <span className="w-5 text-center text-sm font-semibold tabular-nums">
+                            {line.quantity}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label={`One more ${line.name}`}
+                            onClick={() => changeTakeawayQty(line.key, 1)}
+                          >
+                            +
+                          </Button>
+                        </div>
+                        <span className="w-20 shrink-0 text-right tabular-nums">
+                          {formatMoney(line.unitPrice * line.quantity, restaurant.currency, restaurant.locale)}
                         </span>
                       </div>
                     ))}
@@ -509,6 +592,20 @@ export function CashierBoard({
               </div>
 
               {takeawayError ? <p className="text-sm font-medium text-destructive">{takeawayError}</p> : null}
+
+              {choosing ? (
+                <OptionDialog
+                  item={choosing}
+                  currency={restaurant.currency}
+                  locale={restaurant.locale}
+                  money={(minor) => formatMoney(minor, restaurant.currency, restaurant.locale)}
+                  onCancel={() => setChoosing(null)}
+                  onConfirm={(optionIds, quantity, lineNotes) => {
+                    pushTakeawayLine(choosing, optionIds, quantity, lineNotes)
+                    setChoosing(null)
+                  }}
+                />
+              ) : null}
 
               <Button className="w-full" loading={creatingTakeaway} onClick={submitTakeawayOrder}>
                 Send to kitchen and bill customer

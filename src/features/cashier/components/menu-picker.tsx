@@ -6,6 +6,7 @@ import { Search, UtensilsCrossed } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
+import { priceRange } from '@/features/menu/variant-pricing'
 
 /**
  * The menu, as a grid of photographs you tap to add.
@@ -136,6 +137,8 @@ function FoodCard({
   money: (minor: number) => string
   onAdd: () => void
 }) {
+  const range = priceRange(item.price, item.groups)
+
   return (
     <button
       type="button"
@@ -165,7 +168,17 @@ function FoodCard({
       </div>
       <div className="p-2.5">
         <p className="line-clamp-2 text-sm font-medium leading-snug">{item.name}</p>
-        <p className="mt-1 text-sm font-semibold tabular-nums text-primary">{money(item.price)}</p>
+        {/*
+          A cashier needs the same warning a guest does: this dish is going to
+          ask a question. Without it, tapping a dish opens a dialog seemingly at
+          random.
+        */}
+        <p className="mt-1 text-sm font-semibold tabular-nums text-primary">
+          {range.sizeCount > 0 ? `from ${money(range.from)}` : money(item.price)}
+        </p>
+        {range.sizeCount > 0 ? (
+          <p className="text-xs text-muted-foreground">{range.sizeCount} sizes</p>
+        ) : null}
       </div>
     </button>
   )

@@ -21,6 +21,7 @@ import {
   StepButton,
   type OrderType,
 } from './menu-picker'
+import { OptionDialog } from './option-dialog'
 
 /**
  * The till — one screen for every kind of order.
@@ -50,8 +51,21 @@ import {
  */
 
 interface Line {
+  /** food id + chosen options: Normal and Full are two lines, not one. */
+  key: string
   item: PublicMenuItem
   quantity: number
+  options: Array<{ id: string; name: string; groupName: string; priceDelta: number }>
+  notes: string
+}
+
+/**
+ * The same collapse rule the guest cart uses (`cart-store.tsx`): identical dish
+ * AND identical choices merge; anything else stays its own line. Sorted,
+ * because the order a cashier ticks two add-ons in does not make a new line.
+ */
+function lineKey(foodId: string, optionIds: string[], notes: string): string {
+  return `${foodId}::${[...optionIds].sort().join(',')}::${notes.trim().toLowerCase()}`
 }
 
 export function PosTerminal({
@@ -87,6 +101,8 @@ export function PosTerminal({
   const [servedById, setServedById] = React.useState(currentUserId ?? '')
   /** The finished bill, once the order has gone. */
   const [bill, setBill] = React.useState<StaffOrderBill | null>(null)
+  /** The dish whose sizes are being chosen, if any. */
+  const [choosing, setChoosing] = React.useState<PublicMenuItem | null>(null)
 
   /*
    * One key per cart, so a double tap places one order.
@@ -101,30 +117,73 @@ export function PosTerminal({
 
   const money = (minor: number) => formatMoney(minor, currency, restaurant.locale)
 
+  /*
+   * Summed, not found. One dish can now be on the order more than once — a
+   * Normal and a Full — and the badge on its photo should say how many of that
+   * dish are going to the kitchen, whatever size they are.
+   */
   const qtyOf = React.useCallback(
-    (id: string) => lines.find((l) => l.item.id === id)?.quantity ?? 0,
+    (id: string) =>
+      lines.reduce((total, line) => (line.item.id === id ? total + line.quantity : total), 0),
     [lines],
   )
 
+  /*
+   * A dish with options asks; a dish without adds on the tap.
+   *
+   * Putting a dialog in front of a cashier that has nothing in it but a Confirm
+   * button is how a till gets slow, so the question is only asked when there is
+   * genuinely something to answer.
+   */
   const add = (item: PublicMenuItem) => {
+    if (item.groups.length > 0) {
+      setChoosing(item)
+      return
+    }
+    addLine(item, [], 1, '')
+  }
+
+  const addLine = (
+    item: PublicMenuItem,
+    optionIds: string[],
+    quantity: number,
+    notes: string,
+  ) => {
+    const chosen = item.groups
+      .flatMap((group) =>
+        group.options
+          .filter((option) => optionIds.includes(option.id))
+          .map((option) => ({
+            id: option.id,
+            name: option.name,
+            groupName: group.name,
+            priceDelta: option.priceDelta,
+          })),
+      )
+    const key = lineKey(item.id, optionIds, notes)
+
     setLines((current) => {
-      const found = current.find((l) => l.item.id === item.id)
-      if (!found) return [...current, { item, quantity: 1 }]
+      const found = current.find((l) => l.key === key)
+      if (!found) return [...current, { key, item, quantity, options: chosen, notes }]
       return current.map((l) =>
-        l.item.id === item.id ? { ...l, quantity: Math.min(50, l.quantity + 1) } : l,
+        l.key === key ? { ...l, quantity: Math.min(50, l.quantity + quantity) } : l,
       )
     })
   }
 
-  const setQty = (id: string, quantity: number) => {
+  const setQty = (key: string, quantity: number) => {
     setLines((current) =>
       quantity <= 0
-        ? current.filter((l) => l.item.id !== id)
-        : current.map((l) => (l.item.id === id ? { ...l, quantity: Math.min(50, quantity) } : l)),
+        ? current.filter((l) => l.key !== key)
+        : current.map((l) => (l.key === key ? { ...l, quantity: Math.min(50, quantity) } : l)),
     )
   }
 
-  const subtotal = lines.reduce((total, l) => total + l.item.price * l.quantity, 0)
+  /** What one of this line costs: the dish, plus whatever was chosen on it. */
+  const unitOf = (line: Line) =>
+    line.item.price + line.options.reduce((total, option) => total + option.priceDelta, 0)
+
+  const subtotal = lines.reduce((total, l) => total + unitOf(l) * l.quantity, 0)
   const count = lines.reduce((total, l) => total + l.quantity, 0)
 
   /** Clear the till for the next guest. */
@@ -165,7 +224,12 @@ export function PosTerminal({
         customerPhone: phone,
         notes,
         idempotencyKey: idempotencyKey.current,
-        items: lines.map((l) => ({ foodId: l.item.id, quantity: l.quantity, optionIds: [] })),
+        items: lines.map((l) => ({
+          foodId: l.item.id,
+          quantity: l.quantity,
+          optionIds: l.options.map((option) => option.id),
+          notes: l.notes,
+        })),
       }),
     )
     setBusy(false)
@@ -235,18 +299,28 @@ export function PosTerminal({
               ) : (
                 <ul className="divide-y divide-border">
                   {lines.map((line) => (
-                    <li key={line.item.id} className="flex items-center gap-3 px-4 py-3">
+                    <li key={line.key} className="flex items-center gap-3 px-4 py-3">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{line.item.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {money(line.item.price)} each
-                        </p>
+                        {/*
+                          The chosen size, named. Without it two lines of the
+                          same dish at different prices look like a mistake.
+                        */}
+                        {line.options.length > 0 ? (
+                          <p className="truncate text-xs text-primary">
+                            {line.options.map((option) => option.name).join(' · ')}
+                          </p>
+                        ) : null}
+                        <p className="text-xs text-muted-foreground">{money(unitOf(line))} each</p>
+                        {line.notes ? (
+                          <p className="truncate text-xs text-muted-foreground">{line.notes}</p>
+                        ) : null}
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
                         <StepButton
                           label={`Remove one ${line.item.name}`}
-                          onClick={() => setQty(line.item.id, line.quantity - 1)}
+                          onClick={() => setQty(line.key, line.quantity - 1)}
                         >
                           {line.quantity === 1 ? (
                             <Trash2 className="h-4 w-4" />
@@ -259,14 +333,14 @@ export function PosTerminal({
                         </span>
                         <StepButton
                           label={`Add one ${line.item.name}`}
-                          onClick={() => setQty(line.item.id, line.quantity + 1)}
+                          onClick={() => setQty(line.key, line.quantity + 1)}
                         >
                           <Plus className="h-4 w-4" />
                         </StepButton>
                       </div>
 
                       <span className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums">
-                        {money(line.item.price * line.quantity)}
+                        {money(unitOf(line) * line.quantity)}
                       </span>
                     </li>
                   ))}
@@ -374,6 +448,20 @@ export function PosTerminal({
           )}
         </div>
       </aside>
+
+      {choosing ? (
+        <OptionDialog
+          item={choosing}
+          currency={currency}
+          locale={restaurant.locale}
+          money={money}
+          onCancel={() => setChoosing(null)}
+          onConfirm={(optionIds, quantity, itemNotes) => {
+            addLine(choosing, optionIds, quantity, itemNotes)
+            setChoosing(null)
+          }}
+        />
+      ) : null}
 
       {/* Mobile: a persistent bar so the running total is always visible. */}
       {count > 0 && !cartOpen && (

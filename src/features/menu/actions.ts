@@ -279,9 +279,6 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
           })
           if (!existing) throw new NotFoundError('Menu item')
           await tx.food.update({ where: { id: foodId }, data: base })
-          // Option groups are fully replaced — simplest correct semantics for
-          // a form that edits them as one unit.
-          await tx.variantGroup.deleteMany({ where: { foodId } })
           await tx.recipeItem.deleteMany({ where: { foodId } })
         } else {
           const created = await tx.food.create({
@@ -315,27 +312,91 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
           })
         }
 
-        for (const group of data.variantGroups) {
-          await tx.variantGroup.create({
-            data: {
-              foodId,
-              name: group.name,
-              kind: group.kind,
-              isRequired: group.isRequired,
-              minSelect: group.minSelect,
-              maxSelect: group.maxSelect,
-              sortOrder: group.sortOrder,
-              options: {
-                create: group.options.map((option, index) => ({
-                  name: option.name,
-                  priceDelta: option.priceDelta,
-                  isDefault: option.isDefault,
-                  isAvailable: option.isAvailable,
-                  sortOrder: option.sortOrder || index,
-                })),
-              },
-            },
+        /*
+         * ── Option ids have to survive a save ─────────────────────────────
+         *
+         * This used to `deleteMany` every group and recreate them, which mints
+         * fresh cuids for every group and option on every save. The form has
+         * always sent the ids back; they were accepted by zod and then thrown
+         * away.
+         *
+         * The cost was not historical — an order snapshots its choices onto
+         * `OrderItem.options`, so past orders were never at risk. It was LIVE
+         * carts. A guest browsing with a basket open, an owner correcting a
+         * typo on that dish, and the guest's next tap fails `INVALID_OPTION` —
+         * the tamper check, fired at somebody who tampered with nothing. Their
+         * basket dies and the message accuses them.
+         *
+         * So: update what came back with an id, create what is new, and delete
+         * only what the form actually dropped.
+         */
+        const keptGroupIds = data.variantGroups
+          .map((group) => group.id)
+          .filter((id): id is string => Boolean(id))
+
+        await tx.variantGroup.deleteMany({
+          where: { foodId, ...(keptGroupIds.length ? { id: { notIn: keptGroupIds } } : {}) },
+        })
+
+        for (const [groupIndex, group] of data.variantGroups.entries()) {
+          const groupFields = {
+            name: group.name,
+            kind: group.kind,
+            isRequired: group.isRequired,
+            minSelect: group.minSelect,
+            maxSelect: group.maxSelect,
+            sortOrder: group.sortOrder || groupIndex,
+          }
+
+          /*
+           * `updateMany` rather than `update`, and scoped by `foodId` — an id
+           * from the payload is only trusted once it is proved to belong to
+           * this dish. `count === 0` means it did not, and the group is created
+           * fresh rather than silently editing another dish's options.
+           */
+          let groupId = group.id ?? null
+          if (groupId) {
+            const touched = await tx.variantGroup.updateMany({
+              where: { id: groupId, foodId },
+              data: groupFields,
+            })
+            if (touched.count === 0) groupId = null
+          }
+          if (!groupId) {
+            const created = await tx.variantGroup.create({ data: { foodId, ...groupFields } })
+            groupId = created.id
+          }
+
+          const keptOptionIds = group.options
+            .map((option) => option.id)
+            .filter((id): id is string => Boolean(id))
+
+          await tx.variantOption.deleteMany({
+            where: { groupId, ...(keptOptionIds.length ? { id: { notIn: keptOptionIds } } : {}) },
           })
+
+          for (const [index, option] of group.options.entries()) {
+            const optionFields = {
+              name: option.name,
+              priceDelta: option.priceDelta,
+              isDefault: option.isDefault,
+              isAvailable: option.isAvailable,
+              // `??`, not `||`: an option that genuinely sorts first has
+              // sortOrder 0, and the old falsy check pushed it to its index.
+              sortOrder: option.sortOrder ?? index,
+            }
+
+            const touched = option.id
+              ? await tx.variantOption.updateMany({
+                  where: { id: option.id, groupId },
+                  data: optionFields,
+                })
+              : { count: 0 }
+
+            if (touched.count === 0) {
+              await tx.variantOption.create({ data: { groupId, ...optionFields } })
+            }
+          }
         }
 
         if (data.recipe.length) {

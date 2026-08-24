@@ -34,6 +34,7 @@ import { Input } from '@/components/ui/input'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { SpiceLevelIndicator, VegIndicator } from '@/components/ui/status'
 import { formatMoney } from '@/lib/money'
+import { priceRange } from '@/features/menu/variant-pricing'
 import { cn } from '@/lib/utils'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { createServiceRequest } from '../actions'
@@ -446,19 +447,37 @@ export function MenuBrowser({
                           {item.name}
                         </h3>
 
-                        <div className="mt-1 flex items-center gap-2">
-                          <span
-                            className="text-[15px] font-bold"
-                            style={{ color: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
-                          >
-                            {formatMoney(item.price, currency, locale)}
-                          </span>
-                          {item.compareAt ? (
-                            <span className="guest-ink-faint text-xs line-through">
-                              {formatMoney(item.compareAt, currency, locale)}
-                            </span>
-                          ) : null}
-                        </div>
+                        {/*
+                          "from Rs 850 · 2 sizes" when a dish has portions.
+                          The card used to print one price whether the dish came
+                          in three sizes or none, so a guest had no reason to
+                          expect the sheet to ask them anything — the size
+                          picker was there and invisible.
+                        */}
+                        {(() => {
+                          const range = priceRange(item.price, item.groups)
+                          return (
+                            <div className="mt-1 flex items-center gap-2">
+                              <span
+                                className="text-[15px] font-bold"
+                                style={{ color: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))' }}
+                              >
+                                {range.sizeCount > 0
+                                  ? `from ${formatMoney(range.from, currency, locale)}`
+                                  : formatMoney(item.price, currency, locale)}
+                              </span>
+                              {range.sizeCount > 0 ? (
+                                <span className="guest-ink-faint text-xs">
+                                  {range.sizeCount} sizes
+                                </span>
+                              ) : item.compareAt ? (
+                                <span className="guest-ink-faint text-xs line-through">
+                                  {formatMoney(item.compareAt, currency, locale)}
+                                </span>
+                              ) : null}
+                            </div>
+                          )
+                        })()}
 
                         {item.description ? (
                           <p className="guest-ink-muted mt-1.5 line-clamp-2 text-xs leading-relaxed">
