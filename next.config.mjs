@@ -1,8 +1,18 @@
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 
+/*
+ * Stamped at build time, not read at runtime.
+ *
+ * A serverless function can tell you when it woke up; it cannot tell you when
+ * the code it is running was compiled, and the two can be weeks apart. This is
+ * how `/api/health` reports the age of the deploy — see `lib/build-info.ts`.
+ */
+const BUILD_TIME = new Date().toISOString()
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  env: { NEXT_PUBLIC_BUILD_TIME: BUILD_TIME },
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,

@@ -24,9 +24,16 @@ services:
     autoDeploy: true
     # Build the app (no database needed here).
     buildCommand: npm ci && npx prisma generate && npx next build
-    # Runs after the build, with the database available: create/upgrade tables
-    # and make sure the admin account exists. Safe to run on every deploy.
-    preDeployCommand: npx prisma db push && npm run db:seed:prod
+    # Runs after the build, with the database available: bring the schema up to
+    # date and make sure the admin account exists. Safe to run on every deploy.
+    #
+    # This used to be `npx prisma db push`, which applies the schema WITHOUT
+    # recording any migration history — and a database in that state makes
+    # `prisma migrate deploy` (what Netlify runs) abort with P3005, so the two
+    # hosts could not share a database and the Netlify build failed on every
+    # push. `db:deploy:safe` migrates properly and baselines a pushed database
+    # once, so both hosts agree from then on.
+    preDeployCommand: npm run db:deploy:safe && npm run db:seed:prod
     startCommand: node server.mjs
     envVars:
       - key: DATABASE_URL

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/server/db/prisma'
 import { isRealtimeReady } from '@/server/realtime/emitter'
 import { isRedisEnabled } from '@/server/cache/redis'
+import { buildInfo } from '@/lib/build-info'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +28,12 @@ export async function GET() {
       status: healthy ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
       checks,
-      version: '1.0.0',
+      /*
+       * The commit this build came from — the answer to "did my fix reach the
+       * site". It used to be the string '1.0.0', which was the same on every
+       * deploy and so could never tell anyone anything.
+       */
+      build: buildInfo(),
     },
     { status: healthy ? 200 : 503 },
   )
