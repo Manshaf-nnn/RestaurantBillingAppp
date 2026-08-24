@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Customer analytics' }
 
 export default async function CustomerAnalyticsPage() {
-  const user = await requirePagePermission(PERMISSIONS.CUSTOMER_VIEW, '/dashboard/customers/analytics')
+  const user = await requirePagePermission(PERMISSIONS.CUSTOMER_ANALYTICS, '/dashboard/customers/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
   const data = await getCustomerAnalytics({

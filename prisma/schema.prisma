@@ -497,6 +497,7 @@ model Restaurant {
   mediaBackups     MediaBackup[]
   mediaAssets      MediaAsset[]
   invites          Invite[]
+  staffRoles       StaffRole[]
   menuSnapshots    RestaurantMenuSnapshot[]
   branches         Branch[]
   cashDrawers      CashDrawerSession[]
@@ -609,8 +610,13 @@ model User {
   phone        String?
   avatarUrl    String?
   role         UserRole @default(WAITER)
-  /// extra permission keys granted on top of the role defaults
+  /// extra permission keys granted on top of whatever the role gives
   permissions  String[] @default([])
+
+  /// The restaurant's own role, when this person holds one. Its permission
+  /// list REPLACES the preset defaults — see `permissionsFor` in lib/rbac.ts.
+  staffRoleId String?
+  staffRole   StaffRole? @relation("UserStaffRole", fields: [staffRoleId], references: [id], onDelete: SetNull)
 
   isActive        Boolean   @default(true)
   emailVerifiedAt DateTime?
@@ -633,6 +639,8 @@ model User {
   shifts              StaffShift[]
   handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
   createdInvites      Invite[]
+  accessLinks         Invite[]            @relation("InviteForUser")
+  staffRolesCreated   StaffRole[]         @relation("StaffRoleCreatedBy")
   branchId            String?
   /// Short human code a member of staff can be identified by — on a waiter
   /// link, a printed docket, or when an owner asks "who served table 4?".
@@ -672,6 +680,7 @@ model User {
   @@unique([email])
   @@unique([restaurantId, staffCode])
   @@index([restaurantId, role])
+  @@index([restaurantId, staffRoleId])
   @@index([restaurantId, isActive])
   @@index([restaurantId, branchId])
   @@map("users")
@@ -709,6 +718,68 @@ model VerificationToken {
   @@map("verification_tokens")
 }
 
+/// A role the restaurant defined for itself.
+///
+/// `UserRole` is a Prisma enum and always will be — `ROLE_HOME`, the edge gate
+/// in middleware and `visibleBranchIds` all switch on it, and 109 files import
+/// the module that does. So a custom role does not replace the enum; it names
+/// the built-in it behaves like (`preset`) and carries its own explicit
+/// permission list.
+///
+/// That list is the whole point. `permissionsFor` used to be role defaults ∪
+/// per-user grants, which can only ever ADD — there was no way to take the
+/// payments screen off a cashier, because the union put it back. Storing the
+/// complete set means OFF is expressible, and means nothing has to compute the
+/// precedence between a grant list and a deny list on 152 separate call sites.
+model StaffRole {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  /// The built-in this was cloned from. Decides branch semantics, where the
+  /// person lands after signing in, and what the edge gate lets through.
+  preset UserRole
+
+  /// The complete permission list. Replaces the preset's defaults rather than
+  /// adding to them.
+  permissions String[] @default([])
+
+  /// The location members of this role work at. Null means the role does not
+  /// pin one and the member's own branch decides.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  isActive Boolean @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("StaffRoleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  members User[] @relation("UserStaffRole")
+  invites Invite[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, isActive])
+  @@map("staff_roles")
+}
+
+/// How a share link signs somebody in.
+enum InviteMode {
+  /// The link opens a login scoped to its role and branch, and the person
+  /// enters their email and code. The link alone is not a credential.
+  PERSONAL
+  /// Opening the link signs the device in. For a kitchen tablet or a counter
+  /// screen that reboots and must come straight back up. The link IS the
+  /// credential and has to be treated like one.
+  SHARED_DEVICE
+}
+
 /// Short-lived invite links that create a temporary staff session for a role.
 model Invite {
   id           String     @id @default(cuid())
@@ -722,7 +793,36 @@ model Invite {
   createdBy    User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt    DateTime   @default(now())
 
+  /// PERSONAL asks for an email and code; SHARED_DEVICE signs the device in.
+  /// Existing rows are SHARED_DEVICE because that is what they already do.
+  mode InviteMode @default(SHARED_DEVICE)
+
+  /// The location this link is for.
+  ///
+  /// Absent until now, and that was the bug behind "the screen is empty": the
+  /// account the link created had no branch, so `visibleBranchIds` returned []
+  /// — sees nothing — and every list on every page came back empty with no
+  /// error anywhere to explain it.
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  /// The custom role this link grants, when it is not a plain preset.
+  staffRoleId String?
+  staffRole   StaffRole? @relation(fields: [staffRoleId], references: [id], onDelete: SetNull)
+
+  /// For PERSONAL links: whose account it signs in to.
+  userId String?
+  user   User?   @relation("InviteForUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// What the owner called it — "Kitchen tablet", "Nadia — Branch 02".
+  label String?
+
+  /// So an owner can tell a link nobody has opened from one in daily use.
+  lastUsedAt DateTime?
+  useCount   Int       @default(0)
+
   @@index([restaurantId, isActive])
+  @@index([restaurantId, branchId])
   @@map("invites")
 }
 
@@ -1962,6 +2062,8 @@ model Branch {
   shiftNotes       ShiftNote[]
   notifications    Notification[]
   purchaseReturns  PurchaseReturn[]
+  staffRoles       StaffRole[]
+  accessLinks      Invite[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])

@@ -66,6 +66,35 @@ export const PERMISSIONS = {
   AUDIT_VIEW: 'audit.view',
   REVIEW_MANAGE: 'review.manage',
 
+  /*
+   * ── Screens that used to borrow somebody else's permission ────────────────
+   *
+   * An owner is meant to see every feature while building a role and switch
+   * each one on or off. That was impossible for a dozen screens, because they
+   * did not have a permission of their own — all six reports answered to
+   * `report.view`, Approvals and Things-to-do to `dashboard.view`, Recipes to
+   * `menu.view`. Turning one off turned the whole group off, and turning
+   * Approvals off would have taken the dashboard with it.
+   *
+   * Each of these is granted below to exactly the roles that hold its old
+   * parent, so no existing account gains or loses anything the day this ships.
+   * They exist to be switched OFF individually from now on.
+   */
+  TASKS_VIEW: 'tasks.view',
+  APPROVALS_VIEW: 'approvals.view',
+  HANDOVER_VIEW: 'handover.view',
+  RECIPE_VIEW: 'recipe.view',
+  LOYALTY_VIEW: 'loyalty.view',
+  QR_VIEW: 'qr.view',
+  FEEDBACK_VIEW: 'feedback.view',
+  CUSTOMER_ANALYTICS: 'customer.analytics',
+  REPORT_SALES: 'report.sales',
+  REPORT_PROFIT: 'report.profit',
+  REPORT_INVENTORY: 'report.inventory',
+  REPORT_PURCHASING: 'report.purchasing',
+  REPORT_VARIANCE: 'report.variance',
+  REPORT_RECONCILIATION: 'report.reconciliation',
+
   // inventory — moving stock and changing what it cost are separate powers
   // from ordinary stock-keeping, so they are separate permissions.
   INVENTORY_ADJUST: 'inventory.adjust',
@@ -247,18 +276,66 @@ const ACCOUNTANT: Permission[] = [
   PERMISSIONS.CUSTOMER_VIEW,
 ]
 
+/**
+ * Which permission each newly-split screen used to answer to.
+ *
+ * Splitting them is what makes "Approvals OFF, Dashboard ON" expressible. But
+ * a split is a silent downgrade if the roles are not brought with it: the day
+ * `report.sales` appears, an accountant holding `report.view` would lose the
+ * sales report unless something grants it.
+ *
+ * So the defaults are DERIVED rather than retyped into eight arrays. Anyone
+ * holding the parent gets the child, which by construction means no account
+ * gains or loses a thing on the day of the migration. Hand-editing the arrays
+ * would have been fourteen chances to miss one, in a file where missing one is
+ * invisible until somebody's screen is empty.
+ */
+const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
+  [PERMISSIONS.TASKS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
+  [PERMISSIONS.APPROVALS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
+  [PERMISSIONS.HANDOVER_VIEW, PERMISSIONS.ORDER_VIEW],
+  [PERMISSIONS.RECIPE_VIEW, PERMISSIONS.MENU_VIEW],
+  [PERMISSIONS.LOYALTY_VIEW, PERMISSIONS.SETTINGS_VIEW],
+  [PERMISSIONS.QR_VIEW, PERMISSIONS.SETTINGS_VIEW],
+  [PERMISSIONS.FEEDBACK_VIEW, PERMISSIONS.REVIEW_MANAGE],
+  [PERMISSIONS.CUSTOMER_ANALYTICS, PERMISSIONS.CUSTOMER_VIEW],
+  [PERMISSIONS.REPORT_SALES, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_PROFIT, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_INVENTORY, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_PURCHASING, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_VARIANCE, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_RECONCILIATION, PERMISSIONS.REPORT_VIEW],
+]
+
+/** Grant every split child to whoever already holds its parent. */
+function withSplits(list: Permission[]): Permission[] {
+  const set = new Set<Permission>(list)
+  for (const [child, parent] of SPLIT_FROM) {
+    if (set.has(parent)) set.add(child)
+  }
+  return [...set]
+}
+
+/**
+ * The built-in roles.
+ *
+ * From here on these are TEMPLATES as much as they are roles: a restaurant
+ * that customises one gets a `StaffRole` row holding an explicit permission
+ * list, seeded from the array here. This stays the answer for everyone who has
+ * not customised anything, which is every account today.
+ */
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
-  ADMIN,
-  INVENTORY_MANAGER,
-  PURCHASING_MANAGER,
-  WAREHOUSE_STAFF,
-  ACCOUNTANT,
+  ADMIN: withSplits(ADMIN),
+  INVENTORY_MANAGER: withSplits(INVENTORY_MANAGER),
+  PURCHASING_MANAGER: withSplits(PURCHASING_MANAGER),
+  WAREHOUSE_STAFF: withSplits(WAREHOUSE_STAFF),
+  ACCOUNTANT: withSplits(ACCOUNTANT),
   SUPER_ADMIN: ALL,
   OWNER: ALL,
-  MANAGER,
-  KITCHEN,
-  CASHIER,
-  WAITER,
+  MANAGER: withSplits(MANAGER),
+  KITCHEN: withSplits(KITCHEN),
+  CASHIER: withSplits(CASHIER),
+  WAITER: withSplits(WAITER),
 }
 
 export const ROLE_LABELS: Record<UserRole, string> = {
@@ -294,11 +371,48 @@ export const ROLE_HOME: Record<UserRole, string> = {
 
 export interface PermissionSubject {
   role: UserRole
+  /** Extra keys granted to this one person, on top of whatever the role gives. */
   permissions?: string[]
+  /**
+   * The complete permission list from a saved `StaffRole`, when the person has
+   * one. Present means it REPLACES the role defaults; absent or null means
+   * fall back to them.
+   */
+  rolePermissions?: string[] | null
 }
 
+/**
+ * Everything this person may do.
+ *
+ * ── Why a saved role REPLACES the defaults rather than adding to them ───────
+ *
+ * This used to be `ROLE_PERMISSIONS[role] ∪ user.permissions` and nothing
+ * else, which can only ever grant. An owner could give a cashier the inventory
+ * screen; there was no way to take the payment screen away, because the union
+ * always put it back. Every ON/OFF switch in the role builder needs the OFF
+ * half to mean something.
+ *
+ * The alternative — keeping the union and adding a deny list — was rejected.
+ * It makes every one of the 152 permission checks in this codebase depend on
+ * getting a precedence rule right, and a deny list that is consulted in one
+ * place and forgotten in another fails open. Storing the answer instead of
+ * computing it means there is nothing to get wrong: what the row says is what
+ * the person has.
+ *
+ * Per-user `permissions` still adds on top, so "this one cashier may also
+ * approve wastage" needs no bespoke role.
+ *
+ * ── The owner is not lockable ───────────────────────────────────────────────
+ *
+ * An owner who saves a role for themselves with Settings switched off could
+ * not switch it back on — the screen they need is the screen they just
+ * removed. That is unrecoverable without database access, so it is refused at
+ * the only level that matters. The same applies to the platform operator.
+ */
 export function permissionsFor(subject: PermissionSubject): Set<string> {
-  return new Set<string>([...ROLE_PERMISSIONS[subject.role], ...(subject.permissions ?? [])])
+  if (subject.role === 'OWNER' || subject.role === 'SUPER_ADMIN') return new Set<string>(ALL)
+  const base = subject.rolePermissions ?? ROLE_PERMISSIONS[subject.role]
+  return new Set<string>([...base, ...(subject.permissions ?? [])])
 }
 
 export function can(subject: PermissionSubject | null | undefined, permission: Permission): boolean {

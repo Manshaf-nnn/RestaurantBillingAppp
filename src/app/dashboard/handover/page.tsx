@@ -17,7 +17,7 @@ export default async function HandoverPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.ORDER_VIEW, '/dashboard/handover')
+  const user = await requirePagePermission(PERMISSIONS.HANDOVER_VIEW, '/dashboard/handover')
 
   /*
    * `branchIds`, not `scopeToOne`. A handover board is one of the few screens

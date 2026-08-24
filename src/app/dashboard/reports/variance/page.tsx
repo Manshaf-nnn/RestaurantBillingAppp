@@ -20,7 +20,7 @@ export default async function VarianceReportPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.REPORT_VIEW, '/dashboard/reports/variance')
+  const user = await requirePagePermission(PERMISSIONS.REPORT_VARIANCE, '/dashboard/reports/variance')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

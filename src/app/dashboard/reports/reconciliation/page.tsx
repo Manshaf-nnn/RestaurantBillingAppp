@@ -27,7 +27,7 @@ export default async function ReconciliationPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.REPORT_VIEW, '/dashboard/reports/reconciliation')
+  const user = await requirePagePermission(PERMISSIONS.REPORT_RECONCILIATION, '/dashboard/reports/reconciliation')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

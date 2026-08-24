@@ -56,6 +56,15 @@ export interface ShellUser {
   // compile here while being invisible to the shell.
   role: UserRole
   permissions: string[]
+  /**
+   * The saved role's complete list, when this person holds one.
+   *
+   * The sidebar has to be handed the same three inputs `permissionsFor` reads
+   * on the server, or it filters against the preset defaults and shows items
+   * the pages then refuse — a menu that lies, which is the failure the whole
+   * feature-toggle system exists to avoid.
+   */
+  rolePermissions: string[] | null
   avatarUrl: string | null
 }
 

@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Recipes' }
 
 export default async function RecipesPage() {
-  const user = await requirePagePermission(PERMISSIONS.MENU_VIEW, '/dashboard/recipes')
+  const user = await requirePagePermission(PERMISSIONS.RECIPE_VIEW, '/dashboard/recipes')
   const restaurant = await requireRestaurant(user.restaurantId)
   const rows = await listRecipeRows(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)

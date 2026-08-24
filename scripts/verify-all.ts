@@ -27,7 +27,7 @@ const BASE_URL = process.env.BASE_URL
 
 const STATIC = [
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
-  'no-unscoped-branch-pages',
+  'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
 ]
 
 const SERVICE = [
@@ -48,10 +48,12 @@ const SERVICE = [
   'locations-test',
   'branch-isolation-test',
   'dashboard-period-test',
+  'role-permissions-test',
 ]
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  'role-url-refusal-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
 ]

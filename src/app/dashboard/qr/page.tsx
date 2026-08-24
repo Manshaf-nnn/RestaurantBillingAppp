@@ -32,7 +32,7 @@ export const metadata: Metadata = { title: 'QR codes' }
  * on a laminated card that will be photographed.
  */
 export default async function QrPage() {
-  const user = await requirePagePermission(PERMISSIONS.SETTINGS_VIEW, '/dashboard/qr')
+  const user = await requirePagePermission(PERMISSIONS.QR_VIEW, '/dashboard/qr')
   const restaurant = await requireRestaurant(user.restaurantId)
 
   const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })

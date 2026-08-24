@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Loyalty' }
 
 export default async function LoyaltyPage() {
-  const user = await requirePagePermission(PERMISSIONS.SETTINGS_VIEW, '/dashboard/loyalty')
+  const user = await requirePagePermission(PERMISSIONS.LOYALTY_VIEW, '/dashboard/loyalty')
   const [restaurant, overview] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getLoyaltyOverview(user.restaurantId, visibleBranchIds(user)),

@@ -1,8 +1,27 @@
 import { z } from 'zod'
 
 import { emailSchema, passwordSchema, phoneSchema } from '@/features/auth/schema'
+import { ROLE_LABELS } from '@/lib/rbac'
 
-const STAFF_ROLES = ['MANAGER', 'KITCHEN', 'CASHIER', 'WAITER'] as const
+/**
+ * Every role that can be given to a member of staff.
+ *
+ * This was four hard-coded names, and the Staff screen has offered nine since
+ * the back-office roles were added: `assignableRoles` put Accountant and
+ * Inventory manager in the dropdown, and this Zod enum rejected them on
+ * submit. An owner picking Accountant got a validation error naming a field
+ * they had filled in correctly, and the permission sets for those roles sat in
+ * `rbac.ts` with no user able to hold them.
+ *
+ * Derived from `ROLE_LABELS` — the list of roles that exist — minus the two
+ * nobody is ever *assigned*: OWNER comes from registering the restaurant, and
+ * SUPER_ADMIN is the platform operator and belongs to no restaurant. The real
+ * authority on who may grant what stays `assignableRoles`, which every action
+ * checks; this only stops the schema from being the narrower gate.
+ */
+const STAFF_ROLES = (Object.keys(ROLE_LABELS) as Array<keyof typeof ROLE_LABELS>).filter(
+  (role) => role !== 'OWNER' && role !== 'SUPER_ADMIN',
+) as [keyof typeof ROLE_LABELS, ...Array<keyof typeof ROLE_LABELS>]
 
 /**
  * Which location this person works at.

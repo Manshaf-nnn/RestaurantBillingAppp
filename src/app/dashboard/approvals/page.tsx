@@ -16,7 +16,7 @@ export default async function ApprovalsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard/approvals')
+  const user = await requirePagePermission(PERMISSIONS.APPROVALS_VIEW, '/dashboard/approvals')
   const restaurant = await requireRestaurant(user.restaurantId)
 
   // Someone confined to a location only sees requests raised there; anyone can

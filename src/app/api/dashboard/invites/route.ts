@@ -4,7 +4,8 @@ import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { generateToken } from '@/server/auth/password'
 import { appUrl } from '@/lib/env'
-import { PERMISSIONS, ROLE_HOME, type Permission } from '@/lib/rbac'
+import { assignableRoles, PERMISSIONS, ROLE_HOME } from '@/lib/rbac'
+import type { UserRole } from '@prisma/client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,7 +32,30 @@ export async function POST(request: NextRequest) {
   try {
     const user = await requirePermission(PERMISSIONS.STAFF_MANAGE)
     const body = await request.json().catch(() => ({})) as { role?: string; days?: number; target?: string }
-    const role = (body.role ?? 'WAITER') as keyof typeof ROLE_HOME
+
+    /*
+     * The role has to be one this person may actually grant.
+     *
+     * It used to be cast straight out of the body — `(body.role ?? 'WAITER') as
+     * keyof typeof ROLE_HOME` — with nothing checking it. `STAFF_MANAGE` is
+     * held by every MANAGER, so a manager could POST `{"role":"ADMIN"}` to this
+     * endpoint and walk through the resulting link as an administrator. The UI
+     * only ever offered three roles, which is why it was never noticed: the
+     * hole was one curl away and invisible from the screen.
+     *
+     * `assignableRoles` is the same ladder `inviteStaff` has always enforced —
+     * nobody may mint their own rank or above. This endpoint was the one door
+     * that skipped it.
+     */
+    const allowed = assignableRoles(user.role)
+    const requested = (body.role ?? 'WAITER') as UserRole
+    if (!allowed.includes(requested)) {
+      return NextResponse.json(
+        { error: `You cannot create a link for the ${requested} role` },
+        { status: 403 },
+      )
+    }
+    const role = requested
     const days = Number(body.days ?? 7)
     const target = body.target ?? ROLE_HOME[role]
 

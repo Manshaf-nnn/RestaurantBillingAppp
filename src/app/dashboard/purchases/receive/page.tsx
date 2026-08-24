@@ -41,7 +41,18 @@ export default async function ReceiveGoodsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.PURCHASE_VIEW, '/dashboard/purchases/receive')
+  /*
+   * `PURCHASE_RECEIVE`, not `PURCHASE_VIEW`.
+   *
+   * The sidebar has always hidden this screen behind `purchase.receive` while
+   * the page asked only for `purchase.view` — so an accountant, who may read
+   * purchase orders and must never book goods in against one, could not see
+   * the link but could open the URL. Hidden is not denied.
+   */
+  const user = await requirePagePermission(
+    PERMISSIONS.PURCHASE_RECEIVE,
+    '/dashboard/purchases/receive',
+  )
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

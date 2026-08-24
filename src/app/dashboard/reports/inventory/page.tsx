@@ -23,7 +23,7 @@ export default async function InventoryReportPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.REPORT_VIEW, '/dashboard/reports/inventory')
+  const user = await requirePagePermission(PERMISSIONS.REPORT_INVENTORY, '/dashboard/reports/inventory')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

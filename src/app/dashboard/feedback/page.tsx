@@ -16,7 +16,7 @@ const FACE: Record<number, string> = { 1: '😞', 2: '😐', 3: '🙂', 4: '😍
 const LABEL: Record<number, string> = { 1: 'Bad', 2: 'Okay', 3: 'Good', 4: 'Great' }
 
 export default async function FeedbackPage() {
-  const user = await requirePagePermission(PERMISSIONS.REVIEW_MANAGE, '/dashboard/feedback')
+  const user = await requirePagePermission(PERMISSIONS.FEEDBACK_VIEW, '/dashboard/feedback')
   const data = await getFeedbackOverview(user.restaurantId)
 
   return (

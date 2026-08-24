@@ -19,6 +19,22 @@ import {
   type SessionScope,
 } from './jwt'
 
+/**
+ * The permission list a custom role contributes, if it is still in force.
+ *
+ * A deactivated role falls back to the preset defaults rather than to nothing.
+ * Returning `[]` here would read as "an explicit empty set" — a person with a
+ * blank screen and no way to tell that from a role that genuinely grants
+ * nothing. Deactivating a role in the middle of service should demote somebody,
+ * not strand them.
+ */
+function activeRolePermissions(
+  staffRole: { permissions: string[]; isActive: boolean } | null | undefined,
+): string[] | null {
+  if (!staffRole || !staffRole.isActive) return null
+  return staffRole.permissions
+}
+
 /** Platform admins get an isolated session; everyone else is 'staff'. */
 export function scopeForRole(role: UserRole): SessionScope {
   return role === 'SUPER_ADMIN' ? 'admin' : 'staff'
@@ -33,7 +49,17 @@ export interface AuthUser {
   /// Home branch, when the restaurant runs more than one location.
   branchId: string | null
   avatarUrl: string | null
+  /** Extra keys granted to this person alone. */
   permissions: string[]
+  /**
+   * The complete list from the restaurant's own role, when they hold one.
+   *
+   * Null means "no custom role — use the preset defaults". Read fresh from the
+   * database on every request rather than carried in the JWT, which is what
+   * makes an owner's edit take effect on the member of staff's very next click
+   * instead of whenever their token happens to expire.
+   */
+  rolePermissions: string[] | null
   sessionId: string
 }
 
@@ -112,6 +138,7 @@ export async function rotateSession(
           id: true, email: true, name: true, role: true, restaurantId: true,
           branchId: true, avatarUrl: true, permissions: true, isActive: true,
           deletedAt: true,
+          staffRole: { select: { permissions: true, isActive: true } },
         },
       },
     },
@@ -164,6 +191,7 @@ export async function rotateSession(
     branchId: user.branchId ?? null,
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
+    rolePermissions: activeRolePermissions(user.staffRole),
     sessionId: updated.id,
   }
 }
@@ -234,6 +262,7 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
           id: true, email: true, name: true, role: true, restaurantId: true,
           branchId: true, avatarUrl: true, permissions: true, isActive: true,
           deletedAt: true,
+          staffRole: { select: { permissions: true, isActive: true } },
         },
       },
     },
@@ -269,6 +298,7 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
     branchId: user.branchId ?? null,
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
+    rolePermissions: activeRolePermissions(user.staffRole),
     sessionId: session.id,
   }
 }
@@ -299,6 +329,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
           permissions: true,
           isActive: true,
           deletedAt: true,
+          staffRole: { select: { permissions: true, isActive: true } },
         },
       },
     },
@@ -322,6 +353,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
     branchId: session.user.branchId ?? null,
     avatarUrl: session.user.avatarUrl,
     permissions: session.user.permissions,
+    rolePermissions: activeRolePermissions(session.user.staffRole),
     sessionId: session.id,
   }
 }

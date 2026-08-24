@@ -20,7 +20,7 @@ export default async function SalesReportPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.REPORT_VIEW, '/dashboard/reports/sales')
+  const user = await requirePagePermission(PERMISSIONS.REPORT_SALES, '/dashboard/reports/sales')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
 

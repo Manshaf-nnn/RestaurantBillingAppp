@@ -118,6 +118,7 @@ locations={locations}
         email: user.email,
         role: user.role,
         permissions: user.permissions,
+        rolePermissions: user.rolePermissions,
         avatarUrl: user.avatarUrl,
       }}
       initialNotifications={notifications.map((notification) => ({

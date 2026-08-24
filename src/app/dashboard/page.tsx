@@ -422,7 +422,7 @@ export default async function DashboardPage({
               description="Raise one when you order stock from a supplier, and spend, deliveries and what is still owed appear here."
               action={
                 <Button asChild variant="outline">
-                  <Link href="/dashboard/purchasing">Go to purchasing</Link>
+                  <Link href="/dashboard/purchases">Go to purchasing</Link>
                 </Button>
               }
             />

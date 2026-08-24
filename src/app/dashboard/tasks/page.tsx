@@ -26,7 +26,7 @@ export default async function TasksPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard/tasks')
+  const user = await requirePagePermission(PERMISSIONS.TASKS_VIEW, '/dashboard/tasks')
 
   const selection = await selectedBranch(user, await searchParams)
   const canInstruct = visibleBranchIds(user) === null
