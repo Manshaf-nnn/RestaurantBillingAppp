@@ -54,7 +54,6 @@ const GROUP_WIDE: Record<string, string> = {
   // ── Settings and administration. About the business itself.
   'dashboard/settings': 'Restaurant-level settings',
   'dashboard/settings/profile': 'The signed-in user’s own account',
-  'dashboard/links': 'Share links for the restaurant',
   'dashboard/help': 'Static guidance',
   'dashboard/locations': 'The list of locations — narrowed by visibleBranchIds, not by a selection',
   'dashboard/locations/[branchId]': 'IS one location; guarded by canAccessBranch on the id in the URL',
