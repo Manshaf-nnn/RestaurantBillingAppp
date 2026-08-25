@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { permissionsField } from '@/features/access/schema'
+
 /*
  * The location schemas live here rather than beside the actions that use them.
  *
@@ -136,3 +138,21 @@ export const updateStorageLocationSchema = z.object({
   name: z.string().trim().min(2, 'Name the storage area').max(60).optional(),
   isActive: z.boolean().optional(),
 })
+
+/**
+ * What this location's manager can do.
+ *
+ * A flat permission list, exactly the shape the role builder posts — the two
+ * screens write interchangeable data, so a grid filled in here can be opened
+ * and refined under Roles & access afterwards.
+ *
+ * Validated against the real vocabulary rather than `z.string()`: an unknown
+ * permission id would sit in the array for ever, granting nothing and matching
+ * no switch, and nobody would find out until they wondered why a feature was
+ * missing.
+ */
+export const locationFeaturesSchema = z.object({
+  branchId: z.string().min(1),
+  permissions: permissionsField,
+})
+export type LocationFeaturesInput = z.infer<typeof locationFeaturesSchema>

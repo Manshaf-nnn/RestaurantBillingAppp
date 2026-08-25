@@ -1,7 +1,8 @@
 import type { Metadata } from 'next'
 
 import { CouponsManager } from '@/features/staff/components/coupons-manager'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { listSwitchableLocations } from '@/features/transfers/queries'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -12,18 +13,31 @@ export const metadata: Metadata = { title: 'Coupons' }
 
 export default async function CouponsPage() {
   const user = await requirePagePermission(PERMISSIONS.COUPON_MANAGE, '/dashboard/coupons')
-  const [restaurant, coupons] = await Promise.all([
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+
+  const [restaurant, coupons, locations] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.coupon.findMany({
-      where: { restaurantId: user.restaurantId },
+      where: {
+        restaurantId: user.restaurantId,
+        /*
+         * A group-wide code — `branchId: null` — belongs to everybody and stays
+         * visible. What narrows is a code pinned to somewhere this person
+         * cannot see.
+         */
+        ...(reach ? { OR: [{ branchId: null }, { branchId: { in: reach } }] } : {}),
+      },
       orderBy: { createdAt: 'desc' },
+      include: { branch: { select: { name: true } } },
     }),
+    listSwitchableLocations(user.restaurantId, reach),
   ])
 
   return (
     <CouponsManager
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locations={locations.map((l) => ({ id: l.id, name: l.name }))}
       coupons={coupons.map((coupon) => ({
         id: coupon.id,
         code: coupon.code,
@@ -37,6 +51,8 @@ export default async function CouponsPage() {
         isActive: coupon.isActive,
         startsAt: coupon.startsAt?.toISOString() ?? null,
         endsAt: coupon.endsAt?.toISOString() ?? null,
+        branchId: coupon.branchId,
+        branchName: coupon.branch?.name ?? null,
       }))}
     />
   )

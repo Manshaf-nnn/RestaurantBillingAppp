@@ -40,9 +40,10 @@ export default async function PurchaseOrderPage({
    * a menu.
    */
   const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
-  const locations = (await listSwitchableLocations(user.restaurantId))
-    .filter((l) => allowed === null || allowed.includes(l.id))
-    .map((l) => ({ id: l.id, name: l.name }))
+  const locations = (await listSwitchableLocations(user.restaurantId, allowed)).map((l) => ({
+    id: l.id,
+    name: l.name,
+  }))
 
   // Draft only. The service refuses anything further along, and offering an
   // Edit button that answers with a refusal teaches people the app is broken.

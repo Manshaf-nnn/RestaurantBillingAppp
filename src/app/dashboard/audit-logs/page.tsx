@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/features/dashboard/components/page-header'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -22,6 +22,7 @@ export default async function AuditLogsPage({
   const user = await requirePagePermission(PERMISSIONS.AUDIT_VIEW, '/dashboard/audit-logs')
   const params = await searchParams
   const search = (typeof params.search === 'string' ? params.search : '').trim()
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
 
   const [restaurant, logs] = await Promise.all([
     requireRestaurant(user.restaurantId),
@@ -29,24 +30,56 @@ export default async function AuditLogsPage({
       where: {
         restaurantId: user.restaurantId,
         /*
-         * Searched in the query, not filtered after `take: 200`. This table is
-         * the one that grows fastest in the whole app — a client filter over
-         * the newest two hundred rows would confidently report "nothing found"
-         * for the action you are actually looking for, which is exactly when
-         * someone is reading an audit log.
+         * Two clauses, ANDed, because each is an OR of its own and side-by-side
+         * they would overwrite one another on the same key.
          */
-        ...(search
-          ? {
-              OR: [
-                { action: { contains: search, mode: 'insensitive' } },
-                { entity: { contains: search, mode: 'insensitive' } },
-                { entityId: { contains: search, mode: 'insensitive' } },
-                { actorName: { contains: search, mode: 'insensitive' } },
-                { user: { is: { name: { contains: search, mode: 'insensitive' } } } },
-                { ipAddress: { contains: search, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
+        AND: [
+          /*
+           * ── Whose actions this person may read ────────────────────────────
+           *
+           * This filtered on the restaurant and nothing else, and `AUDIT_VIEW`
+           * is held by MANAGER — so an assigned branch manager read the whole
+           * group's trail: every other site's refunds, price changes, role
+           * grants and sign-ins.
+           *
+           * Scoped on the entry's branch OR the actor's, and the second half is
+           * what makes it usable. `AuditLog.branchId` is nullable and most
+           * `audit()` calls never pass one, so filtering on the column alone
+           * would hide nearly everything including the reader's own team. Who
+           * did it is the fact that is always recorded.
+           *
+           * An owner's settings change stays hidden from a branch manager —
+           * an owner belongs to no branch, which is the correct answer for a
+           * business-level action.
+           */
+          reach
+            ? {
+                OR: [
+                  { branchId: { in: reach } },
+                  { user: { is: { branchId: { in: reach } } } },
+                ],
+              }
+            : {},
+          /*
+           * Searched in the query, not filtered after `take: 200`. This table is
+           * the one that grows fastest in the whole app — a client filter over
+           * the newest two hundred rows would confidently report "nothing found"
+           * for the action you are actually looking for, which is exactly when
+           * someone is reading an audit log.
+           */
+          search
+            ? {
+                OR: [
+                  { action: { contains: search, mode: 'insensitive' } },
+                  { entity: { contains: search, mode: 'insensitive' } },
+                  { entityId: { contains: search, mode: 'insensitive' } },
+                  { actorName: { contains: search, mode: 'insensitive' } },
+                  { user: { is: { name: { contains: search, mode: 'insensitive' } } } },
+                  { ipAddress: { contains: search, mode: 'insensitive' } },
+                ],
+              }
+            : {},
+        ],
       },
       orderBy: { createdAt: 'desc' },
       take: 200,

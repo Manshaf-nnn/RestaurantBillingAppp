@@ -80,6 +80,7 @@ export interface ShellNotification {
 export function DashboardShell({
   user,
   locations,
+  seesEverything = false,
   restaurantName,
   orderUrl,
   trialDaysLeft,
@@ -89,8 +90,13 @@ export function DashboardShell({
   children,
 }: {
   user: ShellUser
-  /** Locations this user may see; the switcher hides itself below two. */
+  /** Locations this user may see; the switcher hides itself with nothing to pick. */
   locations?: SwitchableLocation[]
+  /**
+   * Whether this person's reach is unrestricted. Drives the "Main admin" row —
+   * see `BranchSwitcher`.
+   */
+  seesEverything?: boolean
   restaurantName: string
   orderUrl: string
   trialDaysLeft?: number | null
@@ -272,8 +278,13 @@ export function DashboardShell({
             is the most likely person to need the switcher, and they are the least
             likely to be at a desk.
           */}
-          {locations && locations.length > 1 ? (
-            <BranchSwitcher locations={locations} />
+          {/*
+            The "is there a choice to make" test now lives inside the switcher,
+            because it depends on whether the all-sites row is offered as well
+            as on how many locations there are.
+          */}
+          {locations && locations.length > 0 ? (
+            <BranchSwitcher locations={locations} seesEverything={seesEverything} />
           ) : null}
 
           <GlobalSearch />

@@ -555,8 +555,18 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
     async (data) => {
       const user = await requirePermission(PERMISSIONS.COUPON_MANAGE)
 
+      /*
+       * A code pinned to a location has to be one this person may reach —
+       * otherwise "everywhere" and "Colombo" are the same button for a Kandy
+       * manager. Empty stays empty: a group-wide promotion is the default and
+       * the common case.
+       */
+      const branchId = data.branchId || null
+      if (branchId) await assertBranchAccess(user, branchId)
+
       const payload = {
         code: data.code,
+        branchId,
         description: data.description || null,
         type: data.type,
         value: data.value,

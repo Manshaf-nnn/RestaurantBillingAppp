@@ -11,7 +11,7 @@ import { SearchBox } from '@/components/search-box'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { visibleBranchIds, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -37,7 +37,9 @@ export default async function SuppliersPage({
     listSuppliersWithCounts(user.restaurantId),
     // One set of grouped queries for the whole page rather than a ledger read
     // per row.
-    getSupplierBalances(user.restaurantId),
+    // Same reach as the ledger behind each row, so the list total and the
+    // statement it opens cannot disagree.
+    getSupplierBalances(user.restaurantId, visibleBranchIds(user)),
     requireRestaurant(user.restaurantId),
   ])
 

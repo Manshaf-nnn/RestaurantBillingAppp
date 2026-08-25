@@ -22,6 +22,8 @@ export interface CustomerProfile {
   totalSpent: number
   totalOrders: number
   loyaltyPoints: number
+  /** True when spend/visits/last visit are this branch's rather than the group's. */
+  figuresScopedToBranch: boolean
   lastOrderAt: string | null
   /** Average spend per visit. */
   averageOrder: number
@@ -86,8 +88,44 @@ export async function getCustomerProfile(params: {
     }
   }
 
-  const days = customer.lastOrderAt
-    ? Math.floor((Date.now() - customer.lastOrderAt.getTime()) / 86_400_000)
+  /*
+   * ── The figures follow the same scope as the list under them ─────────────
+   *
+   * These four read straight off the group-wide `Customer` counters and were
+   * rendered as "Lifetime spend / Visits / Average order / Last visit"
+   * directly above an order list that IS branch-filtered. A Colombo manager
+   * saw *Visits: 12* over three orders and nothing anywhere admitted the
+   * mismatch.
+   *
+   * Scoped, they answer the question the screen appears to be answering: what
+   * this guest has done *here*. Unscoped — an owner on Main admin — they are
+   * the counters, which is both correct and cheaper.
+   *
+   * The aggregate is separate from the `take: 100` order list on purpose: a
+   * regular with two hundred visits would otherwise have their spend quietly
+   * truncated to the most recent hundred.
+   */
+  const scoped = params.branchIds !== null && params.branchIds !== undefined
+  const branchTotals = scoped
+    ? await prisma.order.aggregate({
+        where: {
+          customerId: customer.id,
+          restaurantId: params.restaurantId,
+          status: { not: 'CANCELLED' },
+          branchId: { in: params.branchIds! },
+        },
+        _sum: { grandTotal: true },
+        _count: true,
+        _max: { placedAt: true },
+      })
+    : null
+
+  const totalSpent = branchTotals ? (branchTotals._sum.grandTotal ?? 0) : customer.totalSpent
+  const totalOrders = branchTotals ? branchTotals._count : customer.totalOrders
+  const lastOrderAt = branchTotals ? branchTotals._max.placedAt : customer.lastOrderAt
+
+  const days = lastOrderAt
+    ? Math.floor((Date.now() - lastOrderAt.getTime()) / 86_400_000)
     : null
 
   return {
@@ -98,11 +136,21 @@ export async function getCustomerProfile(params: {
     group: customer.group as string,
     marketingConsent: customer.marketingConsent,
     notes: customer.notes,
-    totalSpent: customer.totalSpent,
-    totalOrders: customer.totalOrders,
+    totalSpent,
+    totalOrders,
+    /*
+     * Loyalty is the one figure that stays the person's, everywhere.
+     *
+     * It is a single counter with no ledger behind it, so there is nothing to
+     * replay per branch — and a regular should not lose their balance for
+     * visiting the other site. The screen labels it as theirs rather than as
+     * this branch's.
+     */
     loyaltyPoints: customer.loyaltyPoints,
-    lastOrderAt: customer.lastOrderAt?.toISOString() ?? null,
-    averageOrder: customer.totalOrders > 0 ? Math.round(customer.totalSpent / customer.totalOrders) : 0,
+    /** True when the figures above are this branch's rather than the group's. */
+    figuresScopedToBranch: scoped,
+    lastOrderAt: lastOrderAt?.toISOString() ?? null,
+    averageOrder: totalOrders > 0 ? Math.round(totalSpent / totalOrders) : 0,
     daysSinceLastVisit: days,
     favouriteItems: [...favourites.entries()]
       .map(([name, v]) => ({ name, ...v }))

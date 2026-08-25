@@ -41,8 +41,10 @@ const GROUP_WIDE: Record<string, string> = {
   //    per-branch join rows (FoodBranch, InventoryStock), not on these.
   'dashboard/suppliers': 'One supplier list for the business — purchasing depends on it',
   'dashboard/suppliers/[supplierId]': 'As above; a supplier belongs to the restaurant',
-  'dashboard/customers': 'A guest belongs to the restaurant, not to a site',
-  'dashboard/customers/[customerId]': 'Profile is group-level; its ORDER list is scoped in the query',
+  // `dashboard/customers` and `dashboard/customers/[customerId]` were here, and
+  // are not any more: both resolve a branch now. The RECORD is still
+  // restaurant-wide — see `customersAtBranch` — but who a branch sees, and what
+  // it sees of them, follows the switcher like every other screen.
   'dashboard/customers/analytics': 'Customer behaviour across the whole business',
   'dashboard/loyalty': 'One loyalty scheme for the business',
   'dashboard/coupons': 'A promotion can be group-wide; branchId is nullable and means "everywhere"',
@@ -77,10 +79,11 @@ const GROUP_WIDE: Record<string, string> = {
   // ── Genuinely group-level views.
   'dashboard/reports': 'Scoped — see the selectedBranch call; listed only because it also has a range',
   'dashboard/audit-logs': 'The audit trail spans the business; AuditLog.branchId is nullable by design',
-  'dashboard/reviews': 'Reviews are about the restaurant',
+  // `dashboard/reviews` and `dashboard/reservations` were here. Both are
+  // scoped now: a review reaches its branch through its order, and a
+  // reservation carries one of its own.
   'dashboard/feedback': 'Feedback is about the product',
   'dashboard/qr': 'Renders a sheet per branch — filtered by visibleBranchIds, not by one selection',
-  'dashboard/reservations': 'Reservation has no branch column; would need a schema change to scope',
 
   // ── The guest side. These are the pages a QR code opens, so the branch is
   //    the whole point — only three are legitimately without one.
@@ -88,6 +91,9 @@ const GROUP_WIDE: Record<string, string> = {
   'order/cart': 'Legacy redirect to the canonical /order/<slug>/<branch>/cart',
   'order/track/[orderId]': 'One order; authorised by the guest session cookie, not by branch',
   'order/bill/[orderId]': 'As above',
+
+  // ── The station screens.
+  'cashier/session': 'The screen for OPENING a drawer — it picks the branch rather than reading one',
 }
 
 const ROOT = 'src/app'
@@ -120,6 +126,18 @@ function main() {
   const all = [
     ...pages(join(ROOT, 'dashboard'), 'dashboard'),
     ...pages(join(ROOT, 'order'), 'order'),
+    /*
+     * And the station screens, which were outside this check entirely.
+     *
+     * `/kitchen`, `/waiter` and `/cashier` are the three surfaces where getting
+     * the branch wrong is worst: a ticket on the wrong kitchen display, a bill
+     * rung up against the wrong site. All four resolve a branch today — but
+     * they did so by habit, not because anything insisted, and the next one
+     * somebody adds would have been written the way the old ones were.
+     */
+    ...pages(join(ROOT, 'kitchen'), 'kitchen'),
+    ...pages(join(ROOT, 'waiter'), 'waiter'),
+    ...pages(join(ROOT, 'cashier'), 'cashier'),
   ]
 
   const unscoped: string[] = []

@@ -1757,6 +1757,14 @@ model Reservation {
   id           String           @id @default(cuid())
   restaurantId String
   restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Which site the booking is for.
+  ///
+  /// Nullable only so existing rows survive the migration — everything written
+  /// from now on carries one. A guest books a table at a place, not at a
+  /// company, and without this a Kandy manager saw Colombo's diary and could
+  /// seat somebody at a Colombo table from it.
+  branchId     String?
+  branch       Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
   tableId      String?
   table        RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
   customerId   String?
@@ -1776,6 +1784,7 @@ model Reservation {
 
   @@index([restaurantId, reservedAt])
   @@index([restaurantId, status])
+  @@index([restaurantId, branchId, reservedAt])
   @@map("reservations")
 }
 
@@ -2152,6 +2161,7 @@ model Branch {
   cashRegisters    CashRegister[]
   pettyCash        PettyCashRequest[]
   cashHandovers    CashHandover[]
+  reservations     Reservation[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])

@@ -84,6 +84,49 @@ async function main() {
   check('and the report says the books do not balance', broken.balanced === false)
   check('with a count of the items affected', broken.totals.drifting === 1, `${broken.totals.drifting}`)
 
+  /*
+   * ── And a branch-scoped run has to check something ──────────────────────
+   *
+   * It used to set `cached = expected` whenever a branch was selected —
+   * comparing the ledger replay against itself — so the screen whose entire job
+   * is proving the books reported "balanced" without having looked at a single
+   * stored figure. Nothing anywhere reconciled `InventoryStock`, which is what
+   * every branch total on every screen is summed from.
+   */
+  console.log('\nAnd a branch-scoped run checks the branch’s own shelves')
+
+  await prisma.inventoryItem.update({ where: { id: item.id }, data: { quantity: 115 } })
+
+  const scoped = await getReconciliationReport({
+    restaurantId: restaurant.id,
+    range,
+    branchId: branch.id,
+  })
+  const scopedLine = scoped.lines.find((l) => l.itemId === item.id)
+  check('the branch ladder still adds up to 115', scopedLine?.expected === 115, `${scopedLine?.expected}`)
+  check('and balances when the shelf agrees', scopedLine?.drift === 0 && scoped.balanced,
+    `drift ${scopedLine?.drift}`)
+
+  // Poke the shelf balance off-ledger — the state a stranded reservation or a
+  // half-applied delta leaves behind.
+  await prisma.inventoryStock.updateMany({
+    where: { restaurantId: restaurant.id, itemId: item.id, branchId: branch.id },
+    data: { available: 100 },
+  })
+
+  const drifted = await getReconciliationReport({
+    restaurantId: restaurant.id,
+    range,
+    branchId: branch.id,
+  })
+  const driftedLine = drifted.lines.find((l) => l.itemId === item.id)
+  check(
+    'a shelf that disagrees with the ledger is reported',
+    driftedLine?.drift === -15,
+    `drift ${driftedLine?.drift}, expected -15`,
+  )
+  check('and the branch run says the books do not balance', drifted.balanced === false)
+
   await prisma.stockMovement.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: restaurant.id } })

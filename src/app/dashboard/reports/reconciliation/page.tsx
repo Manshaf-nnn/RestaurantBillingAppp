@@ -44,9 +44,7 @@ export default async function ReconciliationPage({
   const allowed = selection.branchIds
   const branchId = scopeToOne(selection)
 
-  const locations = (await listSwitchableLocations(user.restaurantId)).filter(
-    (l) => allowed === null || allowed.includes(l.id),
-  )
+  const locations = await listSwitchableLocations(user.restaurantId, allowed)
 
   const report = await getReconciliationReport({
     restaurantId: user.restaurantId,

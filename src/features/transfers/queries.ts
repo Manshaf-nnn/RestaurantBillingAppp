@@ -519,7 +519,20 @@ export async function getTransferBuilderData(restaurantId: string) {
  * locations page and badly wrong for the dashboard layout, where it would run
  * on every single page load to populate a dropdown that needs three fields.
  */
-export async function listSwitchableLocations(restaurantId: string): Promise<
+export async function listSwitchableLocations(
+  restaurantId: string,
+  /**
+   * Which locations this person may see. `null` is unrestricted; `[]` is
+   * confined with nowhere to look and correctly returns nothing.
+   *
+   * Optional only so the existing callers keep compiling — but every one of
+   * them was already doing `.filter(...)` on the result, in four separate
+   * places, with nothing but habit keeping them in step. `listLocations` two
+   * hundred lines up has taken this parameter since the leak that put it
+   * there; this is the same fix on the cheap query.
+   */
+  branchIds?: string[] | null,
+): Promise<
   Array<{
     id: string
     name: string
@@ -535,7 +548,12 @@ export async function listSwitchableLocations(restaurantId: string): Promise<
    * note above insists on — no stock rows, no items.
    */
   const branches = await prisma.branch.findMany({
-    where: { restaurantId, deletedAt: null, isActive: true },
+    where: {
+      restaurantId,
+      deletedAt: null,
+      isActive: true,
+      ...(branchIds ? { id: { in: branchIds } } : {}),
+    },
     select: {
       id: true,
       name: true,

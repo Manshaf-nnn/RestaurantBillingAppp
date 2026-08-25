@@ -7,7 +7,7 @@ import { SupplierProfile } from '@/features/suppliers/components/supplier-profil
 import { getSupplierLedger } from '@/features/suppliers/ledger'
 import { getSupplierPricing } from '@/features/purchasing/queries'
 import { Badge } from '@/components/ui/badge'
-import { PERMISSIONS, can } from '@/lib/rbac'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -32,7 +32,17 @@ export default async function SupplierPricingPage({
       supplierId,
       currency: restaurant.currency,
     }),
-    getSupplierLedger({ restaurantId: user.restaurantId, supplierId }),
+    /*
+     * The supplier record is the business's; the transactions on it are not.
+     * WAREHOUSE_STAFF and an assigned MANAGER both hold SUPPLIER_VIEW and are
+     * both confined to one site, so this page was showing them every branch's
+     * orders and the group's balance.
+     */
+    getSupplierLedger({
+      restaurantId: user.restaurantId,
+      supplierId,
+      branchIds: visibleBranchIds(user),
+    }),
   ])
 
   return (

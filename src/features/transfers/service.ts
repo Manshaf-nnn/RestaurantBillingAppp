@@ -38,7 +38,19 @@ const ALLOWED: Record<TransferStatus, TransferStatus[]> = {
   DRAFT: ['REQUESTED', 'CANCELLED'],
   REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
   APPROVED: ['DISPATCHED', 'CANCELLED'],
-  DISPATCHED: ['IN_TRANSIT', 'RECEIVED'],
+  /*
+   * CANCELLED is reachable from here, and it has to be.
+   *
+   * Without it a van that is redirected, lost, or sent to a site that has
+   * closed leaves the stock out of the source's `available` and sitting in the
+   * destination's `inTransit` for ever, with no path in the app to get it
+   * back. A manual adjustment at each end does not help: adjustments touch
+   * `available` and never `inTransit`, so the phantom inbound quantity stays.
+   *
+   * Cancelling from here is a real stock movement, not a status change — see
+   * `recallTransfer`.
+   */
+  DISPATCHED: ['IN_TRANSIT', 'RECEIVED', 'CANCELLED'],
   IN_TRANSIT: ['RECEIVED'],
   // Arrived, but short or damaged, so somebody still has to sign the variance
   // off. A clean delivery skips this and completes on receipt.
@@ -266,8 +278,36 @@ export async function dispatchTransfer(params: {
     const transfer = await load(tx, params.restaurantId, params.transferId)
     assertTransition(transfer.status, 'DISPATCHED')
 
+    /*
+     * ── Every reservation is released, before anything can skip a line ──────
+     *
+     * Approving reserved the full requested quantity on every line, so
+     * dispatching has to give all of it back whether that line ships in full,
+     * in part, or not at all. This release used to sit inside the loop below,
+     * *after* `if (sentQty <= 0) continue` — so a line sent as zero kept its
+     * reservation, the transfer moved to DISPATCHED, and `closeTransfer` only
+     * releases from APPROVED. That stock was then locked out of the source's
+     * free balance permanently.
+     *
+     * Permanently is the right word: `reserved` is not derivable from the
+     * movement ledger, so no report could show it and
+     * `scripts/repair-branch-stock.ts` says in as many words that it cannot fix
+     * it. A quantity that silently shrinks a branch's usable stock for ever is
+     * worth a separate pass over the lines.
+     */
+    for (const line of transfer.lines) {
+      await applyLocationDelta(tx, {
+        restaurantId: params.restaurantId,
+        itemId: line.itemId,
+        branchId: transfer.fromBranchId,
+        storageLocationId: transfer.fromStorageId,
+        reserved: -line.requestedQty,
+      })
+    }
+
     for (const line of transfer.lines) {
       const sentQty = overrides.get(line.id) ?? line.requestedQty
+      // Nothing on this line. Its reservation is already back above.
       if (sentQty <= 0) continue
       if (sentQty > line.requestedQty + 1e-6) {
         throw new AppError(
@@ -276,15 +316,6 @@ export async function dispatchTransfer(params: {
           'TRANSFER_OVER_SEND',
         )
       }
-
-      // Release the reservation first — it is about to become a real movement.
-      await applyLocationDelta(tx, {
-        restaurantId: params.restaurantId,
-        itemId: line.itemId,
-        branchId: transfer.fromBranchId,
-        storageLocationId: transfer.fromStorageId,
-        reserved: -line.requestedQty,
-      })
 
       await assertSufficient(tx, {
         restaurantId: params.restaurantId,
@@ -371,8 +402,24 @@ export async function receiveTransfer(params: {
       const sentQty = line.sentQty ?? 0
       if (sentQty <= 0) continue
 
+      /*
+       * An absent line is not an acceptance.
+       *
+       * This defaulted a line that was not in the payload to the full `sentQty`
+       * with no reason required, so a receive naming one line silently signed
+       * for the whole delivery — and signing for stock is what puts it on the
+       * shelf and ends anyone's ability to query it. Receiving what was sent is
+       * still one click; the client sends every line to say so.
+       */
       const input = byLine.get(line.id)
-      const receivedQty = input?.receivedQty ?? sentQty
+      if (!input) {
+        throw new AppError(
+          `${line.item.name}: say how much arrived`,
+          400,
+          'TRANSFER_LINE_MISSING',
+        )
+      }
+      const receivedQty = input.receivedQty
       if (receivedQty < 0) {
         throw new AppError('A received quantity cannot be negative', 400, 'TRANSFER_NEGATIVE')
       }
@@ -385,7 +432,7 @@ export async function receiveTransfer(params: {
       }
 
       const variance = round(receivedQty - sentQty)
-      if (variance < 0 && !input?.varianceReason) {
+      if (variance < 0 && !input.varianceReason) {
         throw new AppError(
           `${line.item.name}: ${Math.abs(variance)} short — give a reason`,
           400,
@@ -427,8 +474,8 @@ export async function receiveTransfer(params: {
         data: {
           receivedQty,
           variance,
-          varianceReason: input?.varianceReason ?? null,
-          varianceNote: input?.varianceNote?.trim() || null,
+          varianceReason: input.varianceReason ?? null,
+          varianceNote: input.varianceNote?.trim() || null,
         },
       })
     }
@@ -493,6 +540,19 @@ export async function closeTransfer(params: {
     const transfer = await load(tx, params.restaurantId, params.transferId)
     assertTransition(transfer.status, params.status)
 
+    /*
+     * A dispatched transfer has real stock in the air, so cancelling it means
+     * moving that stock back — which is `recallTransfer`, not this. Refused
+     * here rather than silently marking it cancelled and stranding the goods.
+     */
+    if (transfer.status === 'DISPATCHED' || transfer.status === 'IN_TRANSIT') {
+      throw new AppError(
+        'This has already left. Recall it instead, so the stock comes back to the source.',
+        409,
+        'TRANSFER_ALREADY_SENT',
+      )
+    }
+
     if (transfer.status === 'APPROVED') {
       for (const line of transfer.lines) {
         await applyLocationDelta(tx, {
@@ -508,6 +568,82 @@ export async function closeTransfer(params: {
     return tx.stockTransfer.update({
       where: { id: transfer.id },
       data: { status: params.status, rejectReason: params.reason?.trim() || null },
+    })
+  })
+}
+
+/**
+ * Bring a dispatched transfer back to where it came from.
+ *
+ * ── Why this is a movement and not a status change ──────────────────────────
+ *
+ * At dispatch the source really lost the stock — a `TRANSFER_OUT` is in the
+ * ledger — and the destination really shows it inbound. Marking the row
+ * CANCELLED would leave both of those facts standing: the source stays short,
+ * the destination keeps a phantom `inTransit` that nothing can ever clear, and
+ * the two ends disagree with the item's own total for ever.
+ *
+ * So a recall posts the opposite movement. The ledger then reads out-and-back,
+ * which is what actually happened, and the reconciliation replays to the same
+ * number it started at.
+ *
+ * `sentQty` and not `requestedQty`: what comes home is what left, which on a
+ * partial dispatch are different numbers.
+ */
+export async function recallTransfer(params: {
+  restaurantId: string
+  transferId: string
+  reason: string
+  userId?: string | null
+}): Promise<StockTransfer> {
+  const reason = params.reason.trim()
+  if (reason.length < 2) {
+    throw new AppError('Say why it is coming back', 400, 'TRANSFER_NO_RECALL_REASON')
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const transfer = await load(tx, params.restaurantId, params.transferId)
+    if (transfer.status !== 'DISPATCHED' && transfer.status !== 'IN_TRANSIT') {
+      throw new AppError(
+        'Only a transfer that has left can be recalled',
+        409,
+        'TRANSFER_NOT_SENT',
+      )
+    }
+
+    for (const line of transfer.lines) {
+      const sentQty = line.sentQty ?? 0
+      if (sentQty <= 0) continue
+
+      // Back onto the source's shelf, as a real inbound movement.
+      await postMovement(tx, {
+        restaurantId: params.restaurantId,
+        itemId: line.itemId,
+        type: 'TRANSFER_IN',
+        quantity: sentQty,
+        reason: `Recalled from transfer ${transfer.number} — ${reason}`,
+        referenceType: 'StockTransfer',
+        referenceId: transfer.id,
+        branchId: transfer.fromBranchId,
+        locationId: transfer.fromStorageId,
+        batchId: line.batchId,
+        userId: params.userId,
+      })
+
+      // And out of the destination's inbound column, which is the half a
+      // manual adjustment could never reach.
+      await applyLocationDelta(tx, {
+        restaurantId: params.restaurantId,
+        itemId: line.itemId,
+        branchId: transfer.toBranchId,
+        storageLocationId: transfer.toStorageId,
+        inTransit: -sentQty,
+      })
+    }
+
+    return tx.stockTransfer.update({
+      where: { id: transfer.id },
+      data: { status: 'CANCELLED', rejectReason: reason },
     })
   })
 }

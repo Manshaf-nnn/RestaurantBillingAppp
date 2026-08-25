@@ -93,12 +93,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
     countOpenInstructions({ restaurantId: user.restaurantId, user }),
     // In the same batch, not after it. This was awaited on its own line, adding
     // a fourth serial round trip to a layout that runs on every refresh.
-    listSwitchableLocations(user.restaurantId),
+    // Narrowed in the query now, not by a `.filter` afterwards.
+    listSwitchableLocations(user.restaurantId, reach),
   ])
 
-  const allowedBranchIds = reach
   const locations = allLocations
-    .filter((l) => allowedBranchIds === null || allowedBranchIds.includes(l.id))
     .map((l) => ({
       id: l.id,
       name: l.name,
@@ -110,8 +109,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <DashboardShell
-locations={locations}
-            restaurantName={restaurant.name}
+      locations={locations}
+      /*
+       * `reach === null` is the definition of "sees every location", and it is
+       * what decides whether the switcher offers a "Main admin" row at all.
+       * For anybody else that row would be a second name for the one location
+       * they already have.
+       */
+      seesEverything={reach === null}
+      restaurantName={restaurant.name}
       /*
        * Deliberately branch-less, and safe now.
        *

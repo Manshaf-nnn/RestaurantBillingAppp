@@ -317,12 +317,30 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
     async (data) => {
       const user = await requirePermission(PERMISSIONS.RESERVATION_MANAGE)
 
+      /*
+       * ── Which location this booking is for ────────────────────────────────
+       *
+       * The table decides it where one is chosen, because a table belongs to
+       * exactly one site — and that is also the check that stops a Kandy
+       * manager seating a guest at a Colombo table. The picker used to offer
+       * every branch's tables with nothing to tell them apart, since table
+       * numbers restart per branch by design.
+       *
+       * With no table yet — a phone booking for "sometime Friday" — it falls to
+       * the branch on screen, which is what `actingBranchId` reads.
+       */
+      let branchId: string | null = null
+
       if (data.tableId) {
         const table = await prisma.restaurantTable.findFirst({
           where: { id: data.tableId, restaurantId: user.restaurantId },
-          select: { id: true },
+          select: { id: true, branchId: true },
         })
         if (!table) throw new NotFoundError('Table')
+        await assertBranchAccess(user, table.branchId)
+        branchId = table.branchId
+      } else {
+        branchId = await actingBranchId(user)
       }
 
       const payload = {
@@ -330,6 +348,7 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         customerPhone: data.customerPhone,
         customerEmail: data.customerEmail || null,
         tableId: data.tableId || null,
+        branchId,
         partySize: data.partySize,
         reservedAt: new Date(data.reservedAt),
         durationMinutes: data.durationMinutes,

@@ -7,13 +7,21 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
+import { LocationFeatures } from '@/features/branches/components/location-features'
 import { StorageForm } from '@/features/branches/components/storage-form'
 import { LocationEditForm } from '@/features/branches/components/location-edit-form'
 import { AddStockForm } from '@/features/branches/components/add-stock-form'
 import { ManagerCredentials } from '@/features/branches/components/manager-credentials'
 import { LocalDateTime } from '@/components/local-time'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, ROLE_LABELS, can, canAccessBranch, canManageLocation } from '@/lib/rbac'
+import {
+  PERMISSIONS,
+  ROLE_LABELS,
+  can,
+  canAccessBranch,
+  canManageLocation,
+  permissionsFor,
+} from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -41,7 +49,7 @@ export default async function LocationPage({
   const user = await requirePagePermission(PERMISSIONS.BRANCH_VIEW, `/dashboard/locations/${branchId}`)
   const restaurant = await requireRestaurant(user.restaurantId)
   const canManage = can(user, PERMISSIONS.BRANCH_MANAGE)
-  const [detail, transfers, items, staff] = await Promise.all([
+  const [detail, transfers, items, staff, managerRole] = await Promise.all([
     getLocationDetail({ restaurantId: user.restaurantId, branchId }),
     listTransfers({ restaurantId: user.restaurantId, branchId, limit: 10 }),
     prisma.inventoryItem.findMany({
@@ -57,6 +65,23 @@ export default async function LocationPage({
           orderBy: { name: 'asc' },
         })
       : [],
+    /*
+     * The role pinned to this location, if one has been set up. Found by the
+     * pin rather than by name — a rename must not orphan it and quietly create
+     * a second.
+     */
+    canManage
+      ? prisma.staffRole.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            branchId,
+            preset: 'MANAGER',
+            deletedAt: null,
+          },
+          select: { id: true, name: true, permissions: true },
+          orderBy: { createdAt: 'asc' },
+        })
+      : null,
   ])
   /*
    * The worst of the gaps: BRANCH_VIEW is held by cashiers and warehouse
@@ -131,6 +156,24 @@ export default async function LocationPage({
             items={items}
             shelves={branch.storageLocations}
             currency={restaurant.currency}
+          />
+        </div>
+      )}
+
+      {canManage && (
+        <div className="mb-5">
+          <LocationFeatures
+            branchId={branch.id}
+            branchName={branch.name}
+            managerName={branch.manager?.name ?? null}
+            initialPermissions={managerRole?.permissions ?? []}
+            roleName={managerRole?.name ?? null}
+            /*
+             * What this person holds themselves. The server refuses anything
+             * beyond it — `assertNoEscalation` — and this greys those out so a
+             * site manager is not offered a control that will always fail.
+             */
+            grantable={[...permissionsFor(user)]}
           />
         </div>
       )}

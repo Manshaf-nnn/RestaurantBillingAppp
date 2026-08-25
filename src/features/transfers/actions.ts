@@ -11,7 +11,8 @@ import { notifyLocation } from '@/features/instructions/service'
 import { assertApproved, requestApproval } from '@/features/approvals/service'
 import { prisma } from '@/server/db/prisma'
 import {
-  approveTransfer, assertTransferSide, closeTransfer, completeTransfer, dispatchTransfer, receiveTransfer,
+  approveTransfer, assertTransferSide, closeTransfer, completeTransfer, dispatchTransfer,
+  receiveTransfer, recallTransfer,
   requestTransfer, transferEnds,
 } from './service'
 
@@ -359,5 +360,61 @@ export async function closeTransferAction(input: unknown): Promise<ActionResult<
       return { id: transfer.id }
     },
     'Transfer closed.',
+  )
+}
+
+/**
+ * Bring a dispatched transfer home.
+ *
+ * The source side only — it is their stock coming back to their shelf, and the
+ * destination has nothing to give up but a phantom inbound figure. `DISPATCH`
+ * rather than `APPROVE` for the same reason: whoever could send it is whoever
+ * can un-send it.
+ */
+export async function recallTransferAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    z.object({
+      transferId: z.string().min(1),
+      reason: z.string().trim().min(2, 'Say why it is coming back').max(200),
+    }),
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.TRANSFER_DISPATCH)
+      const ends = await transferEnds(user.restaurantId, data.transferId)
+      assertTransferSide(user, ends, 'SOURCE')
+
+      const transfer = await recallTransfer({
+        restaurantId: user.restaurantId,
+        transferId: data.transferId,
+        reason: data.reason,
+        userId: user.id,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: ends.fromBranchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.TRANSFER_CLOSED,
+        entity: 'StockTransfer',
+        entityId: transfer.id,
+        after: { number: transfer.number, status: 'CANCELLED', recalled: true, reason: data.reason },
+      })
+
+      // The destination was expecting this. Telling them is the whole point.
+      await notifyLocation({
+        restaurantId: user.restaurantId,
+        branchId: ends.toBranchId,
+        title: `Recalled: ${transfer.number}`,
+        body: `${user.name} brought it back — ${data.reason}.`,
+        data: { transferId: transfer.id, href: `/dashboard/transfers/${transfer.id}` },
+      })
+
+      touch(data.transferId)
+      return { id: transfer.id }
+    },
+    'Recalled. The stock is back at the source.',
   )
 }

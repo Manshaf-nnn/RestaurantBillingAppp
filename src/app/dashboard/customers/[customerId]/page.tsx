@@ -7,7 +7,8 @@ import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getCustomerProfile } from '@/features/customers/analytics'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS } from '@/lib/rbac'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -16,17 +17,21 @@ export const metadata: Metadata = { title: 'Customer' }
 
 export default async function CustomerPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ customerId: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { customerId } = await params
   const user = await requirePagePermission(PERMISSIONS.CUSTOMER_VIEW, `/dashboard/customers/${customerId}`)
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
+  // Same helper as the list, so the switcher moves both together.
+  const selection = await selectedBranch(user, await searchParams)
   const c = await getCustomerProfile({
     restaurantId: user.restaurantId,
     customerId,
-    branchIds: visibleBranchIds(user),
+    branchIds: selection.branchIds,
   })
 
   return (
@@ -49,12 +54,25 @@ export default async function CustomerPage({
         }
       />
 
+      {/*
+        The labels say which figures these are. They used to read "Lifetime
+        spend" and "Visits" off the group-wide counters while the order list
+        below was branch-filtered — twelve visits over three orders, with
+        nothing to explain the gap.
+      */}
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Lifetime spend" value={money(c.totalSpent)} />
-        <StatCard label="Visits" value={String(c.totalOrders)} />
+        <StatCard
+          label={c.figuresScopedToBranch ? 'Spend here' : 'Lifetime spend'}
+          value={money(c.totalSpent)}
+          hint={c.figuresScopedToBranch ? 'At the locations you can see' : undefined}
+        />
+        <StatCard
+          label={c.figuresScopedToBranch ? 'Visits here' : 'Visits'}
+          value={String(c.totalOrders)}
+        />
         <StatCard label="Average order" value={money(c.averageOrder)} />
         <StatCard
-          label="Last visit"
+          label={c.figuresScopedToBranch ? 'Last visit here' : 'Last visit'}
           value={c.daysSinceLastVisit === null ? '—' : c.daysSinceLastVisit === 0 ? 'Today' : `${c.daysSinceLastVisit}d ago`}
         />
       </div>
@@ -63,6 +81,17 @@ export default async function CustomerPage({
         <div className="mb-5 rounded-lg border border-border p-3 text-sm">
           <span className="text-muted-foreground">Loyalty balance</span>
           <span className="ml-2 font-semibold tabular-nums">{c.loyaltyPoints} points</span>
+          {/*
+            Deliberately not scoped, and said out loud so it is not read as an
+            inconsistency. Points are one counter with no ledger behind them —
+            there is nothing to replay per branch — and a regular should not
+            lose their balance for visiting the other site.
+          */}
+          {c.figuresScopedToBranch ? (
+            <span className="ml-2 text-xs text-muted-foreground">
+              across every location — points follow the person
+            </span>
+          ) : null}
         </div>
       )}
 

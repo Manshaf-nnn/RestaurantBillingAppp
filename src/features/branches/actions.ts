@@ -12,11 +12,18 @@ import { requireRestaurant } from '@/server/db/tenant'
 import { generateSignInCode, nextStaffCode } from '@/features/staff/codes'
 import { sendMail, staffInviteEmail } from '@/server/mailer'
 import {
+  locationFeaturesSchema,
   locationSchema,
   storageLocationSchema,
   updateLocationSchema,
   updateStorageLocationSchema,
 } from './schema'
+import {
+  assertNoEscalation,
+  assertPresetScopeAllowed,
+  resolveRoleBranch,
+} from '@/features/access/service'
+import { assignRole } from '@/features/access/actions'
 import {
   createLocationWithManager,
   locationRemovalBlockers,
@@ -489,4 +496,115 @@ export async function setDefaultLocationAction(branchId: string): Promise<Action
     })
     return { ok: true } as const
   }, 'Default location changed.')
+}
+
+/**
+ * Set what this location's manager can do.
+ *
+ * ── One permission system, reached from two screens ─────────────────────────
+ *
+ * The grid on the Locations screen writes an ordinary `StaffRole` — pinned to
+ * this branch, based on MANAGER — and assigns it to whoever manages the place.
+ * Nothing new is invented: the role is editable afterwards under Roles &
+ * access, it resolves through the same `permissionsFor`, and it drives the same
+ * sidebar. `Branch.staffRoles` has existed since the model was written and was
+ * never queried from the Branch side; this is what it is for.
+ *
+ * ── The escalation check is the whole point ─────────────────────────────────
+ *
+ * `BRANCH_MANAGE` is held by site managers (`rbac.ts:503-505`), and this screen
+ * hands out permissions. Without `assertNoEscalation` a branch manager could
+ * open their own location page and grant themselves `settings.manage` — a
+ * privilege escalation reachable in three clicks by design rather than by bug.
+ * `assertPresetScopeAllowed` and `resolveRoleBranch` are the two other guards
+ * the roles screen runs, and they run here for the same reasons.
+ */
+export async function setLocationFeaturesAction(
+  input: unknown,
+): Promise<ActionResult<{ roleId: string; assigned: boolean }>> {
+  return runAction(
+    locationFeaturesSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.BRANCH_MANAGE)
+      await assertBranchAccess(user, data.branchId)
+
+      const branch = await requireBranch(user.restaurantId, data.branchId)
+
+      // Handing a permission out is granting it.
+      assertNoEscalation(user, data.permissions)
+      assertPresetScopeAllowed(user, 'MANAGER')
+      // Re-resolves the branch through the same helper the role builder uses,
+      // so a pin this person may not set is refused here too.
+      const branchId = await resolveRoleBranch(user, branch.id, 'MANAGER')
+
+      /*
+       * One role per location, found by its pin rather than by its name.
+       *
+       * Matching on the name would break the moment somebody renamed the
+       * location or the role, and would then quietly create a second role for
+       * the same branch — two answers to one question, which is the failure
+       * this whole change exists to remove.
+       */
+      const existing = await prisma.staffRole.findFirst({
+        where: {
+          restaurantId: user.restaurantId,
+          branchId,
+          preset: 'MANAGER',
+          deletedAt: null,
+        },
+        orderBy: { createdAt: 'asc' },
+      })
+
+      const name = `${branch.name} manager`
+      const role = existing
+        ? await prisma.staffRole.update({
+            where: { id: existing.id },
+            data: { permissions: data.permissions, isActive: true },
+          })
+        : await prisma.staffRole.create({
+            data: {
+              restaurantId: user.restaurantId,
+              // The unique index is `[restaurantId, name]`, and two locations
+              // can share a name in principle. The code disambiguates.
+              name: `${name} (${branch.code})`,
+              description: `What the manager of ${branch.name} can do.`,
+              preset: 'MANAGER',
+              branchId,
+              permissions: data.permissions,
+              createdById: user.id,
+            },
+          })
+
+      /*
+       * Assign it, when there is somebody to assign it to. `assignRole` writes
+       * the base role and the branch onto the person as well as the role id —
+       * the fix from `629c0fc` — so this is the whole story, not half of it.
+       */
+      let assigned = false
+      if (branch.managerId) {
+        const result = await assignRole({ userId: branch.managerId, staffRoleId: role.id })
+        assigned = result.ok
+      }
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ROLE_UPDATED,
+        entity: 'StaffRole',
+        entityId: role.id,
+        after: {
+          location: branch.name,
+          role: role.name,
+          permissions: data.permissions.length,
+          assignedTo: assigned ? branch.managerId : null,
+        },
+      })
+
+      return { roleId: role.id, assigned }
+    },
+    'Saved.',
+  )
 }

@@ -87,7 +87,7 @@ export async function getReconciliationReport(params: {
    * would be a second source of truth that could disagree with the ledger, which
    * is the failure this report exists to detect.
    */
-  const [before, within, items] = await Promise.all([
+  const [before, within, items, shelfBalances] = await Promise.all([
     prisma.stockMovement.groupBy({
       by: ['itemId'],
       where: { ...scope, createdAt: { lt: params.range.from } },
@@ -103,9 +103,31 @@ export async function getReconciliationReport(params: {
       select: { id: true, name: true, unit: true, quantity: true, costPerUnit: true },
       orderBy: { name: 'asc' },
     }),
+    /*
+     * The stored balance for ONE branch, summed across its shelves.
+     *
+     * This is what makes a branch-scoped run mean anything. It used to set
+     * `cached = expected` when a branch was selected — comparing the ledger
+     * replay against itself — so the screen whose entire job is proving the
+     * books reported "balanced" without having checked a single figure.
+     *
+     * The reasoning behind that was half right: `InventoryItem.quantity` is
+     * restaurant-wide, so comparing it to one branch's ladder would flag every
+     * multi-branch item. But the branch has a stored total of its own —
+     * `InventoryStock.available`, the number every branch figure on every
+     * screen is summed from — and nothing anywhere reconciled it.
+     */
+    params.branchId
+      ? prisma.inventoryStock.groupBy({
+          by: ['itemId'],
+          where: { restaurantId: params.restaurantId, branchId: params.branchId },
+          _sum: { available: true },
+        })
+      : Promise.resolve([]),
   ])
 
   const openingByItem = new Map(before.map((r) => [r.itemId, r._sum.quantity ?? 0]))
+  const shelfByItem = new Map(shelfBalances.map((r) => [r.itemId, r._sum.available ?? 0]))
   const byItem = new Map<string, Array<{ type: string; quantity: number }>>()
   for (const row of within) {
     const list = byItem.get(row.itemId) ?? []
@@ -119,8 +141,15 @@ export async function getReconciliationReport(params: {
     const rows = byItem.get(item.id) ?? []
     const opening = round(openingByItem.get(item.id) ?? 0)
 
-    // Nothing to say about an item with no history and no stock.
-    if (rows.length === 0 && opening === 0 && item.quantity === 0) continue
+    /*
+     * Nothing to say about an item with no history and no stock — but "no
+     * stock" has to mean the total being compared. A branch run that skipped on
+     * the restaurant-wide figure would drop exactly the item whose shelf holds
+     * something the ledger has never heard of, which is the drift most worth
+     * finding.
+     */
+    const storedHere = params.branchId ? (shelfByItem.get(item.id) ?? 0) : item.quantity
+    if (rows.length === 0 && opening === 0 && storedHere === 0) continue
 
     const merged = new Map<string, { label: string; group: string; quantity: number }>()
     let totalIn = 0
@@ -142,12 +171,12 @@ export async function getReconciliationReport(params: {
     const expected = round(opening + totalIn - totalOut)
 
     /*
-     * Cached is the restaurant-wide balance. Comparing it against a branch's
-     * ladder would report drift on every multi-branch item, so the check only
-     * means anything unscoped — and saying so is better than showing a number
-     * that looks like a discrepancy and is not.
+     * Whichever stored total belongs to what was just replayed: this branch's
+     * shelf sum when one is selected, the restaurant-wide cache otherwise.
+     * Both are real numbers held somewhere else in the database, which is what
+     * a drift check needs — comparing the replay against itself proves nothing.
      */
-    const cached = params.branchId ? expected : item.quantity
+    const cached = params.branchId ? round(shelfByItem.get(item.id) ?? 0) : item.quantity
 
     lines.push({
       itemId: item.id,

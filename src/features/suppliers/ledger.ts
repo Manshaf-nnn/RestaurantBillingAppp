@@ -123,11 +123,43 @@ export interface SupplierLedger {
 export async function getSupplierLedger(params: {
   restaurantId: string
   supplierId: string
+  /**
+   * Which locations the reader may see. `null` is unrestricted; `[]` is
+   * confined with nowhere to look and correctly matches nothing.
+   *
+   * ── Why the ledger is scoped and the supplier is not ──────────────────────
+   *
+   * A supplier record belongs to the business — one list, shared, and the
+   * purchasing screens depend on that. The *transactions* hanging off it do
+   * not: a purchase order, a delivery and a return each happened at one
+   * location, and three of those four models carry a `branchId` already.
+   *
+   * These four queries had no branch predicate at all, and the page renders
+   * `branch.name` beside every row. `SUPPLIER_VIEW` is held by WAREHOUSE_STAFF
+   * — always confined to one site — and by assigned MANAGERs, so a Kandy
+   * warehouse worker opening a supplier read every branch's orders, receipts,
+   * returns and the amount owed, neatly labelled by branch.
+   */
+  branchIds?: string[] | null
 }): Promise<SupplierLedger> {
   const supplier = await prisma.supplier.findFirst({
     where: { id: params.supplierId, restaurantId: params.restaurantId },
   })
   if (!supplier) throw new NotFoundError('Supplier')
+
+  const reach = params.branchIds ?? null
+  /** For the three models that carry a branch of their own. */
+  const atBranch = reach ? { branchId: { in: reach } } : {}
+  /*
+   * A payment reaches a location through the order it settles — the same
+   * one-hop rule `Payment` and `ServiceRequest` already use. A payment on
+   * account carries no purchase, so it stays visible: money handed to a
+   * supplier with no order against it is a business-level fact, and hiding it
+   * would make the running balance stop adding up.
+   */
+  const paymentScope = reach
+    ? { OR: [{ purchase: { branchId: { in: reach } } }, { purchaseId: null }] }
+    : {}
 
   const [purchases, receipts, payments, returns] = await Promise.all([
     prisma.purchase.findMany({
@@ -135,6 +167,7 @@ export async function getSupplierLedger(params: {
         restaurantId: params.restaurantId,
         supplierId: supplier.id,
         status: { notIn: ['CANCELLED'] },
+        ...atBranch,
       },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -146,7 +179,11 @@ export async function getSupplierLedger(params: {
       },
     }),
     prisma.goodsReceipt.findMany({
-      where: { restaurantId: params.restaurantId, purchase: { supplierId: supplier.id } },
+      where: {
+        restaurantId: params.restaurantId,
+        purchase: { supplierId: supplier.id },
+        ...atBranch,
+      },
       orderBy: { receivedAt: 'asc' },
       include: {
         branch: { select: { name: true } },
@@ -155,12 +192,20 @@ export async function getSupplierLedger(params: {
       },
     }),
     prisma.supplierPayment.findMany({
-      where: { restaurantId: params.restaurantId, supplierId: supplier.id },
+      where: {
+        restaurantId: params.restaurantId,
+        supplierId: supplier.id,
+        ...paymentScope,
+      },
       orderBy: { paidAt: 'asc' },
       include: { purchase: { select: { id: true, number: true } } },
     }),
     prisma.purchaseReturn.findMany({
-      where: { restaurantId: params.restaurantId, supplierId: supplier.id },
+      where: {
+        restaurantId: params.restaurantId,
+        supplierId: supplier.id,
+        ...atBranch,
+      },
       orderBy: { createdAt: 'asc' },
       include: { lines: { select: { quantity: true, unitCost: true } } },
     }),
@@ -341,10 +386,22 @@ export async function getSupplierLedger(params: {
  * Computed in three grouped queries rather than per supplier, because the list
  * page would otherwise fire one ledger read per row.
  */
-export async function getSupplierBalances(restaurantId: string): Promise<Map<string, number>> {
+export async function getSupplierBalances(
+  restaurantId: string,
+  /** Same rule as the ledger: `null` unrestricted, `[]` nothing. */
+  branchIds?: string[] | null,
+): Promise<Map<string, number>> {
+  const reach = branchIds ?? null
+  const atBranch = reach ? { branchId: { in: reach } } : {}
+  const paymentScope = reach
+    ? { OR: [{ purchase: { branchId: { in: reach } } }, { purchaseId: null }] }
+    : {}
+
   const [receipts, payments, returns] = await Promise.all([
     prisma.goodsReceiptLine.findMany({
-      where: { receipt: { restaurantId, purchase: { supplierId: { not: null } } } },
+      where: {
+        receipt: { restaurantId, purchase: { supplierId: { not: null } }, ...atBranch },
+      },
       select: {
         acceptedQty: true,
         unitCost: true,
@@ -353,11 +410,11 @@ export async function getSupplierBalances(restaurantId: string): Promise<Map<str
     }),
     prisma.supplierPayment.groupBy({
       by: ['supplierId'],
-      where: { restaurantId },
+      where: { restaurantId, ...paymentScope },
       _sum: { amount: true },
     }),
     prisma.purchaseReturnLine.findMany({
-      where: { return: { restaurantId, supplierId: { not: null } } },
+      where: { return: { restaurantId, supplierId: { not: null }, ...atBranch } },
       select: { quantity: true, unitCost: true, return: { select: { supplierId: true } } },
     }),
   ])

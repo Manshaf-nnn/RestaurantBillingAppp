@@ -103,6 +103,16 @@ export const couponSchema = z
     endsAt: z.string().optional().or(z.literal('')),
     usageLimit: z.coerce.number().int().min(0).optional().nullable(),
     perCustomerLimit: z.coerce.number().int().min(0).optional().nullable(),
+    /**
+     * Which location the code works at. Empty means everywhere.
+     *
+     * `Coupon.branchId` has existed and been enforced at redemption
+     * (`customers/discounts.ts:78`) since it was added — and nothing in the app
+     * could ever set it. Every coupon made through the UI was `null`, so the
+     * check ran on every order and never once matched. Half a feature shipped;
+     * this is the other half.
+     */
+    branchId: z.string().trim().max(40).optional().or(z.literal('')),
     isActive: z.coerce.boolean().default(true),
   })
   .refine((data) => data.type !== 'PERCENT' || data.value <= 10000, {

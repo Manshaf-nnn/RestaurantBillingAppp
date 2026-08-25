@@ -1,7 +1,8 @@
 /** Phase 6: locations, production house, inter-location transfers. */
 import { prisma } from '../src/server/db/prisma'
 import {
-  requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer, canTransition,
+  requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer,
+  recallTransfer, canTransition,
 } from '../src/features/transfers/service'
 import {
   createProductionSpec, createProductionOrder, setProductionStatus, completeProduction,
@@ -201,6 +202,85 @@ async function main() {
   await closeTransfer({ restaurantId: shop.id, transferId: t3.id, status: 'CANCELLED', userId: user.id })
   ok('cancelling releases the reservation',
     (await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })).reserved === 0)
+
+  /*
+   * ── 6b. The two ways stock got stranded ──────────────────────────────────
+   *
+   * Neither of these was covered by any test, and both leave stock in a state
+   * no report could show and no repair script could fix.
+   */
+  console.log('\n── 6b. Stranded stock ───────────────────────────────────')
+
+  // A line dispatched as zero. The release used to sit AFTER the `continue`
+  // that skips it, so its reservation was locked out of the source for ever.
+  const t4 = await requestTransfer({
+    restaurantId: shop.id,
+    fromBranchId: ph.id,
+    toBranchId: colombo.id,
+    lines: [{ itemId: patty.id, quantity: 5 }],
+    userId: user.id,
+  })
+  await approveTransfer({ restaurantId: shop.id, transferId: t4.id, userId: user.id })
+  const reservedNow = (await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })).reserved
+  ok('approving reserves it', reservedNow === 5, `got ${reservedNow}`)
+
+  const t4Lines = await prisma.stockTransferLine.findMany({ where: { transferId: t4.id } })
+  await dispatchTransfer({
+    restaurantId: shop.id,
+    transferId: t4.id,
+    sent: [{ lineId: t4Lines[0].id, quantity: 0 }],
+    userId: user.id,
+  })
+  ok(
+    'a line sent as zero still gives its reservation back',
+    (await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })).reserved === 0,
+    'this stock was locked out permanently, and `reserved` cannot be rebuilt from the ledger',
+  )
+
+  // A van that never arrives. There was no edge out of DISPATCHED except
+  // forward, so the stock sat in the destination's inTransit for ever.
+  const beforeRecall = await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })
+  const t5 = await requestTransfer({
+    restaurantId: shop.id,
+    fromBranchId: ph.id,
+    toBranchId: colombo.id,
+    lines: [{ itemId: patty.id, quantity: 6 }],
+    userId: user.id,
+  })
+  await approveTransfer({ restaurantId: shop.id, transferId: t5.id, userId: user.id })
+  await dispatchTransfer({ restaurantId: shop.id, transferId: t5.id, userId: user.id })
+
+  const sent = await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })
+  const inbound = await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: colombo.id })
+  ok('dispatch takes it from the source', sent.available === beforeRecall.available - 6, `${sent.available}`)
+  ok('and shows it inbound at the destination', inbound.inTransit === 6, `${inbound.inTransit}`)
+
+  await throws(
+    'a sent transfer cannot simply be marked cancelled',
+    () => closeTransfer({ restaurantId: shop.id, transferId: t5.id, status: 'CANCELLED', userId: user.id }),
+    'TRANSFER_ALREADY_SENT',
+  )
+  await throws(
+    'and a recall needs a reason',
+    () => recallTransfer({ restaurantId: shop.id, transferId: t5.id, reason: ' ', userId: user.id }),
+    'TRANSFER_NO_RECALL_REASON',
+  )
+
+  await recallTransfer({
+    restaurantId: shop.id,
+    transferId: t5.id,
+    reason: 'Van broke down, everything came back',
+    userId: user.id,
+  })
+  const recalled = await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: ph.id })
+  const cleared = await getLocationBalance({ restaurantId: shop.id, itemId: patty.id, branchId: colombo.id })
+  ok('recalling puts it back on the source shelf', recalled.available === beforeRecall.available, `${recalled.available}`)
+  ok('and clears the destination’s inbound', cleared.inTransit === 0, `${cleared.inTransit}`)
+  ok(
+    'the ledger still reconciles after an out-and-back',
+    (await recomputeBalance(shop.id, patty.id)).matches,
+    'a recall is a real movement, not a status change',
+  )
 
   console.log('\n── 7. Traceability ──────────────────────────────────────')
   const across = await getItemAcrossLocations({ restaurantId: shop.id, itemId: patty.id })

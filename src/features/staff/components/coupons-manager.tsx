@@ -44,16 +44,22 @@ export interface CouponRow {
   isActive: boolean
   startsAt: string | null
   endsAt: string | null
+  /** Null means every location. */
+  branchId: string | null
+  branchName: string | null
 }
 
 export function CouponsManager({
   coupons: initial,
   currency,
   locale,
+  locations,
 }: {
   coupons: CouponRow[]
   currency: string
   locale: string
+  /** Locations this person may pin a code to. */
+  locations: Array<{ id: string; name: string }>
 }) {
   const [coupons, setCoupons] = React.useState(initial)
   const [editing, setEditing] = React.useState<CouponRow | null>(null)
@@ -182,7 +188,13 @@ export function CouponsManager({
         </div>
       )}
 
-      <CouponDialog open={dialogOpen} onOpenChange={setDialogOpen} coupon={editing} currency={currency} />
+      <CouponDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        coupon={editing}
+        currency={currency}
+        locations={locations}
+      />
 
       <ConfirmDialog
         open={Boolean(deleteId)}
@@ -201,11 +213,14 @@ function CouponDialog({
   onOpenChange,
   coupon,
   currency,
+  locations,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   coupon: CouponRow | null
   currency: string
+  /** Locations this person may pin a code to. Fewer than two hides the field. */
+  locations: Array<{ id: string; name: string }>
 }) {
   const [form, setForm] = React.useState({
     code: '',
@@ -217,6 +232,7 @@ function CouponDialog({
     usageLimit: '',
     perCustomerLimit: '',
     endsAt: '',
+    branchId: '',
     isActive: true,
   })
   const [saving, setSaving] = React.useState(false)
@@ -240,6 +256,7 @@ function CouponDialog({
       usageLimit: coupon?.usageLimit ? String(coupon.usageLimit) : '',
       perCustomerLimit: '',
       endsAt: coupon?.endsAt ? coupon.endsAt.slice(0, 10) : '',
+      branchId: coupon?.branchId ?? '',
       isActive: coupon?.isActive ?? true,
     })
   }, [open, coupon, currency])
@@ -261,6 +278,7 @@ function CouponDialog({
       usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
       perCustomerLimit: form.perCustomerLimit ? Number(form.perCustomerLimit) : null,
       endsAt: form.endsAt || '',
+      branchId: form.branchId || '',
       isActive: form.isActive,
     }))
     setSaving(false)
@@ -331,6 +349,27 @@ function CouponDialog({
           <Field label="Expires on" hint="Optional">
             <Input type="date" value={form.endsAt} onChange={(e) => setForm({ ...form, endsAt: e.target.value })} />
           </Field>
+          {/*
+            Only worth asking with more than one location. The column and the
+            check at redemption have both existed all along; there was simply no
+            way to say anything but "everywhere".
+          */}
+          {locations.length > 1 ? (
+            <Field label="Works at" hint="Blank = every location">
+              <select
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                value={form.branchId}
+                onChange={(e) => setForm({ ...form, branchId: e.target.value })}
+              >
+                <option value="">Every location</option>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
         </div>
 
         <Field label="Description" hint="Shown to guests">

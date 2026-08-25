@@ -70,7 +70,19 @@ export interface SwitchableLocation {
  * bookmarked or sent to an accountant, and the back button behaves. The cookie
  * alongside it is only a memory of the last choice.
  */
-export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] }) {
+export function BranchSwitcher({
+  locations,
+  seesEverything,
+}: {
+  locations: SwitchableLocation[]
+  /**
+   * Whether this viewer's reach is genuinely unrestricted —
+   * `visibleBranchIds(...) === null`. Decides whether "Main admin" is offered
+   * at all, because for anyone else it would be a second name for the one
+   * location they already have.
+   */
+  seesEverything: boolean
+}) {
   const pathname = usePathname()
   const params = useSearchParams()
   const [open, setOpen] = React.useState(false)
@@ -89,7 +101,20 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
   const current = params.get('branch')
   const active = locations.find((l) => l.id === current) ?? null
 
-  if (locations.length < 2) return null
+  /*
+   * The all-sites row is only offered to somebody who really has all of them.
+   *
+   * For a manager pinned to one branch, `selectedBranch` resolves "no branch
+   * chosen" to `branchIds: [their own branch]` — so the row said "everything
+   * added together" and meant "your one site". Two entries, identical figures,
+   * one of them lying. A menu that does that teaches people the switcher does
+   * nothing.
+   *
+   * With one location and no all-sites row there is no choice left to make, so
+   * the whole control hides — same rule as before, one line further down.
+   */
+  const rows = locations.length + (seesEverything ? 1 : 0)
+  if (rows < 2) return null
 
   /*
    * One server call, and nothing else.
@@ -133,7 +158,7 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
             <Icon className="h-4 w-4 text-muted-foreground" />
           )}
           <span className="max-w-[10rem] truncate">
-            {busy ? 'Switching…' : active ? active.name : 'All locations'}
+            {busy ? 'Switching…' : active ? active.name : 'Main admin'}
           </span>
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </button>
@@ -144,15 +169,18 @@ export function BranchSwitcher({ locations }: { locations: SwitchableLocation[] 
           Showing figures for
         </p>
 
-        <Row
-          label="All locations"
-          hint="Everything added together"
-          icon={Building2}
-          selected={!active}
-          onSelect={() => choose(null)}
-        />
-
-        <div className="my-1 border-t border-border" />
+        {seesEverything ? (
+          <>
+            <Row
+              label="Main admin"
+              hint="Every location, added together"
+              icon={Building2}
+              selected={!active}
+              onSelect={() => choose(null)}
+            />
+            <div className="my-1 border-t border-border" />
+          </>
+        ) : null}
 
         <ul className="max-h-[50vh] overflow-y-auto">
           {locations.map((l) => (

@@ -25,7 +25,7 @@ const PERMISSION_VALUES = Object.values(PERMISSIONS) as [string, ...string[]]
  * confusing possible state. Rejecting it at the door keeps the stored set and
  * the displayed set the same thing.
  */
-const permissionsField = z
+export const permissionsField = z
   .array(z.enum(PERMISSION_VALUES))
   .max(200)
   .transform((list) => [...new Set(list)])

@@ -684,3 +684,68 @@ export function describePermissions(granted: Set<string>) {
     }
   })
 }
+
+/**
+ * How much of a feature somebody has.
+ *
+ * ── Why three words and not a list of checkboxes ────────────────────────────
+ *
+ * The role builder is exact: every action is its own switch, because a role is
+ * composed once and lived with. The Locations screen is not that — an owner
+ * setting up Kandy is answering "can the manager touch the till, or only look
+ * at it", and making them reason about `payment.view` versus `payment.collect`
+ * versus `payment.refund` to say so is how a setup screen gets abandoned.
+ *
+ * So the same permission set is offered two ways. This is the coarse
+ * vocabulary, and it is defined in terms of the fine one rather than beside it,
+ * so the two can never mean different things:
+ *
+ *   off   nothing
+ *   read  the primary action — exactly what makes the page open
+ *   full  every action the feature has
+ *
+ * A role composed in the builder may sit between two of these. `levelOf` calls
+ * that `custom`, and the Locations grid says so rather than rounding it to the
+ * nearest word and silently rewriting somebody's careful work on save.
+ */
+export type FeatureLevel = 'off' | 'read' | 'full' | 'custom'
+
+/** The permissions a level grants. `custom` is not expressible here by design. */
+export function permissionsForLevel(feature: Feature, level: Exclude<FeatureLevel, 'custom'>): string[] {
+  if (level === 'off') return []
+  if (level === 'full') return feature.actions.map((a) => a.permission)
+  const primary = primaryAction(feature)
+  return primary ? [primary.permission] : []
+}
+
+/** Which level a permission set corresponds to, or `custom` if it is between. */
+export function levelOf(feature: Feature, granted: Set<string>): FeatureLevel {
+  const on = feature.actions.filter((a) => granted.has(a.permission))
+  if (on.length === 0) return 'off'
+  if (on.length === feature.actions.length) return 'full'
+
+  const primary = primaryAction(feature)
+  // Read is exactly the primary action and nothing else. Anything else that
+  // happens to be one permission — a stray `discount.apply` with Payments off —
+  // is not "read", it is a role somebody built deliberately.
+  if (on.length === 1 && primary && on[0].permission === primary.permission) return 'read'
+  return 'custom'
+}
+
+/**
+ * Apply a level to an existing permission set, leaving every other feature be.
+ *
+ * Returns a new set — the grid holds one `Set<string>` for the whole role, the
+ * same shape the role builder posts, so a location grid and the roles screen
+ * write interchangeable data.
+ */
+export function withLevel(
+  granted: Set<string>,
+  feature: Feature,
+  level: Exclude<FeatureLevel, 'custom'>,
+): Set<string> {
+  const next = new Set(granted)
+  for (const action of feature.actions) next.delete(action.permission)
+  for (const permission of permissionsForLevel(feature, level)) next.add(permission)
+  return next
+}

@@ -1,6 +1,12 @@
 import 'server-only'
 
-import { PERMISSIONS, can, visibleBranchIds, type Permission } from '@/lib/rbac'
+import {
+  PERMISSIONS,
+  can,
+  customersAtBranch,
+  visibleBranchIds,
+  type Permission,
+} from '@/lib/rbac'
 import type { TenantUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
@@ -167,11 +173,24 @@ export async function globalSearch(params: {
         })
       : [],
 
+    /*
+     * Customers narrow the way the Customers screen narrows them —
+     * `customersAtBranch`, reached through their orders. Without it this box
+     * was a way round that screen: type a phone number and read any guest in
+     * the group, including one who has never set foot in your branch.
+     *
+     * The AND is load-bearing. `customersAtBranch` returns its own `OR`, and
+     * putting it beside the name/phone/email `OR` at the same level would let
+     * the second key silently replace the first.
+     */
     may(PERMISSIONS.CUSTOMER_VIEW)
       ? prisma.customer.findMany({
           where: {
             restaurantId,
-            OR: [{ name: contains }, { phone: contains }, { email: contains }],
+            AND: [
+              { OR: [{ name: contains }, { phone: contains }, { email: contains }] },
+              customersAtBranch(allowed),
+            ],
           },
           select: { id: true, name: true, phone: true, loyaltyPoints: true },
           orderBy: { name: 'asc' },
@@ -179,11 +198,20 @@ export async function globalSearch(params: {
         })
       : [],
 
+    /*
+     * And staff narrow the way the Staff screen narrows them. That screen's own
+     * comment records the fix — "a Kandy manager could read every employee in
+     * the chain with their email, phone and last sign-in" — and this box was
+     * handing back the same roster from a keyboard shortcut.
+     *
+     * `branchWhere` and not a hand-rolled clause, so the two cannot drift.
+     */
     may(PERMISSIONS.STAFF_VIEW)
       ? prisma.user.findMany({
           where: {
             restaurantId,
             deletedAt: null,
+            ...branchWhere,
             OR: [{ name: contains }, { email: contains }, { staffCode: contains }],
           },
           select: { id: true, name: true, role: true, staffCode: true },

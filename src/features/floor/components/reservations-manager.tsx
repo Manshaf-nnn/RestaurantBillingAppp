@@ -58,7 +58,7 @@ export function ReservationsManager({
   locale,
 }: {
   reservations: ReservationRow[]
-  tables: Array<{ id: string; number: string }>
+  tables: Array<{ id: string; number: string; branchName?: string | null }>
   locale: string
 }) {
   const [reservations, setReservations] = React.useState(initial)
@@ -208,7 +208,7 @@ function ReservationDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   reservation: ReservationRow | null
-  tables: Array<{ id: string; number: string }>
+  tables: Array<{ id: string; number: string; branchName?: string | null }>
 }) {
   const [form, setForm] = React.useState({
     customerName: '',
@@ -284,9 +284,17 @@ function ReservationDialog({
                   <SelectValue placeholder="Unassigned" />
                 </SelectTrigger>
                 <SelectContent>
+                  {/*
+                    The branch name is on the row when there is more than one
+                    site in the list. Table numbers restart per branch by
+                    design, so without it this offered several identical
+                    "Table 4" entries and picking the wrong one seated a guest
+                    at another location.
+                  */}
                   {tables.map((table) => (
                     <SelectItem key={table.id} value={table.id}>
                       Table {table.number}
+                      {table.branchName ? ` · ${table.branchName}` : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
