@@ -9,8 +9,8 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { resolveStockLocation } from '@/features/branches/service'
 import { resolveCategory } from '@/features/catalog/service'
+import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
-import { setOpeningBalance } from './operations'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
 import {
@@ -52,21 +52,42 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
         categoryName: data.category || null,
       })
 
+      /*
+       * Turning expiry tracking ON is a plain write. Turning it OFF is not.
+       *
+       * `postMovement` only draws stock out of batches while `trackBatches` is
+       * set, so switching it off strands every `StockBatch` for this item at
+       * whatever `remainingQty` it happened to hold — the expiry board then
+       * warns for ever about crates that were eaten weeks ago, and FEFO offers
+       * lots that are gone. Unticking the box stops deliveries ASKING for a
+       * date, which is what the owner means by it; the batch machinery stays on
+       * so the lots already recorded keep draining correctly.
+       */
+      const existing = data.id
+        ? await prisma.inventoryItem.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            select: { trackBatches: true },
+          })
+        : null
+
       const payload = {
         name: data.name,
         sku: data.sku || null,
         category: category.category,
         categoryId: category.categoryId,
         unit: data.unit,
-        reorderLevel: data.reorderLevel,
-        minStock: data.minStock,
+        // The same number in both columns — see `alertBelow` in the schema.
+        reorderLevel: data.alertBelow,
+        minStock: data.alertBelow,
         maxStock: data.maxStock && data.maxStock > 0 ? data.maxStock : null,
         costPerUnit: data.costPerUnit,
         supplierId: data.supplierId || null,
         storageArea: data.storageArea || null,
         purchaseUnit: data.purchaseUnit || null,
         unitsPerPurchaseUnit: data.unitsPerPurchaseUnit > 0 ? data.unitsPerPurchaseUnit : null,
-        expiryDate: data.expiryDate ? new Date(data.expiryDate) : null,
+        trackExpiry: data.tracksExpiry,
+        trackBatches: data.tracksExpiry || existing?.trackBatches || false,
+        useFefo: data.tracksExpiry || existing?.trackBatches || false,
       }
 
       try {
@@ -85,27 +106,55 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
           return { id: data.id }
         }
 
-        const record = await prisma.inventoryItem.create({
-          data: { ...payload, quantity: 0, restaurantId: user.restaurantId },
+        /*
+         * Where the opening quantity lands — the branch the form chose, and
+         * failing that the one on screen.
+         *
+         * This is the "every new item reads 0" bug. It used to resolve
+         * `data.branchId`, which the form never sent, then `user.branchId`,
+         * which is null for an owner — so it fell all the way through to the
+         * restaurant's DEFAULT branch. Meanwhile the stock list shows the
+         * SELECTED branch's `InventoryStock`. Type 10 in while looking at
+         * Branch 02 and the 10 was posted to Main, so Branch 02 read 0 for
+         * ever, and the item looked broken the moment it was created.
+         *
+         * Every other stock action in this codebase already used
+         * `actingBranchId`; this path and `recordStockMovement` were the two
+         * that did not. The form now also asks outright, because guessing where
+         * stock is turned out to be the whole problem.
+         */
+        const branchId = data.branchId || (await actingBranchId(user))
+
+        /*
+         * One transaction, so an item cannot exist without its opening stock.
+         *
+         * These were two calls. If the balance failed, the item row survived at
+         * zero — and retrying the same name hit the unique constraint below, so
+         * the owner was left with a broken item they could not re-create.
+         */
+        const record = await prisma.$transaction(async (tx) => {
+          const created = await tx.inventoryItem.create({
+            data: { ...payload, quantity: 0, restaurantId: user.restaurantId },
+          })
+
+          // A starting quantity on a brand-new item is legitimate — but it goes
+          // in as an opening balance so it has a date, an author and a ledger
+          // row.
+          if (data.quantity > 0) {
+            await postMovement(tx, {
+              restaurantId: user.restaurantId,
+              itemId: created.id,
+              type: 'OPENING_BALANCE',
+              quantity: data.quantity,
+              unitCost: data.costPerUnit,
+              userId: user.id,
+              branchId,
+            })
+          }
+          return created
         })
 
-        // A starting quantity on a brand-new item is legitimate — but it goes in
-        // as an opening balance so it has a date, an author and a ledger row.
-        if (data.quantity > 0) {
-          await setOpeningBalance({
-            restaurantId: user.restaurantId,
-            itemId: record.id,
-            quantity: data.quantity,
-            unitCost: data.costPerUnit,
-            userId: user.id,
-            branchId: await resolveStockLocation({
-              restaurantId: user.restaurantId,
-              requestedBranchId: data.branchId,
-              userBranchId: user.branchId,
-            }),
-          })
-        }
-
+        revalidatePath('/dashboard/inventory')
         return { id: record.id }
       } catch (error) {
         if (isUniqueViolation(error)) throw new ConflictError('An item with that name already exists')
@@ -162,12 +211,11 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
           : MOVEMENT_TYPES[data.type]
 
       // Resolved before the transaction opens, so the lookup does not run while
-      // the item row is locked.
-      const branchId = await resolveStockLocation({
-        restaurantId: user.restaurantId,
-        requestedBranchId: data.branchId,
-        userBranchId: user.branchId,
-      })
+      // the item row is locked. `actingBranchId` — the location on screen —
+      // rather than the restaurant's default, for the reason spelt out in
+      // `saveInventoryItem`: stock typed in while looking at one branch used to
+      // land on another.
+      const branchId = data.branchId || (await actingBranchId(user))
 
       const posted = await prisma.$transaction((tx) =>
         postMovement(tx, {

@@ -13,6 +13,7 @@ import { createStaffOrder, type StaffOrderBill } from '@/features/orders/actions
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
 import { printReceipt } from '@/features/printing/print'
+import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
 
 import {
@@ -419,12 +420,15 @@ export function PosTerminal({
                     <Label htmlFor="pos-phone" className="text-xs">
                       Phone {type === 'DELIVERY' ? '' : <span className="text-muted-foreground">(optional)</span>}
                     </Label>
-                    <Input
+                    <CustomerPhoneField
                       id="pos-phone"
-                      inputMode="tel"
-                      placeholder="07X XXX XXXX"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
+                      phone={phone}
+                      name={name}
+                      onPhoneChange={setPhone}
+                      onPick={(customer) => {
+                        setPhone(customer.phone)
+                        setName(customer.name)
+                      }}
                     />
                   </div>
                   <div className="space-y-1">

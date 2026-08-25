@@ -357,6 +357,34 @@ export async function upsertSupplierItem(params: {
         data: { isPreferred: false },
       })
     }
+    /*
+     * Teach the ITEM its pack size from the supplier's, when it has none.
+     *
+     * `toBaseUnits` refuses rather than guesses, and `assertConvertible` calls
+     * it when a purchase order is RAISED — so an item bought by the box with no
+     * pack size on the item row blocks the order, with an error naming a field
+     * the owner had to hunt for. The same question is answered right here, on
+     * the supplier price list, and the answer was going nowhere near the item.
+     *
+     * One direction only, and never an overwrite: two suppliers can pack the
+     * same thing differently, and the item's own columns are the restaurant's
+     * convention for counting it. Copying the second supplier's case size over
+     * the first would silently rewrite every conversion the item has ever done.
+     */
+    if (data.purchaseUnit && data.unitsPerPurchaseUnit && data.unitsPerPurchaseUnit > 0) {
+      await tx.inventoryItem.updateMany({
+        where: {
+          id: params.itemId,
+          restaurantId: params.restaurantId,
+          OR: [{ purchaseUnit: null }, { unitsPerPurchaseUnit: null }, { unitsPerPurchaseUnit: 0 }],
+        },
+        data: {
+          purchaseUnit: data.purchaseUnit,
+          unitsPerPurchaseUnit: data.unitsPerPurchaseUnit,
+        },
+      })
+    }
+
     return tx.supplierItem.upsert({
       where: { supplierId_itemId: { supplierId: params.supplierId, itemId: params.itemId } },
       create: { restaurantId: params.restaurantId, supplierId: params.supplierId, itemId: params.itemId, ...data },

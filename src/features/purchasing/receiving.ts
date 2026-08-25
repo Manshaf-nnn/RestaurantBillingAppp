@@ -228,11 +228,21 @@ export async function receiveGoods(params: {
           userId: params.userId,
         })
 
-        // Batch-tracked items get a lot record so the stock can be traced back
-        // to this delivery, and so expiry and FEFO have something to work with.
-        // Without this the batch tables stay empty however many deliveries
-        // arrive, and the expiry board is permanently blank.
-        if (purchaseItem.item.trackBatches) {
+        /*
+         * Batch-tracked items get a lot record so the stock can be traced back
+         * to this delivery, and so expiry and FEFO have something to work with.
+         * Without this the batch tables stay empty however many deliveries
+         * arrive, and the expiry board is permanently blank.
+         *
+         * `trackExpiry` counts too, not just `trackBatches`. An item with only
+         * the expiry flag was in a trap: the receiving screen REFUSES to submit
+         * without a date for it, and then nothing was created to hang that date
+         * on — so the date went to the receipt line, was read by nothing, and
+         * the item could never reach the expiry board. The item form now sets
+         * both flags together, and this is the safety net for rows that predate
+         * it.
+         */
+        if (purchaseItem.item.trackBatches || purchaseItem.item.trackExpiry) {
           const batchNo =
             line.batchNo?.trim().toUpperCase() ||
             // A tracked item delivered without a supplier lot number still needs

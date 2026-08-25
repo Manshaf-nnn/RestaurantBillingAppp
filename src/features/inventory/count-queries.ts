@@ -25,6 +25,14 @@ export interface CountSheetItem {
   /** What has been keyed in so far, in the item's base unit. Null = uncounted. */
   countedQty: number | null
   notes: string | null
+  /**
+   * Whether this branch has a stock row for the item at all.
+   *
+   * Drives the sheet's default filter. False does not mean "do not count it" —
+   * it means the book has never seen this item here, which is the interesting
+   * case when it turns out to be sitting on the shelf.
+   */
+  heldHere: boolean
 }
 
 export interface CountReviewLine extends Omit<CountSheetItem, 'countedQty'> {
@@ -79,24 +87,58 @@ export async function getStockCountDetail(params: {
   })
   if (!count) throw new NotFoundError('Stock count')
 
-  // Everything active in scope is countable. A count scoped to a location only
-  // offers that location's stock, so a counter is never asked about a shelf
-  // they are not standing in front of.
-  const items = await prisma.inventoryItem.findMany({
-    where: {
-      restaurantId: params.restaurantId,
-      isActive: true,
-      ...(count.branchId ? { branchId: count.branchId } : {}),
-      ...(count.locationId ? { locationId: count.locationId } : {}),
-    },
-    orderBy: [{ category: 'asc' }, { name: 'asc' }],
-    select: {
-      id: true, name: true, sku: true, unit: true, category: true,
-      quantity: true, costPerUnit: true,
-      location: { select: { name: true } },
-    },
-  })
+  /*
+   * Every active item, not "items belonging to this branch".
+   *
+   * This used to filter `InventoryItem.branchId` and `InventoryItem.locationId`,
+   * neither of which any screen has ever written — so both are null on every
+   * row, the filter matched nothing, and the sheet was empty for every count
+   * ever opened. That is why counting "did not work", and why Stock variance,
+   * which reads only approved counts, had nothing to show either.
+   *
+   * The same mistake was found and fixed once in `purchasing/suggestions.ts` —
+   * "branchId scopes the QUANTITY, not the item list" — and reappeared here and
+   * in `alerts.ts`. `scripts/no-item-branch-filter.ts` now fails the build on it.
+   *
+   * Beyond being the bug, the wide population is also right. A stock count is
+   * the completeness test: restricting it to what the book already knows is at
+   * this branch makes it structurally incapable of finding stock that exists on
+   * the shelf and not in the book — which is the error class that matters most,
+   * and precisely the damage left behind by opening balances that landed on the
+   * wrong branch. You cannot test completeness against a population defined by
+   * the thing you are testing.
+   *
+   * `heldHere` keeps that from meaning a 400-line sheet: the sheet defaults to
+   * what this branch stocks and the rest is one tap away.
+   */
+  const [items, onHand] = await Promise.all([
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: params.restaurantId, isActive: true },
+      orderBy: [{ category: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true, name: true, sku: true, unit: true, category: true,
+        quantity: true, costPerUnit: true,
+        location: { select: { name: true } },
+      },
+    }),
+    count.branchId
+      ? prisma.inventoryStock.findMany({
+          where: {
+            restaurantId: params.restaurantId,
+            branchId: count.branchId,
+            ...(count.locationId ? { storageLocationId: count.locationId } : {}),
+          },
+          select: { itemId: true },
+        })
+      : Promise.resolve([]),
+  ])
 
+  /*
+   * Stocked here means a row EXISTS, not that it is above zero. A row at zero
+   * says this branch carries the item and has run out — which is exactly the
+   * line you most want somebody to walk over and confirm.
+   */
+  const heldHere = new Set(onHand.map((row) => row.itemId))
   const lineByItem = new Map(count.lines.map((l) => [l.itemId, l]))
 
   const sheet: CountSheetItem[] = items.map((item) => {
@@ -110,16 +152,26 @@ export async function getStockCountDetail(params: {
       locationName: item.location?.name ?? null,
       countedQty: line ? line.countedQty : null,
       notes: line?.notes ?? null,
+      heldHere: heldHere.has(item.id),
     }
   })
 
+  /*
+   * Built from the LINES, not from the item list above.
+   *
+   * It used to iterate the items and skip those without a line, so any line
+   * whose item fell outside the sheet's population was invisible to the approver
+   * — and still posted to the ledger on approval. The same loop fed
+   * `withVariance`, so the button could read "approve and adjust 0 items" while
+   * adjusting several. An approver has to see everything they are signing.
+   */
+  const itemById = new Map(items.map((i) => [i.id, i]))
   const review: CountReviewLine[] = []
   let netVarianceValue = 0
   let withVariance = 0
 
-  for (const item of items) {
-    const line = lineByItem.get(item.id)
-    if (!line) continue
+  for (const line of count.lines) {
+    const item = itemById.get(line.itemId) ?? (await countedItem(line.itemId))
     const varianceValue = Math.round(line.variance * item.costPerUnit)
     netVarianceValue += varianceValue
     if (Math.abs(line.variance) > 1e-6) withVariance += 1
@@ -131,6 +183,7 @@ export async function getStockCountDetail(params: {
       unit: item.unit,
       category: item.category,
       locationName: item.location?.name ?? null,
+      heldHere: heldHere.has(item.id),
       countedQty: line.countedQty,
       notes: line.notes,
       systemQty: line.systemQty,
@@ -158,11 +211,37 @@ export async function getStockCountDetail(params: {
     review,
     totals: {
       counted: count.lines.length,
-      uncounted: items.length - count.lines.length,
+      /*
+       * Counted against what this branch stocks, not against the whole
+       * catalogue. Now that the sheet offers every item, `items.length - lines`
+       * would report a restaurant's entire item list as outstanding work and no
+       * count would ever look finished.
+       */
+      uncounted: sheet.filter((row) => row.heldHere && row.countedQty === null).length,
       withVariance,
       netVarianceValue,
     },
   }
+}
+
+/**
+ * Metadata for a counted item that has since been retired.
+ *
+ * Rare, and it must not blank the review: the line was counted, the variance is
+ * real, and approval will post it. The item is fetched without the `isActive`
+ * filter for exactly that reason.
+ */
+async function countedItem(itemId: string) {
+  const item = await prisma.inventoryItem.findUnique({
+    where: { id: itemId },
+    select: {
+      id: true, name: true, sku: true, unit: true, category: true,
+      quantity: true, costPerUnit: true,
+      location: { select: { name: true } },
+    },
+  })
+  if (!item) throw new NotFoundError('Inventory item')
+  return item
 }
 
 export interface StockCountSummary {

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckCircle2, Eye, Save, Search, Send } from 'lucide-react'
+import { CheckCircle2, Eye, Save, Search, Send, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +12,7 @@ import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { UNIT_LABELS, formatQuantity } from '../units'
 import {
-  approveStockCountAction, recordCountLinesAction, submitStockCountAction,
+  approveStockCountAction, cancelStockCountAction, recordCountLinesAction, submitStockCountAction,
 } from '../stock-actions'
 import type { StockCountDetail } from '../count-queries'
 import { callAction } from '@/lib/use-action'
@@ -55,17 +55,33 @@ export function CountSheet({
   const [busy, setBusy] = React.useState(false)
   const [approveNote, setApproveNote] = React.useState('')
   const [revealed, setRevealed] = React.useState(false)
+  /*
+   * The sheet offers every item in the restaurant, because a count is how you
+   * find stock the book does not know is here. But handing somebody four
+   * hundred lines on a tablet in a cold store produces a count nobody finishes,
+   * and an unfinished count is worse than none. So the default is what this
+   * branch stocks, and the rest is one tap away rather than unreachable.
+   */
+  const [scope, setScope] = React.useState<'here' | 'all'>('here')
+
+  const heldCount = React.useMemo(
+    () => detail.sheet.filter((row) => row.heldHere).length,
+    [detail.sheet],
+  )
 
   const visible = React.useMemo(() => {
     const term = search.trim().toLowerCase()
-    if (!term) return detail.sheet
-    return detail.sheet.filter(
+    // A search always looks everywhere — somebody typing a name is looking for
+    // that item, not asking whether the book expects it to be here.
+    const base = scope === 'here' && !term ? detail.sheet.filter((r) => r.heldHere) : detail.sheet
+    if (!term) return base
+    return base.filter(
       (row) =>
         row.name.toLowerCase().includes(term) ||
         (row.sku?.toLowerCase().includes(term) ?? false) ||
         (row.category?.toLowerCase().includes(term) ?? false),
     )
-  }, [detail.sheet, search])
+  }, [detail.sheet, search, scope])
 
   const enteredCount = Object.values(values).filter((v) => v.trim() !== '').length
 
@@ -102,6 +118,19 @@ export function CountSheet({
     router.refresh()
   }
 
+  const discard = async () => {
+    if (!window.confirm('Discard this count? Nothing has moved, so nothing is lost.')) return
+    setBusy(true)
+    const result = await callAction(() => cancelStockCountAction(detail.id))
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Count discarded')
+    router.push('/dashboard/inventory/counts')
+  }
+
   const approve = async () => {
     setBusy(true)
     const result = await callAction(() => approveStockCountAction({
@@ -130,18 +159,40 @@ export function CountSheet({
           description="Enter what you physically find. The system's figure is hidden on purpose — count what is there, not what you expect."
           actions={
             <Badge variant="secondary">
-              {enteredCount} / {detail.sheet.length}
+              {enteredCount} / {heldCount}
             </Badge>
           }
         >
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              className="pl-9"
-              placeholder="Find an item"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+              {([
+                { key: 'here' as const, label: 'Stocked here', n: heldCount },
+                { key: 'all' as const, label: 'All items', n: detail.sheet.length },
+              ]).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  aria-pressed={scope === tab.key}
+                  onClick={() => setScope(tab.key)}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
+                    scope === tab.key
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  {tab.label} · {tab.n}
+                </button>
+              ))}
+            </div>
+            <div className="relative min-w-[12rem] flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Find an item"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
           </div>
 
           <ul className="divide-y divide-border">
@@ -151,6 +202,11 @@ export function CountSheet({
                   <p className="truncate font-medium">{row.name}</p>
                   <p className="text-xs text-muted-foreground">
                     {[row.sku, row.category, row.locationName].filter(Boolean).join(' · ') || '—'}
+                    {!row.heldHere && (
+                      <span className="ml-1 text-amber-600 dark:text-amber-400">
+                        · not stocked here
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -183,6 +239,10 @@ export function CountSheet({
             <Button variant="outline" onClick={submit} disabled={busy || detail.totals.counted === 0}>
               <Send className="mr-2 h-4 w-4" />
               Send for approval
+            </Button>
+            <Button variant="ghost" onClick={discard} disabled={busy} className="ml-auto">
+              <Trash2 className="mr-2 h-4 w-4" />
+              Discard
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">

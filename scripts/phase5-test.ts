@@ -164,7 +164,9 @@ async function main() {
   counts.push(count.id)
   await recordCountLines({ restaurantId: shop.id, stockCountId: count.id, lines: [{ itemId: rice.id, countedQty: 96 }] })
   await submitStockCount(shop.id, count.id)
-  await approveStockCount({ restaurantId: shop.id, stockCountId: count.id, userId: user.id })
+  await approveStockCount({
+    restaurantId: shop.id, stockCountId: count.id, userId: user.id, selfApprovalAllowed: true,
+  })
 
   const variance = await getVarianceReport({ restaurantId: shop.id, days: 7 })
   const riceLine = variance.lines.find((l) => l.itemId === rice.id)

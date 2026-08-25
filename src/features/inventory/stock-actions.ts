@@ -2,10 +2,11 @@
 
 import { revalidatePath } from 'next/cache'
 
+import type { UserRole } from '@prisma/client'
+
 import { runAction, type ActionResult } from '@/lib/action'
 import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
-import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -15,7 +16,7 @@ import {
   adjustStock, receiveStock, setOpeningBalance,
 } from './operations'
 import {
-  approveStockCount, openStockCount, recordCountLines, submitStockCount,
+  approveStockCount, cancelStockCount, openStockCount, recordCountLines, submitStockCount,
 } from './stock-count'
 import {
   adjustStockSchema, approveCountSchema, countLinesSchema, openingBalanceSchema,
@@ -135,6 +136,14 @@ export async function setOpeningBalanceAction(input: unknown): Promise<ActionRes
  * Takes the location being counted. It used to take nothing and record
  * `user.branchId ?? null`, which is null for an owner — so every count was
  * against "no location" and its adjustments credited no shelf.
+ *
+ * With nothing passed it falls to `actingBranchId` — the branch on screen —
+ * like every other stock action in this file. It used to fall to the default
+ * branch instead, so an owner looking at Branch 02 got a count filed against
+ * Main: the sheet snapshotted Main's balances while somebody walked Branch 02's
+ * shelves, and approval posted the difference between two unrelated places into
+ * Main. The visible symptom was milder and much more confusing — the count
+ * vanished from a list that filters by the branch you are standing in.
  */
 export async function openStockCountAction(
   branchId?: string | null,
@@ -143,11 +152,7 @@ export async function openStockCountAction(
   await assertBranchAccess(user, branchId ?? null)
   const count = await openStockCount({
     restaurantId: user.restaurantId, userId: user.id,
-    branchId: await resolveStockLocation({
-      restaurantId: user.restaurantId,
-      requestedBranchId: branchId,
-      userBranchId: user.branchId,
-    }),
+    branchId: branchId || (await actingBranchId(user)),
   })
   await audit({
     restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
@@ -178,6 +183,9 @@ export async function recordCountLinesAction(input: unknown): Promise<ActionResu
   }, 'Count saved. Nothing has moved yet.')
 }
 
+/** Roles with nobody above them to countersign. See `approveStockCountAction`. */
+const SELF_APPROVERS = new Set<UserRole>(['OWNER', 'ADMIN', 'SUPER_ADMIN'])
+
 /**
  * The branch a stock count belongs to.
  *
@@ -190,6 +198,30 @@ async function countBranch(restaurantId: string, stockCountId: string) {
     where: { id: stockCountId, restaurantId },
     select: { branchId: true },
   })
+}
+
+/**
+ * Abandon a count.
+ *
+ * `cancelStockCount` existed with no caller, so a draft started by mistake — or
+ * one whose counter went home — could never be closed, and the list filled with
+ * counts nobody would ever finish. Nothing has moved at this point, so this
+ * only ends the draft.
+ */
+export async function cancelStockCountAction(
+  stockCountId: string,
+): Promise<ActionResult<{ id: string }>> {
+  const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
+  await assertRecordBranch(user, await countBranch(user.restaurantId, stockCountId), 'stock count')
+  const count = await cancelStockCount(user.restaurantId, stockCountId)
+  await audit({
+    restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+    action: AUDIT_ACTIONS.STOCK_COUNT_CANCELLED, entity: 'StockCount', entityId: count.id,
+    after: { reference: count.reference },
+  })
+  revalidatePath('/dashboard/inventory/counts')
+  revalidatePath(`/dashboard/inventory/counts/${stockCountId}`)
+  return { ok: true, data: { id: count.id } }
 }
 
 export async function submitStockCountAction(stockCountId: string): Promise<ActionResult<{ id: string }>> {
@@ -218,6 +250,17 @@ export async function approveStockCountAction(
     const result = await approveStockCount({
       restaurantId: user.restaurantId, stockCountId: data.stockCountId,
       userId: user.id, notes: data.notes || null,
+      /*
+       * Maker-checker, with the one exemption that keeps it usable.
+       *
+       * A storeman must not sign off the count that writes off what they
+       * carried out — that is the entire reason approval is a separate step.
+       * But most restaurants running this are one person, and for them there is
+       * no second signatory to find; refusing would leave them unable to count
+       * at all. An owner or admin has nobody above them to ask, so they may
+       * approve their own. Everybody else needs a second pair of eyes.
+       */
+      selfApprovalAllowed: SELF_APPROVERS.has(user.role),
     })
     await audit({
       restaurantId: user.restaurantId, userId: user.id, actorName: user.name,

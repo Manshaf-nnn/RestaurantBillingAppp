@@ -39,8 +39,19 @@ import { PageHeader, StatCard } from '@/features/dashboard/components/page-heade
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { deleteInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
+import { levelFor } from '../stock-level'
 import { callAction } from '@/lib/use-action'
 
+
+/**
+ * The one threshold, from the two columns that hold it.
+ *
+ * `alerts.ts` and `suggestions.ts` have always taken the higher of the pair,
+ * so the form now writes the same value to both and everything reads the max.
+ */
+function alertLevelOf(item: { reorderLevel: number; minStock: number }): number {
+  return Math.max(item.reorderLevel, item.minStock)
+}
 
 export interface InventoryRow {
   id: string
@@ -65,7 +76,17 @@ export interface InventoryRow {
   supplierId: string | null
   supplierName: string | null
   storageArea: string | null
+  /**
+   * The soonest date any stock of this item goes off.
+   *
+   * From the earliest open `StockBatch` at the selected location, falling back
+   * to the item's own legacy `expiryDate` column. Expiry is a fact about a
+   * delivery, not about an item — "milk" does not have an expiry date, the
+   * crate that arrived on Tuesday does — so the item column is no longer
+   * written and this reads the batches instead.
+   */
   expiryDate: string | null
+  trackExpiry: boolean
   purchaseUnit: StockUnit | null
   unitsPerPurchaseUnit: number | null
 }
@@ -79,6 +100,8 @@ export function InventoryManager({
   locale,
   canManage,
   branchName = null,
+  locations = [],
+  selectedBranchId = null,
 }: {
   items: InventoryRow[]
   suppliers: Array<{ id: string; name: string }>
@@ -94,6 +117,10 @@ export function InventoryManager({
   canManage: boolean
   /** Set when a single location is selected, so the quantities can say whose they are. */
   branchName?: string | null
+  /** Locations this user may post stock to. Drives the new item's Location field. */
+  locations?: Array<{ id: string; name: string }>
+  /** The location on screen, so a new item's opening stock defaults to it. */
+  selectedBranchId?: string | null
 }) {
   const [items, setItems] = React.useState(initial)
   const [search, setSearch] = React.useState('')
@@ -105,9 +132,24 @@ export function InventoryManager({
 
   React.useEffect(() => setItems(initial), [initial])
 
+  /*
+   * The shared classifier, not a rule of its own.
+   *
+   * This screen used to test `quantity <= reorderLevel` inline. `0 <= 0` is
+   * true, so every item sitting at zero with no alert level set was badged
+   * "Low" for ever — which is what a brand-new item looks like, and it made the
+   * whole screen appear broken. `levelFor` has always had it right: nothing on
+   * the shelf is OUT OF STOCK, and LOW only means anything once somebody sets a
+   * threshold. Two definitions of "low" in one app is one too many, and the
+   * inventory report was already using the other one.
+   */
+  const levelOf = React.useCallback((item: InventoryRow) => levelFor(item), [])
   const isLow = React.useCallback(
-    (item: InventoryRow) => item.quantity <= item.reorderLevel,
-    [],
+    (item: InventoryRow) => {
+      const level = levelOf(item)
+      return level === 'LOW_STOCK' || level === 'OUT_OF_STOCK'
+    },
+    [levelOf],
   )
 
   /**
@@ -285,7 +327,7 @@ export function InventoryManager({
               <TableRow>
                 <TableHead>Item</TableHead>
                 <TableHead>In stock</TableHead>
-                <TableHead className="hidden md:table-cell">Reorder at</TableHead>
+                <TableHead className="hidden md:table-cell">Alert below</TableHead>
                 <TableHead className="hidden lg:table-cell">Cost / unit</TableHead>
                 <TableHead className="hidden md:table-cell">Expiry</TableHead>
                 <TableHead className="hidden lg:table-cell">Supplier</TableHead>
@@ -294,7 +336,9 @@ export function InventoryManager({
             </TableHeader>
             <TableBody>
               {filtered.map((item) => {
-                const low = item.quantity <= item.reorderLevel
+                const level = levelOf(item)
+                const low = level === 'LOW_STOCK'
+                const out = level === 'OUT_OF_STOCK'
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
@@ -315,17 +359,25 @@ export function InventoryManager({
                       </p>
                     </TableCell>
                     <TableCell>
-                      <span className={cn('font-semibold tabular-nums', low && 'text-destructive')}>
+                      <span
+                        className={cn('font-semibold tabular-nums', (low || out) && 'text-destructive')}
+                      >
                         {item.quantity} {item.unit.toLowerCase()}
                       </span>
-                      {low ? (
+                      {out ? (
+                        <Badge variant="destructive" size="sm" className="ml-2">
+                          Out
+                        </Badge>
+                      ) : low ? (
                         <Badge variant="warning" size="sm" className="ml-2">
                           Low
                         </Badge>
                       ) : null}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {item.reorderLevel} {item.unit.toLowerCase()}
+                      {alertLevelOf(item) > 0
+                        ? `${alertLevelOf(item)} ${item.unit.toLowerCase()}`
+                        : '—'}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {formatMoney(item.costPerUnit, currency, locale)}
@@ -399,6 +451,8 @@ export function InventoryManager({
         units={units}
         categories={categories}
         currency={currency}
+        locations={locations}
+        selectedBranchId={selectedBranchId}
       />
       <MovementDialog item={movementFor} onClose={() => setMovementFor(null)} />
 
@@ -427,6 +481,8 @@ function ItemDialog({
   units,
   categories,
   currency,
+  locations,
+  selectedBranchId,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -435,6 +491,8 @@ function ItemDialog({
   units: Array<{ code: StockUnit; name: string; symbol: string }>
   categories: Array<{ id: string; name: string }>
   currency: string
+  locations: Array<{ id: string; name: string }>
+  selectedBranchId: string | null
 }) {
   const [form, setForm] = React.useState({
     name: '',
@@ -442,18 +500,30 @@ function ItemDialog({
     category: '',
     unit: 'PIECE' as StockUnit,
     quantity: '0',
-    reorderLevel: '0',
-    minStock: '0',
+    branchId: '',
+    alertBelow: '0',
     maxStock: '',
     costPerUnit: '',
     supplierId: '',
     storageArea: '',
-    expiryDate: '',
+    tracksExpiry: false,
     purchaseUnit: '' as StockUnit | '',
     unitsPerPurchaseUnit: '',
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  /*
+   * Pack size lives here but is folded away.
+   *
+   * The owner asked for it off the form, and they were right that it does not
+   * belong in the first five things you answer about a new item. It cannot
+   * simply go, though: `toBaseUnits` THROWS without it, and `assertConvertible`
+   * calls that when a purchase order is raised — so an item bought by the box
+   * with no pack size blocks the PO, not just the delivery. The supplier price
+   * list now fills it in automatically, and this stays as the way out when
+   * there is no supplier row to copy from.
+   */
+  const [advanced, setAdvanced] = React.useState(false)
 
   /** The managed list, plus whatever this item already uses. */
   const offeredUnits = React.useMemo(() => {
@@ -475,18 +545,26 @@ function ItemDialog({
       category: item?.category ?? '',
       unit: item?.unit ?? 'PIECE',
       quantity: String(item?.quantity ?? 0),
-      reorderLevel: String(item?.reorderLevel ?? 0),
-      minStock: String(item?.minStock ?? 0),
+      // Defaults to the location on screen, so the commonest case needs no
+      // thought and the number lands where the person can see it.
+      branchId: selectedBranchId ?? '',
+      /*
+       * The higher of the two old columns. That is how `alerts.ts` and
+       * `suggestions.ts` have always read them, so merging on read shows the
+       * threshold that was actually in force rather than silently lowering it.
+       */
+      alertBelow: String(Math.max(item?.reorderLevel ?? 0, item?.minStock ?? 0)),
       maxStock: item?.maxStock ? String(item.maxStock) : '',
       costPerUnit: item ? String(toMajor(item.costPerUnit, currency)) : '',
       // Was hard-coded to '' regardless of the item — the supplier-wiping bug.
       supplierId: item?.supplierId ?? '',
       storageArea: item?.storageArea ?? '',
-      expiryDate: item?.expiryDate ? item.expiryDate.slice(0, 10) : '',
+      tracksExpiry: item?.trackExpiry ?? false,
       purchaseUnit: item?.purchaseUnit ?? '',
       unitsPerPurchaseUnit: item?.unitsPerPurchaseUnit ? String(item.unitsPerPurchaseUnit) : '',
     })
-  }, [open, item, currency])
+    setAdvanced(Boolean(item?.purchaseUnit))
+  }, [open, item, currency, selectedBranchId])
 
   const save = async () => {
     setSaving(true)
@@ -497,13 +575,13 @@ function ItemDialog({
       category: form.category,
       unit: form.unit,
       quantity: Number(form.quantity),
-      reorderLevel: Number(form.reorderLevel),
-      minStock: Number(form.minStock) || 0,
+      branchId: form.branchId,
+      alertBelow: Number(form.alertBelow) || 0,
       maxStock: form.maxStock ? Number(form.maxStock) : null,
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
       supplierId: form.supplierId,
       storageArea: form.storageArea,
-      expiryDate: form.expiryDate,
+      tracksExpiry: form.tracksExpiry,
       purchaseUnit: form.purchaseUnit,
       unitsPerPurchaseUnit: Number(form.unitsPerPurchaseUnit) || 0,
     }))
@@ -612,45 +690,37 @@ function ItemDialog({
               <Input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
             </Field>
           )}
-          <Field label="Bought as (optional)">
-            <Select
-              value={form.purchaseUnit || 'NONE'}
-              onValueChange={(v) => setForm({ ...form, purchaseUnit: v === 'NONE' ? '' : (v as StockUnit) })}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="NONE">Same as the unit above</SelectItem>
-                {offeredUnits.map((u) => (
-                  <SelectItem key={u.code} value={u.code}>
-                    {u.name} ({u.symbol})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label={`How many ${unitLabel(form.unit)} in one ${unitLabel(form.purchaseUnit || form.unit)}`}>
-            <Input
-              type="number"
-              step="any"
-              value={form.unitsPerPurchaseUnit}
-              onChange={(e) => setForm({ ...form, unitsPerPurchaseUnit: e.target.value })}
-              disabled={!form.purchaseUnit}
-              placeholder={form.purchaseUnit ? 'e.g. 24' : 'Choose a purchase unit first'}
-            />
+          {/*
+            Which location the opening stock goes to.
+            Only when creating, and only when there is more than one place it
+            could go. An item is defined once for the whole business — it is the
+            STOCK that lives somewhere — so this asks about the quantity above,
+            not about the item, and says so.
+          */}
+          {!item?.id && locations.length > 1 ? (
+            <Field label="Location">
+              <Select
+                value={form.branchId || locations[0].id}
+                onValueChange={(v) => setForm({ ...form, branchId: v })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {locations.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Where the opening quantity is counted. The item itself is shared
+                by every location.
+              </p>
+            </Field>
+          ) : null}
+          <Field label="Alert me below">
+            <Input type="number" step="any" value={form.alertBelow} onChange={(e) => setForm({ ...form, alertBelow: e.target.value })} />
             <p className="mt-1 text-xs text-muted-foreground">
-              Buy in boxes, count in bottles. Receiving a delivery in boxes converts it for you.
-            </p>
-          </Field>
-          <Field label="Reorder level">
-            <Input type="number" step="any" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })} />
-            <p className="mt-1 text-xs text-muted-foreground">
-              At or below this, the item is flagged low and appears in reorder suggestions.
-            </p>
-          </Field>
-          <Field label="Minimum stock">
-            <Input type="number" step="any" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} />
-            <p className="mt-1 text-xs text-muted-foreground">
-              A hard floor. Whichever of these two is higher is the one that triggers.
+              At or below this, the item is flagged low and appears in reorder
+              suggestions. Leave 0 for no alert.
             </p>
           </Field>
           <Field label="Maximum stock (par level)">
@@ -675,9 +745,24 @@ function ItemDialog({
           <Field label={`Cost per unit (${currency})`}>
             <Input type="number" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: e.target.value })} />
           </Field>
-          <Field label="Expiry date">
-            <Input type="date" value={form.expiryDate} onChange={(e) => setForm({ ...form, expiryDate: e.target.value })} />
-          </Field>
+          <div className="sm:col-span-2">
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={form.tracksExpiry}
+                onChange={(e) => setForm({ ...form, tracksExpiry: e.target.checked })}
+              />
+              <span>
+                <span className="font-medium">This goes off</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Deliveries will ask for an expiry date, each one tracked
+                  separately, and the oldest gets used first. It shows on the
+                  Expiry tab as the date approaches.
+                </span>
+              </span>
+            </label>
+          </div>
           {suppliers.length ? (
             <Field label="Supplier" className="sm:col-span-2">
               <Select value={form.supplierId} onValueChange={(value) => setForm({ ...form, supplierId: value })}>
@@ -694,6 +779,58 @@ function ItemDialog({
               </Select>
             </Field>
           ) : null}
+
+          {/*
+            Buying units, folded away.
+
+            Almost nobody needs it — the supplier price list fills it in when a
+            supplier is set up — but it cannot be absent: `toBaseUnits` throws
+            without it, and that fires when a purchase order is RAISED, not just
+            when the delivery turns up. So it is one click away rather than the
+            eighth question about a new item.
+          */}
+          <div className="sm:col-span-2">
+            <button
+              type="button"
+              onClick={() => setAdvanced((v) => !v)}
+              className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              {advanced ? 'Hide' : 'I buy this in boxes, cases or packs'}
+            </button>
+            {advanced ? (
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                <Field label="Bought as">
+                  <Select
+                    value={form.purchaseUnit || 'NONE'}
+                    onValueChange={(v) => setForm({ ...form, purchaseUnit: v === 'NONE' ? '' : (v as StockUnit) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NONE">Same as the unit above</SelectItem>
+                      {offeredUnits.map((u) => (
+                        <SelectItem key={u.code} value={u.code}>
+                          {u.name} ({u.symbol})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label={`How many ${unitLabel(form.unit)} in one ${unitLabel(form.purchaseUnit || form.unit)}`}>
+                  <Input
+                    type="number"
+                    step="any"
+                    value={form.unitsPerPurchaseUnit}
+                    onChange={(e) => setForm({ ...form, unitsPerPurchaseUnit: e.target.value })}
+                    disabled={!form.purchaseUnit}
+                    placeholder={form.purchaseUnit ? 'e.g. 24' : 'Choose a purchase unit first'}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Buy in boxes, count in bottles. Receiving a delivery in boxes converts it for you.
+                  </p>
+                </Field>
+              </div>
+            ) : null}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>

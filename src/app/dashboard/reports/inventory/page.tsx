@@ -53,7 +53,9 @@ export default async function InventoryReportPage({
       includeEmployees: can(user, PERMISSIONS.INVENTORY_WASTAGE_APPROVE),
     }),
     listExpiringStock({ restaurantId: user.restaurantId, branchId: chosen, periodDays: 30 }),
-    getVarianceReport({ restaurantId: user.restaurantId, days, branchId: chosen }),
+    getVarianceReport({
+      restaurantId: user.restaurantId, days, branchId: chosen, timeZone: restaurant.timezone,
+    }),
   ])
 
   return (

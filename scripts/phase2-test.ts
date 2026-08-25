@@ -214,7 +214,11 @@ async function main() {
   const submitted = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: beef.id } })).quantity
   ok('submitting still moves no stock', submitted === beforeCount)
 
-  const approved = await approveStockCount({ restaurantId: shop.id, stockCountId: count.id, userId: user.id })
+  // `selfApprovalAllowed` because this fixture's user is the owner, who counted
+  // it themselves. A storeman may not; `stock-count-branch-test` covers that.
+  const approved = await approveStockCount({
+    restaurantId: shop.id, stockCountId: count.id, userId: user.id, selfApprovalAllowed: true,
+  })
   const afterApproval = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: beef.id } })).quantity
   ok('approval posts the variance (65 -> 62)', afterApproval === 62, `got ${afterApproval}`)
   ok('one adjustment was made', approved.adjusted === 1)
@@ -225,7 +229,9 @@ async function main() {
   ok('the adjustment references its count', adj.referenceType === 'StockCount' && adj.referenceId === count.id)
   ok('the adjustment is ADJUSTMENT_OUT', adj.type === 'ADJUSTMENT_OUT')
   await throws('approving twice is refused',
-    () => approveStockCount({ restaurantId: shop.id, stockCountId: count.id, userId: user.id }),
+    () => approveStockCount({
+      restaurantId: shop.id, stockCountId: count.id, userId: user.id, selfApprovalAllowed: true,
+    }),
     'COUNT_APPROVED')
 
   const recheck = await recomputeBalance(shop.id, beef.id)

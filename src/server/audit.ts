@@ -139,6 +139,7 @@ export const AUDIT_ACTIONS = {
   STOCK_OPENING: 'inventory.opening_balance',
   STOCK_COUNT_OPENED: 'inventory.count_opened',
   STOCK_COUNT_APPROVED: 'inventory.count_approved',
+  STOCK_COUNT_CANCELLED: 'inventory.count_cancelled',
   STOCK_COST_EDITED: 'inventory.cost_edited',
 
   PO_CREATED: 'purchase.created',

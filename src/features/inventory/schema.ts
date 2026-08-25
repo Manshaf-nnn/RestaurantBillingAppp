@@ -9,23 +9,45 @@ export const inventoryItemSchema = z.object({
   category: z.string().trim().max(40).optional().or(z.literal('')),
   unit: z.enum(UNITS),
   quantity: z.coerce.number().min(0).default(0),
-  reorderLevel: z.coerce.number().min(0).default(0),
   /*
-   * The other two thresholds.
+   * One low-stock threshold, written to both columns.
    *
-   * Both have been in the schema and read by live logic since the beginning,
-   * and nothing ever wrote them. `alerts.ts` takes `max(reorderLevel, minStock)`
-   * as the floor and flags OVERSTOCK above `maxStock` — so the OVERSTOCK alert
-   * could never fire, and `suggestions.ts` always fell back to `floor * 2`
-   * because the par-level branch was unreachable. Two features were dead for
-   * want of a form input.
+   * The form asked for a "Reorder level" AND a "Minimum stock", with the help
+   * text explaining that whichever is higher is the one that triggers — which is
+   * a question about the software, not about the business. Live logic reads
+   * `max(reorderLevel, minStock)` in two places (`alerts.ts`, `suggestions.ts`),
+   * so writing the same value to both keeps every existing reader correct and
+   * leaves the columns in place. Reading back takes the max, which is also how
+   * the two get merged for items created before this.
    */
-  minStock: z.coerce.number().min(0).default(0),
+  alertBelow: z.coerce.number().min(0).default(0),
+  /*
+   * The par level. Read by live logic since the beginning with nothing writing
+   * it: `alerts.ts` flags OVERSTOCK above `maxStock`, so that alert could never
+   * fire, and `suggestions.ts` fell back to `floor * 2` because the par-level
+   * branch was unreachable.
+   */
   maxStock: z.coerce.number().min(0).nullable().optional(),
   costPerUnit: z.coerce.number().int().min(0).default(0),
   supplierId: z.string().cuid().optional().or(z.literal('')),
   storageArea: z.string().trim().max(40).optional().or(z.literal('')),
-  expiryDate: z.string().optional().or(z.literal('')),
+  /*
+   * Whether deliveries of this item should be asked for an expiry date.
+   *
+   * Expiry belongs to a delivery, not to an item: this crate of milk goes off
+   * on Friday and the next one on Sunday. There was an `expiryDate` on the item
+   * itself, which could only ever describe one of them, and the Expiry board
+   * ignored it — the board reads `StockBatch`, and nothing ever created one,
+   * because batch creation sits behind `trackBatches` and no screen could set
+   * it. One checkbox here lights the whole chain: the receiving screen starts
+   * asking for dates, batches get written, the board fills, and FEFO has
+   * something to allocate.
+   *
+   * One box rather than three, because `trackExpiry` without `trackBatches` is
+   * a trap the receiving screen cannot resolve — it demands a date and then
+   * creates nothing to hang it on.
+   */
+  tracksExpiry: z.coerce.boolean().default(false),
   /*
    * How this item is bought, when that differs from how it is counted.
    *

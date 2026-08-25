@@ -26,35 +26,33 @@ export interface StockAlert {
   locationName: string | null
 }
 
-/**
- * Classify one item.
- *
- * Order matters: a negative balance is reported as out of stock rather than
- * low, and overstock is only meaningful when a par level has been set.
+/*
+ * `levelFor` moved to `stock-level.ts` so client screens can use it too — this
+ * module is `server-only`, and the stock list had written a second, wrong copy
+ * of the rule for want of an import it could make. Re-exported so nothing that
+ * imports it from here has to move.
  */
-export function levelFor(item: {
-  quantity: number
-  reorderLevel: number
-  minStock: number
-  maxStock: number | null
-}): StockAlertLevel | null {
-  if (item.quantity <= 0) return 'OUT_OF_STOCK'
-  const floor = Math.max(item.reorderLevel, item.minStock)
-  if (floor > 0 && item.quantity <= floor) return 'LOW_STOCK'
-  if (item.maxStock && item.maxStock > 0 && item.quantity > item.maxStock) return 'OVERSTOCK'
-  return null
-}
+import { levelFor } from './stock-level'
+export { alertThreshold, levelFor } from './stock-level'
 
 export async function listStockAlerts(params: {
   restaurantId: string
   branchId?: string | null
 }): Promise<StockAlert[]> {
-  const items = await prisma.inventoryItem.findMany({
-    where: {
-      restaurantId: params.restaurantId,
-      isActive: true,
-      ...(params.branchId ? { branchId: params.branchId } : {}),
-    },
+  /*
+   * `branchId` scopes the QUANTITY, not the item list.
+   *
+   * This filtered `InventoryItem.branchId` — the item's notional home, which no
+   * screen has ever written, so it is null on every row. Selecting any location
+   * therefore returned nothing, and the whole inventory report went blank the
+   * moment somebody used the branch switcher.
+   *
+   * Third occurrence of this exact mistake: `purchasing/suggestions.ts` carries
+   * the original post-mortem, `count-queries.ts` had it too, and it type-checks
+   * cleanly every time. `scripts/no-item-branch-filter.ts` now fails on it.
+   */
+  const rows = await prisma.inventoryItem.findMany({
+    where: { restaurantId: params.restaurantId, isActive: true },
     select: {
       id: true,
       name: true,
@@ -65,8 +63,29 @@ export async function listStockAlerts(params: {
       unit: true,
       branch: { select: { name: true } },
       location: { select: { name: true } },
+      ...(params.branchId
+        ? {
+            locationStock: {
+              where: { branchId: params.branchId },
+              select: { available: true },
+            },
+          }
+        : {}),
     },
   })
+
+  // With a location chosen, "how much is there" is that location's shelves —
+  // not the restaurant-wide cached total, which would report the warehouse's
+  // sugar as sitting in every branch at once.
+  const items = rows.map((item) => ({
+    ...item,
+    quantity: params.branchId
+      ? ('locationStock' in item ? item.locationStock : []).reduce(
+          (sum, row) => sum + row.available,
+          0,
+        )
+      : item.quantity,
+  }))
 
   const alerts: StockAlert[] = []
   for (const item of items) {
@@ -111,20 +130,36 @@ export async function getInventorySummary(params: {
   restaurantId: string
   branchId?: string | null
 }): Promise<InventorySummary> {
-  const items = await prisma.inventoryItem.findMany({
-    where: {
-      restaurantId: params.restaurantId,
-      isActive: true,
-      ...(params.branchId ? { branchId: params.branchId } : {}),
-    },
+  // Same correction as `listStockAlerts` above: the location narrows the
+  // quantity, never the item list.
+  const rows = await prisma.inventoryItem.findMany({
+    where: { restaurantId: params.restaurantId, isActive: true },
     select: {
       quantity: true,
       costPerUnit: true,
       reorderLevel: true,
       minStock: true,
       maxStock: true,
+      ...(params.branchId
+        ? {
+            locationStock: {
+              where: { branchId: params.branchId },
+              select: { available: true },
+            },
+          }
+        : {}),
     },
   })
+
+  const items = rows.map((item) => ({
+    ...item,
+    quantity: params.branchId
+      ? ('locationStock' in item ? item.locationStock : []).reduce(
+          (sum, row) => sum + row.available,
+          0,
+        )
+      : item.quantity,
+  }))
 
   let outOfStock = 0
   let lowStock = 0

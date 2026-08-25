@@ -29,13 +29,29 @@ export default async function InventoryPage({
   const selection = await selectedBranch(user, await searchParams)
   const branchId = scopeToOne(selection)
 
-  const [restaurant, items, suppliers, branch, units, categories] = await Promise.all([
+  const [restaurant, items, suppliers, branch, units, categories, locations] = await Promise.all([
     requireRestaurant(user.restaurantId),
     prisma.inventoryItem.findMany({
       where: { restaurantId: user.restaurantId, isActive: true },
       orderBy: { name: 'asc' },
       include: {
         supplier: { select: { name: true } },
+        /*
+         * The soonest date any stock of this item goes off.
+         *
+         * Expiry belongs to a delivery, not to an item: this crate of milk goes
+         * off on Friday, the next on Sunday. The item's own `expiryDate` column
+         * could only ever describe one of them, so the form stopped asking for
+         * it and this reads the open batches instead — narrowed to the location
+         * on screen, since a crate in the warehouse is not about to expire in
+         * the shop.
+         */
+        batches: {
+          where: { remainingQty: { gt: 0 }, expiryDate: { not: null }, ...(branchId ? { branchId } : {}) },
+          orderBy: { expiryDate: 'asc' },
+          take: 1,
+          select: { expiryDate: true },
+        },
         ...(branchId
           ? { locationStock: { where: { branchId }, select: { available: true } } }
           : {}),
@@ -54,6 +70,24 @@ export default async function InventoryPage({
       : Promise.resolve(null),
     activeUnits(user.restaurantId),
     listStockCategories(user.restaurantId, { activeOnly: true }),
+    /*
+     * Where a new item's opening stock may be posted.
+     *
+     * Narrowed by `selection.branchIds`, so the field can never offer a site
+     * this user cannot reach — and note `[]` means "sees nothing", which is a
+     * different answer from `null`, "no restriction". `listLocations` would do
+     * this too but drags every stock row along with it for a dropdown.
+     */
+    prisma.branch.findMany({
+      where: {
+        restaurantId: user.restaurantId,
+        deletedAt: null,
+        isActive: true,
+        ...(selection.branchIds ? { id: { in: selection.branchIds } } : {}),
+      },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true },
+    }),
   ])
 
   /** This location's shelf, or the group total when no location is chosen. */
@@ -90,8 +124,14 @@ export default async function InventoryPage({
         supplierId: item.supplierId,
         supplierName: item.supplier?.name ?? null,
         storageArea: item.storageArea,
-        expiryDate: item.expiryDate?.toISOString() ?? null,
+        // Batch first, the item's own legacy date only as a fallback for rows
+        // created before expiry moved onto deliveries.
+        expiryDate:
+          item.batches[0]?.expiryDate?.toISOString() ?? item.expiryDate?.toISOString() ?? null,
+        trackExpiry: item.trackExpiry,
       }))}
+      locations={locations}
+      selectedBranchId={selection.branchId}
     />
   )
 }

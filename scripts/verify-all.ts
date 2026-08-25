@@ -28,6 +28,7 @@ const BASE_URL = process.env.BASE_URL
 const STATIC = [
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
+  'no-item-branch-filter',
 ]
 
 const SERVICE = [
@@ -56,6 +57,8 @@ const SERVICE = [
   'cash-drawer-test',
   'role-assignment-test',
   'branch-isolation-2-test',
+  'stock-count-branch-test',
+  'expiry-tracking-test',
 ]
 
 const RUNTIME = [

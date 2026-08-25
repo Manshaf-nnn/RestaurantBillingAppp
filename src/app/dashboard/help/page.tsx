@@ -115,6 +115,108 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard
+          title="2b · Every screen under Inventory"
+          description="What each one is for, and when to open it."
+        >
+          <Rows
+            rows={[
+              [
+                'Stock',
+                'The list of everything you hold, and the only place items are created. The quantity shown is whichever location the switcher is on — pick Branch 02 and you see Branch 02’s shelf, not the group total.',
+              ],
+              [
+                'Stock counts',
+                'Walk the shelves, write down what is actually there, and let a manager sign off the difference. The one screen that can correct a balance in bulk.',
+              ],
+              [
+                'Wastage',
+                'What went in the bin, why, and what it cost. Always with a reason, because “we lost 4kg” and “the fridge failed” are different problems.',
+              ],
+              [
+                'Expiry',
+                'Every batch that is going off, soonest first, with the money at risk. Only items ticked “This goes off” appear here — see 2c.',
+              ],
+              [
+                'Stock variance',
+                'The history of your counts: what was expected, what was found, what it cost, and whether wastage on the day explains it.',
+              ],
+              [
+                'Reconciliation',
+                'Opening + in − out = closing, item by item. Proves the books add up.',
+              ],
+              [
+                'Units & categories',
+                'The two managed lists items pick from. Set these up once, first.',
+              ],
+            ]}
+          />
+          <Note>
+            <strong>Adding an item.</strong> Name, unit, opening quantity, and — if you have more
+            than one site — <strong>which location</strong> the opening quantity is at. That last
+            one matters: an item is shared by the whole business, but its stock lives somewhere. Put
+            10kg in at the warehouse and Branch 02 correctly shows nothing until you transfer some.
+          </Note>
+          <Note>
+            <strong>“Alert me below”</strong> is the only threshold. At or under it the item is
+            flagged Low and appears in reorder suggestions. Leave it at 0 and you simply get no
+            warning — an item sitting at zero shows as <strong>Out</strong>, which is a fact, not an
+            alert you configured.
+          </Note>
+        </SectionCard>
+
+        <SectionCard
+          title="2c · Counting, and things that go off"
+          description="The two that need a worked example."
+        >
+          <p className="text-sm font-medium">A stock count, start to finish</p>
+          <Rows
+            rows={[
+              [
+                '1 · Start a count',
+                'From Stock counts. It is opened against the location you are currently viewing — check the switcher first, because that is the shelf you are about to compare against.',
+              ],
+              [
+                '2 · Count the shelf',
+                'The sheet opens on what this location stocks; “All items” shows the rest, for when you find something the books have never heard of here. The system figure is deliberately hidden — if you are shown the number you are supposed to find, you stop counting and start agreeing.',
+              ],
+              [
+                '3 · Send for approval',
+                'Nothing has moved yet. A mistyped 5 instead of 50 is a wrong line on a draft, not a wrong balance.',
+              ],
+              [
+                '4 · A manager approves',
+                'Only now does stock change, as adjustments in the ledger with a name and a date on them. Whoever counted cannot approve their own sheet — that is the control that makes a count worth taking. Owners and admins can, because there is nobody above them to ask.',
+              ],
+            ]}
+          />
+          <Note>
+            <strong>Worked example.</strong> The warehouse holds 40kg of rice and Branch 02 holds
+            10kg. You count Branch 02 and find 10kg. Variance <strong>0</strong> — the count is
+            compared against <em>Branch 02’s</em> 10kg, never the group’s 50kg. Find 7kg instead and
+            it posts a 3kg shortfall <em>at Branch 02</em>; the warehouse is untouched. Find 3kg of
+            something Branch 02 has never carried and approving it creates that stock there, which
+            is exactly how you correct a location whose figures have drifted.
+          </Note>
+          <Note>
+            <strong>Then read Stock variance.</strong> That 3kg shortfall appears there with what it
+            cost. If someone recorded 3kg of wastage the same day, it is marked as explained.
+            If not, it is unexplained loss — which is the number worth chasing.
+          </Note>
+          <p className="mt-5 text-sm font-medium">Things that go off</p>
+          <Note>
+            Tick <strong>“This goes off”</strong> on the item. From then on, every delivery of it
+            asks for an expiry date and each delivery is tracked as its own batch — because this
+            crate of milk goes off on Friday and the next one on Sunday. The oldest is always used
+            first, and the Expiry tab fills up on its own.
+          </Note>
+          <Note>
+            <strong>If the Expiry tab is empty</strong>, nothing you hold is marked as perishable
+            yet, or no delivery of it has arrived since you ticked the box. It fills from{' '}
+            <Guide href="/dashboard/purchases/receive">deliveries</Guide>, not from the item form.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="3 · Stock going out">
           <Rows
             rows={[
@@ -606,6 +708,9 @@ export default async function HelpPage() {
               ['Petty cash', 'A separate tin for small cash expenses. Never the drawer'],
               ['Drop', 'Cash skimmed from the till to the safe mid-shift'],
               ['Drift', 'Stored balance minus ledger sum. Must be zero'],
+              ['Variance (count)', 'Counted minus what the books said, for one location'],
+              ['Alert me below', 'Your low-stock threshold. 0 means no warning, not "warn always"'],
+              ['Out vs Low', 'Out is nothing on the shelf. Low is under the threshold you set'],
               ['COGS', 'What the ingredients cost. Revenue − COGS = gross profit'],
               ['Spec', 'A production recipe'],
             ]}

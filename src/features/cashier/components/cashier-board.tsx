@@ -22,6 +22,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -531,7 +532,16 @@ export function CashierBoard({
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium">Phone</label>
-                <Input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} placeholder="+91 98765 43210" />
+                <CustomerPhoneField
+                  phone={customerPhone}
+                  name={customerName}
+                  onPhoneChange={setCustomerPhone}
+                  onPick={(customer) => {
+                    setCustomerPhone(customer.phone)
+                    setCustomerName(customer.name)
+                  }}
+                  placeholder="+91 98765 43210"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium">Kitchen note</label>

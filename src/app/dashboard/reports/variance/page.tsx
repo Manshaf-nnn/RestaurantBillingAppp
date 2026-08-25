@@ -37,7 +37,14 @@ export default async function VarianceReportPage({
   const selection = await selectedBranch(user, params)
   const branchId = scopeToOne(selection)
 
-  const report = await getVarianceReport({ restaurantId: user.restaurantId, days, branchId })
+  const report = await getVarianceReport({
+    restaurantId: user.restaurantId,
+    days,
+    branchId,
+    // So "wastage on the same day" means the same day to the people who
+    // recorded it, rather than the same UTC day.
+    timeZone: restaurant.timezone,
+  })
 
   return (
     <>
