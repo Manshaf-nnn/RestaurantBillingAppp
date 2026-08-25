@@ -16,6 +16,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import {
   closeDrawerAction,
+  forceCloseDrawerAction,
   openDrawerAction,
   recordCashMovementAction,
   reviewDrawerAction,
@@ -44,6 +45,7 @@ export function DrawerConsole({ data }: { data: DrawerPageData }) {
   return (
     <div className="space-y-6">
       {data.pendingHandovers.length > 0 && <IncomingHandovers data={data} money={money} />}
+      {data.openNow.some((row) => !row.mine) && <OpenNow data={data} money={money} />}
       {data.review.length > 0 && <ReviewQueue data={data} money={money} />}
       {data.open ? <OpenDrawerPanel data={data} money={money} /> : <OpenForm data={data} />}
       <History data={data} money={money} />
@@ -672,6 +674,187 @@ function IncomingHandovers({
         ))}
       </ul>
     </SectionCard>
+  )
+}
+
+// ── open right now ───────────────────────────────────────────────────────────
+
+/**
+ * Drawers open on the floor, and a way to close one somebody walked away from.
+ *
+ * ── Why this card exists ────────────────────────────────────────────────────
+ *
+ * A cashier goes home without closing. Their session keeps the till, and the
+ * next cashier is told "somebody else already has this till open" — with no
+ * screen anywhere showing whose, and no way to do anything about it. The shift
+ * cannot start.
+ *
+ * Only other people's drawers are listed. Your own is the panel below, with the
+ * ordinary close form; showing it twice would offer two different ways to close
+ * the same session, one of which records you as having closed it on your own
+ * behalf.
+ */
+function OpenNow({ data, money }: { data: DrawerPageData; money: (m: number) => string }) {
+  const rows = data.openNow.filter((row) => !row.mine)
+
+  return (
+    <SectionCard
+      title="Open right now"
+      description="Drawers somebody still has out. Close one only when they have finished with it."
+      actions={<Badge variant="outline">{rows.length}</Badge>}
+    >
+      <ul className="space-y-3">
+        {rows.map((row) => (
+          <ForceCloseRow key={row.id} row={row} money={money} />
+        ))}
+      </ul>
+    </SectionCard>
+  )
+}
+
+function ForceCloseRow({
+  row,
+  money,
+}: {
+  row: DrawerPageData['openNow'][number]
+  money: (m: number) => string
+}) {
+  const router = useRouter()
+  const [open, setOpen] = React.useState(false)
+  const [counted, setCounted] = React.useState(true)
+  const [amount, setAmount] = React.useState('')
+  const [reason, setReason] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+
+  const submit = async () => {
+    const value = Number(amount)
+    if (counted && (!amount.trim() || !Number.isFinite(value) || value < 0)) {
+      toast.error('Enter what you counted, or say you could not count it')
+      return
+    }
+    if (reason.trim().length < 2) {
+      toast.error('Say why you are closing somebody else’s drawer')
+      return
+    }
+    setBusy(true)
+    const result = await callAction(() =>
+      forceCloseDrawerAction({
+        sessionId: row.id,
+        counted,
+        ...(counted ? { countedCash: value } : {}),
+        reason,
+      }),
+    )
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    const v = result.data.variance
+    if (v === null) toast.success('Closed. The variance is recorded as unknown.')
+    else if (v === 0) toast.success('Closed and balanced exactly')
+    else toast.warning(`Closed — ${v > 0 ? 'over' : 'short'} by ${money(Math.abs(v))}`)
+    router.refresh()
+  }
+
+  return (
+    <li className="rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="font-medium">
+          {row.openedByName}
+          <span className="ml-2 font-mono text-xs text-muted-foreground">{row.sessionNumber}</span>
+        </span>
+        <span className="text-muted-foreground">
+          {[row.branchName, row.registerName].filter(Boolean).join(' · ')} · open since{' '}
+          <LocalDateTime value={row.openedAt} />
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Should hold{' '}
+        <span className="font-semibold tabular-nums text-foreground">
+          {money(row.expectedCash)}
+        </span>{' '}
+        — opened with {money(row.openingFloat)}.
+      </p>
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button variant="ghost" size="sm" asChild>
+          <Link href={`/dashboard/cash-drawer/${row.id}`}>See everything</Link>
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
+          <Lock className="mr-2 h-3.5 w-3.5" />
+          {open ? 'Not now' : 'Close it for them'}
+        </Button>
+      </div>
+
+      {open ? (
+        <div className="mt-3 space-y-3 border-t border-border pt-3">
+          {/*
+            Counting is the default, because an owner standing at the till
+            should record what is really there. The alternative is not "assume
+            it balanced" — it is "say the variance is unknown", which is the
+            honest record when nobody looked.
+          */}
+          <div className="flex flex-wrap gap-3 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                className="size-4"
+                checked={counted}
+                onChange={() => setCounted(true)}
+              />
+              I have counted it
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                className="size-4"
+                checked={!counted}
+                onChange={() => setCounted(false)}
+              />
+              I cannot count it now
+            </label>
+          </div>
+
+          {counted ? (
+            <div className="space-y-1.5">
+              <Label htmlFor={`fc-amt-${row.id}`}>Counted cash</Label>
+              <Input
+                id={`fc-amt-${row.id}`}
+                inputMode="decimal"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Any difference is recorded against {row.openedByName}, whose shift it was.
+              </p>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">
+              The variance will be recorded as <strong>unknown</strong>, not as zero. Closing at
+              the expected figure would claim the till balanced when nobody checked.
+            </p>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`fc-why-${row.id}`}>
+              Why are you closing it? <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id={`fc-why-${row.id}`}
+              placeholder="e.g. Ann went home without closing"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </div>
+
+          <Button size="sm" variant="destructive" disabled={busy} onClick={submit}>
+            {busy ? 'Closing…' : 'Close this drawer'}
+          </Button>
+        </div>
+      ) : null}
+    </li>
   )
 }
 

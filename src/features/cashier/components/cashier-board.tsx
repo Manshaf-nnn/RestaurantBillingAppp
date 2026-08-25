@@ -111,6 +111,7 @@ export function CashierBoard({
   todayTotal,
   todayCount,
   user,
+  exit,
   restaurant,
   menu,
   startInTakeaway = false,
@@ -121,6 +122,15 @@ export function CashierBoard({
   todayTotal: number
   todayCount: number
   user: { name: string; role: string }
+  /**
+   * A way back to the dashboard, rendered by the page.
+   *
+   * A ReactNode rather than anything computed here: deciding whether this
+   * person has somewhere to go needs their permissions, which live on the
+   * server. The page renders `<StationExit>` and hands the element across —
+   * elements serialize, functions do not.
+   */
+  exit?: React.ReactNode
   /** Locations this screen is showing. Null means all of them. */
   branchIds: string[] | null
   menu: PublicMenu
@@ -408,7 +418,7 @@ export function CashierBoard({
   const outstanding = bills.reduce((sum, bill) => sum + (bill.grandTotal - bill.paidTotal), 0)
 
   return (
-    <OpsShell title="Cashier" subtitle={restaurant.name} user={user}>
+    <OpsShell title="Cashier" subtitle={restaurant.name} user={user} actions={exit}>
       <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[

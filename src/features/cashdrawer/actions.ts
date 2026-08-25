@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
+import { AppError } from '@/lib/errors'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
@@ -13,6 +14,7 @@ import { directionOf } from './movement-types'
 import {
   cashMovementSchema,
   closeDrawerSchema,
+  forceCloseDrawerSchema,
   openDrawerSchema,
   registerActiveSchema,
   registerSchema,
@@ -20,6 +22,7 @@ import {
 } from './schema'
 import {
   closeDrawer,
+  forceCloseDrawer,
   getOpenDrawer,
   openDrawer,
   recordCashMovement,
@@ -241,6 +244,66 @@ export async function closeDrawerAction(
 
       revalidateDrawer()
       return { id: session.id, variance, expectedCash: totals.expectedCash, needsReview }
+    },
+    'Drawer closed.',
+  )
+}
+
+/**
+ * Close a drawer somebody left open.
+ *
+ * Guarded by CASH_DRAWER_MANAGE, and that finally matches the service: closing
+ * another person's session has always required `canManageOthers` inside
+ * `requireOpenSession`, while `closeDrawerAction` asked only for OPERATE. A
+ * head-office role holding MANAGE alone was refused by the action for something
+ * the service would have allowed.
+ */
+export async function forceCloseDrawerAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; variance: number | null }>> {
+  return runAction(
+    forceCloseDrawerSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.CASH_DRAWER_MANAGE)
+
+      if (data.counted && data.countedCash === undefined) {
+        throw new AppError('Enter what you counted', 400, 'DRAWER_NO_COUNT')
+      }
+
+      const { session, totals, variance } = await forceCloseDrawer({
+        restaurantId: user.restaurantId,
+        sessionId: data.sessionId,
+        countedCash: data.counted
+          ? await toMinor(user.restaurantId, data.countedCash ?? 0)
+          : null,
+        reason: data.reason,
+        userId: user.id,
+        actor: actorFor(user),
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: session.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.DRAWER_FORCE_CLOSED,
+        entity: 'CashDrawerSession',
+        entityId: session.id,
+        after: {
+          sessionNumber: session.sessionNumber,
+          openedById: session.openedById,
+          expectedCash: totals.expectedCash,
+          countedCash: session.countedCash,
+          // Spelled out rather than left to a null: "unknown" is the fact.
+          variance: variance === null ? 'unknown — not counted' : variance,
+          reason: session.varianceReason,
+          status: session.status,
+        },
+      })
+
+      revalidateDrawer()
+      return { id: session.id, variance }
     },
     'Drawer closed.',
   )

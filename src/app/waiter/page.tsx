@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import { WaiterBoard, type WaiterOrder } from '@/features/waiter/components/waiter-board'
 import { getWaiterBoard } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
   scopeToOne,
@@ -101,6 +102,7 @@ export default async function WaiterPage({
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
+      exit={<StationExit user={user} current="/waiter" />}
       initialReady={board.ready.map(toWaiterOrder)}
       initialServing={board.serving.map(toWaiterOrder)}
       initialRequests={board.requests.map((request) => ({

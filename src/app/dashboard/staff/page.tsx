@@ -93,6 +93,7 @@ export default async function StaffPage() {
           ? customRoles.map((role) => ({
               id: role.id,
               name: role.name,
+              preset: role.preset,
               presetLabel: role.presetLabel,
             }))
           : undefined

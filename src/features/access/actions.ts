@@ -352,16 +352,58 @@ export async function assignRole(input: unknown): Promise<ActionResult<{ userId:
         throw new ForbiddenError('You cannot change that person’s access')
       }
 
+      /*
+       * ── The preset is applied, not just recorded ─────────────────────────
+       *
+       * This used to write `staffRoleId` alone, and that one omission was
+       * behind most of what people reported as broken.
+       *
+       * A person has two roles: `User.role`, which decides where they land,
+       * what the edge middleware lets through and which branches they can see;
+       * and the custom role, which decides their permissions. `StaffRole.preset`
+       * exists to keep those in step — its own schema comment says it "decides
+       * branch semantics, where the person lands after signing in, and what the
+       * edge gate lets through" — and nothing applied it.
+       *
+       * So a role built on Cashier could be given to a Waiter's account. Their
+       * permissions became a cashier's; their landing page stayed /waiter; the
+       * middleware still saw WAITER. Giving somebody the right permissions and
+       * leaving them unable to reach the screens is worse than not granting
+       * them, because it looks done.
+       */
+      let nextRole: UserRole | null = null
+      let nextBranchId: string | null | undefined
+
       if (data.staffRoleId) {
         const role = await requireRole(admin.restaurantId, data.staffRoleId)
         if (!role.isActive) throw new ConflictError('That role is switched off')
         // Assigning is granting, so it passes the same power check as building.
         assertNoEscalation(admin, role.permissions)
+
+        // The preset is a role being handed out, so it obeys the same rank rule
+        // as every other way of handing one out.
+        if (!assignableRoles(admin.role).includes(role.preset)) {
+          throw new ForbiddenError('That role outranks what you can assign')
+        }
+        nextRole = role.preset
+        // Only when the role pins a location. A role that does not pin one
+        // leaves the person where they already work.
+        if (role.branchId) nextBranchId = role.branchId
       }
 
       await prisma.user.update({
         where: { id: data.userId },
-        data: { staffRoleId: data.staffRoleId ?? null },
+        data: {
+          staffRoleId: data.staffRoleId ?? null,
+          /*
+           * Clearing a custom role deliberately leaves the base role alone.
+           * Taking somebody's extra permissions away must not also re-rank
+           * them — that would demote a manager to whatever they were hired as
+           * the moment an owner tidied up a role list.
+           */
+          ...(nextRole ? { role: nextRole } : {}),
+          ...(nextBranchId ? { branchId: nextBranchId } : {}),
+        },
       })
 
       await audit({
@@ -371,8 +413,12 @@ export async function assignRole(input: unknown): Promise<ActionResult<{ userId:
         action: AUDIT_ACTIONS.ROLE_ASSIGNED,
         entity: 'User',
         entityId: target.id,
-        before: { staffRoleId: target.staffRoleId },
-        after: { staffRoleId: data.staffRoleId ?? null, staff: target.name },
+        before: { staffRoleId: target.staffRoleId, role: target.role },
+        after: {
+          staffRoleId: data.staffRoleId ?? null,
+          role: nextRole ?? target.role,
+          staff: target.name,
+        },
       })
 
       refresh()

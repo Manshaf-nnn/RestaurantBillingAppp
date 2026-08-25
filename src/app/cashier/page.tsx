@@ -6,6 +6,7 @@ import { readPaperWidths } from '@/features/printing/paper'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
   scopeToOne,
@@ -125,6 +126,7 @@ export default async function CashierPage({
       menu={menu}
       startInTakeaway={startInTakeaway}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
+      exit={<StationExit user={user} current="/cashier" />}
       todayTotal={today._sum.amount ?? 0}
       todayCount={today._count}
       restaurant={{

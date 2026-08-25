@@ -11,6 +11,7 @@ import {
   getDrawerSummary,
   getOpenDrawer,
   listDrawerSessions,
+  listOpenDrawers,
 } from './service'
 import { listRegisters } from './registers'
 
@@ -63,6 +64,20 @@ export interface HandoverRow {
   createdAt: string
 }
 
+export interface OpenDrawerRow {
+  id: string
+  sessionNumber: string
+  openedAt: string
+  openedById: string
+  openedByName: string
+  branchName: string | null
+  registerName: string | null
+  openingFloat: number
+  expectedCash: number
+  /** True when this is the viewer's own drawer, which they close normally. */
+  mine: boolean
+}
+
 export interface DrawerPageData {
   open: Awaited<ReturnType<typeof getDrawerSummary>> | null
   /** The open session's branch and till, for the header. */
@@ -71,6 +86,15 @@ export interface DrawerPageData {
   recent: DrawerSessionRow[]
   /** Counted, over the threshold, waiting for somebody to sign off. */
   review: DrawerSessionRow[]
+  /**
+   * Every drawer open right now, for a manager.
+   *
+   * The reason this exists: a cashier who goes home without closing leaves the
+   * till locked, and there was no screen anywhere that showed an open session
+   * belonging to somebody else. The data was already being fetched and thrown
+   * away by a `status !== 'OPEN'` filter one line into the render.
+   */
+  openNow: OpenDrawerRow[]
   branches: BranchSummary[]
   registers: Array<{ id: string; name: string; branchId: string; isActive: boolean }>
   /** The tin for the open session, and what is queued against it. */
@@ -159,7 +183,7 @@ export async function getDrawerPageData(params: {
 
   const openSession = await getOpenDrawer(params.restaurantId, params.userId)
 
-  const [open, sessions, review, branches, pendingHandovers] = await Promise.all([
+  const [open, sessions, review, branches, pendingHandovers, openNow] = await Promise.all([
     openSession ? getDrawerSummary(params.restaurantId, openSession.id) : Promise.resolve(null),
     listDrawerSessions({
       restaurantId: params.restaurantId,
@@ -180,8 +204,15 @@ export async function getDrawerPageData(params: {
       : Promise.resolve([]),
     listBranches(params.restaurantId),
     listPendingForUser(params.restaurantId, params.userId),
+    params.canSeeAll
+      ? listOpenDrawers({
+          restaurantId: params.restaurantId,
+          branchId: params.branchId ?? null,
+          branchIds: reach,
+        })
+      : Promise.resolve([]),
   ]).then(
-    ([open, sessions, review, allBranches, pending]) =>
+    ([open, sessions, review, allBranches, pending, live]) =>
       [
         open,
         sessions,
@@ -196,6 +227,7 @@ export async function getDrawerPageData(params: {
          */
         reach === null ? allBranches : allBranches.filter((b) => reach.includes(b.id)),
         pending,
+        live,
       ] as const,
   )
 
@@ -259,6 +291,23 @@ export async function getDrawerPageData(params: {
       createdAt: h.createdAt.toISOString(),
     })),
     handoverCandidates: candidates.map((c) => ({ id: c.id, name: c.name })),
+    openNow: await Promise.all(
+      openNow.map(async (row) => ({
+        id: row.id,
+        sessionNumber: row.sessionNumber,
+        openedAt: row.openedAt.toISOString(),
+        openedById: row.openedById,
+        openedByName: row.openedBy?.name ?? 'Unknown',
+        branchName: row.branch?.name ?? null,
+        registerName: row.register?.name ?? null,
+        openingFloat: row.openingFloat,
+        // Live, because a session still taking money has no snapshot yet — and
+        // the figure an owner needs before counting it is what it *should*
+        // hold right now.
+        expectedCash: (await computeDrawerTotals(row.id)).expectedCash,
+        mine: row.openedById === params.userId,
+      })),
+    ),
     canManage: params.canSeeAll,
     canApprovePetty: params.canApprovePetty ?? false,
     currency: params.currency,

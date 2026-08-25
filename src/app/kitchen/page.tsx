@@ -11,6 +11,7 @@ import {
 } from '@/features/dashboard/selected-branch'
 import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { StationExit } from '@/features/dashboard/components/station-exit'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -85,6 +86,7 @@ export default async function KitchenPage({
       paperWidth={readPaperWidths(restaurant.printerConfig).kitchen}
       branchIds={branchIds}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
+      exit={<StationExit user={user} current="/kitchen" />}
       initialStats={stats}
       initialTickets={queue.map((order) => ({
         id: order.id,

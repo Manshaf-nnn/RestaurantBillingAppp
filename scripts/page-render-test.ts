@@ -67,6 +67,7 @@ const PAGES = [
   '/dashboard/handover',
   '/dashboard/cash-drawer',
   '/dashboard/petty-cash',
+  '/dashboard/links',
   '/dashboard/reports/cash-drawer',
   '/dashboard/reports/petty-cash',
   '/dashboard/online-payments',

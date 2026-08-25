@@ -9,6 +9,7 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import {
   Bell,
   Building2,
+  ShieldCheck,
   ExternalLink,
   LogOut,
   Menu,
@@ -45,7 +46,7 @@ import { logout } from '@/features/auth/actions'
 import { LocalTime } from '@/components/local-time'
 import { markAllRead } from '../actions'
 import { GlobalSearch } from '@/features/search/components/global-search'
-import { NAV_SECTIONS } from '../nav'
+import { visibleSections } from '../nav'
 import { callAction } from '@/lib/use-action'
 
 export interface ShellUser {
@@ -118,16 +119,10 @@ export function DashboardShell({
   const [notifications, setNotifications] = React.useState(initialNotifications)
   const { play } = useNotificationSound()
 
-  const granted = React.useMemo(() => permissionsFor(user), [user])
-
-  const sections = React.useMemo(
-    () =>
-      NAV_SECTIONS.map((section) => ({
-        ...section,
-        items: section.items.filter((item) => granted.has(item.permission)),
-      })).filter((section) => section.items.length > 0),
-    [granted],
-  )
+  // `visibleSections` in nav.ts, not a second copy of the same filter — the
+  // station screens and /forbidden ask the same question and have to get the
+  // same answer.
+  const sections = React.useMemo(() => visibleSections(user), [user])
 
   useSocketEvent(EVENTS.NOTIFICATION, (payload: NotificationPayload) => {
     setNotifications((current) => [
@@ -398,6 +393,22 @@ export function DashboardShell({
             <span className="text-muted-foreground">
               That is why these screens are empty — ask the owner to set your location on the Staff
               screen.
+            </span>
+          </div>
+        ) : null}
+
+        {/*
+          An empty sidebar looks like a broken page, and it is usually a role
+          somebody built and never ticked anything on. Saying so turns a
+          mystery into a sentence the person can repeat to their manager.
+        */}
+        {sections.length === 0 ? (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-warning/10 px-4 py-2 text-sm text-warning lg:px-6">
+            <ShieldCheck className="size-4 shrink-0" />
+            <span className="font-medium">No features are switched on for your role yet.</span>
+            <span className="text-muted-foreground">
+              That is why the menu is empty — ask the owner to enable what you need under Roles
+              &amp; access.
             </span>
           </div>
         ) : null}

@@ -3,7 +3,7 @@ import 'server-only'
 import type { InviteMode, UserRole } from '@prisma/client'
 
 import { ForbiddenError, NotFoundError } from '@/lib/errors'
-import { ROLE_HOME, ROLE_LABELS } from '@/lib/rbac'
+import { landingFor, ROLE_LABELS } from '@/lib/rbac'
 import { appUrl } from '@/lib/env'
 import { tenantOrigin } from '@/lib/tenant-url'
 import { prisma } from '@/server/db/prisma'
@@ -74,10 +74,11 @@ export function joinUrl(token: string, origin: string = appUrl()): string {
   return `${origin}/join/${token}`
 }
 
-/** Where somebody lands once the link has let them in. */
-export function landingFor(role: UserRole): string {
-  return ROLE_HOME[role] ?? '/dashboard'
-}
+/*
+ * Where somebody lands once the link has let them in — `lib/rbac.ts`, not a
+ * second copy. Re-exported so existing importers of this module keep working.
+ */
+export { landingFor }
 
 export async function listAccessLinks(
   restaurantId: string,
@@ -143,6 +144,8 @@ export interface ResolvedLink {
   branchName: string | null
   staffRoleId: string | null
   staffRoleName: string | null
+  /** The base role the custom role is built on — what the account becomes. */
+  staffRolePreset: UserRole | null
   userId: string | null
   userEmail: string | null
   token: string
@@ -161,7 +164,7 @@ export async function resolveLink(token: string): Promise<ResolvedLink> {
     where: { token },
     include: {
       branch: { select: { id: true, name: true } },
-      staffRole: { select: { id: true, name: true, isActive: true } },
+      staffRole: { select: { id: true, name: true, isActive: true, preset: true } },
       user: { select: { id: true, email: true, isActive: true, deletedAt: true } },
       restaurant: { select: { id: true, name: true, status: true, isActive: true } },
     },
@@ -200,6 +203,7 @@ export async function resolveLink(token: string): Promise<ResolvedLink> {
     // to the preset, exactly as `activeRolePermissions` does in the session.
     staffRoleId: invite.staffRole?.isActive ? invite.staffRole.id : null,
     staffRoleName: invite.staffRole?.isActive ? invite.staffRole.name : null,
+    staffRolePreset: invite.staffRole?.isActive ? invite.staffRole.preset : null,
     userId: invite.user?.id ?? null,
     userEmail: invite.user?.email ?? null,
     token,

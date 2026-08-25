@@ -92,6 +92,7 @@ export function WaiterBoard({
   initialRequests,
   initialTables,
   user,
+  exit,
   restaurantName,
   currency,
   locale,
@@ -102,6 +103,15 @@ export function WaiterBoard({
   initialRequests: WaiterRequest[]
   initialTables: WaiterTable[]
   user: { name: string; role: string }
+  /**
+   * A way back to the dashboard, rendered by the page.
+   *
+   * A ReactNode rather than anything computed here: deciding whether this
+   * person has somewhere to go needs their permissions, which live on the
+   * server. The page renders `<StationExit>` and hands the element across —
+   * elements serialize, functions do not.
+   */
+  exit?: React.ReactNode
   /** Locations this screen is showing. Null means all of them. */
   branchIds: string[] | null
 
@@ -284,6 +294,7 @@ export function WaiterBoard({
       title="Waiter station"
       subtitle={restaurantName}
       user={user}
+      actions={exit}
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >

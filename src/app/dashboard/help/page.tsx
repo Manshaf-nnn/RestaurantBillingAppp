@@ -235,6 +235,38 @@ export default async function HelpPage() {
             Card, QR, online and bank transfers appear on the close screen so you can see the
             whole shift, but they never change the drawer figure. That money never entered it.
           </Note>
+
+          <p className="mt-4 text-sm font-medium">What &ldquo;opening float&rdquo; means</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            The float is the change you start with so you can serve the first customer — say
+            Rs 10,000 in fives, tens and hundreds. <strong>It is not takings.</strong> If you
+            open with Rs 10,000, sell nothing all day and count Rs 10,000 at close, you have
+            balanced perfectly and earned nothing. The float is measured so that everything
+            after it can be measured against it.
+          </p>
+          <Note>
+            Count it before the first sale, not after. A float typed from memory is a variance
+            waiting to appear at midnight with nobody able to say which end it came from.
+          </Note>
+
+          <p className="mt-4 text-sm font-medium">A shift, in figures</p>
+          <Rows
+            rows={[
+              ['Open', 'Cash 10,000 in the drawer · 5,000 in the petty cash tin'],
+              ['Cash sales', '+50,000 — attaches itself, nothing to press'],
+              ['Card sales', '20,000 — shown at close, never in the drawer'],
+              ['More change brought up', '+2,000 (Cash in → Additional float)'],
+              ['A refund', '−1,000 — recorded when you refund the payment'],
+              ['Three-wheeler to the market', '−400 from the drawer (petty cash, paid from drawer)'],
+              ['Cleaning cloths', '−800 from the tin (petty cash, paid from tin)'],
+              ['To the safe', '−20,000 (Cash out → Cash drop)'],
+              ['Expected in the drawer', '40,600 · and 4,200 left in the tin'],
+            ]}
+          />
+          <Note>
+            Count 40,100 and the screen says <strong>short by 500</strong> before you press
+            anything, and asks why. Write the answer while you still have one.
+          </Note>
         </SectionCard>
 
         <SectionCard title="5a · Starting a shift" description="Before the till will open.">
@@ -354,7 +386,32 @@ export default async function HelpPage() {
           <Note>
             Closed drawers never disappear. Every session, its variance and the reason given are
             on <Guide href="/dashboard/reports/cash-drawer">the cash drawer report</Guide>,
-            filterable by branch, cashier, till, status and date, and exportable.
+            filterable by branch, cashier, till, status and date, and exportable. Open any
+            session number for every movement in it, who recorded each one, and the audit trail.
+          </Note>
+
+          <p className="mt-4 text-sm font-medium">If somebody forgets to close</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            Their session keeps the till, and the next cashier cannot start on it. An owner or
+            manager sees it under <strong>Open right now</strong> on{' '}
+            <Guide href="/dashboard/cash-drawer">Cash drawer</Guide> — whose it is, which till,
+            and what it should be holding — and can close it for them.
+          </p>
+          <Rows
+            rows={[
+              [
+                'You can count it',
+                'Enter what is really there. The difference is recorded against the cashier whose shift it was, not against you.',
+              ],
+              [
+                'You cannot count it',
+                'Say so. The variance is recorded as unknown — never as zero, because zero would claim the till balanced when nobody looked.',
+              ],
+            ]}
+          />
+          <Note>
+            Either way you have to say why, and the record shows it was closed by a manager
+            rather than by the person who opened it. The till is free immediately.
           </Note>
         </SectionCard>
 

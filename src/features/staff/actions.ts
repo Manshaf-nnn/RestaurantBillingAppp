@@ -6,6 +6,7 @@ import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { requireBranch } from '@/features/branches/service'
+import { assertNoEscalation, requireRole } from '@/features/access/service'
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import {
   assignableRoles,
@@ -136,18 +137,43 @@ export async function inviteStaff(
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
       const restaurant = await requireRestaurant(admin.restaurantId)
 
-      if (!assignableRoles(admin.role).includes(data.role)) {
+      /*
+       * A custom role decides the base role, not the form.
+       *
+       * The decision is that a custom role carries its own base — "Senior
+       * Cashier is based on Cashier" — so the person is created as whatever
+       * the role says. Trusting `data.role` alongside it would let the two
+       * disagree from the first second of the account's life, which is the
+       * whole class of bug this change exists to close.
+       */
+      const staffRole = data.staffRoleId
+        ? await requireRole(admin.restaurantId, data.staffRoleId)
+        : null
+      if (staffRole) {
+        if (!staffRole.isActive) throw new ConflictError('That role is switched off')
+        // Creating somebody into a role is granting it.
+        assertNoEscalation(admin, staffRole.permissions)
+      }
+
+      const role = staffRole?.preset ?? data.role
+
+      if (!assignableRoles(admin.role).includes(role)) {
         throw new ForbiddenError('You cannot assign that role')
       }
       // Rank is not reach — see the note on assertScopeAllowed.
-      assertScopeAllowed(admin, data.role)
+      assertScopeAllowed(admin, role)
 
       const existing = await prisma.user.findUnique({ where: { email: data.email } })
       if (existing) throw new ConflictError('A user with that email already exists')
 
       // Resolved before anything is written, so a bad location cannot leave a
-      // half-made account behind.
-      const branchId = await homeBranchFor(admin, data.branchId, data.role)
+      // half-made account behind. A role that pins a location wins over the
+      // form, for the same reason its preset does.
+      const branchId = await homeBranchFor(
+        admin,
+        staffRole?.branchId ?? data.branchId,
+        role,
+      )
 
       /*
        * The sign-in code is the password. A waiter is handed a card with their
@@ -165,7 +191,8 @@ export async function inviteStaff(
           email: data.email,
           name: data.name,
           phone: data.phone || null,
-          role: data.role,
+          role,
+          staffRoleId: staffRole?.id ?? null,
           branchId,
           staffCode,
           signInCode: temporaryPassword,

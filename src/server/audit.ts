@@ -117,6 +117,7 @@ export const AUDIT_ACTIONS = {
   DRAWER_OPENED: 'cashDrawer.opened',
   DRAWER_CLOSED: 'cashDrawer.closed',
   DRAWER_REVIEWED: 'cashDrawer.reviewed',
+  DRAWER_FORCE_CLOSED: 'cashDrawer.force_closed',
   DRAWER_CASH_IN: 'cashDrawer.cash_in',
   DRAWER_CASH_OUT: 'cashDrawer.cash_out',
   DRAWER_HANDED_OVER: 'cashDrawer.handed_over',

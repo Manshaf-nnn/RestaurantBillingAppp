@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
+import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission, assertBranchAccess } from '@/server/auth/guard'
 import { generateToken } from '@/server/auth/password'
@@ -34,9 +35,17 @@ function refresh() {
 async function vetLink(
   admin: Awaited<ReturnType<typeof requirePermission>>,
   data: z.infer<typeof createLinkSchema>,
+  /*
+   * The role this link will actually carry — which for a personal link is the
+   * person's own, not whatever the form posted. It has to be this one and not
+   * `data.role`, because the branch rules below differ by role: resolving them
+   * against a role the link will not have produces a link whose branch is
+   * wrong for the account it signs in to.
+   */
+  effectiveRole: UserRole,
 ) {
-  if (!assignableRoles(admin.role).includes(data.role)) {
-    throw new ForbiddenError(`You cannot create a link for the ${ROLE_LABELS[data.role]} role`)
+  if (!assignableRoles(admin.role).includes(effectiveRole)) {
+    throw new ForbiddenError(`You cannot create a link for the ${ROLE_LABELS[effectiveRole]} role`)
   }
 
   const staffRole = data.staffRoleId
@@ -57,10 +66,45 @@ async function vetLink(
   const branchId = await resolveRoleBranch(
     admin,
     data.branchId ?? staffRole?.branchId ?? null,
-    data.role,
+    effectiveRole,
   )
 
   return { staffRole, branchId }
+}
+
+/**
+ * What role a link will really carry.
+ *
+ * A custom role's preset wins wherever there is one — that is the decision
+ * that a custom role carries its own base. Otherwise a shared-device link uses
+ * the role that was picked (it is creating the account), and a personal link
+ * uses the account's own.
+ */
+async function effectiveLinkRole(
+  admin: Awaited<ReturnType<typeof requirePermission>>,
+  data: z.infer<typeof createLinkSchema>,
+): Promise<{ role: UserRole; person: PersonForLink | null }> {
+  const preset = data.staffRoleId
+    ? (await requireRole(admin.restaurantId, data.staffRoleId)).preset
+    : null
+
+  if (data.mode !== 'PERSONAL') return { role: preset ?? data.role, person: null }
+
+  if (!data.userId) throw new ConflictError('Choose who this link is for')
+  const person = await prisma.user.findFirst({
+    where: { id: data.userId, restaurantId: admin.restaurantId, deletedAt: null },
+    select: { id: true, role: true, signInCode: true, branchId: true },
+  })
+  if (!person) throw new NotFoundError('Member of staff')
+
+  return { role: preset ?? person.role, person }
+}
+
+type PersonForLink = {
+  id: string
+  role: UserRole
+  signInCode: string | null
+  branchId: string | null
 }
 
 export async function createAccessLink(
@@ -71,18 +115,29 @@ export async function createAccessLink(
     input,
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-      const { staffRole, branchId } = await vetLink(admin, data)
+      const { role: linkRole, person } = await effectiveLinkRole(admin, data)
+      const { staffRole, branchId } = await vetLink(admin, data, linkRole)
 
       let userId: string | null = null
       let signInCode: string | null = null
 
-      if (data.mode === 'PERSONAL') {
-        if (!data.userId) throw new ConflictError('Choose who this link is for')
-        const person = await prisma.user.findFirst({
-          where: { id: data.userId, restaurantId: admin.restaurantId, deletedAt: null },
-          select: { id: true, role: true, signInCode: true, branchId: true },
-        })
-        if (!person) throw new NotFoundError('Member of staff')
+      /*
+       * ── A personal link cannot contradict the person ──────────────────────
+       *
+       * The role stored on a PERSONAL link used to be whatever the dialog's
+       * Role dropdown happened to say, chosen independently of who the link
+       * was for. Nothing compared them, so the ordinary mistake — a Cashier
+       * link handed to somebody whose account is a Waiter — produced a link
+       * that redirected its holder to /cashier, where the edge middleware read
+       * their real role and bounced them to /forbidden. "You do not have
+       * access here", from the screen whose entire job is handing out access.
+       *
+       * A personal link is authentication: it says *let this person in*. It is
+       * not a promotion. So its role is the person's own — or, when the link
+       * carries a custom role, that role's preset, which is a real change the
+       * dialog states in words before you create it.
+       */
+      if (person) {
         if (person.role === 'OWNER' || !assignableRoles(admin.role).includes(person.role)) {
           throw new ForbiddenError('You cannot create a link for that person')
         }
@@ -103,7 +158,7 @@ export async function createAccessLink(
         data: {
           token,
           restaurantId: admin.restaurantId,
-          role: data.role,
+          role: linkRole,
           mode: data.mode,
           branchId,
           staffRoleId: staffRole?.id ?? null,
@@ -124,7 +179,7 @@ export async function createAccessLink(
         entityId: link.id,
         after: {
           mode: data.mode,
-          role: data.role,
+          role: linkRole,
           staffRole: staffRole?.name ?? null,
           branchId,
           label: data.label || null,

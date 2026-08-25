@@ -386,6 +386,24 @@ export const ROLE_HOME: Record<UserRole, string> = {
   WAITER: '/waiter',
 }
 
+/**
+ * Where somebody lands after signing in.
+ *
+ * One function, because there were four. `auth/actions.ts` read the table,
+ * `access/links.ts` read it again, `app/page.tsx` a third time, and
+ * `staff/codes/page.tsx` had reimplemented it as a ternary chain that had
+ * already drifted — it knew about three roles and defaulted the other eight to
+ * `/dashboard`, which is wrong for every back-office role.
+ *
+ * A destination is only useful if the person is allowed to be there, and the
+ * edge middleware decides that from `role` alone. So this takes the role and
+ * nothing else: anything that changes where somebody lands has to change their
+ * role, which is exactly the rule Part A exists to enforce.
+ */
+export function landingFor(role: UserRole): string {
+  return ROLE_HOME[role] ?? '/dashboard'
+}
+
 export interface PermissionSubject {
   role: UserRole
   /** Extra keys granted to this one person, on top of whatever the role gives. */
@@ -428,6 +446,26 @@ export interface PermissionSubject {
  */
 export function permissionsFor(subject: PermissionSubject): Set<string> {
   if (subject.role === 'OWNER' || subject.role === 'SUPER_ADMIN') return new Set<string>(ALL)
+  /*
+   * `withSplits` applies to the PRESET list and deliberately not to a saved one.
+   *
+   * It is tempting to run it on both — a custom role holding `report.view` gets
+   * the reports hub and none of the reports behind it, which looks like an
+   * oversight. It is not. The splits exist so that when a permission was carved
+   * into smaller ones, nobody lost access they already had; they are a
+   * compatibility rule for the built-in presets, not a general "parent implies
+   * child".
+   *
+   * Applying them here would make a switch impossible to turn off: an owner who
+   * unticks Gross profit while leaving Reports on would watch it come back,
+   * because `report.view` would re-derive `report.profit` on every request. A
+   * saved role is an explicit list — the builder shows every one of these as its
+   * own switch — and the whole point of a list somebody composed by hand is that
+   * what is not in it is not granted.
+   *
+   * `role-url-refusal-test` is the check that holds this: it strips three
+   * permissions from a MANAGER and asserts the pages go on refusing.
+   */
   const base = subject.rolePermissions ?? ROLE_PERMISSIONS[subject.role]
   return new Set<string>([...base, ...(subject.permissions ?? [])])
 }

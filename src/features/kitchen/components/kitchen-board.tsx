@@ -73,6 +73,7 @@ export function KitchenBoard({
   initialTickets,
   initialStats,
   user,
+  exit,
   restaurantName,
   paperWidth,
   branchIds,
@@ -80,6 +81,15 @@ export function KitchenBoard({
   initialTickets: KitchenTicket[]
   initialStats: KitchenStats
   user: { name: string; role: string }
+  /**
+   * A way back to the dashboard, rendered by the page.
+   *
+   * A ReactNode rather than anything computed here: deciding whether this
+   * person has somewhere to go needs their permissions, which live on the
+   * server. The page renders `<StationExit>` and hands the element across —
+   * elements serialize, functions do not.
+   */
+  exit?: React.ReactNode
   restaurantName: string
   paperWidth: PaperWidth
   /**
@@ -249,6 +259,7 @@ export function KitchenBoard({
       title="Kitchen display"
       subtitle={restaurantName}
       user={user}
+      actions={exit}
       soundEnabled={soundEnabled}
       onToggleSound={() => setSoundEnabled((value) => !value)}
     >

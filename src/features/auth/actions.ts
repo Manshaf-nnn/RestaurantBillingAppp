@@ -6,7 +6,7 @@ import type { UserRole } from '@prisma/client'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ForbiddenError, UnauthorizedError } from '@/lib/errors'
-import { ROLE_HOME } from '@/lib/rbac'
+import { landingFor } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
 import { appUrl } from '@/lib/env'
 import { tenantOrigin } from '@/lib/tenant-url'
@@ -134,13 +134,18 @@ export async function login(input: unknown): Promise<ActionResult<{ redirectTo: 
       entityId: user.id,
     })
 
-    return { redirectTo: await landingFor(user.id, user.role, user.restaurantId) }
+    return { redirectTo: await landingAfterLogin(user.role, user.restaurantId) }
   })
 }
 
-/** Resolves where a user should land, accounting for tenant approval status. */
-async function landingFor(
-  _userId: string,
+/**
+ * Where a user lands, accounting for tenant approval status.
+ *
+ * The role half is `landingFor` in `lib/rbac.ts` — one table, one reader. This
+ * wraps it with the two things that outrank a role: a platform operator, and a
+ * restaurant that is not approved yet.
+ */
+async function landingAfterLogin(
   role: UserRole,
   restaurantId: string | null,
 ): Promise<string> {
@@ -153,7 +158,7 @@ async function landingFor(
   })
   if (restaurant && restaurant.status !== 'ACTIVE') return '/pending-approval'
 
-  return ROLE_HOME[role]
+  return landingFor(role)
 }
 
 // ── registration (new restaurant + owner) ────────────────────────────────────

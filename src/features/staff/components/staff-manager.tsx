@@ -77,6 +77,8 @@ const NO_CUSTOM_ROLE = '__default__'
 export interface AssignableRole {
   id: string
   name: string
+  /** The built-in role it is based on. Picking the role picks this too. */
+  preset: UserRole
   presetLabel: string
 }
 
@@ -298,6 +300,7 @@ export function StaffManager({
         onOpenChange={setInviteOpen}
         roles={assignableRoles}
         locations={locations}
+        customRoles={customRoles}
         canAssignAllLocations={canAssignAllLocations}
       />
       <EditDialog
@@ -411,14 +414,25 @@ function InviteDialog({
   onOpenChange,
   roles,
   locations,
+  customRoles,
   canAssignAllLocations = true,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   roles: UserRole[]
   locations: StaffLocation[]
+  customRoles?: AssignableRole[]
   canAssignAllLocations?: boolean
 }) {
+  /*
+   * The custom role is chosen here rather than in a second visit to the row.
+   *
+   * It used to be edit-only, so every new hire started on preset defaults and
+   * stayed there until somebody remembered to come back — which is the step
+   * people forget, and the reason a carefully built role had no members.
+   */
+  const [staffRoleId, setStaffRoleId] = React.useState('')
+  const chosenRole = customRoles?.find((role) => role.id === staffRoleId) ?? null
   const [form, setForm] = React.useState(() => {
     const role = roles[0] ?? 'WAITER'
     return {
@@ -451,6 +465,7 @@ function InviteDialog({
         name: '', email: '', phone: '', role,
         branchId: branchForRole(role, ALL_LOCATIONS, locations),
       })
+      setStaffRoleId('')
       setError(null)
       setCredentials(null)
     }
@@ -460,7 +475,11 @@ function InviteDialog({
     setSaving(true)
     setError(null)
     const result = await callAction(() =>
-      inviteStaff({ ...form, branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId }),
+      inviteStaff({
+        ...form,
+        branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId,
+        staffRoleId: staffRoleId || null,
+      }),
     )
     setSaving(false)
     if (!result.ok) {
@@ -519,6 +538,7 @@ function InviteDialog({
             <Field label="Role" required>
               <Select
                 value={form.role}
+                disabled={chosenRole !== null}
                 onValueChange={(value) =>
                   setForm({
                     ...form,
@@ -538,7 +558,57 @@ function InviteDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {chosenRole ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Set by <strong>{chosenRole.name}</strong>, which is based on{' '}
+                  {chosenRole.presetLabel}.
+                </p>
+              ) : null}
             </Field>
+
+            {/*
+              Below the role, not above it: the built-in role is the thing
+              everybody understands, and the custom one refines it. Choosing one
+              takes the base with it, which is why the field above locks rather
+              than being left to disagree.
+            */}
+            {customRoles && customRoles.length > 0 ? (
+              <Field label="Custom access">
+                <Select
+                  value={staffRoleId || NO_CUSTOM_ROLE}
+                  onValueChange={(value) => {
+                    const next = value === NO_CUSTOM_ROLE ? '' : value
+                    setStaffRoleId(next)
+                    const picked = customRoles.find((role) => role.id === next)
+                    if (picked) {
+                      setForm((current) => ({
+                        ...current,
+                        role: picked.preset,
+                        branchId: branchForRole(picked.preset, current.branchId, locations),
+                      }))
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_CUSTOM_ROLE}>
+                      Default for {ROLE_LABELS[form.role]}
+                    </SelectItem>
+                    {customRoles.map((role) => (
+                      <SelectItem key={role.id} value={role.id}>
+                        {role.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  A custom role replaces the default features for this person, and sets which
+                  built-in role they are. Manage them under Roles &amp; access.
+                </p>
+              </Field>
+            ) : null}
             <WorksAtField
               value={form.branchId}
               onChange={(branchId) => setForm({ ...form, branchId })}

@@ -71,6 +71,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/production/[orderId]': 'One run; its own branch is checked',
   'dashboard/inventory/[itemId]': 'One item; its history is scoped by visibleBranchIds in the query',
   'dashboard/inventory/counts/[countId]': 'One count; its own branch is checked',
+  'dashboard/cash-drawer/[sessionId]':
+    'One drawer session; assertRecordBranch on the session’s own branch',
 
   // ── Genuinely group-level views.
   'dashboard/reports': 'Scoped — see the selectedBranch call; listed only because it also has a range',

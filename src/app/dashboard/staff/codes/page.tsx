@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ensureStaffCodes } from '@/features/staff/codes'
 import { appUrl } from '@/lib/env'
-import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { landingFor, PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { CopyLink } from '@/features/staff/components/copy-link'
@@ -32,6 +32,9 @@ export default async function StaffCodesPage() {
     where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true },
     select: {
       id: true, name: true, email: true, role: true, staffCode: true, signInCode: true,
+      // The custom role's name, so a printed card is not labelled with a role
+      // the person no longer effectively has.
+      staffRole: { select: { name: true, isActive: true } },
       _count: { select: { servedOrders: true } },
     },
     orderBy: [{ role: 'asc' }, { staffCode: 'asc' }],
@@ -64,7 +67,13 @@ export default async function StaffCodesPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {staff.map((s) => {
-                const home = s.role === 'WAITER' ? '/waiter' : s.role === 'KITCHEN' ? '/kitchen' : s.role === 'CASHIER' ? '/cashier' : '/dashboard'
+                /*
+                 * The shared table, not a fourth copy. This was a ternary chain
+                 * that knew about three roles and sent the other eight to
+                 * /dashboard — wrong for every back-office role, which each have
+                 * their own landing screen.
+                 */
+                const home = landingFor(s.role)
                 /*
                  * The link carries their own email, not their staff code. It used
                  * to carry the code and look the email up through a public
@@ -84,7 +93,16 @@ export default async function StaffCodesPage() {
                     <td className="py-2.5 pr-3">
                       <StaffCodeCell userId={s.id} code={s.signInCode} />
                     </td>
-                    <td className="py-2.5 pr-3 text-muted-foreground">{ROLE_LABELS[s.role]}</td>
+                    <td className="py-2.5 pr-3 text-muted-foreground">
+                      {s.staffRole?.isActive ? (
+                        <>
+                          <span className="text-foreground">{s.staffRole.name}</span>
+                          <span className="block text-xs">based on {ROLE_LABELS[s.role]}</span>
+                        </>
+                      ) : (
+                        ROLE_LABELS[s.role]
+                      )}
+                    </td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{s._count.servedOrders}</td>
                     <td className="py-2.5">
                       <CopyLink url={link} />

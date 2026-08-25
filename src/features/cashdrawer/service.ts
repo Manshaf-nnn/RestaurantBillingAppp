@@ -605,6 +605,127 @@ export async function closeDrawer(params: {
 }
 
 /**
+ * Close a drawer the person who opened it walked away from.
+ *
+ * ── Why this needs to exist ─────────────────────────────────────────────────
+ *
+ * A cashier goes home without closing. The session stays OPEN, it keeps
+ * `activeRegisterKey`, and the next cashier on that till is told "somebody else
+ * already has this till open" with no route forward — the shift cannot start.
+ * `releaseStaleKeys` cannot help: it only clears keys stranded on a session
+ * that is already closed, and this one is genuinely open.
+ *
+ * ── Counted, or honestly not ────────────────────────────────────────────────
+ *
+ * `countedCash: null` means nobody counted it, and the variance is then `null`
+ * — genuinely unknown. That distinction is the whole point. Closing at the
+ * expected figure would record a variance of zero, which asserts the till
+ * balanced when nobody looked, and would quietly write off exactly the
+ * shortfall this system exists to surface.
+ *
+ * An uncounted close also skips the review threshold. There is no variance to
+ * review, and parking it in PENDING_REVIEW would leave the till blocked — the
+ * thing being fixed.
+ *
+ * The variance, where there is one, belongs to the cashier who opened the
+ * session, not to the owner closing it. `openedById` is untouched; `closedById`
+ * and `closedOnBehalf` record who actually did this.
+ */
+export async function forceCloseDrawer(params: {
+  restaurantId: string
+  sessionId: string
+  /** What the owner counted, or null when they could not. */
+  countedCash: number | null
+  reason: string
+  userId: string
+  actor: DrawerActor
+}): Promise<{ session: CashDrawerSession; totals: DrawerTotals; variance: number | null }> {
+  if (!params.actor.canManageOthers) {
+    throw new ForbiddenError('Only a manager can close somebody else’s drawer')
+  }
+  if (params.countedCash !== null && params.countedCash < 0) {
+    throw new AppError('Counted cash cannot be negative', 400, 'DRAWER_BAD_COUNT')
+  }
+
+  const reason = params.reason.trim()
+  if (reason.length < 2) {
+    throw new AppError(
+      'Say why you are closing somebody else’s drawer',
+      400,
+      'DRAWER_NO_FORCE_REASON',
+    )
+  }
+
+  const session = await prisma.cashDrawerSession.findFirst({
+    where: { id: params.sessionId, restaurantId: params.restaurantId },
+  })
+  if (!session) throw new NotFoundError('Drawer session')
+
+  if (!canAccessBranch({ role: params.actor.role, branchId: params.actor.branchId }, session.branchId)) {
+    throw new ForbiddenError('That drawer belongs to another location')
+  }
+  if (session.status !== 'OPEN') {
+    throw new AppError('That drawer is not open', 409, 'DRAWER_CLOSED')
+  }
+
+  const totals = await computeDrawerTotals(session.id)
+  const variance = params.countedCash === null ? null : params.countedCash - totals.expectedCash
+
+  /*
+   * A counted close still stops for review when the gap is large — an owner
+   * finding a till Rs 5,000 short is exactly the case a second pair of eyes
+   * exists for, and the till is released either way so nobody is held up.
+   */
+  const needsReview =
+    variance !== null && (await varianceNeedsReview(params.restaurantId, variance))
+
+  const closed = await prisma.cashDrawerSession.update({
+    where: { id: session.id },
+    data: {
+      status: needsReview ? 'PENDING_REVIEW' : 'CLOSED',
+      closedAt: new Date(),
+      closedById: params.userId,
+      closedOnBehalf: true,
+      countedCash: params.countedCash,
+      expectedCash: totals.expectedCash,
+      variance,
+      varianceReason: reason,
+      closingNote:
+        params.countedCash === null
+          ? 'Closed by a manager without a count — the variance is unknown.'
+          : null,
+      activeRegisterKey: null,
+      activeCashierKey: null,
+    },
+  })
+
+  return { session: closed, totals, variance }
+}
+
+/** Every drawer open right now, wherever this person can see. */
+export async function listOpenDrawers(params: {
+  restaurantId: string
+  /** `null` is unrestricted; `[]` is confined with nowhere to look. */
+  branchIds?: string[] | null
+  branchId?: string | null
+}) {
+  return prisma.cashDrawerSession.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      status: 'OPEN',
+      ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
+    orderBy: { openedAt: 'asc' },
+    include: {
+      openedBy: { select: { id: true, name: true } },
+      branch: { select: { name: true } },
+      register: { select: { name: true } },
+    },
+  })
+}
+
+/**
  * Is this gap big enough to need a manager?
  *
  * Exported because a handover is also a close, and it has to answer the same

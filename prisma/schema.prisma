@@ -2202,7 +2202,18 @@ model CashDrawerSession {
   variance       Int?
   /// Required whenever the variance is not zero. A difference nobody explained
   /// on the night is a difference nobody can explain a week later.
+  ///
+  /// Also carries the owner's explanation when a drawer is closed on somebody
+  /// else's behalf — "Ann went home without closing" is the whole story of that
+  /// session and there is nowhere better to put it.
   varianceReason String?
+  /// Closed by somebody other than the person who opened it.
+  ///
+  /// A forgotten drawer blocks the next cashier from that till, so an owner can
+  /// close it for them. That is a different fact from a cashier counting their
+  /// own money and it is marked as one: `countedCash` null here means nobody
+  /// counted, and the variance is genuinely unknown rather than zero.
+  closedOnBehalf Boolean   @default(false)
   closingNote    String?
 
   /// Who signed off a variance large enough to stop at PENDING_REVIEW.

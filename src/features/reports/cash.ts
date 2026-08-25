@@ -74,6 +74,8 @@ export interface CashSessionRow {
   countedCash: number | null
   variance: number | null
   varianceReason: string | null
+  /** Closed by somebody other than the cashier who opened it. */
+  closedOnBehalf: boolean
 }
 
 export interface CashDrawerReport {
@@ -235,6 +237,7 @@ export async function getCashDrawerReport(
       countedCash: s.countedCash,
       variance: s.variance,
       varianceReason: s.varianceReason,
+      closedOnBehalf: s.closedOnBehalf,
     }
   })
 

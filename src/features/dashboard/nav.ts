@@ -38,7 +38,13 @@ import {
   KeyRound,
 } from 'lucide-react'
 
-import { PERMISSIONS, type Permission } from '@/lib/rbac'
+import {
+  PERMISSIONS,
+  landingFor,
+  permissionsFor,
+  type Permission,
+  type PermissionSubject,
+} from '@/lib/rbac'
 
 export interface NavItem {
   href: string
@@ -301,3 +307,44 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
 ]
+
+/**
+ * The sidebar this person actually gets.
+ *
+ * One implementation, because there are now three readers: the shell that
+ * renders it, the station screens that decide whether a "Dashboard" control is
+ * worth showing at all, and `/forbidden`, which needs somewhere real to send
+ * people. A refused page that offers a way back to another refused page is a
+ * loop, and that is exactly what it offered before.
+ *
+ * `permissionsFor` is the same function the server guards use, so what the
+ * sidebar shows and what the page allows cannot disagree.
+ */
+export function visibleSections(user: PermissionSubject): NavSection[] {
+  const granted = permissionsFor(user)
+  return NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => granted.has(item.permission)),
+  })).filter((section) => section.items.length > 0)
+}
+
+/** Every item they may open, flattened, in sidebar order. */
+export function reachableNavItems(user: PermissionSubject): NavItem[] {
+  return visibleSections(user).flatMap((section) => section.items)
+}
+
+/**
+ * Somewhere this person can actually go.
+ *
+ * Their landing page first, but only if they hold the permission that guards
+ * it — a custom role built on Waiter without `waiter.view` lands on `/waiter`,
+ * is refused, and used to be handed a button back to `/waiter`. Otherwise the
+ * first thing in their sidebar. `null` when there is genuinely nothing, which
+ * is a real state worth naming rather than papering over with `/dashboard`.
+ */
+export function firstReachablePath(user: PermissionSubject): string | null {
+  const items = reachableNavItems(user)
+  const home = landingFor(user.role)
+  if (items.some((item) => item.href === home)) return home
+  return items[0]?.href ?? null
+}

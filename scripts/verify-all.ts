@@ -54,6 +54,7 @@ const SERVICE = [
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',
+  'role-assignment-test',
 ]
 
 const RUNTIME = [

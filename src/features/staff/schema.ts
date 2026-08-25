@@ -44,6 +44,17 @@ export const inviteStaffSchema = z.object({
   phone: phoneSchema.optional().or(z.literal('')),
   role: z.enum(STAFF_ROLES),
   branchId: branchIdField,
+  /**
+   * A custom role, chosen at the same time as the person.
+   *
+   * It used to be a second step — create the account, reopen the row, use
+   * "Custom access" — and the second step is the one people forget. A new hire
+   * then works on preset defaults nobody chose for them.
+   *
+   * When one is given it carries its own base, so `role` above is derived from
+   * it server-side rather than trusted from the form.
+   */
+  staffRoleId: z.string().cuid().optional().nullable(),
 })
 export type InviteStaffInput = z.infer<typeof inviteStaffSchema>
 

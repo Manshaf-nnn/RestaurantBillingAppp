@@ -36,6 +36,8 @@ import {
   computeDrawerTotals,
   getUnattributedCash,
   getUnrecordedRefunds,
+  forceCloseDrawer,
+  listOpenDrawers,
   openDrawer,
   recordCashMovement,
   reviewDrawer,
@@ -980,6 +982,160 @@ async function main() {
     openingFloat: 5_000_00,
   })
   check('so the next person can open it', reopened.status === 'OPEN')
+
+  // ── 7b. the drawer somebody left open ─────────────────────────────────────
+  console.log('\n── 7b. closing a till the cashier walked away from ──')
+
+  /*
+   * The situation: Kumar opens Kandy's till and goes home. Nobody can work that
+   * counter until it is closed, and the person who could close it is not here.
+   */
+  const forgotten = await openDrawer({
+    restaurantId: restaurant.id,
+    userId: kumar.id,
+    branchId: kandy.id,
+    registerId: kandyTill.id,
+    openingFloat: 3_000_00,
+  })
+
+  const nextCashier = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id,
+      email: `night-${stamp}@test.local`,
+      name: 'Night shift',
+      passwordHash: 'x',
+      role: 'CASHIER',
+      branchId: kandy.id,
+    },
+  })
+
+  await refuses(
+    'the next cashier cannot open that till',
+    () =>
+      openDrawer({
+        restaurantId: restaurant.id,
+        userId: nextCashier.id,
+        branchId: kandy.id,
+        registerId: kandyTill.id,
+        openingFloat: 1_000_00,
+      }),
+    /already has this till open/i,
+  )
+
+  const visible = await listOpenDrawers({ restaurantId: restaurant.id, branchIds: [kandy.id] })
+  check(
+    'a manager can see it is open and whose it is',
+    visible.some((row) => row.id === forgotten.id && row.openedById === kumar.id),
+    'there was no screen anywhere showing somebody else’s open drawer',
+  )
+
+  await refuses(
+    'a cashier cannot close somebody else’s drawer',
+    () =>
+      forceCloseDrawer({
+        restaurantId: restaurant.id,
+        sessionId: forgotten.id,
+        countedCash: null,
+        reason: 'trying it on',
+        userId: ann.id,
+        actor: actorFor(ann, false),
+      }),
+    /manager/i,
+  )
+  await refuses(
+    'and a reason is required even from a manager',
+    () =>
+      forceCloseDrawer({
+        restaurantId: restaurant.id,
+        sessionId: forgotten.id,
+        countedCash: null,
+        reason: ' ',
+        userId: boss.id,
+        actor: actorFor(boss, true),
+      }),
+    /why you are closing/i,
+  )
+
+  const uncounted = await forceCloseDrawer({
+    restaurantId: restaurant.id,
+    sessionId: forgotten.id,
+    countedCash: null,
+    reason: 'Kumar went home without closing',
+    userId: boss.id,
+    actor: actorFor(boss, true),
+  })
+
+  check(
+    'closing without a count records the variance as unknown, not zero',
+    uncounted.variance === null && uncounted.session.variance === null,
+    `${uncounted.session.variance}`,
+  )
+  check(
+    'and does not park the till in review, which would block it again',
+    uncounted.session.status === 'CLOSED',
+    uncounted.session.status,
+  )
+  check('it is marked as closed by somebody else', uncounted.session.closedOnBehalf)
+  check(
+    'the shift still belongs to the cashier who opened it',
+    uncounted.session.openedById === kumar.id && uncounted.session.closedById === boss.id,
+  )
+  check('and the owner’s explanation is on the record', uncounted.session.varianceReason !== null)
+
+  const nightSession = await openDrawer({
+    restaurantId: restaurant.id,
+    userId: nextCashier.id,
+    branchId: kandy.id,
+    registerId: kandyTill.id,
+    openingFloat: 1_000_00,
+  })
+  check('so the next cashier can start their shift', nightSession.status === 'OPEN')
+
+  /*
+   * And the other half of the decision: when the owner IS standing at the till,
+   * the count is real and the variance lands on the person whose shift it was.
+   */
+  const nightExpected = (await computeDrawerTotals(nightSession.id)).expectedCash
+  const countedClose = await forceCloseDrawer({
+    restaurantId: restaurant.id,
+    sessionId: nightSession.id,
+    countedCash: nightExpected - 200_00,
+    reason: 'Counted it myself at close',
+    userId: boss.id,
+    actor: actorFor(boss, true),
+  })
+  check(
+    'a counted force-close records a real variance',
+    countedClose.variance === -200_00,
+    `${countedClose.variance}`,
+  )
+  check(
+    'against the cashier who opened it',
+    countedClose.session.openedById === nextCashier.id,
+  )
+
+  await refuses(
+    'a closed drawer cannot be force-closed again',
+    () =>
+      forceCloseDrawer({
+        restaurantId: restaurant.id,
+        sessionId: nightSession.id,
+        countedCash: null,
+        reason: 'again',
+        userId: boss.id,
+        actor: actorFor(boss, true),
+      }),
+    /not open/i,
+  )
+
+  // Reopen Kumar's till so the sections below still have their fixture.
+  await openDrawer({
+    restaurantId: restaurant.id,
+    userId: kumar.id,
+    branchId: kandy.id,
+    registerId: kandyTill.id,
+    openingFloat: 2_000_00,
+  })
 
   // ── 8. handover ───────────────────────────────────────────────────────────
   console.log('\n── 8. passing the till on ──')

@@ -174,28 +174,44 @@ export default async function CashDrawerReportPage({
 
       <ReportTable
         title="Drawer sessions"
-        description="One row per shift. Expected cash for an open till is live; for a closed one it is what was recorded at close."
+        description="One row per shift — open the session number for every movement in it. Expected cash for an open till is live; for a closed one it is what was recorded at close. A blank variance means nobody counted."
         filename={`cash-drawers-${range.preset.toLowerCase()}`}
         currency={restaurant.currency}
+        /*
+         * A string template, never a callback — every caller here is a Server
+         * Component and a function cannot cross into a client one
+         * (`report-table.tsx:11-25`). `{id}` was already on every row and the
+         * table simply never linked anywhere.
+         */
+        hrefTemplate="/dashboard/cash-drawer/{id}"
         columns={[
           { key: 'sessionNumber', label: 'Session' },
           { key: 'branchName', label: 'Branch' },
           { key: 'registerName', label: 'Till' },
-          { key: 'cashierName', label: 'Cashier' },
+          { key: 'cashierName', label: 'Opened by' },
+          { key: 'closedByName', label: 'Closed by', fallback: '—' },
           { key: 'statusLabel', label: 'Status' },
           { key: 'openingFloat', label: 'Opening', align: 'right', format: 'money' },
           { key: 'cashSales', label: 'Cash sales', align: 'right', format: 'money' },
           { key: 'cashIn', label: 'In', align: 'right', format: 'money' },
           { key: 'cashOut', label: 'Out', align: 'right', format: 'money' },
+          { key: 'refunds', label: 'Refunds', align: 'right', format: 'money' },
+          { key: 'drops', label: 'Drops', align: 'right', format: 'money' },
           { key: 'expectedCash', label: 'Expected', align: 'right', format: 'money' },
           { key: 'countedCash', label: 'Counted', align: 'right', format: 'money', fallback: '—' },
-          { key: 'variance', label: 'Variance', align: 'right', format: 'delta', fallback: '—' },
+          { key: 'variance', label: 'Variance', align: 'right', format: 'delta', fallback: 'Unknown' },
           { key: 'varianceReason', label: 'Why', fallback: '—' },
         ]}
         rows={report.rows.map((r) => ({
           ...r,
           statusLabel:
-            r.status === 'OPEN' ? 'Open' : r.status === 'PENDING_REVIEW' ? 'In review' : 'Closed',
+            r.status === 'OPEN'
+              ? 'Open'
+              : r.status === 'PENDING_REVIEW'
+                ? 'In review'
+                : r.closedOnBehalf
+                  ? 'Closed by manager'
+                  : 'Closed',
         }))}
         empty="No drawer was opened in this period."
       />
