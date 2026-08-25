@@ -209,7 +209,156 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="5 · Recipes" description="More important than they look.">
+        <SectionCard title="5 · Cash and the till" description="Two piles of money, never mixed.">
+          <Rows
+            rows={[
+              [
+                'Opening cash',
+                'The change float in the drawer. Cash sales add to it; refunds, drops and anything paid out take from it.',
+              ],
+              [
+                'Opening petty cash',
+                'A separate tin you buy small things from — a three-wheeler to the market, cleaning cloths. Sales never touch it. If you have no tin, leave it blank.',
+              ],
+            ]}
+          />
+          <Note>
+            What the system expects to find in the drawer:{' '}
+            <strong>
+              opening cash + cash sales + anything put in − refunds, drops, deposits and anything
+              paid out
+            </strong>
+            . It is worked out fresh every time it is shown, never kept as a running total, so a
+            payment that arrives late cannot quietly put it out.
+          </Note>
+          <Note>
+            Card, QR, online and bank transfers appear on the close screen so you can see the
+            whole shift, but they never change the drawer figure. That money never entered it.
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="5a · Starting a shift" description="Before the till will open.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            A cashier signing in is asked to open a drawer before they can reach the till. Cash
+            taken with no drawer open belongs to no shift and can never be counted against
+            anything — so this comes first, and it is the whole reason for the screen.
+          </p>
+          <Rows
+            rows={[
+              ['Branch', 'Only asked if they can work at more than one.'],
+              ['Till', 'Only asked if that branch has more than one counter.'],
+              ['Opening cash', 'Count the change in the drawer and type it.'],
+              ['Opening petty cash', 'The tin, counted separately.'],
+            ]}
+          />
+          <Note>
+            <strong>The second box is not the drawer.</strong> It is the tin you buy small things
+            from. Typing the float into both is the one mistake worth warning about — the fund is
+            then wrong from the first shift and every petty cash figure after it inherits that.
+            Blank is correct if there is no tin.
+          </Note>
+          <Note>
+            Managers and owners never see this screen; they are not stopped by it. If your
+            operation genuinely handles no cash you can switch the whole thing off in{' '}
+            <Guide href="/dashboard/settings">Settings → Cash controls</Guide>.
+          </Note>
+          <Note>
+            One person, one drawer; one till, one person. Nobody can open a second drawer while
+            they hold one, and nobody can open a till somebody else is standing at.
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="5b · During service" description="Most of it looks after itself.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Cash sales attach themselves to whoever took them, at the branch they were taken at.
+            There is nothing to press. Everything else that moves notes gets a row, with a reason
+            — an unexplained movement is indistinguishable from theft when the drawer is counted.
+          </p>
+          <Rows
+            rows={[
+              ['Additional float', 'More change brought up to the till.'],
+              ['Cash drop', 'Skimmed to the safe so the till is not holding the day’s takings.'],
+              ['Bank deposit', 'Taken to the bank.'],
+              ['Paid out', 'A supplier at the door, a courier.'],
+              ['Top up petty cash', 'Moves money from the drawer into the tin.'],
+            ]}
+          />
+          <Note>
+            Two kinds are written by the system and are deliberately not in that list: a{' '}
+            <strong>cash refund</strong> and a <strong>petty cash payment</strong>. Both are
+            recorded by the thing that performs them. Posting one by hand as well would put the
+            same rupees in the ledger twice.{' '}
+            <Guide href="/dashboard/cash-drawer">Cash drawer</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="5c · Petty cash" description="Raise it, approve it, then pay it.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Small cash expenses go through three steps, and only the last one moves money. A
+            request that is approved but not yet paid has changed nothing; the notes are still in
+            the tin.
+          </p>
+          <Rows
+            rows={[
+              ['Raise', 'Category, what it was for, how much, and which tin it comes out of.'],
+              ['Approve', 'A manager says yes. Still nothing has moved.'],
+              ['Pay out', 'The notes change hands. This is the step that costs money.'],
+            ]}
+          />
+          <Note>
+            <strong>Which tin</strong> matters. Paid from the tin, it comes off the fund and the
+            drawer is untouched. Paid from the drawer, it writes a movement and lowers what the
+            till should hold. It is never taken off both.
+          </Note>
+          <Note>
+            Above a limit you set, the person who asked cannot be the person who approves. Below
+            it they can, so a manager buying a bag of cloths does not have to find a second
+            manager — a control everybody trips over every night stops being a control.{' '}
+            <Guide href="/dashboard/petty-cash">Petty cash</Guide>
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="5d · Closing, and handing over" description="Two ways a shift ends.">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Count what is physically in the drawer and enter it. The difference is shown as you
+            type, and it is <strong>recorded, not corrected</strong> — a till that is short by 500
+            is a fact the owner needs to see, not an error to round away.
+          </p>
+          <Rows
+            rows={[
+              [
+                'If it balances',
+                'The drawer closes. The till is free for the next person.',
+              ],
+              [
+                'If it does not',
+                'You must say why, before it will close. Nobody remembers this tomorrow, and the sentence written on the night is the only one worth having.',
+              ],
+              [
+                'If the gap is large',
+                'It stops for a manager to sign off, and takes no more money while it waits — so the count it is holding cannot go stale. The manager cannot be the person who counted it.',
+              ],
+            ]}
+          />
+          <Note>
+            Leaving mid-service instead? Use <strong>Hand over</strong>. You count, pick who is
+            taking it, and your session closes; they confirm on their own screen and a new session
+            opens with what you counted as its float. The tin goes with it.
+          </Note>
+          <Note>
+            It works that way rather than passing your session along because a drawer that is
+            short has to belong to one person. A session with two names on it cannot answer the
+            only question it exists to answer.{' '}
+            <Guide href="/dashboard/handover">Shift handover</Guide>
+          </Note>
+          <Note>
+            Closed drawers never disappear. Every session, its variance and the reason given are
+            on <Guide href="/dashboard/reports/cash-drawer">the cash drawer report</Guide>,
+            filterable by branch, cashier, till, status and date, and exportable.
+          </Note>
+        </SectionCard>
+
+        <SectionCard title="6 · Recipes" description="More important than they look.">
           <p className="text-sm leading-relaxed text-muted-foreground">
             A recipe links a dish to what it consumes. Without one, selling a burger takes
             nothing off any shelf and your food cost is unknowable.
@@ -236,7 +385,7 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="6 · Production" description="For anything you make rather than buy.">
+        <SectionCard title="7 · Production" description="For anything you make rather than buy.">
           <p className="text-sm leading-relaxed text-muted-foreground">
             Bread, sauces, marinades, butchered cuts. Raw materials go in, a new stock item
             comes out. It happens at a <strong>production house</strong>, because making things
@@ -286,7 +435,7 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="7 · Who sees what">
+        <SectionCard title="8 · Who sees what">
           <p className="text-sm leading-relaxed text-muted-foreground">
             Everyone signs in with their <strong>email</strong> and their{' '}
             <strong>sign-in code</strong> — eight characters on a card. Their{' '}
@@ -312,7 +461,7 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="8 · Proving the books">
+        <SectionCard title="9 · Proving the books">
           <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed">
 {`Opening              100 kg
   + purchases         50 kg
@@ -330,7 +479,7 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="9 · Setting up, in order">
+        <SectionCard title="10 · Setting up, in order">
           <ol className="list-inside list-decimal space-y-1.5 text-sm text-muted-foreground">
             <li><Guide href="/dashboard/settings">Settings</Guide> — name, currency, tax</li>
             <li>
@@ -348,6 +497,11 @@ export default async function HelpPage() {
               cost is guesswork
             </li>
             <li><Guide href="/dashboard/tables">Tables</Guide>, then print the <Guide href="/dashboard/qr">QR codes</Guide></li>
+            <li>
+              <Guide href="/dashboard/settings">Cash controls</Guide> — how far a drawer may be
+              out before a manager has to sign it off, and how much petty cash needs a second
+              approver. Add a second till to a branch only if it really has two counters
+            </li>
             <li>
               If you have more than one location, use the switcher in the top bar and leave{' '}
               <Guide href="/dashboard/tasks">instructions</Guide> for each manager
@@ -386,7 +540,14 @@ export default async function HelpPage() {
               ['In transit', 'Dispatched, not yet arrived. Not sellable at either end'],
               ['Batch (production)', 'One run of a recipe. 10 batches of a 10-loaf recipe = 100 loaves'],
               ['Batch / lot (stock)', 'A delivery with its own expiry date, used oldest-first'],
-              ['Variance', 'The gap between expected and actual. Always needs a reason'],
+              [
+                'Variance',
+                'The gap between expected and actual — of stock on a shelf, or cash in a drawer. Always needs a reason',
+              ],
+              ['Float', 'The change you start a shift with. Not takings'],
+              ['Till / register', 'One physical counter. One open drawer at a time'],
+              ['Petty cash', 'A separate tin for small cash expenses. Never the drawer'],
+              ['Drop', 'Cash skimmed from the till to the safe mid-shift'],
               ['Drift', 'Stored balance minus ledger sum. Must be zero'],
               ['COGS', 'What the ingredients cost. Revenue − COGS = gross profit'],
               ['Spec', 'A production recipe'],
