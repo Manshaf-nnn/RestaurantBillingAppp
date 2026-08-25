@@ -53,11 +53,12 @@ const SERVICE = [
   'pos-billing-test',
   'variant-order-test',
   'custom-domain-test',
+  'cash-drawer-test',
 ]
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
-  'role-url-refusal-test', 'join-flow-test',
+  'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
 ]

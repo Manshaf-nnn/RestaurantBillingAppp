@@ -207,17 +207,31 @@ export async function capturePayment(params: {
         ? Math.max(0, params.tenderedAmount - params.amount)
         : 0
 
-    // Attribute the takings to whichever drawer this cashier has open, so an
-    // end-of-shift count has something to reconcile against. Every method is
-    // attributed, not just cash — the close screen reports card and other
-    // takings for the same session as context. A cashier with no drawer open
-    // is never blocked from taking money; the payment simply carries no
-    // session and falls outside drawer reconciliation.
+    /*
+     * Attribute the takings to whichever drawer this cashier has open, so an
+     * end-of-shift count has something to reconcile against. Every method is
+     * attributed, not just cash — the close screen reports card and other
+     * takings for the same session as context. A cashier with no drawer open
+     * is never blocked from taking money; the payment simply carries no
+     * session and falls outside drawer reconciliation, and the cash drawer
+     * report names the total so it cannot quietly disappear.
+     *
+     * ── The branch predicate ─────────────────────────────────────────────────
+     *
+     * This used to match on `openedById` alone. A cashier holding a drawer at
+     * Colombo who settled a Kandy bill booked Kandy's cash into Colombo's till:
+     * both branches' reconciliations were wrong, one over and one short, and
+     * every branch check downstream reads the session and so agreed. Matching
+     * the order's branch is what makes the attribution true rather than merely
+     * plausible — and when the cashier has no drawer at that branch, the
+     * payment is correctly left unattributed instead of landing somewhere else.
+     */
     const drawer = params.receivedById
       ? await tx.cashDrawerSession.findFirst({
           where: {
             restaurantId: params.restaurantId,
             openedById: params.receivedById,
+            branchId: order.branchId,
             status: 'OPEN',
           },
           orderBy: { openedAt: 'desc' },
@@ -464,14 +478,19 @@ export async function refundPayment(params: {
     // Cash handed back leaves the drawer that is open right now, which is not
     // necessarily the drawer that took the money — a bill paid this morning can
     // be refunded tonight. Recording it as a movement against the current
-    // drawer is what keeps both sessions' counts honest.
+    // drawer is what keeps both sessions' counts honest. The order's branch is
+    // passed so it lands in a till at the site the money physically left.
     if (payment.method === 'CASH') {
       await recordRefundAgainstOpenDrawer({
         tx,
         restaurantId: params.restaurantId,
+        branchId: payment.order.branchId,
         userId: params.actorId,
         amount: payment.amount,
         orderNumber: payment.order.orderNumber,
+        // Links the movement back to the payment, so a refund that produced no
+        // movement is a visible absence rather than a silence.
+        paymentId: payment.id,
       })
     }
 

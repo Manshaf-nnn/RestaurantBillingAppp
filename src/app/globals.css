@@ -294,6 +294,41 @@
   line-height: 1.4;
 }
 
+/* ── print: a report on paper ─────────────────────────────────────────────────
+ *
+ * This is also the PDF path. Every browser's Save-as-PDF renders exactly this,
+ * which is one document to keep correct rather than a second layout inside a
+ * PDF library that would drift from the screen within a month.
+ *
+ * The dashboard chrome goes: a sidebar of links is worthless on paper, and a
+ * sticky header printed at the top of every page is worse than worthless. What
+ * is left is the figures and the table, which is what somebody printing a cash
+ * report is holding the paper for.
+ */
+@media print {
+  body > div > aside,
+  body > div > div > header {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  /* Tables must not be cut mid-row, and headers repeat on every page. */
+  table {
+    page-break-inside: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  /* Cards keep their outline but lose the shadow, which prints as grey mud. */
+  .shadow-soft {
+    box-shadow: none !important;
+  }
+}
+
 @media print {
   .thermal-58,
   .thermal-80 {

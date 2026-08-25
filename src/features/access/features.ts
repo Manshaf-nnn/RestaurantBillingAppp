@@ -159,10 +159,31 @@ export const FEATURES: Feature[] = [
         key: 'approve',
         label: "See everyone's",
         permission: PERMISSIONS.CASH_DRAWER_MANAGE,
-        hint: "Every drawer's variance, and force-closing one left open.",
+        hint: "Every drawer's variance, signing off a large one, and managing tills.",
       },
     ],
     routes: ['/dashboard/cash-drawer'],
+  },
+  {
+    key: 'pettyCash',
+    label: 'Petty cash',
+    group: 'Overview',
+    description: 'The small-expenses fund: raising a request, approving it, paying it.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.PETTY_CASH_VIEW },
+      {
+        key: 'create',
+        label: 'Raise a request',
+        permission: PERMISSIONS.PETTY_CASH_REQUEST,
+      },
+      {
+        key: 'approve',
+        label: 'Approve and pay',
+        permission: PERMISSIONS.PETTY_CASH_APPROVE,
+        hint: 'The control. Giving it to whoever can raise a request removes it.',
+      },
+    ],
+    routes: ['/dashboard/petty-cash'],
   },
   {
     key: 'locations',
@@ -530,6 +551,14 @@ export const FEATURES: Feature[] = [
     description: 'Proving the stock ledger adds up.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_RECONCILIATION }],
     routes: ['/dashboard/reports/reconciliation'],
+  },
+  {
+    key: 'reportCash',
+    label: 'Cash reports',
+    group: 'Back office',
+    description: 'Drawer sessions, variances and the petty cash ledger.',
+    actions: [{ key: 'view', permission: PERMISSIONS.REPORT_CASH }],
+    routes: ['/dashboard/reports/cash-drawer', '/dashboard/reports/petty-cash'],
   },
   {
     key: 'qr',

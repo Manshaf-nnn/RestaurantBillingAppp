@@ -17,7 +17,12 @@ import {
 } from '@/components/ui/select'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { cn } from '@/lib/utils'
-import { updatePaymentSettings, updatePrinterSettings, updateRestaurantSettings } from '../actions'
+import {
+  updateCashControls,
+  updatePaymentSettings,
+  updatePrinterSettings,
+  updateRestaurantSettings,
+} from '../actions'
 import { callAction } from '@/lib/use-action'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
@@ -72,6 +77,12 @@ export interface SettingsData {
     receiptWidth: 58 | 80
     kitchenWidth: 58 | 80
   }
+  /** Thresholds in MAJOR units — what the owner would say out loud. */
+  cash: {
+    cashVarianceAbove: number
+    pettyCashApprovalAbove: number
+    requireCashierSession: boolean
+  }
 }
 
 export function SettingsView({ initial, canManage }: { initial: SettingsData; canManage: boolean }) {
@@ -81,6 +92,8 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
   const [savingPayments, setSavingPayments] = React.useState(false)
   const [printer, setPrinter] = React.useState(initial.printer)
   const [savingPrinter, setSavingPrinter] = React.useState(false)
+  const [cash, setCash] = React.useState(initial.cash)
+  const [savingCash, setSavingCash] = React.useState(false)
 
   const set = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -109,6 +122,14 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
     else toast.error(result.error)
   }
 
+  const saveCash = async () => {
+    setSavingCash(true)
+    const result = await callAction(() => updateCashControls(cash))
+    setSavingCash(false)
+    if (result.ok) toast.success('Cash controls saved')
+    else toast.error(result.error)
+  }
+
   return (
     <>
       <PageHeader title="Settings" description="Your restaurant profile, tax, payments and loyalty" />
@@ -120,6 +141,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="loyalty">Loyalty</TabsTrigger>
           <TabsTrigger value="printer">Printer</TabsTrigger>
+          <TabsTrigger value="cash">Cash controls</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-4">
@@ -400,6 +422,78 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           {canManage ? (
             <Button onClick={savePrinter} loading={savingPrinter}>
               Save printer settings
+            </Button>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="cash" className="space-y-4">
+          <SectionCard title="When a second pair of eyes is needed">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Set these to the amounts you would actually want to be told about. A
+              threshold everybody trips over every night stops being a control and
+              becomes a step people learn to click through.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Drawer variance to review"
+                hint="A till counted this far from expected waits for a manager to sign it off. 0 turns it off."
+              >
+                <Input
+                  inputMode="decimal"
+                  value={String(cash.cashVarianceAbove)}
+                  disabled={!canManage}
+                  onChange={(e) =>
+                    setCash((c) => ({ ...c, cashVarianceAbove: Number(e.target.value) || 0 }))
+                  }
+                />
+              </Field>
+              <Field
+                label="Petty cash needing another approver"
+                hint="At or above this, the person who asked cannot be the person who approves. 0 turns it off."
+              >
+                <Input
+                  inputMode="decimal"
+                  value={String(cash.pettyCashApprovalAbove)}
+                  disabled={!canManage}
+                  onChange={(e) =>
+                    setCash((c) => ({
+                      ...c,
+                      pettyCashApprovalAbove: Number(e.target.value) || 0,
+                    }))
+                  }
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Starting a shift">
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1 size-4"
+                checked={cash.requireCashierSession}
+                disabled={!canManage}
+                onChange={(e) =>
+                  setCash((c) => ({ ...c, requireCashierSession: e.target.checked }))
+                }
+              />
+              <span>
+                <span className="font-medium">
+                  Cashiers must open a drawer before they can work
+                </span>
+                <span className="mt-1 block text-muted-foreground">
+                  Cash taken with no drawer open belongs to no shift and can never be
+                  counted against anything. Leave this on unless your staff genuinely
+                  handle no cash — managers and owners are never stopped by it either
+                  way.
+                </span>
+              </span>
+            </label>
+          </SectionCard>
+
+          {canManage ? (
+            <Button onClick={saveCash} loading={savingCash}>
+              Save cash controls
             </Button>
           ) : null}
         </TabsContent>

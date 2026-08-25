@@ -5,6 +5,7 @@ import { appUrl } from '@/lib/env'
 import { prisma } from '@/server/db/prisma'
 import { listSwitchableLocations } from '@/features/transfers/queries'
 import { countOpenInstructions } from '@/features/instructions/service'
+import { requireCashierSession } from '@/features/cashdrawer/gate'
 import { visibleBranchIds } from '@/lib/rbac'
 import { requirePageUser } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -37,6 +38,23 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const onTrial = tenant.plan === 'TRIAL' && tenant.trialEndsAt !== null
   const trialExpired = onTrial && tenant.trialEndsAt!.getTime() < Date.now()
   if (trialExpired) redirect('/trial-ended')
+
+  /*
+   * A till operator opens their drawer before they get the dashboard.
+   *
+   * Here rather than on each page, because CASHIER is on the `/dashboard`
+   * allow-list in the middleware and typing the URL has always worked — a gate
+   * that only covered `/cashier` would be a gate with a door beside it.
+   *
+   * `/dashboard` rather than the page they asked for: a layout cannot read the
+   * pathname, and guessing wrong would land them somewhere they did not choose.
+   * Managers, owners and admins hold CASH_DRAWER_MANAGE and pass straight
+   * through — see `gate.ts` for why that is the line.
+   */
+  await requireCashierSession(
+    { ...user, restaurantId: user.restaurantId },
+    '/dashboard',
+  )
 
   const trialDaysLeft = onTrial
     ? Math.max(0, Math.ceil((tenant.trialEndsAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))

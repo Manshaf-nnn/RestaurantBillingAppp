@@ -2,6 +2,7 @@ import {
   BarChart3,
   ChefHat,
   ClipboardList,
+  Coins,
   CreditCard,
   FileText,
   HandPlatter,
@@ -86,6 +87,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Cash drawer',
         icon: Wallet,
         permission: PERMISSIONS.CASH_DRAWER_OPERATE,
+      },
+      {
+        href: '/dashboard/petty-cash',
+        label: 'Petty cash',
+        icon: Coins,
+        permission: PERMISSIONS.PETTY_CASH_VIEW,
       },
       {
         href: '/dashboard/locations',
@@ -280,6 +287,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/dashboard/reports/profit', label: 'Gross profit', icon: PiggyBank, permission: PERMISSIONS.REPORT_PROFIT },
       { href: '/dashboard/reports/inventory', label: 'Inventory report', icon: Package, permission: PERMISSIONS.REPORT_INVENTORY },
       { href: '/dashboard/reports/purchasing', label: 'Purchasing report', icon: Truck, permission: PERMISSIONS.REPORT_PURCHASING },
+      { href: '/dashboard/reports/cash-drawer', label: 'Cash drawer report', icon: Wallet, permission: PERMISSIONS.REPORT_CASH },
+      { href: '/dashboard/reports/petty-cash', label: 'Petty cash report', icon: Coins, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.QR_VIEW },
       {
         href: '/dashboard/audit-logs',

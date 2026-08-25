@@ -133,6 +133,17 @@ export const PERMISSIONS = {
   // variance and force-closing a drawer someone left open is a manager's.
   CASH_DRAWER_OPERATE: 'cashDrawer.operate',
   CASH_DRAWER_MANAGE: 'cashDrawer.manage',
+
+  // petty cash — three permissions because there are three different jobs.
+  // Anybody at the till may need to see what the tin has left; raising a
+  // request is a step further; approving one and handing the notes over is the
+  // control, and giving it to whoever can raise a request removes the control.
+  PETTY_CASH_VIEW: 'pettyCash.view',
+  PETTY_CASH_REQUEST: 'pettyCash.request',
+  PETTY_CASH_APPROVE: 'pettyCash.approve',
+
+  // the cash reports, split from REPORT_VIEW like every other report.
+  REPORT_CASH: 'report.cash',
 } as const
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -305,6 +316,12 @@ const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   [PERMISSIONS.REPORT_PURCHASING, PERMISSIONS.REPORT_VIEW],
   [PERMISSIONS.REPORT_VARIANCE, PERMISSIONS.REPORT_VIEW],
   [PERMISSIONS.REPORT_RECONCILIATION, PERMISSIONS.REPORT_VIEW],
+  [PERMISSIONS.REPORT_CASH, PERMISSIONS.REPORT_VIEW],
+  // Somebody already trusted to run a till may see and raise petty cash;
+  // approving it stays with whoever already reconciles the floor.
+  [PERMISSIONS.PETTY_CASH_VIEW, PERMISSIONS.CASH_DRAWER_OPERATE],
+  [PERMISSIONS.PETTY_CASH_REQUEST, PERMISSIONS.CASH_DRAWER_OPERATE],
+  [PERMISSIONS.PETTY_CASH_APPROVE, PERMISSIONS.CASH_DRAWER_MANAGE],
 ]
 
 /** Grant every split child to whoever already holds its parent. */

@@ -163,6 +163,19 @@ export async function GET() {
         (await import('@/features/cashdrawer/queries')).getDrawerPageData({
           restaurantId: rid, userId: user.id, currency, canSeeAll: true,
         })],
+      ['petty cash', async () =>
+        (await import('@/features/pettycash/queries')).getPettyCashPageData({
+          restaurantId: rid, userId: user.id, currency,
+          approvalThreshold: 0, canRequest: true, canApprove: true,
+        })],
+      ['reports: cash drawer', async () =>
+        (await import('@/features/reports/cash')).getCashDrawerReport({
+          restaurantId: rid, range, branchIds,
+        })],
+      ['reports: petty cash', async () =>
+        (await import('@/features/reports/cash')).getPettyCashReport({
+          restaurantId: rid, range, branchIds,
+        })],
       ['menu: public', async () =>
         (await import('@/features/menu/queries')).getPublicMenu(rid, row?.timezone ?? 'Asia/Colombo')],
     ]

@@ -57,3 +57,19 @@ export const printerSettingsSchema = z.object({
   kitchenWidth: z.coerce.number().refine((v) => v === 58 || v === 80, 'Choose 58 mm or 80 mm'),
 })
 export type PrinterSettingsInput = z.infer<typeof printerSettingsSchema>
+
+/**
+ * The cash controls.
+ *
+ * Amounts are entered in major units — the owner types what they would say out
+ * loud, "five hundred rupees" as `500` — and the action converts with the
+ * restaurant's own currency factor. Zero means "never": a variance threshold of
+ * zero sends nothing for review, which is the pre-existing behaviour and has to
+ * stay expressible.
+ */
+export const cashControlsSchema = z.object({
+  cashVarianceAbove: z.coerce.number().min(0).max(9_999_999),
+  pettyCashApprovalAbove: z.coerce.number().min(0).max(9_999_999),
+  requireCashierSession: z.coerce.boolean().default(true),
+})
+export type CashControlsInput = z.infer<typeof cashControlsSchema>

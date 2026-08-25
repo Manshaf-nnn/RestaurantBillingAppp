@@ -9,7 +9,15 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
-import { paymentSettingsSchema, printerSettingsSchema, restaurantSettingsSchema } from './schema'
+import { requireRestaurant } from '@/server/db/tenant'
+import { minorUnitFactor } from '@/lib/money'
+import { getApprovalPolicy } from '@/features/approvals/service'
+import {
+  cashControlsSchema,
+  paymentSettingsSchema,
+  printerSettingsSchema,
+  restaurantSettingsSchema,
+} from './schema'
 
 export async function updateRestaurantSettings(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
@@ -140,5 +148,62 @@ export async function updatePrinterSettings(input: unknown): Promise<ActionResul
       return { id: user.restaurantId }
     },
     'Printer settings saved.',
+  )
+}
+
+/**
+ * The cash controls: variance review, petty cash approval, and the till gate.
+ *
+ * They live in the same `approvalPolicy` JSON as the refund and discount
+ * thresholds, because they answer the same question — how much is worth a
+ * second pair of eyes — and an owner should find all of it in one place. This
+ * is also the first UI that column has ever had; the four approval thresholds
+ * have been configurable in the database and nowhere else.
+ *
+ * Merged rather than overwritten, so saving this form cannot silently reset the
+ * refund threshold to its default.
+ */
+export async function updateCashControls(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    cashControlsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      const restaurant = await requireRestaurant(user.restaurantId)
+      const factor = minorUnitFactor(restaurant.currency)
+
+      const existing = await getApprovalPolicy(user.restaurantId)
+      const next = {
+        ...existing,
+        cashVarianceAbove: Math.round(data.cashVarianceAbove * factor),
+        pettyCashApprovalAbove: Math.round(data.pettyCashApprovalAbove * factor),
+        requireCashierSession: data.requireCashierSession,
+      }
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: { approvalPolicy: next as unknown as Prisma.InputJsonValue },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        after: {
+          cashVarianceAbove: next.cashVarianceAbove,
+          pettyCashApprovalAbove: next.pettyCashApprovalAbove,
+          requireCashierSession: next.requireCashierSession,
+        },
+      })
+
+      revalidatePath('/dashboard/settings')
+      revalidatePath('/dashboard/cash-drawer')
+      revalidatePath('/dashboard/petty-cash')
+      return { id: user.restaurantId }
+    },
+    'Cash controls saved.',
   )
 }

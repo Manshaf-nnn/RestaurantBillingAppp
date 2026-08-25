@@ -116,8 +116,20 @@ export const AUDIT_ACTIONS = {
 
   DRAWER_OPENED: 'cashDrawer.opened',
   DRAWER_CLOSED: 'cashDrawer.closed',
+  DRAWER_REVIEWED: 'cashDrawer.reviewed',
   DRAWER_CASH_IN: 'cashDrawer.cash_in',
   DRAWER_CASH_OUT: 'cashDrawer.cash_out',
+  DRAWER_HANDED_OVER: 'cashDrawer.handed_over',
+  DRAWER_HANDOVER_ACCEPTED: 'cashDrawer.handover_accepted',
+  DRAWER_HANDOVER_DECLINED: 'cashDrawer.handover_declined',
+  REGISTER_CREATED: 'cashRegister.created',
+  REGISTER_TOGGLED: 'cashRegister.toggled',
+
+  PETTY_CASH_REQUESTED: 'pettyCash.requested',
+  PETTY_CASH_APPROVED: 'pettyCash.approved',
+  PETTY_CASH_REJECTED: 'pettyCash.rejected',
+  PETTY_CASH_PAID: 'pettyCash.paid',
+  PETTY_CASH_CANCELLED: 'pettyCash.cancelled',
 
   STOCK_RECEIVED: 'inventory.received',
   STOCK_WASTAGE: 'inventory.wastage',

@@ -10,6 +10,7 @@ import {
   selectedBranch,
 } from '@/features/dashboard/selected-branch'
 import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
+import { requireCashierSession } from '@/features/cashdrawer/gate'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -27,6 +28,11 @@ export default async function PosPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const user = await requirePagePermission(PERMISSIONS.ORDER_CREATE, '/cashier/pos')
+
+  // Same gate as /cashier: this screen takes payment, so the drawer that money
+  // belongs to has to exist before the screen does.
+  await requireCashierSession(user, '/cashier/pos')
+
   const restaurant = await requireRestaurant(user.restaurantId)
 
   /*

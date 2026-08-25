@@ -3,6 +3,8 @@ import type { Metadata } from 'next'
 import { SettingsView } from '@/features/settings/components/settings-view'
 import { readPaymentConfig } from '@/features/payments/service'
 import { readPaperWidths } from '@/features/printing/paper'
+import { getApprovalPolicy } from '@/features/approvals/service'
+import { minorUnitFactor } from '@/lib/money'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -15,6 +17,10 @@ export default async function SettingsPage() {
   const user = await requirePagePermission(PERMISSIONS.SETTINGS_VIEW, '/dashboard/settings')
   const restaurant = await prisma.restaurant.findUniqueOrThrow({ where: { id: user.restaurantId } })
   const payment = readPaymentConfig(restaurant.paymentConfig)
+  const policy = await getApprovalPolicy(user.restaurantId)
+  // Stored in minor units, shown and typed in major ones — the same boundary
+  // every other cash field in the app crosses.
+  const factor = minorUnitFactor(restaurant.currency)
 
   return (
     <SettingsView
@@ -44,6 +50,11 @@ export default async function SettingsPage() {
         printer: {
           receiptWidth: readPaperWidths(restaurant.printerConfig).receipt,
           kitchenWidth: readPaperWidths(restaurant.printerConfig).kitchen,
+        },
+        cash: {
+          cashVarianceAbove: policy.cashVarianceAbove / factor,
+          pettyCashApprovalAbove: policy.pettyCashApprovalAbove / factor,
+          requireCashierSession: policy.requireCashierSession,
         },
         payment: {
           cash: payment.cash ?? true,

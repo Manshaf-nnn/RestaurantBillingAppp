@@ -12,6 +12,7 @@ import {
   selectedBranch,
 } from '@/features/dashboard/selected-branch'
 import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
+import { requireCashierSession } from '@/features/cashdrawer/gate'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -26,6 +27,13 @@ export default async function CashierPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const user = await requirePagePermission(PERMISSIONS.PAYMENT_COLLECT, '/cashier')
+
+  /*
+   * No drawer, no till. Cash taken with no session open is attributed to
+   * nothing and can never be reconciled, so a till operator starts their shift
+   * before the screen appears. Managers are not gated — see `gate.ts`.
+   */
+  await requireCashierSession(user, '/cashier')
 
   // The sidebar's "Takeaway" entry links here with ?mode=takeaway. It used to
   // be ignored, so that link just opened the ordinary cashier screen.

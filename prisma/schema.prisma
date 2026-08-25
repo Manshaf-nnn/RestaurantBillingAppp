@@ -141,14 +141,73 @@ enum PaymentMethod {
 
 enum CashDrawerStatus {
   OPEN
+  /// Counted, but the variance was large enough to need a manager's eyes.
+  /// The drawer takes no more money in this state — the count cannot go stale.
+  PENDING_REVIEW
   CLOSED
 }
 
+/// Why cash moved, which also says which way it moved.
+///
+/// The direction is not stored: it is derived from the type by `DIRECTION` in
+/// `features/cashdrawer/movement-types.ts`, so a type added later cannot end up
+/// with the wrong sign in one place and the right one in another.
+///
+/// There is deliberately no CASH_SALE member. A cash sale is already attributed
+/// by stamping `Payment.cashDrawerSessionId`, and mirroring it here would give
+/// the same rupees two rows that can disagree the first time a payment is voided.
 enum CashMovementType {
   /// Money added to the drawer that is not a sale (float top-up, change fund).
   CASH_IN
   /// Money taken out that is not a refund (supplier paid in cash, bank drop).
   CASH_OUT
+  /// Extra float brought to the till mid-shift.
+  ADDITIONAL_CASH
+  /// Cash handed back to a customer.
+  CASH_REFUND
+  /// A petty cash expense paid out of the drawer rather than the petty tin.
+  PETTY_CASH_PAID
+  /// Drawer to petty tin. Leaves the drawer, arrives in the fund.
+  PETTY_FUND_TOPUP
+  /// Paid to somebody in cash — a supplier at the door, a courier.
+  CASH_PAID_OUT
+  /// Skimmed to the safe so the till is not holding the day's takings.
+  CASH_DROP
+  /// Taken to the bank.
+  BANK_DEPOSIT
+  /// A correction signed off by a manager.
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+/// Where a petty cash expense was actually paid from.
+///
+/// The petty fund and the drawer are separate tins. Only a DRAWER payment
+/// changes expected drawer cash; a PETTY_FUND payment reduces the fund alone.
+enum PettyCashSource {
+  DRAWER
+  PETTY_FUND
+}
+
+/// A petty cash request's life.
+///
+/// Four live states, not the six a first draft usually reaches for: a submitted
+/// request *is* pending approval, and "recorded" is not a state but the effect
+/// of PAID — paying writes the ledger row and the drawer movement in one
+/// transaction, so paid-but-unrecorded cannot exist.
+enum PettyCashStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+enum CashHandoverStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }
 
 enum ServiceRequestType {
@@ -402,8 +461,8 @@ enum FeedbackCategory {
 // ──────────────────────────────────────────────────────────── tenancy ──────
 
 model Restaurant {
-  id                 String  @id @default(cuid())
-  slug               String  @unique
+  id   String @id @default(cuid())
+  slug String @unique
 
   /// The restaurant's own domain, e.g. "nilaza.lk".
   ///
@@ -419,19 +478,19 @@ model Restaurant {
   /// would be enough to point a hostname at somebody else's menu — the check
   /// is what makes the claim real rather than asserted.
   customDomainVerifiedAt DateTime?
-  name               String
-  tagline            String?
-  description        String?
-  logoUrl            String?
-  coverUrl           String?
-  email              String?
-  phone              String?
-  addressLine        String?
-  city               String?
-  state              String?
-  country            String? @default("IN")
-  postalCode         String?
-  timezone           String  @default("Asia/Kolkata")
+  name                   String
+  tagline                String?
+  description            String?
+  logoUrl                String?
+  coverUrl               String?
+  email                  String?
+  phone                  String?
+  addressLine            String?
+  city                   String?
+  state                  String?
+  country                String?   @default("IN")
+  postalCode             String?
+  timezone               String    @default("Asia/Kolkata")
   /// Whether an outward movement may take a balance below zero.
   ///
   /// Off by default, which is what workflow.md asks for. It was hardcoded on:
@@ -441,9 +500,9 @@ model Restaurant {
   /// Turning it ON is a legitimate choice for a busy kitchen — refusing to serve
   /// a guest because a delivery was not keyed in is usually the worse outcome —
   /// so it is the owner's decision rather than ours.
-  allowNegativeStock Boolean @default(false)
-  locale             String  @default("en")
-  currency           String  @default("INR")
+  allowNegativeStock     Boolean   @default(false)
+  locale                 String    @default("en")
+  currency               String    @default("INR")
 
   /// basis points — 500 = 5.00%
   taxRateBps       Int     @default(500)
@@ -516,6 +575,9 @@ model Restaurant {
   menuSnapshots    RestaurantMenuSnapshot[]
   branches         Branch[]
   cashDrawers      CashDrawerSession[]
+  cashRegisters    CashRegister[]
+  pettyCash        PettyCashRequest[]
+  cashHandovers    CashHandover[]
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
   recipes          Recipe[]
@@ -672,7 +734,13 @@ model User {
   instructionsDone    BranchInstruction[] @relation("InstructionCompleter")
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
+  drawersReviewed     CashDrawerSession[] @relation("DrawerReviewedBy")
   cashMovements       CashMovement[]      @relation("CashMovementBy")
+  pettyRequested      PettyCashRequest[]  @relation("PettyRequestedBy")
+  pettyDecided        PettyCashRequest[]  @relation("PettyDecidedBy")
+  pettyPaid           PettyCashRequest[]  @relation("PettyPaidBy")
+  handoversGiven      CashHandover[]      @relation("HandoverFrom")
+  handoversReceived   CashHandover[]      @relation("HandoverTo")
   countsCounted       StockCount[]        @relation("CountCountedBy")
   countsApproved      StockCount[]        @relation("CountApprovedBy")
   recipesCreated      Recipe[]            @relation("RecipeCreatedBy")
@@ -772,7 +840,7 @@ model StaffRole {
   createdById String?
   createdBy   User?   @relation("StaffRoleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  members User[] @relation("UserStaffRole")
+  members User[]   @relation("UserStaffRole")
   invites Invite[]
 
   createdAt DateTime  @default(now())
@@ -1109,8 +1177,8 @@ model Order {
   status        OrderStatus   @default(PENDING)
   paymentStatus PaymentStatus @default(UNPAID)
 
-  tableId    String?
-  table      RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  tableId     String?
+  table       RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
   /// The table number as it was when the order was taken.
   ///
   /// `tableId` is SetNull, so deleting a table erased which table every past
@@ -1120,8 +1188,8 @@ model Order {
   /// says today. Null for takeaway, delivery and counter sales, which have no
   /// table — a real state, not a missing one.
   tableNumber String?
-  customerId String?
-  customer   Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerId  String?
+  customer    Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   /// snapshot so the ticket stays correct even if the customer record changes
   customerName  String
@@ -1330,6 +1398,8 @@ model Payment {
   updatedAt           DateTime           @updatedAt
   cashDrawerSession   CashDrawerSession? @relation(fields: [cashDrawerSessionId], references: [id])
   cashDrawerSessionId String?
+  /// The drawer movement a refund of this payment produced, if it produced one.
+  cashMovements       CashMovement[]
 
   @@index([restaurantId, status, createdAt])
   @@index([orderId])
@@ -2079,6 +2149,9 @@ model Branch {
   purchaseReturns  PurchaseReturn[]
   staffRoles       StaffRole[]
   accessLinks      Invite[]
+  cashRegisters    CashRegister[]
+  pettyCash        PettyCashRequest[]
+  cashHandovers    CashHandover[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
@@ -2094,58 +2167,231 @@ model Branch {
 /// payments and movements rather than stored as a running total, so a
 /// late-arriving payment cannot silently desync the variance.
 model CashDrawerSession {
-  id           String     @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  branchId     String
-  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  id            String       @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId      String
+  branch        Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  /// Which physical till. One per branch unless the owner adds more.
+  registerId    String
+  register      CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  /// Human handle for the paperwork, e.g. "CD-2026-000123".
+  ///
+  /// Unique per restaurant, not globally: the sequence is each restaurant's
+  /// own, so a global index would make two tenants opening a till at the same
+  /// moment collide on a number that means nothing to either of them.
+  sessionNumber String
 
-  openedById   String
-  openedBy     User     @relation("DrawerOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
-  openingFloat Int      @default(0)
-  openedAt     DateTime @default(now())
-  openingNote  String?
+  openedById       String
+  openedBy         User     @relation("DrawerOpenedBy", fields: [openedById], references: [id], onDelete: Cascade)
+  openingFloat     Int      @default(0)
+  /// The petty cash tin's starting balance. Deliberately NOT part of the float:
+  /// it is a different pile of money answering a different question.
+  openingPettyCash Int      @default(0)
+  openedAt         DateTime @default(now())
+  openingNote      String?
 
-  closedById   String?
-  closedBy     User?     @relation("DrawerClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
-  closedAt     DateTime?
+  closedById     String?
+  closedBy       User?     @relation("DrawerClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  closedAt       DateTime?
   /// What the cashier physically counted at close.
-  countedCash  Int?
+  countedCash    Int?
   /// What the system says should be there. Snapshotted at close for the record.
-  expectedCash Int?
+  expectedCash   Int?
   /// countedCash - expectedCash. Negative is short, positive is over.
-  variance     Int?
-  closingNote  String?
+  variance       Int?
+  /// Required whenever the variance is not zero. A difference nobody explained
+  /// on the night is a difference nobody can explain a week later.
+  varianceReason String?
+  closingNote    String?
+
+  /// Who signed off a variance large enough to stop at PENDING_REVIEW.
+  reviewedById String?
+  reviewedBy   User?     @relation("DrawerReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewNote   String?
 
   status CashDrawerStatus @default(OPEN)
 
-  movements CashMovement[]
-  payments  Payment[]
+  /// Uniqueness, done by the database rather than by a read-then-write check.
+  ///
+  /// Both hold an id while the session is OPEN and NULL once it is not, and
+  /// Postgres does not collide NULLs in a unique index. So these say exactly
+  /// "one open session per till" and "one open session per cashier" without a
+  /// partial index, which would be invisible to the Prisma schema and show up
+  /// as drift on every migrate diff.
+  activeRegisterKey String? @unique
+  activeCashierKey  String? @unique
+
+  movements  CashMovement[]
+  payments   Payment[]
+  pettyCash  PettyCashRequest[]
+  handedOver CashHandover[]     @relation("HandoverFromSession")
+  receivedAs CashHandover[]     @relation("HandoverToSession")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([restaurantId, sessionNumber])
   @@index([restaurantId, status, openedAt])
   @@index([openedById, status])
   @@index([restaurantId, branchId, openedAt])
+  @@index([registerId, openedAt])
   @@map("cash_drawer_sessions")
 }
 
+/// A physical till. One counter, one drawer, one person accountable at a time.
+///
+/// Branch alone was too coarse: it made "who is short Rs 500" unanswerable at a
+/// site with two counters, and it made the uniqueness rule wrong in both
+/// directions — two cashiers could open the same branch, one cashier could not
+/// open two branches. The register is the thing a session actually belongs to.
+///
+/// A restaurant that has never thought about registers gets "Counter 1" created
+/// for each branch on demand and never sees a picker.
+model CashRegister {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name      String
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  sessions  CashDrawerSession[]
+  handovers CashHandover[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchId, name])
+  @@index([restaurantId, isActive])
+  @@map("cash_registers")
+}
+
 /// Cash added to or removed from an open drawer for a reason that is not a sale.
+///
+/// Branch and register are not copied here on purpose. Both are reachable
+/// through the session with one join, the session is their only writer, and a
+/// copy is only ever another way for the two to disagree.
 model CashMovement {
   id        String            @id @default(cuid())
   sessionId String
   session   CashDrawerSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
-  type        CashMovementType
-  amount      Int
-  reason      String
-  createdById String?
-  createdBy   User?            @relation("CashMovementBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime         @default(now())
+  type               CashMovementType
+  amount             Int
+  reason             String
+  /// Receipt, invoice or slip number, where there is one.
+  reference          String?
+  /// Set when this movement is the cash half of a petty cash payment.
+  pettyCashRequestId String?
+  pettyCashRequest   PettyCashRequest? @relation(fields: [pettyCashRequestId], references: [id], onDelete: SetNull)
+  /// Set when this movement is a refund, so "which refunds were recorded
+  /// against a drawer, and which were not" has an answer. A refund given when
+  /// no drawer is open anywhere writes no movement at all, and without this
+  /// link there is nothing to notice its absence by.
+  paymentId          String?
+  payment            Payment?          @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  createdById        String?
+  createdBy          User?             @relation("CashMovementBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime          @default(now())
 
   @@index([sessionId, createdAt])
+  @@index([sessionId, type])
+  @@index([paymentId])
   @@map("cash_movements")
+}
+
+/// A small expense paid in cash, from raising it to paying it.
+///
+/// The request row is the object, not a wrapper around one: it has a life after
+/// approval — paid, receipted — that ApprovalRequest has no vocabulary for.
+/// Only PAID moves money, which is the whole control.
+model PettyCashRequest {
+  id           String             @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  /// The drawer session it was paid against. Null until paid.
+  sessionId    String?
+  session      CashDrawerSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  category    String
+  description String
+  amount      Int
+  /// Receipt or invoice number.
+  reference   String?
+  paidFrom    PettyCashSource @default(PETTY_FUND)
+  status      PettyCashStatus @default(PENDING)
+
+  requestedById String?
+  requestedBy   User?    @relation("PettyRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt   DateTime @default(now())
+
+  decidedById  String?
+  decidedBy    User?     @relation("PettyDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
+  decisionNote String?
+
+  paidById String?
+  paidBy   User?     @relation("PettyPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  paidAt   DateTime?
+
+  movements CashMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, branchId, status, requestedAt])
+  @@index([sessionId])
+  @@map("petty_cash_requests")
+}
+
+/// Passing the till from one cashier to the next.
+///
+/// The outgoing session is CLOSED by the handover and the counted amount opens
+/// a new one for the incoming cashier. A session with two owners cannot
+/// attribute a variance, which is the only reason drawer sessions exist — so
+/// responsibility is transferred by ending one and starting another, with this
+/// row linking them so the chain of custody stays readable.
+model CashHandover {
+  id           String       @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  registerId   String
+  register     CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
+
+  fromSessionId String
+  fromSession   CashDrawerSession  @relation("HandoverFromSession", fields: [fromSessionId], references: [id], onDelete: Cascade)
+  /// Created when the incoming cashier accepts. Null while pending or declined.
+  toSessionId   String?
+  toSession     CashDrawerSession? @relation("HandoverToSession", fields: [toSessionId], references: [id], onDelete: SetNull)
+
+  fromUserId String
+  fromUser   User   @relation("HandoverFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId   String
+  toUser     User   @relation("HandoverTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  /// What the system said should be in the drawer at handover.
+  expectedAmount Int
+  /// What the outgoing cashier physically counted.
+  countedAmount  Int
+  variance       Int
+  note           String?
+
+  status     CashHandoverStatus @default(PENDING)
+  createdAt  DateTime           @default(now())
+  acceptedAt DateTime?
+
+  @@index([restaurantId, branchId, createdAt])
+  @@index([toUserId, status])
+  @@map("cash_handovers")
 }
 
 /// A place stock physically sits — main store, bar fridge, kitchen line.

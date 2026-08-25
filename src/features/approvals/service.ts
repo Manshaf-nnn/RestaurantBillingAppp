@@ -37,6 +37,32 @@ export interface ApprovalPolicy {
   purchaseAbove: number
   /** Turn the whole mechanism off for a restaurant that does not want it. */
   enabled: boolean
+
+  /*
+   * ── The cash controls ─────────────────────────────────────────────────────
+   *
+   * These do not go through ApprovalRequest — a drawer's status is already its
+   * state, and a petty cash request has a life after approval that the approval
+   * table has no vocabulary for. They live here because this is where an owner
+   * already comes to say "how much is worth a second pair of eyes", and one
+   * screen answering that question is better than three.
+   */
+
+  /** A drawer counted this far from expected stops for a manager. 0 disables. */
+  cashVarianceAbove: number
+  /**
+   * Petty cash at or above this must be approved by somebody other than the
+   * person who raised it. Below it, an approver may sign their own.
+   */
+  pettyCashApprovalAbove: number
+  /**
+   * Whether a till operator has to open a drawer before they can work.
+   *
+   * On by default, because an unattributed cash sale is money nobody can be
+   * asked about. Off is for an operation that genuinely takes no cash, where
+   * the gate would be a locked door with nothing behind it.
+   */
+  requireCashierSession: boolean
 }
 
 const DEFAULT_POLICY: ApprovalPolicy = {
@@ -45,6 +71,9 @@ const DEFAULT_POLICY: ApprovalPolicy = {
   discountAbove: 5_000_00,
   adjustmentValueAbove: 10_000_00,
   purchaseAbove: 100_000_00,
+  cashVarianceAbove: 500_00,
+  pettyCashApprovalAbove: 2_000_00,
+  requireCashierSession: true,
 }
 
 export async function getApprovalPolicy(restaurantId: string): Promise<ApprovalPolicy> {

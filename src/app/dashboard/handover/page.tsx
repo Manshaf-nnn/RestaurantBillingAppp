@@ -3,10 +3,13 @@ import type { Metadata } from 'next'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { HandoverBoard } from '@/features/handover/components/handover-board'
+import { CashHandoverLog } from '@/features/handover/components/cash-handover-log'
 import { listShiftNotes } from '@/features/handover/queries'
+import { listHandovers } from '@/features/handover/cash-service'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
+import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,16 +30,50 @@ export default async function HandoverPage({
    * what they may see.
    */
   const selection = await selectedBranch(user, await searchParams)
-  const notes = await listShiftNotes(user.restaurantId, selection.branchIds)
+
+  const [notes, restaurant, handovers] = await Promise.all([
+    listShiftNotes(user.restaurantId, selection.branchIds),
+    requireRestaurant(user.restaurantId),
+    /*
+     * The cash side of a handover, alongside the notes side. They are the same
+     * event from a staff member's point of view — "I am going home, here is
+     * what you need to know and here is the till" — and splitting them across
+     * two screens is how one half stops being filled in.
+     */
+    listHandovers({
+      restaurantId: user.restaurantId,
+      branchIds: selection.branchIds,
+      limit: 30,
+    }),
+  ])
 
   return (
     <>
       <AutoRefresh intervalMs={15000} />
       <PageHeader
         title="Shift handover"
-        description="Leave notes for the next shift — nothing gets forgotten between manager changes."
+        description="Leave notes for the next shift, and pass the till on with both counts recorded."
       />
-      <HandoverBoard initial={notes} />
+      <div className="space-y-6">
+        <CashHandoverLog
+          currency={restaurant.currency}
+          rows={handovers.map((h) => ({
+            id: h.id,
+            fromName: h.fromUser?.name ?? 'Unknown',
+            toName: h.toUser?.name ?? 'Unknown',
+            branchName: h.branch?.name ?? null,
+            registerName: h.register?.name ?? null,
+            expectedAmount: h.expectedAmount,
+            countedAmount: h.countedAmount,
+            variance: h.variance,
+            note: h.note,
+            status: h.status,
+            createdAt: h.createdAt.toISOString(),
+            acceptedAt: h.acceptedAt?.toISOString() ?? null,
+          }))}
+        />
+        <HandoverBoard initial={notes} />
+      </div>
     </>
   )
 }
