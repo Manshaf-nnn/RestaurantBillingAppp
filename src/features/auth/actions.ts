@@ -8,6 +8,8 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ForbiddenError, UnauthorizedError } from '@/lib/errors'
 import { ROLE_HOME } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
+import { appUrl } from '@/lib/env'
+import { tenantOrigin } from '@/lib/tenant-url'
 import { defaultCategoryRows } from '@/features/menu/default-categories'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requireUser } from '@/server/auth/guard'
@@ -26,6 +28,7 @@ import {
   revokeAllSessions,
 } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
+import { getRestaurantByDomain, requestHost } from '@/server/db/tenant'
 import { clientIp, enforceRateLimit } from '@/server/security/rate-limit'
 import {
   passwordResetEmail,
@@ -97,6 +100,28 @@ export async function login(input: unknown): Promise<ActionResult<{ redirectTo: 
 
     if (!user.isActive || user.deletedAt) {
       throw new ForbiddenError('This account has been deactivated. Contact your manager.')
+    }
+
+    /*
+     * ── One restaurant per domain ─────────────────────────────────────────
+     *
+     * A restaurant with its own address should not be somewhere another
+     * restaurant's staff can sign in. Nothing leaks if they do — tenancy comes
+     * from the session, so they would see their own data — but seeing your own
+     * dashboard at somebody else's web address reads exactly like a leak, and
+     * it is one line to prevent.
+     *
+     * Only applies where the host names a tenant. On the shared platform
+     * address everyone signs in as before.
+     */
+    const host = await requestHost()
+    if (host) {
+      const owner = await getRestaurantByDomain(host)
+      if (owner && user.restaurantId && owner.id !== user.restaurantId) {
+        throw new ForbiddenError(
+          `This address belongs to ${owner.name}. Sign in at ${appUrl()}/login instead.`,
+        )
+      }
     }
 
     await createSession(user.id)
@@ -299,7 +324,15 @@ export async function requestPasswordReset(input: unknown): Promise<ActionResult
     input,
     async (data) => {
       await enforceRateLimit('passwordReset')
-      const user = await prisma.user.findUnique({ where: { email: data.email } })
+      const user = await prisma.user.findUnique({
+        where: { email: data.email },
+        // Their restaurant's own home, so the link lands where their session
+        // will live. Cookies are host-only — a reset that drops somebody on the
+        // platform address leaves them signed out with no way to tell why.
+        include: {
+          restaurant: { select: { customDomain: true, customDomainVerifiedAt: true } },
+        },
+      })
 
       // Respond identically whether or not the account exists.
       if (user && user.isActive && !user.deletedAt) {
@@ -312,7 +345,10 @@ export async function requestPasswordReset(input: unknown): Promise<ActionResult
             expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
           },
         })
-        await sendMail({ to: user.email, ...passwordResetEmail(user.name, token) })
+        await sendMail({
+          to: user.email,
+          ...passwordResetEmail(user.name, token, tenantOrigin(user.restaurant)),
+        })
       }
 
       return { sent: true as const }

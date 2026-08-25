@@ -146,7 +146,8 @@ Self-describing docs at **`/api/docs`** (JSON) or **`/api/docs?format=html`**.
 
 - **Cloudinary / SMTP are optional.** Without Cloudinary, image URLs are entered directly. Without SMTP, verification/reset/receipt emails are logged to the console with working links — every flow stays testable locally.
 - **Redis is optional.** Absent `REDIS_URL`, rate limiting and caching use an in-process implementation, and the app runs single-instance. Add Redis (and the Socket.IO Redis adapter) to scale horizontally.
-- **Multi-tenant routing.** On a shared domain, the guest link is `/order?r=<slug>` (pinned to a cookie). Subdomains (`<slug>.example.com`) and custom domains are auto-resolved; a single-restaurant deployment needs no slug at all.
+- **Multi-tenant routing.** A tenant is resolved from the URL in this order: an explicit slug in the path (`/order/<slug>/<branch>`), then the request host — a **verified custom domain**, then a `<slug>.example.com` subdomain — then the `ros_r` cookie, then, on a single-restaurant deployment, the only active restaurant. The cookie sits *below* the host on purpose: it pins a choice on the shared address and must not override a restaurant's own domain.
+- **Custom domains.** A restaurant can be given its own address from `/admin` → the restaurant card → **Set domain**. It stays inert until the platform has fetched `/api/public/whoami` on that host and been told the right restaurant, so a row alone can never aim a hostname at somebody else's menu. Add the domain in Netlify as a domain alias; the shared address keeps working throughout, so printed QR codes never stop.
 
 ---
 

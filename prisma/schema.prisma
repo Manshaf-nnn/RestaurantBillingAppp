@@ -404,6 +404,21 @@ enum FeedbackCategory {
 model Restaurant {
   id                 String  @id @default(cuid())
   slug               String  @unique
+
+  /// The restaurant's own domain, e.g. "nilaza.lk".
+  ///
+  /// Stored bare: lower-cased, no scheme, no `www.`, no port — so the matcher
+  /// has one shape to compare against however a guest types it.
+  ///
+  /// Unique across the platform, because a hostname can only mean one
+  /// restaurant. Null is the ordinary case: they use the shared address.
+  customDomain           String?   @unique
+  /// When the app confirmed it actually answers on that domain.
+  ///
+  /// An unverified domain resolves NOTHING. Without that rule, writing a row
+  /// would be enough to point a hostname at somebody else's menu — the check
+  /// is what makes the claim real rather than asserted.
+  customDomainVerifiedAt DateTime?
   name               String
   tagline            String?
   description        String?

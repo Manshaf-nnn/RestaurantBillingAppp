@@ -16,6 +16,7 @@ import {
   seesAllLocations,
   visibleBranchIds,
 } from '@/lib/rbac'
+import { tenantOrigin } from '@/lib/tenant-url'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import {
   assertBranchAccess,
@@ -181,6 +182,8 @@ export async function inviteStaff(
           email: data.email,
           temporaryPassword,
           role: data.role,
+          // Sign in where their session will actually live.
+          origin: tenantOrigin(restaurant),
         }),
       })
 

@@ -5,6 +5,7 @@ import type { InviteMode, UserRole } from '@prisma/client'
 import { ForbiddenError, NotFoundError } from '@/lib/errors'
 import { ROLE_HOME, ROLE_LABELS } from '@/lib/rbac'
 import { appUrl } from '@/lib/env'
+import { tenantOrigin } from '@/lib/tenant-url'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -61,9 +62,16 @@ export interface AccessLink {
   createdAt: string
 }
 
-/** The canonical URL for a link. One place, so the two callers cannot drift. */
-export function joinUrl(token: string): string {
-  return `${appUrl()}/join/${token}`
+/**
+ * The canonical URL for a link. One place, so the callers cannot drift.
+ *
+ * Takes the restaurant's own origin where there is one: these get printed on
+ * cards and taped to walls, and a card naming the platform address sends
+ * somebody to a hostname where their session will not exist. Defaults to the
+ * platform address, which is right for a restaurant with no domain of its own.
+ */
+export function joinUrl(token: string, origin: string = appUrl()): string {
+  return `${origin}/join/${token}`
 }
 
 /** Where somebody lands once the link has let them in. */
@@ -82,6 +90,12 @@ export async function listAccessLinks(
    */
   const scope =
     branchIds === null ? {} : { OR: [{ branchId: { in: branchIds } }, { branchId: null }] }
+
+  const home = await prisma.restaurant.findUnique({
+    where: { id: restaurantId },
+    select: { customDomain: true, customDomainVerifiedAt: true },
+  })
+  const origin = tenantOrigin(home)
 
   const rows = await prisma.invite.findMany({
     where: { restaurantId, ...scope },
@@ -108,7 +122,7 @@ export async function listAccessLinks(
     userName: row.user?.name ?? null,
     userEmail: row.user?.email ?? null,
     signInCode: row.user?.signInCode ?? null,
-    url: joinUrl(row.token),
+    url: joinUrl(row.token, origin),
     isActive: row.isActive,
     expiresAt: row.expiresAt?.toISOString() ?? null,
     expired: Boolean(row.expiresAt && row.expiresAt < now),

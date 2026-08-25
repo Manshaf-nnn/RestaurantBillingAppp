@@ -52,6 +52,7 @@ const SERVICE = [
   'access-links-test',
   'pos-billing-test',
   'variant-order-test',
+  'custom-domain-test',
 ]
 
 const RUNTIME = [

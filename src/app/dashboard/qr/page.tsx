@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import { QrPoster } from '@/features/settings/components/qr-poster'
 import { orderableBranches } from '@/features/branches/public-branch'
 import { toQrDataUrl } from '@/features/payments/service'
-import { appUrl } from '@/lib/env'
+import { printableOrigin } from '@/lib/tenant-url'
 import { guestPath } from '@/features/orders/guest-path'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -48,7 +48,15 @@ export default async function QrPage() {
    * dropped by a navigation or expire with a cookie. That is what was going
    * wrong: a card without a branch resolved silently to the default location.
    */
-  const base = `${appUrl()}/order?r=${restaurant.slug}`
+  /*
+   * The host the owner is actually looking at, not a global env var.
+   *
+   * These get printed and laminated. An owner on their own domain must get
+   * codes carrying their own domain — codes naming the shared platform address
+   * are the one mistake here that costs money to undo.
+   */
+  const origin = await printableOrigin(restaurant)
+  const base = `${origin}/order?r=${restaurant.slug}`
 
   /*
    * Every code rendered server-side, because `toQrDataUrl` is a server helper
@@ -58,7 +66,7 @@ export default async function QrPage() {
    */
   const sheets = await Promise.all(
     branches.map(async (branch) => {
-      const branchUrl = `${appUrl()}${guestPath(restaurant.slug, branch.code)}`
+      const branchUrl = `${origin}${guestPath(restaurant.slug, branch.code)}`
       return {
         id: branch.id,
         name: branch.name,

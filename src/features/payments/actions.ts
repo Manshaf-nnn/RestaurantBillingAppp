@@ -14,6 +14,7 @@ import { receiptEmail, sendMail } from '@/server/mailer'
 import { notify } from '@/server/notifications'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import { appUrl } from '@/lib/env'
+import { tenantOrigin } from '@/lib/tenant-url'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import {
   collectPaymentSchema,
@@ -114,7 +115,7 @@ export async function emailReceipt(input: unknown): Promise<ActionResult<{ sent:
           restaurantName: restaurant.name,
           orderNumber: order.orderNumber,
           total: formatMoney(order.grandTotal, restaurant.currency),
-          invoiceUrl: `${appUrl()}/order/bill/${order.id}`,
+          invoiceUrl: `${tenantOrigin(restaurant)}/order/bill/${order.id}`,
           rows: order.items.map((item) => ({
             name: item.name,
             qty: item.quantity,
@@ -256,7 +257,18 @@ export async function issueInvoiceEmail(orderId: string, email: string) {
 
     const order = await prisma.order.findFirst({
       where: { id: orderId, restaurantId: user.restaurantId },
-      include: { items: true, restaurant: { select: { name: true, currency: true } }, invoice: true },
+      include: {
+        items: true,
+        restaurant: {
+          select: {
+            name: true,
+            currency: true,
+            customDomain: true,
+            customDomainVerifiedAt: true,
+          },
+        },
+        invoice: true,
+      },
     })
     if (!order) throw new NotFoundError('Order')
 
@@ -267,7 +279,7 @@ export async function issueInvoiceEmail(orderId: string, email: string) {
         restaurantName: order.restaurant.name,
         orderNumber: order.orderNumber,
         total: formatMoney(order.grandTotal, order.restaurant.currency),
-        invoiceUrl: `${appUrl()}/dashboard/orders/${order.id}/invoice`,
+        invoiceUrl: `${tenantOrigin(order.restaurant)}/dashboard/orders/${order.id}/invoice`,
         rows: order.items.map((item) => ({
           name: `${item.name}${readOptions(item.options).length ? ` (${readOptions(item.options).map((o) => o.name).join(', ')})` : ''}`,
           qty: item.quantity,

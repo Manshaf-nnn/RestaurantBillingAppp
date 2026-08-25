@@ -8,6 +8,7 @@ import {
   CircleSlash,
   Clock,
   ExternalLink,
+  Globe,
   Play,
   Search,
   Store,
@@ -39,6 +40,8 @@ import {
   reactivateRestaurant,
   rejectRestaurant,
   suspendRestaurant,
+  setCustomDomain,
+  verifyCustomDomain,
 } from '../actions'
 
 const STATUS_META: Record<RestaurantStatus, { label: string; variant: NonNullable<BadgeProps['variant']> }> = {
@@ -74,6 +77,7 @@ export function PlatformConsole({
   const [search, setSearch] = React.useState('')
   const [rejectFor, setRejectFor] = React.useState<PlatformRestaurant | null>(null)
   const [suspendFor, setSuspendFor] = React.useState<PlatformRestaurant | null>(null)
+  const [domainFor, setDomainFor] = React.useState<PlatformRestaurant | null>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
 
   React.useEffect(() => setRestaurants(initial), [initial])
@@ -178,6 +182,23 @@ export function PlatformConsole({
                     /{restaurant.slug} · {restaurant.currency}
                     {restaurant.city ? ` · ${restaurant.city}` : ''}
                   </p>
+                  {/*
+                    Their own address, and whether it actually answers. An
+                    unverified domain is stored but resolves nothing, so saying
+                    "waiting for DNS" is the difference between "I typed it
+                    wrong" and "I have not added it in Netlify yet".
+                  */}
+                  {restaurant.customDomain ? (
+                    <p className="mt-1 flex items-center gap-1.5 text-xs">
+                      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-medium">{restaurant.customDomain}</span>
+                      {restaurant.customDomainVerified ? (
+                        <Badge variant="success">live</Badge>
+                      ) : (
+                        <Badge variant="warning">waiting for DNS</Badge>
+                      )}
+                    </p>
+                  ) : null}
                 </div>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {new Date(restaurant.createdAt).toLocaleDateString()}
@@ -238,6 +259,9 @@ export function PlatformConsole({
                         <Play /> Reactivate
                       </Button>
                     ) : null}
+                    <Button size="sm" variant="outline" onClick={() => setDomainFor(restaurant)}>
+                      <Globe /> {restaurant.customDomain ? 'Domain' : 'Set domain'}
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -290,6 +314,14 @@ export function PlatformConsole({
           </ul>
         )}
       </div>
+
+      {domainFor ? (
+        <DomainDialog
+          restaurant={domainFor}
+          platformHost={new URL(appUrl).host}
+          onClose={() => setDomainFor(null)}
+        />
+      ) : null}
 
       <RejectDialog
         restaurant={rejectFor}
@@ -367,4 +399,160 @@ function RejectDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * Setting up a restaurant's own address.
+ *
+ * Three states, and the dialog says which one you are in rather than making you
+ * infer it: no domain, saved but not answering yet, and live. The DNS record is
+ * shown as something to copy and send, because that is the actual next action —
+ * the operator cannot add it themselves, and the client cannot be expected to
+ * know what a CNAME is without being told exactly what to type.
+ *
+ * Check is a real request to the domain, not a database read. That is the whole
+ * point: it proves DNS, TLS, Netlify and our own resolver at once, and reports
+ * whichever of them is not ready yet.
+ */
+function DomainDialog({
+  restaurant,
+  platformHost,
+  onClose,
+}: {
+  restaurant: PlatformRestaurant
+  platformHost: string
+  onClose: () => void
+}) {
+  const [domain, setDomain] = React.useState(restaurant.customDomain ?? '')
+  const [busy, setBusy] = React.useState(false)
+  const [result, setResult] = React.useState<{ ok: boolean; message: string } | null>(null)
+
+  const saved = restaurant.customDomain
+  const dns = saved ? dnsRecordFor(saved, platformHost) : null
+
+  const save = async () => {
+    setBusy(true)
+    setResult(null)
+    const outcome = await callAction(() =>
+      setCustomDomain({ restaurantId: restaurant.id, domain }),
+    )
+    setBusy(false)
+    if (!outcome.ok) {
+      setResult({ ok: false, message: outcome.error })
+      return
+    }
+    toast.success(outcome.data.domain ? 'Domain saved' : 'Domain removed')
+    onClose()
+  }
+
+  const check = async () => {
+    setBusy(true)
+    setResult(null)
+    const outcome = await callAction(() => verifyCustomDomain({ restaurantId: restaurant.id }))
+    setBusy(false)
+    if (!outcome.ok) {
+      setResult({ ok: false, message: outcome.error })
+      return
+    }
+    setResult({ ok: outcome.data.verified, message: outcome.data.detail })
+    if (outcome.data.verified) toast.success('Domain is live')
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{restaurant.name} · own domain</DialogTitle>
+          <DialogDescription>
+            Diners see this address instead of the platform one. The shared address keeps working
+            either way, so printed QR codes never stop.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <Field label="Domain">
+            <Input
+              value={domain}
+              onChange={(event) => setDomain(event.target.value)}
+              placeholder="nilaza.lk"
+              autoFocus
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Leave it empty to remove. Pasting a full URL is fine.
+            </p>
+          </Field>
+
+          {dns ? (
+            <div className="rounded-lg border bg-muted/40 p-3">
+              <p className="text-xs font-medium">Send them this DNS record</p>
+              <table className="mt-2 w-full text-xs">
+                <tbody>
+                  <tr>
+                    <td className="py-0.5 pr-3 text-muted-foreground">Type</td>
+                    <td className="font-mono">{dns.type}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-0.5 pr-3 text-muted-foreground">Name</td>
+                    <td className="font-mono">{dns.name}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-0.5 pr-3 text-muted-foreground">Points to</td>
+                    <td className="font-mono">{dns.value}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {dns.note ? (
+                <p className="mt-2 text-xs text-muted-foreground">{dns.note}</p>
+              ) : null}
+              <p className="mt-2 text-xs text-muted-foreground">
+                Then add <span className="font-mono">{saved}</span> in Netlify → Domain management →
+                Add a domain alias. Netlify issues the certificate.
+              </p>
+            </div>
+          ) : null}
+
+          {result ? (
+            <p className={`text-sm ${result.ok ? 'text-success' : 'text-destructive'}`}>
+              {result.message}
+            </p>
+          ) : null}
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Close
+          </Button>
+          {saved && saved === domain.trim().toLowerCase() ? (
+            <Button variant="outline" onClick={check} loading={busy}>
+              Check
+            </Button>
+          ) : null}
+          <Button onClick={save} loading={busy}>
+            {domain.trim() ? 'Save' : 'Remove'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * The record to hand the client.
+ *
+ * An apex domain cannot legally be a CNAME, so registrars offer ALIAS/ANAME
+ * instead — and the ones that do not need an A record. Saying which case they
+ * are in saves a round of "my registrar will not accept that".
+ */
+function dnsRecordFor(domain: string, platformHost: string) {
+  const apex = domain.split('.').length <= 2
+  return {
+    type: apex ? 'ALIAS or ANAME' : 'CNAME',
+    name: apex ? '@' : domain.split('.')[0],
+    value: platformHost,
+    note: apex
+      ? 'If their registrar offers neither, use an A record pointing at 75.2.60.5, or give them a subdomain such as order.' +
+        domain +
+        ' instead.'
+      : null,
+  }
 }

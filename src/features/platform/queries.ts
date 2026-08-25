@@ -7,6 +7,8 @@ export interface PlatformRestaurant {
   id: string
   name: string
   slug: string
+  customDomain: string | null
+  customDomainVerified: boolean
   email: string | null
   phone: string | null
   city: string | null
@@ -72,6 +74,8 @@ export async function listPlatformRestaurants(status?: RestaurantStatus): Promis
     id: restaurant.id,
     name: restaurant.name,
     slug: restaurant.slug,
+    customDomain: restaurant.customDomain,
+    customDomainVerified: restaurant.customDomainVerifiedAt !== null,
     email: restaurant.email,
     phone: restaurant.phone,
     city: restaurant.city,

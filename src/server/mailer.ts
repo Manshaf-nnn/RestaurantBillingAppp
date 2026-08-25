@@ -84,8 +84,19 @@ function layout(title: string, body: string, cta?: { label: string; href: string
 </body></html>`
 }
 
-export function verificationEmail(name: string, token: string) {
-  const href = `${appUrl()}/verify-email?token=${token}`
+/*
+ * Every template takes the origin rather than reaching for `appUrl()`.
+ *
+ * An email is composed where there is no request to read and opened days
+ * later, so it has to name the restaurant's own home. Cookies here are
+ * host-only: a reset link pointing at the platform address drops somebody on a
+ * hostname where their session does not exist, and they cannot tell why.
+ *
+ * It defaults to `appUrl()`, which is right for anything with no restaurant
+ * behind it and keeps every existing caller correct.
+ */
+export function verificationEmail(name: string, token: string, origin = appUrl()) {
+  const href = `${origin}/verify-email?token=${token}`
   return {
     subject: 'Confirm your TableFlow email',
     html: layout(
@@ -97,8 +108,8 @@ export function verificationEmail(name: string, token: string) {
   }
 }
 
-export function passwordResetEmail(name: string, token: string) {
-  const href = `${appUrl()}/reset-password?token=${token}`
+export function passwordResetEmail(name: string, token: string, origin = appUrl()) {
+  const href = `${origin}/reset-password?token=${token}`
   return {
     subject: 'Reset your TableFlow password',
     html: layout(
@@ -116,8 +127,10 @@ export function staffInviteEmail(params: {
   email: string
   temporaryPassword: string
   role: string
+  /** The restaurant's own home, when they have one. */
+  origin?: string
 }) {
-  const href = `${appUrl()}/login`
+  const href = `${params.origin ?? appUrl()}/login`
   return {
     subject: `You have been added to ${params.restaurantName} on TableFlow`,
     html: layout(
@@ -168,6 +181,7 @@ export function receiptEmail(params: {
 export function lowStockEmail(params: {
   restaurantName: string
   items: Array<{ name: string; quantity: number; unit: string; reorderLevel: number }>
+  origin?: string
 }) {
   const rows = params.items
     .map(
@@ -182,7 +196,7 @@ export function lowStockEmail(params: {
       'Low stock alert',
       `<p>The following items at ${params.restaurantName} are at or below their reorder level.</p>
        <table width="100%" style="font-size:14px;border-collapse:collapse;margin:12px 0">${rows}</table>`,
-      { label: 'Open inventory', href: `${appUrl()}/dashboard/inventory` },
+      { label: 'Open inventory', href: `${params.origin ?? appUrl()}/dashboard/inventory` },
     ),
   }
 }

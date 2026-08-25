@@ -13,6 +13,7 @@ import { prisma } from '@/server/db/prisma'
 import { issueSignInCode } from '@/features/staff/codes'
 
 import { joinUrl } from './links'
+import { tenantOrigin } from '@/lib/tenant-url'
 import { assertNoEscalation, requireRole, resolveRoleBranch } from './service'
 import { createLinkSchema, linkIdSchema } from './link-schema'
 
@@ -131,7 +132,11 @@ export async function createAccessLink(
       })
 
       refresh()
-      return { id: link.id, url: joinUrl(token), signInCode }
+      const home = await prisma.restaurant.findUnique({
+        where: { id: admin.restaurantId },
+        select: { customDomain: true, customDomainVerifiedAt: true },
+      })
+      return { id: link.id, url: joinUrl(token, tenantOrigin(home)), signInCode }
     },
     'Link created.',
   )
@@ -185,7 +190,11 @@ export async function regenerateAccessLink(
       })
 
       refresh()
-      return { url: joinUrl(token) }
+      const home = await prisma.restaurant.findUnique({
+        where: { id: admin.restaurantId },
+        select: { customDomain: true, customDomainVerifiedAt: true },
+      })
+      return { url: joinUrl(token, tenantOrigin(home)) }
     },
     'New link issued. The old one no longer works.',
   )
