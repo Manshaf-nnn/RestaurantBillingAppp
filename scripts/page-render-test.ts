@@ -201,6 +201,11 @@ async function main() {
     aRun ? `/dashboard/production/${aRun.id}` : null,
     aTransfer ? `/dashboard/transfers/${aTransfer.id}` : null,
     aLocation ? `/dashboard/locations/${aLocation.id}` : null,
+    // All three views, because each one runs a different query and only the
+    // default would otherwise ever be rendered by this sweep.
+    aLocation ? `/dashboard/locations/${aLocation.id}/staff` : null,
+    aLocation ? `/dashboard/locations/${aLocation.id}/staff?view=performance` : null,
+    aLocation ? `/dashboard/locations/${aLocation.id}/staff?view=activity` : null,
   ].filter((path): path is string => path !== null)
 
   if (detailPages.length === 0) {

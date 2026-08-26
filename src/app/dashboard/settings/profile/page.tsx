@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { ProfileView } from '@/features/settings/components/profile-view'
+import { MyShifts } from '@/features/attendance/components/my-shifts'
 import { listSessions } from '@/features/auth/actions'
 import { requirePageUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -19,15 +20,25 @@ export default async function ProfilePage() {
   ])
 
   return (
-    <ProfileView
-      profile={record}
-      sessions={sessions.map((session) => ({
-        id: session.id,
-        userAgent: session.userAgent,
-        ipAddress: session.ipAddress,
-        lastUsedAt: session.lastUsedAt.toISOString(),
-        current: session.current,
-      }))}
-    />
+    <>
+      <ProfileView
+        profile={record}
+        sessions={sessions.map((session) => ({
+          id: session.id,
+          userAgent: session.userAgent,
+          ipAddress: session.ipAddress,
+          lastUsedAt: session.lastUsedAt.toISOString(),
+          current: session.current,
+        }))}
+      />
+      {/*
+        Your own hours, on your own page. Identity, not permission — a cashier
+        does not hold `staff.view` and should not, but their attendance is
+        theirs to check.
+      */}
+      <div className="mt-5">
+        <MyShifts userId={user.id} />
+      </div>
+    </>
   )
 }

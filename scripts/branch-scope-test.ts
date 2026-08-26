@@ -24,7 +24,8 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/branch-scope-test.ts
  */
 import { prisma } from '../src/server/db/prisma'
-import { getDashboardStats, getRevenueSeries, getStaffPerformance } from '../src/features/analytics/queries'
+import { getDashboardStats, getRevenueSeries } from '../src/features/analytics/queries'
+import { getBranchStaffPerformance } from '../src/features/staff/performance'
 import { customRange, resolveRange } from '../src/features/reports/range'
 import { listOrders } from '../src/features/orders/queries'
 import { getReorderSuggestions } from '../src/features/purchasing/suggestions'
@@ -148,13 +149,24 @@ async function main() {
     `${colomboSeries.reduce((s: number, p) => s + p.revenue, 0)} / ${kandySeries.reduce((s: number, p) => s + p.revenue, 0)}`,
   )
 
-  const staffAtKandy = await getStaffPerformance(restaurant.id, 2, kandy.id)
-  const staffAtColombo = await getStaffPerformance(restaurant.id, 2, colombo.id)
+  const range = resolveRange({ preset: 'LAST_7', timeZone: 'UTC' })
+  const staffAtKandy = await getBranchStaffPerformance({
+    restaurantId: restaurant.id, branchIds: [kandy.id], range,
+  })
+  const staffAtColombo = await getBranchStaffPerformance({
+    restaurantId: restaurant.id, branchIds: [colombo.id], range,
+  })
   check(
     'staff figures are per location',
-    staffAtKandy.some((row) => row.id === cashier.id) &&
-      !staffAtColombo.some((row) => row.id === cashier.id),
+    staffAtKandy.rows.some((row) => row.userId === cashier.id) &&
+      !staffAtColombo.rows.some((row) => row.userId === cashier.id),
     'the Kandy cashier appeared in Colombo’s league table',
+  )
+  check(
+    'and the parts add up to the branch total',
+    staffAtKandy.rows.reduce((sum, r) => sum + r.rungRevenue, 0) +
+      staffAtKandy.unattributed.revenue === staffAtKandy.total.revenue,
+    `${staffAtKandy.total.revenue}`,
   )
 
   console.log('\n── reorder suggestions read the shelf, not the item ──')

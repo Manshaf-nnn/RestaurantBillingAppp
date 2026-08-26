@@ -47,6 +47,19 @@ export default async function LocationPage({
 }) {
   const { branchId } = await params
   const user = await requirePagePermission(PERMISSIONS.BRANCH_VIEW, `/dashboard/locations/${branchId}`)
+  /*
+   * The worst of the gaps: BRANCH_VIEW is held by cashiers and warehouse
+   * staff, and this page shows another site's stock, value, team roster, sales
+   * — and, to anyone with BRANCH_MANAGE, its manager's sign-in credentials.
+   * Typing another branch's id was enough.
+   *
+   * Checked BEFORE the queries below, not after them. It used to sit under the
+   * `Promise.all`, so a refused visitor's data was fetched and then thrown
+   * away — wasted work, and the wrong shape for a check whose whole job is
+   * deciding whether this data may be read at all.
+   */
+  if (!canAccessBranch(user, branchId)) notFound()
+
   const restaurant = await requireRestaurant(user.restaurantId)
   const canManage = can(user, PERMISSIONS.BRANCH_MANAGE)
   const [detail, transfers, items, staff, managerRole] = await Promise.all([
@@ -83,14 +96,6 @@ export default async function LocationPage({
         })
       : null,
   ])
-  /*
-   * The worst of the gaps: BRANCH_VIEW is held by cashiers and warehouse
-   * staff, and this page shows another site's stock, value, team roster, sales
-   * — and, to anyone with BRANCH_MANAGE, its manager's sign-in credentials.
-   * Typing another branch's id was enough.
-   */
-  if (!canAccessBranch(user, branchId)) notFound()
-
   const { branch, stock, team, incoming, receipts, sales } = detail
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
@@ -359,12 +364,22 @@ export default async function LocationPage({
             </ul>
           )}
           {can(user, PERMISSIONS.STAFF_VIEW) ? (
-            <Link
-              href="/dashboard/staff"
-              className="mt-3 inline-block text-sm text-primary hover:underline"
-            >
-              Manage staff →
-            </Link>
+            <div className="mt-3 flex flex-wrap gap-4">
+              {/*
+                Hours and figures live on their own route rather than in a card
+                here: they need a date range, and this page runs its queries
+                before it knows whether the reader may see this branch.
+              */}
+              <Link
+                href={`/dashboard/locations/${branchId}/staff`}
+                className="text-sm text-primary hover:underline"
+              >
+                Hours &amp; performance →
+              </Link>
+              <Link href="/dashboard/staff" className="text-sm text-primary hover:underline">
+                Manage staff →
+              </Link>
+            </div>
           ) : null}
         </SectionCard>
       </div>

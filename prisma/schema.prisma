@@ -714,6 +714,7 @@ model User {
   receivedPayments    Payment[]           @relation("PaymentReceivedBy")
   stockMovements      StockMovement[]
   shifts              StaffShift[]
+  shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
   handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
   createdInvites      Invite[]
   accessLinks         Invite[]            @relation("InviteForUser")
@@ -2080,9 +2081,65 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([restaurantId, branchId, createdAt])
   @@index([restaurantId, action, createdAt])
+  /// "Everything this person did between these two times" — the staff activity
+  /// feed. None of the indexes above lead with `userId`, so that question was a
+  /// scan of the whole trail.
+  @@index([userId, createdAt])
   @@map("audit_logs")
 }
 
+/// Why somebody stopped being on shift.
+enum ShiftCloseReason {
+  /// They signed out. Closed at their last action, not at the click.
+  SIGN_OUT
+  /// No activity for `SHIFT_IDLE_MINUTES`. Closed at the last action.
+  AUTO_IDLE
+  /// Ran past `SHIFT_MAX_HOURS`. Needs a manager to look at it.
+  AUTO_CAP
+  /// They signed in somewhere else, so this segment ended.
+  BRANCH_CHANGE
+  /// A manager closed or corrected it by hand.
+  MANUAL
+}
+
+/// How a shift came to exist.
+enum ShiftSource {
+  /// Opened by signing in. The ordinary case, and the whole point.
+  LOGIN
+  /// Added by a manager for somebody who worked without signing in.
+  MANUAL
+}
+
+/// Attendance: who was working, where, and for how long.
+///
+/// Deliberately separate from `CashDrawerSession`, which is money
+/// accountability — see the note on that model. One person can work a whole
+/// shift without touching cash, and a drawer can outlive a shift change.
+///
+/// ── Hours come from work, not from presence ─────────────────────────────────
+///
+/// `clockInAt` is the sign-in. The end is `clockOutAt ?? lastActionAt`, and
+/// `lastActionAt` is stamped by `requirePermission` — so it moves when somebody
+/// *does* something, never merely because a browser is open. That distinction is
+/// load-bearing: a kitchen display left on overnight polls `/api/pulse` for
+/// twelve hours, and any presence-based clock would bill all of it.
+///
+/// ── One branch per shift ────────────────────────────────────────────────────
+///
+/// Signing in at a different location closes the open shift `BRANCH_CHANGE` and
+/// starts a new one, so a day of cover work is two segments and each branch's
+/// figures are genuinely its own. `activeShiftKey` holds the user id while open
+/// and NULL afterwards, so the database — not application code — enforces that
+/// nobody is clocked in twice. Same idiom as `CashDrawerSession.activeCashierKey`,
+/// and a plain nullable-unique rather than a partial index for the reason given
+/// there.
+///
+/// ── Corrections keep the original ───────────────────────────────────────────
+///
+/// `clockInAt` / `clockOutAt` are what the system observed and are never
+/// rewritten. A manager's fix goes in the `adjusted*` columns and the effective
+/// time is `adjusted ?? observed`, so a disputed timesheet can always be shown
+/// both ways.
 model StaffShift {
   id           String     @id @default(cuid())
   restaurantId String
@@ -2092,12 +2149,38 @@ model StaffShift {
 
   clockInAt  DateTime  @default(now())
   clockOutAt DateTime?
+  /// The last time this person did something. The shift's honest end.
+  lastActionAt DateTime?
   notes      String?
-  branch     Branch?   @relation(fields: [branchId], references: [id])
-  branchId   String?
+  /// Required. A shift with no branch would appear on no branch's tab, which
+  /// loses the attendance rather than merely mislabelling it.
+  branch     Branch    @relation(fields: [branchId], references: [id])
+  branchId   String
+
+  /// The day this shift is counted under, in the restaurant's timezone, stamped
+  /// when it opens. A shift that runs 18:00 → 01:30 stays on the opening day
+  /// rather than splitting. Stored rather than derived so range queries can use
+  /// an index instead of converting timezones in SQL.
+  businessDate DateTime @db.Date
+
+  /// The user id while OPEN, NULL once closed. Uniqueness is the "you cannot be
+  /// clocked in twice" rule.
+  activeShiftKey String? @unique
+
+  source   ShiftSource       @default(LOGIN)
+  closedBy ShiftCloseReason?
+
+  adjustedClockInAt  DateTime?
+  adjustedClockOutAt DateTime?
+  adjustedById       String?
+  adjustedBy         User?     @relation("ShiftAdjustedBy", fields: [adjustedById], references: [id], onDelete: SetNull)
+  adjustedAt         DateTime?
+  adjustReason       String?
 
   @@index([restaurantId, clockInAt])
   @@index([userId, clockInAt])
+  @@index([restaurantId, branchId, businessDate])
+  @@index([userId, businessDate])
   @@map("staff_shifts")
 }
 

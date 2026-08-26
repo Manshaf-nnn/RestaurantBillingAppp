@@ -517,6 +517,103 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard
+          title="5e · Who was working"
+          description="Recorded from signing in. Nobody has to remember anything."
+        >
+          <Rows
+            rows={[
+              [
+                'Clocking in',
+                'Signing in starts a shift — with a password, a staff code, or an access link. There is no separate button to press and nothing to forget.',
+              ],
+              [
+                'Clocking out',
+                'The shift ends at the last thing the person actually did, not when they closed the tab. Somebody who finishes at ten and signs out at eleven worked until ten.',
+              ],
+              [
+                'Where it counts',
+                'A shift belongs to one location. Sign in at another and the first one closes and a second begins, so an evening covering Branch 2 is Branch 2’s hours and Branch 2’s sales.',
+              ],
+              [
+                'Seeing it',
+                'A location → Hours & performance. Your own are on your profile page, whatever your role.',
+              ],
+            ]}
+          />
+          <Note>
+            <strong>Why not just “signed in until signed out”.</strong> Almost
+            nobody signs out — they close the laptop — and a session stays valid
+            for a month. Ending a shift at the last real action is the only rule
+            that does not quietly bill a fortnight for a Tuesday.
+          </Note>
+          <Note>
+            <strong>Forgotten shifts close themselves.</strong> Ninety minutes
+            with nothing done and it ends, dated to that last action. Anything
+            still running after sixteen hours is closed and flagged for you to
+            look at — that is a mistake, not a shift.
+          </Note>
+          <Note>
+            <strong>A night shift stays on one day.</strong> Six in the evening
+            until half one in the morning is one shift of seven and a half hours,
+            counted under the evening it started. So on <em>Today</em> that
+            person looks absent until they do something.
+          </Note>
+          <Note>
+            <strong>Shared screens are not counted.</strong> A kitchen display
+            everybody uses is one account shared by everyone who touches it — it
+            cannot say who was there, so it says nothing rather than guessing.
+          </Note>
+          <Note>
+            <strong>Wrong hours can be fixed, and the original is kept.</strong>{' '}
+            Somebody works a morning and forgets to sign in; somebody checks the
+            rota from home and opens a shift they never worked. A manager
+            corrects it with a reason, and both what happened and what was
+            decided stay on the record — which is the point, in the one
+            conversation where it matters.
+          </Note>
+        </SectionCard>
+
+        <SectionCard
+          title="5f · How people are doing"
+          description="Three separate answers, never one score."
+        >
+          <Rows
+            rows={[
+              [
+                'Attendance',
+                'Hours, days, and who is on shift right now. The one figure that means the same thing for every job.',
+              ],
+              [
+                'Served vs rung',
+                'Served is whose table it was. Rung is who keyed it in. A cashier ringing up a waiter’s table is normal, so these are two numbers and never added together.',
+              ],
+              [
+                'Activity',
+                'Every recorded action at that location, newest first — who adjusted stock, who approved a count, who refunded a bill.',
+              ],
+            ]}
+          />
+          <Note>
+            <strong>Counter sales are rung, not served.</strong> Somebody has to
+            own a walk-in, so the till operator is recorded against it — but they
+            were not waiting a table, and counting it as service would put your
+            busiest cashier top of a list of your best waiters.
+          </Note>
+          <Note>
+            <strong>QR orders belong to nobody</strong>, because a guest ordering
+            from their own phone has no server and no cashier. That money is
+            shown separately as <em>not attributed</em> rather than left out, so
+            everyone’s figures plus that number is the branch total.
+          </Note>
+          <Note>
+            <strong>Do not rank different jobs against each other.</strong> A
+            cook rings up nothing, so a sales table says they did nothing — which
+            is false. Kitchen work is not recorded per person yet, and the screen
+            says so rather than showing a zero.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="6 · Recipes" description="More important than they look.">
           <p className="text-sm leading-relaxed text-muted-foreground">
             A recipe links a dish to what it consumes. Without one, selling a burger takes
@@ -708,6 +805,9 @@ export default async function HelpPage() {
               ['Petty cash', 'A separate tin for small cash expenses. Never the drawer'],
               ['Drop', 'Cash skimmed from the till to the safe mid-shift'],
               ['Drift', 'Stored balance minus ledger sum. Must be zero'],
+              ['Shift', 'Attendance — who was working, where, and for how long'],
+              ['Drawer session', 'Money accountability. Not a shift; you can work without touching cash'],
+              ['Last action', 'The last thing somebody did. Where a shift ends'],
               ['Variance (count)', 'Counted minus what the books said, for one location'],
               ['Alert me below', 'Your low-stock threshold. 0 means no warning, not "warn always"'],
               ['Out vs Low', 'Out is nothing on the shelf. Low is under the threshold you set'],

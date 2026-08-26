@@ -12,8 +12,8 @@ import {
   getPeakHours,
   getPopularItems,
   getRevenueSeries,
-  getStaffPerformance,
 } from '@/features/analytics/queries'
+import { getBranchStaffPerformance } from '@/features/staff/performance'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ROLE_LABELS, PERMISSIONS } from '@/lib/rbac'
 import { formatMoney } from '@/lib/money'
@@ -50,7 +50,21 @@ export default async function AnalyticsPage({
       limit: 10,
       branchIds: branchId ? [branchId] : null,
     }),
-    getStaffPerformance(user.restaurantId, 30, branchId),
+    /*
+     * The shared query, and the same `range` as everything else on this page.
+     *
+     * The old one took `days: number` and subtracted from the current instant,
+     * so this card's window began mid-afternoon while every other figure beside
+     * it began at the restaurant's midnight — they disagreed, quietly. It also
+     * grouped by `createdById`, crediting whoever keyed an order in rather than
+     * whose table it was, and read a null branch as "every branch" so a
+     * location filter silently did nothing.
+     */
+    getBranchStaffPerformance({
+      restaurantId: user.restaurantId,
+      branchIds: branchId ? [branchId] : null,
+      range,
+    }),
   ])
 
   const money = (value: number) => formatMoney(value, restaurant.currency, locale)
@@ -95,20 +109,20 @@ export default async function AnalyticsPage({
         </SectionCard>
 
         <SectionCard title="Staff performance" description="Orders & payments handled" bodyClassName="p-0">
-          {staff.length === 0 ? (
+          {staff.rows.length === 0 ? (
             <EmptyState className="m-5 border-none" icon={<Users />} title="No staff activity yet" />
           ) : (
             <ol className="divide-y">
-              {staff.map((member) => (
-                <li key={member.id} className="flex items-center gap-3 px-5 py-3">
+              {staff.rows.map((member) => (
+                <li key={member.userId} className="flex items-center gap-3 px-5 py-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{member.name}</p>
                     <Badge variant="secondary" size="sm">
-                      {ROLE_LABELS[member.role]}
+                      {ROLE_LABELS[member.role as keyof typeof ROLE_LABELS] ?? member.role}
                     </Badge>
                   </div>
                   <div className="text-right text-xs text-muted-foreground">
-                    <p>{member.ordersCreated} orders</p>
+                    <p>{member.ordersRung} orders</p>
                     <p className="font-semibold text-foreground">{money(member.paymentTotal)} collected</p>
                   </div>
                 </li>

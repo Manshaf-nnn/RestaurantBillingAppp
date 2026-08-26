@@ -198,6 +198,19 @@ async function main() {
   const staff = await visit('/dashboard/staff', asManager)
   check('/dashboard/staff is refused', refused(staff), `${staff.status} — page rendered`)
 
+  /*
+   * A location's staff screen goes with Staff, not with Locations — it shows
+   * hours and figures per person, so switching Staff off must close it even
+   * though the URL sits under /dashboard/locations. `featureForRoute` matches
+   * the longest prefix, which is what makes that true.
+   */
+  const branchStaff = await visit(`/dashboard/locations/${branch.id}/staff`, asManager)
+  check(
+    'a location’s staff screen is refused with it',
+    refused(branchStaff),
+    `${branchStaff.status} — page rendered`,
+  )
+
   const receive = await visit('/dashboard/purchases/receive', asManager)
   check(
     '/dashboard/purchases/receive is refused',

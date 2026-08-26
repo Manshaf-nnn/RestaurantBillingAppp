@@ -59,6 +59,7 @@ const SERVICE = [
   'branch-isolation-2-test',
   'stock-count-branch-test',
   'expiry-tracking-test',
+  'staff-attendance-test',
 ]
 
 const RUNTIME = [

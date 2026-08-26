@@ -483,62 +483,6 @@ export async function getPaymentMix(params: {
     .sort((a, b) => b.amount - a.amount)
 }
 
-/** Orders per staff member with the revenue they touched. */
-export async function getStaffPerformance(
-  restaurantId: string,
-  days = 30,
-  branchId?: string | null,
-) {
-  const start = new Date()
-  start.setDate(start.getDate() - days)
-
-  const [ordersByStaff, paymentsByStaff, users] = await Promise.all([
-    prisma.order.groupBy({
-      by: ['createdById'],
-      where: {
-        restaurantId,
-        placedAt: { gte: start },
-        createdById: { not: null },
-        ...(branchId ? { branchId } : {}),
-      },
-      _sum: { grandTotal: true },
-      _count: true,
-    }),
-    prisma.payment.groupBy({
-      by: ['receivedById'],
-      where: {
-        restaurantId,
-        paidAt: { gte: start },
-        status: 'PAID',
-        receivedById: { not: null },
-        ...(branchId ? { order: { branchId } } : {}),
-      },
-      _sum: { amount: true },
-      _count: true,
-    }),
-    prisma.user.findMany({
-      where: { restaurantId, deletedAt: null },
-      select: { id: true, name: true, role: true },
-    }),
-  ])
-
-  return users
-    .map((user) => {
-      const created = ordersByStaff.find((row) => row.createdById === user.id)
-      const collected = paymentsByStaff.find((row) => row.receivedById === user.id)
-      return {
-        id: user.id,
-        name: user.name,
-        role: user.role,
-        ordersCreated: created?._count ?? 0,
-        orderRevenue: created?._sum.grandTotal ?? 0,
-        paymentsCollected: collected?._count ?? 0,
-        paymentTotal: collected?._sum.amount ?? 0,
-      }
-    })
-    .filter((row) => row.ordersCreated > 0 || row.paymentsCollected > 0)
-    .sort((a, b) => b.paymentTotal + b.orderRevenue - (a.paymentTotal + a.orderRevenue))
-}
 
 export interface ReportRange {
   from: Date

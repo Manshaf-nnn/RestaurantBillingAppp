@@ -59,6 +59,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/help': 'Static guidance',
   'dashboard/locations': 'The list of locations — narrowed by visibleBranchIds, not by a selection',
   'dashboard/locations/[branchId]': 'IS one location; guarded by canAccessBranch on the id in the URL',
+  'dashboard/locations/[branchId]/staff':
+    'IS one location; canAccessBranch on the id in the URL, before anything is read',
   'dashboard/staff': 'Narrowed by visibleBranchIds — the roster is a permission question, not a filter',
   'dashboard/staff/codes': 'As above',
 

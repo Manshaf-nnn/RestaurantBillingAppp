@@ -137,6 +137,8 @@ export const AUDIT_ACTIONS = {
   STOCK_TRANSFER: 'inventory.transfer',
   STOCK_RETURN: 'inventory.return',
   STOCK_OPENING: 'inventory.opening_balance',
+  SHIFT_CORRECTED: 'shift.corrected',
+
   STOCK_COUNT_OPENED: 'inventory.count_opened',
   STOCK_COUNT_APPROVED: 'inventory.count_approved',
   STOCK_COUNT_CANCELLED: 'inventory.count_cancelled',

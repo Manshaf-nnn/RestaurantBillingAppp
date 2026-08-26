@@ -4,7 +4,9 @@ import { cookies, headers } from 'next/headers'
 import type { UserRole } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
+import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
+import { due } from './presence'
 import {
   ACCESS_COOKIE_MAX_AGE,
   GUEST_COOKIE,
@@ -18,6 +20,15 @@ import {
   verifyAccessToken,
   type SessionScope,
 } from './jwt'
+
+/**
+ * How often a session's "last used" stamp is allowed to move.
+ *
+ * Five minutes is finer than anybody reading the Active sessions list needs,
+ * and coarse enough that a busy till costs one extra write every five minutes
+ * rather than one per tap.
+ */
+const LAST_USED_EVERY_MS = 5 * 60 * 1000
 
 /**
  * The permission list a custom role contributes, if it is still in force.
@@ -118,6 +129,24 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
     data: { lastLoginAt: new Date(), failedLogins: 0, lockedUntil: null },
   })
 
+  /*
+   * Signing in is clocking in.
+   *
+   * Every way into this application ends here — password, staff code (which is
+   * a password: `issueSignInCode` writes it into `passwordHash`), a personal
+   * access link, a shared-device link — so one call covers them all, and a new
+   * sign-in route added later is covered by construction rather than by
+   * somebody remembering.
+   *
+   * Awaited, because the shift must exist before the first action can stamp it,
+   * but never allowed to fail a login: attendance is a record of work, not a
+   * precondition for it. `openShift` itself declines to record shared screens
+   * and platform operators.
+   */
+  await openShift(userId).catch((error) => {
+    console.error('[attendance] could not open a shift', error)
+  })
+
   return { accessToken }
 }
 
@@ -200,12 +229,35 @@ export async function destroySession(scope: SessionScope = 'staff'): Promise<voi
   const store = await cookies()
   const raw = store.get(refreshCookieName(scope))?.value
   if (raw) {
+    const live = await prisma.session
+      .findFirst({
+        where: { refreshTokenHash: hashToken(raw), revokedAt: null },
+        select: { userId: true },
+      })
+      .catch(() => null)
+
     await prisma.session
       .updateMany({
         where: { refreshTokenHash: hashToken(raw), revokedAt: null },
         data: { revokedAt: new Date() },
       })
       .catch(() => undefined)
+
+    /*
+     * Signing out ends the shift — at the last thing they DID, which
+     * `closeShiftForUser` handles, not at this click. Somebody who finishes at
+     * ten and signs out at eleven worked until ten.
+     *
+     * Here and not in `revokeAllSessions`: that one fires on a password change
+     * and on "sign out everywhere else", neither of which means the person has
+     * gone home. Nor in `rotateSession`, which revokes a row every fifteen
+     * minutes as a matter of routine and would clock everybody out all day.
+     */
+    if (live?.userId) {
+      await closeShiftForUser(live.userId).catch((error) => {
+        console.error('[attendance] could not close a shift', error)
+      })
+    }
   }
   store.delete(accessCookieName(scope))
   store.delete(refreshCookieName(scope))
@@ -343,6 +395,32 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
   // A token from the wrong namespace (e.g. an admin token used as staff) is
   // rejected — the scope and the user's role must agree.
   if (scopeForRole(session.user.role) !== scope) return null
+
+  /*
+   * "Last used" is now actually last used.
+   *
+   * `Session.lastUsedAt` has existed since the beginning, is selected by
+   * `listSessions`, and is rendered on the profile page under a device's IP as
+   * the time it was last active — and nothing has ever written it. It defaults
+   * to `now()` at creation and never moves, so the Active sessions panel has
+   * been showing sign-in time labelled as last-used time. Somebody deciding
+   * whether a session they do not recognise is stale was reading a number that
+   * could not tell them.
+   *
+   * Here rather than in `rotateSession`: rotation inserts a NEW row and revokes
+   * the old one, so writing it there would leave the row anybody is actually
+   * looking at frozen for ever.
+   *
+   * Throttled, and deliberately not awaited. This runs on every guarded render
+   * and every Server Action; a write per request would be absurd for a column
+   * read by one settings screen, and a failure here must never cost somebody
+   * their page.
+   */
+  if (due(`session:${session.id}`, LAST_USED_EVERY_MS)) {
+    prisma.session
+      .update({ where: { id: session.id }, data: { lastUsedAt: new Date() } })
+      .catch(() => {})
+  }
 
   return {
     id: session.user.id,

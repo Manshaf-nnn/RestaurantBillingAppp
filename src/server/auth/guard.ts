@@ -3,7 +3,9 @@ import { redirect } from 'next/navigation'
 
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '@/lib/errors'
 import { can, canAny, canAccessBranch, type Permission } from '@/lib/rbac'
+import { TOUCH_EVERY_MS, touchShift } from '@/features/attendance/service'
 import { getAdminUser, getCurrentUser, type AuthUser } from './session'
+import { due } from './presence'
 
 /**
  * Guards used by every server action, route handler and protected page.
@@ -74,11 +76,39 @@ export async function assertBranchAccess(
   }
 }
 
+/**
+ * Record that this person is working, if a shift of theirs is open.
+ *
+ * ── Why here, of all places ─────────────────────────────────────────────────
+ *
+ * A shift's hours end at the last thing somebody DID, and this is the one line
+ * every "doing something" passes through. The guards divide cleanly:
+ * `requirePermission` gates server actions — the writes — while pages go through
+ * `requirePageUser` and `/api/pulse` calls neither. So a page render costs
+ * nothing, the pulse poll that every station fires continuously costs nothing,
+ * and a wall-mounted kitchen display left on overnight cannot claim a twelve
+ * hour shift. Presence is not work; this hook is what keeps the two apart.
+ *
+ * `audit()` was the obvious alternative and it is the wrong one: it does not
+ * cover `updateItemStatus`, which writes no audit row and is the single most
+ * repeated action in a kitchen. A cook who preps two hundred items would have
+ * shown a nought-minute shift.
+ *
+ * Throttled to a minute per person, and deliberately not awaited — one indexed
+ * single-row UPDATE that nobody is waiting on. If it fails, somebody's
+ * timesheet is a minute out; if it were allowed to throw, an order would fail.
+ */
+function markWorking(user: TenantUser): void {
+  if (!due(`shift:${user.id}`, TOUCH_EVERY_MS)) return
+  touchShift(user.id).catch(() => {})
+}
+
 export async function requirePermission(permission: Permission): Promise<TenantUser> {
   const user = await requireTenantUser()
   if (!can(user, permission)) {
     throw new ForbiddenError(`Missing permission: ${permission}`)
   }
+  markWorking(user)
   return user
 }
 
@@ -87,6 +117,7 @@ export async function requireAnyPermission(permissions: Permission[]): Promise<T
   if (!canAny(user, permissions)) {
     throw new ForbiddenError('You do not have access to this area')
   }
+  markWorking(user)
   return user
 }
 

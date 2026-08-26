@@ -463,17 +463,30 @@ export const FEATURES: Feature[] = [
     key: 'staff',
     label: 'Staff',
     group: 'People',
-    description: 'The team, their roles and their sign-in codes.',
+    description: 'The team, their roles, their hours and their sign-in codes.',
     actions: [
       { key: 'view', permission: PERMISSIONS.STAFF_VIEW },
       {
         key: 'edit',
         label: 'Manage',
         permission: PERMISSIONS.STAFF_MANAGE,
-        hint: 'Adding people, setting roles and issuing access links. A powerful switch.',
+        hint: 'Adding people, setting roles, correcting hours, issuing access links. A powerful switch.',
       },
     ],
-    routes: ['/dashboard/staff', '/dashboard/roles', '/dashboard/links'],
+    /*
+     * A location's staff screen belongs to Staff, not to Locations.
+     *
+     * `featureForRoute` matches the longest prefix, so this beats
+     * `/dashboard/locations` and the page may guard on STAFF_VIEW — which is
+     * also what it should mean: switching **Staff** off ought to hide who
+     * worked and for how long, while switching **Locations** off should not.
+     */
+    routes: [
+      '/dashboard/staff',
+      '/dashboard/roles',
+      '/dashboard/links',
+      '/dashboard/locations/[branchId]/staff',
+    ],
   },
   {
     key: 'reviews',

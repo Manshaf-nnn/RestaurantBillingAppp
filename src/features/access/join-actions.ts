@@ -7,6 +7,7 @@ import { UnauthorizedError } from '@/lib/errors'
 import { landingFor, resolveLink, stampUse } from './links'
 import { joinSchema } from './link-schema'
 import { createSession } from '@/server/auth/session'
+import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import { nextStaffCode } from '@/features/staff/codes'
 import { generateToken, hashPassword, verifyPassword } from '@/server/auth/password'
@@ -58,7 +59,11 @@ export async function joinWithCode(input: unknown): Promise<ActionResult<never>>
 
     const person = await prisma.user.findFirst({
       where: { id: link.userId ?? '', restaurantId: link.restaurantId, deletedAt: null },
-      select: { id: true, email: true, passwordHash: true, isActive: true, role: true },
+      // `name`, `restaurantId` and `branchId` are for the login audit row below.
+      select: {
+        id: true, email: true, passwordHash: true, isActive: true, role: true,
+        name: true, restaurantId: true, branchId: true,
+      },
     })
 
     /*
@@ -116,6 +121,26 @@ export async function joinWithCode(input: unknown): Promise<ActionResult<never>>
 
     await createSession(person.id)
     await stampUse(link.id)
+
+    /*
+     * A sign-in by link is a sign-in.
+     *
+     * The password path has always written this row and this one never did, so
+     * the login history simply omitted everybody who joins through a link —
+     * which, for a restaurant that hands out access links to its floor staff,
+     * is most of the team. It is also the row the staff activity feed reads to
+     * show that somebody arrived.
+     */
+    await audit({
+      restaurantId: person.restaurantId,
+      branchId: link.branchId ?? person.branchId ?? null,
+      userId: person.id,
+      actorName: person.name,
+      action: AUDIT_ACTIONS.LOGIN,
+      entity: 'User',
+      entityId: person.id,
+      after: { via: 'access-link' },
+    })
 
     // Where the account can actually go, not where the link was minted for.
     redirect(landingFor(nextRole ?? person.role))
