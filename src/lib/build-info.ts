@@ -34,7 +34,18 @@ function firstOf(...values: Array<string | undefined>): string | null {
 
 /** The commit this build came from, short form. `null` when running locally. */
 export function buildCommit(): string | null {
+  /*
+   * Stamped by `next.config.mjs`, not read from the environment here.
+   *
+   * These variables exist only while the site is BEING built. A serverless
+   * function that starts three days later has none of them, so reading them at
+   * runtime returned null on every real deploy — this endpoint reported
+   * `commit: null` on a live site, which is the one answer it must never give.
+   * The build bakes the value in, exactly as it already did for the timestamp.
+   */
   const full = firstOf(
+    process.env.NEXT_PUBLIC_BUILD_COMMIT,
+    // Kept as a fallback for a host that does surface them at runtime.
     process.env.COMMIT_REF, // Netlify
     process.env.RENDER_GIT_COMMIT, // Render
     process.env.VERCEL_GIT_COMMIT_SHA, // Vercel
@@ -47,6 +58,7 @@ export function buildCommit(): string | null {
 /** The branch it was built from, when the host says. */
 export function buildBranch(): string | null {
   return firstOf(
+    process.env.NEXT_PUBLIC_BUILD_BRANCH,
     process.env.BRANCH,
     process.env.RENDER_GIT_BRANCH,
     process.env.VERCEL_GIT_COMMIT_REF,

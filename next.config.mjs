@@ -10,9 +10,40 @@ import { dirname } from 'node:path'
  */
 const BUILD_TIME = new Date().toISOString()
 
+/**
+ * The commit this build came from, stamped for the same reason as the time.
+ *
+ * `/api/health` reported `commit: null` on a live deploy, which made it useless
+ * for the one question it exists to answer — "did my push reach the site". The
+ * values are only in the environment of the BUILD; a serverless function
+ * started later has no idea what they were, so reading `process.env.COMMIT_REF`
+ * at runtime always came back empty.
+ *
+ * Every host names it differently, so all of the common ones are read and the
+ * first that answers wins. Null locally, which is exactly what `local: true`
+ * is for.
+ */
+const BUILD_COMMIT =
+  process.env.COMMIT_REF ??            // Netlify
+  process.env.RENDER_GIT_COMMIT ??     // Render
+  process.env.VERCEL_GIT_COMMIT_SHA ?? // Vercel
+  process.env.SOURCE_VERSION ??        // Heroku
+  process.env.GIT_COMMIT ??
+  ''
+
+const BUILD_BRANCH =
+  process.env.BRANCH ??
+  process.env.RENDER_GIT_BRANCH ??
+  process.env.VERCEL_GIT_COMMIT_REF ??
+  ''
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  env: { NEXT_PUBLIC_BUILD_TIME: BUILD_TIME },
+  env: {
+    NEXT_PUBLIC_BUILD_TIME: BUILD_TIME,
+    NEXT_PUBLIC_BUILD_COMMIT: BUILD_COMMIT,
+    NEXT_PUBLIC_BUILD_BRANCH: BUILD_BRANCH,
+  },
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,

@@ -25,7 +25,10 @@ import { DEFAULT_LIVE_POLICY, type LiveBoardPolicy } from '../src/features/live/
 import {
   alertBoard,
   alertsFor,
+  compareFloor,
   daysBetween,
+  emptyTableLabel,
+  emptyTables,
   foldOrdersToTables,
   kpis,
   progressPct,
@@ -33,6 +36,7 @@ import {
   waitBand,
   waitingPriority,
   type CustomerHistoryRow,
+  type FloorTableRow,
   type LiveTable,
 } from '../src/features/live/derive'
 
@@ -250,7 +254,7 @@ async function main() {
   check('the open order is on the board', board.orders.length === 1)
   check('with its quantities rolled up', board.orders[0].ordered === 5, `${board.orders[0].ordered}`)
   check('nothing served yet', board.orders[0].served === 0)
-  check('and the floor size is known', board.tablesTotal === 1)
+  check('and the floor is returned as rows', board.tables.length === 1)
 
   // A first sitting is a first visit: their current order is COMPLETED-less.
   check('a brand-new guest has no completed visits', board.history[0]?.completedVisits === 0)
@@ -356,6 +360,97 @@ async function main() {
     folded3.filter((t) => t.tableId === null).every((t) => t.customer === null),
   )
 
+
+  console.log('\n── 14. Empty tables are a separate list ────────────────────')
+
+  const floorRow = (id: string, number: string, over: Partial<FloorTableRow> = {}): FloorTableRow => ({
+    id, number, label: null, area: 'Main', capacity: 4, status: 'AVAILABLE', sortOrder: 0, ...over,
+  })
+  const floorOf3 = [floorRow('f1', '1'), floorRow('f2', '2'), floorRow('f3', '3')]
+
+  check(
+    'a table with an open order is not empty',
+    emptyTables(floorOf3, [table({ key: 'f1', tableId: 'f1' })]).map((r) => r.id).join() === 'f2,f3',
+  )
+  check(
+    'two orders on one table remove it exactly once',
+    emptyTables(floorOf3, [
+      table({ key: 'f1', tableId: 'f1' }),
+      table({ key: 'f1', tableId: 'f1' }),
+    ]).length === 2,
+  )
+  /*
+   * A takeaway has no table, and its key is `order:<id>`. Filtering on the key
+   * instead of the table id would quietly stop removing anything.
+   */
+  check(
+    'a takeaway card removes nothing from the floor',
+    emptyTables(floorOf3, [
+      table({ key: 'f2', tableId: 'f2' }),
+      table({ key: 'order:xyz', tableId: null }),
+    ]).length === 2,
+  )
+  check(
+    'empty plus seated accounts for the whole floor',
+    (() => {
+      const seated = [table({ key: 'f1', tableId: 'f1' }), table({ key: 'f3', tableId: 'f3' })]
+      const ids = new Set(floorOf3.map((r) => r.id))
+      return (
+        emptyTables(floorOf3, seated).length +
+          seated.filter((t) => t.tableId && ids.has(t.tableId)).length ===
+        floorOf3.length
+      )
+    })(),
+  )
+
+  /*
+   * The reason the two lists are separate, frozen as a check.
+   *
+   * `alertsFor` reads `seatedAt` unconditionally for its long-sitting rule, so
+   * an empty table merged into the occupied array — with any invented
+   * `seatedAt` — starts raising "at the table 1h 30m" about a table nobody is
+   * at. If somebody later decides one array would be simpler, this fails.
+   */
+  check(
+    'an empty table merged into the occupied list would raise a false alert',
+    alertsFor(table({ ordered: 0, served: 0, seatedAt: ago(120) }), P, NOW) !== null,
+  )
+
+  check(
+    'and kpis counts only seated parties',
+    kpis({
+      tables: [table({ key: 'f1', tableId: 'f1', ordered: 2, served: 0 })],
+      tablesTotal: floorOf3.length, policy: P, now: NOW,
+    }).tablesOccupied === 1,
+  )
+
+  console.log('\n── 15. A stale status never contradicts the card ───────────')
+
+  // The column is stale by design — a table with no open order can still say
+  // OCCUPIED from a party that has left.
+  check('a stale OCCUPIED reads as available', emptyTableLabel('OCCUPIED') === 'Available')
+  check('so does WAITING_BILL', emptyTableLabel('WAITING_BILL') === 'Available')
+  check('AVAILABLE reads as available', emptyTableLabel('AVAILABLE') === 'Available')
+  check('cleaning is worth saying', emptyTableLabel('CLEANING') === 'Needs clearing')
+  check('so is reserved', emptyTableLabel('RESERVED') === 'Reserved')
+  check('and out of service', emptyTableLabel('OUT_OF_SERVICE') === 'Out of service')
+
+  console.log('\n── 16. Floor order is the layout, not the alphabet ─────────')
+
+  check(
+    'nine comes before ten',
+    [floorRow('a', '10'), floorRow('b', '9')].sort(compareFloor).map((r) => r.number).join() === '9,10',
+  )
+  check(
+    'and T2 before T10',
+    [floorRow('a', 'T10'), floorRow('b', 'T2')].sort(compareFloor).map((r) => r.number).join() === 'T2,T10',
+  )
+  check(
+    'an explicit sortOrder wins over the number',
+    [floorRow('a', '1', { sortOrder: 5 }), floorRow('b', '9', { sortOrder: 1 })]
+      .sort(compareFloor).map((r) => r.number).join() === '9,1',
+  )
+
   console.log('\n── 13. Branch isolation ────────────────────────────────────')
 
   const other = await prisma.branch.create({
@@ -363,7 +458,7 @@ async function main() {
   })
   const otherBoard = await getLiveBoard({ restaurantId: shop.id, branchId: other.id })
   check('another branch’s board is empty', otherBoard.orders.length === 0)
-  check('and sees none of this floor', otherBoard.tablesTotal === 0)
+  check('and sees none of this floor', otherBoard.tables.length === 0)
 
   await prisma.orderItem.deleteMany({ where: { order: { restaurantId: shop.id } } })
   await prisma.order.deleteMany({ where: { restaurantId: shop.id } })

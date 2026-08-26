@@ -69,6 +69,77 @@ export interface ServiceCallRow {
   createdAt: string
 }
 
+/**
+ * A table on the floor plan — the room, not the service.
+ *
+ * Deliberately thin, and deliberately NOT a `LiveTable`. Merging the two was
+ * the obvious idea and it is wrong in a way that only shows up an hour later:
+ * `alertsFor` reads `seatedAt` unconditionally for its long-sitting rule, so an
+ * empty table carrying an invented `seatedAt` starts announcing "at the table
+ * 1h 30m" about a table nobody is at — and `kpis` counts anything with a
+ * `tableId` as occupied, so the headline figure would count the empties too.
+ *
+ * Keeping them apart means none of the derived functions need to know this type
+ * exists. That is the whole argument for two arrays.
+ */
+export interface FloorTableRow {
+  id: string
+  number: string
+  label: string | null
+  area: string | null
+  capacity: number
+  /** `TableStatus` as text. Only ever used as a sub-label — see `emptyTableLabel`. */
+  status: string
+  sortOrder: number
+}
+
+/**
+ * The tables nobody is sitting at.
+ *
+ * Occupancy comes from the open orders, never from `RestaurantTable.status` —
+ * that column lands in CLEANING after every bill and only a busser clears it,
+ * so trusting it would show a floor emptier than it is from lunchtime onwards.
+ *
+ * Filtered on `tableId` and not on `key`: a takeaway's key is `order:<id>`,
+ * which belongs to no table, and matching on it would quietly stop removing
+ * anything.
+ */
+export function emptyTables(floor: FloorTableRow[], occupied: LiveTable[]): FloorTableRow[] {
+  const seated = new Set(
+    occupied.map((table) => table.tableId).filter((id): id is string => id !== null),
+  )
+  return floor.filter((row) => !seated.has(row.id))
+}
+
+/**
+ * What to say on a table with nobody at it.
+ *
+ * A whitelist rather than the shared `TABLE_STATUS_META`, because the status
+ * column is stale by design: a table with no open order can still say OCCUPIED
+ * or WAITING_BILL from a party that left. Printing that label would have the
+ * card contradict the board that just decided it was free, so anything not on
+ * this list reads as available.
+ */
+export function emptyTableLabel(status: string): string {
+  if (status === 'CLEANING') return 'Needs clearing'
+  if (status === 'RESERVED') return 'Reserved'
+  if (status === 'OUT_OF_SERVICE') return 'Out of service'
+  return 'Available'
+}
+
+/**
+ * Floor order: the layout, not the urgency.
+ *
+ * `number` is a string, so a plain sort gives 1, 10, 11, 2, 3 — fine on the
+ * handful of active tables other screens list, obvious the moment thirty are on
+ * screen at once. Numeric where both sides are numbers, natural otherwise so
+ * T2 still precedes T10.
+ */
+export function compareFloor(a: FloorTableRow, b: FloorTableRow): number {
+  if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder
+  return a.number.localeCompare(b.number, undefined, { numeric: true, sensitivity: 'base' })
+}
+
 // ── customer recognition ─────────────────────────────────────────────────────
 
 export type CustomerTier = 'FIRST_VISIT' | 'RETURNING' | 'REGULAR' | 'VIP'

@@ -32,7 +32,15 @@ import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/au
 import { quoteCart, resolveTable } from '../src/features/orders/actions'
 import { placeOrder } from '../src/features/orders/service'
 
-const BASE = process.env.BASE_URL ?? 'http://localhost:3210'
+/*
+ * Defaults to the port `npm start` uses.
+ *
+ * This said 3210 while five of its sibling runtime suites said 3000, so a
+ * server left running on the other port meant this file quietly tested a build
+ * from hours ago — passing, against code that no longer existed. One port, or
+ * pass BASE_URL.
+ */
+const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
 let passed = 0
 let failed = 0

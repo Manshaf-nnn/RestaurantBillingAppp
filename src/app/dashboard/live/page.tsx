@@ -12,6 +12,7 @@ import {
 import { LiveBoard } from '@/features/live/components/live-board'
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { getLiveBoard } from '@/features/live/queries'
+import { getKitchenStats } from '@/features/orders/queries'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -82,13 +83,19 @@ export default async function LiveFloorPage({
     )
   }
 
-  const [branch, board, policy] = await Promise.all([
+  const [branch, board, policy, kitchen] = await Promise.all([
     prisma.branch.findFirst({
       where: { id: branchId, restaurantId: user.restaurantId, deletedAt: null },
       select: { name: true },
     }),
     getLiveBoard({ restaurantId: user.restaurantId, branchId }),
     getLiveBoardPolicy(user.restaurantId),
+    /*
+     * `[branchId]`, never `null` — `getKitchenStats` reads a null branch list as
+     * "every location", which would put the whole chain's kitchen beside one
+     * restaurant's floor.
+     */
+    getKitchenStats(user.restaurantId, [branchId]),
   ])
 
   return (
@@ -102,7 +109,8 @@ export default async function LiveFloorPage({
         orders={board.orders}
         history={board.history}
         calls={board.calls}
-        tablesTotal={board.tablesTotal}
+        floor={board.tables}
+        avgCookMinutes={kitchen.averageCookMinutes}
         policy={policy}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}

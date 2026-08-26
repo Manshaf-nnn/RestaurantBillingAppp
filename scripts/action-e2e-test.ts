@@ -27,7 +27,15 @@ import { prisma } from '../src/server/db/prisma'
 import { generateToken, hashToken } from '../src/server/auth/password'
 import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/auth/jwt'
 
-const BASE = process.env.BASE_URL ?? 'http://localhost:3210'
+/*
+ * Defaults to the port `npm start` uses.
+ *
+ * This said 3210 while five of its sibling runtime suites said 3000, so a
+ * server left running on the other port meant this file quietly tested a build
+ * from hours ago — passing, against code that no longer existed. One port, or
+ * pass BASE_URL.
+ */
+const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
 let passed = 0
 let failed = 0
@@ -63,6 +71,26 @@ function actionIds(): Map<string, string> {
     // no build
   }
   return found
+}
+
+
+/**
+ * A session minted for one call.
+ *
+ * The run-wide cookie is created once at the top and several checks in between
+ * create, revoke and delete accounts — so by the time the later blocks run it
+ * can be stale. A fresh grant makes each check independent of the order the
+ * file happens to be in.
+ */
+async function freshCookie(u: { id: string; restaurantId: string | null; role: string; name: string | null; email: string }) {
+  const refresh = generateToken()
+  const session = await prisma.session.create({
+    data: { userId: u.id, refreshTokenHash: hashToken(refresh), expiresAt: new Date(Date.now() + 86_400_000) },
+  })
+  const access = await signAccessToken({
+    sub: u.id, rid: u.restaurantId, role: u.role, name: u.name, email: u.email, sid: session.id,
+  } as Parameters<typeof signAccessToken>[0])
+  return `${ACCESS_COOKIE}=${access}; ${REFRESH_COOKIE}=${refresh}`
 }
 
 /** POST a Server Action exactly as the browser would. */
@@ -355,6 +383,108 @@ async function main() {
 
   await prisma.session.delete({ where: { id: session.id } }).catch(() => {})
   await prisma.$disconnect()
+
+
+  console.log('\nOrder details in a modal — read-only, and its own branch only')
+
+  const fetchId = ids.get('fetchOrderDetail')
+  if (!fetchId) {
+    check('fetchOrderDetail found in the bundle', false, 'not present — is the dialog imported?')
+  } else {
+    /*
+     * Seeded rather than found. Relying on whatever orders happen to be in the
+     * database meant this whole section skipped on a fresh one — a green run
+     * that had checked nothing about the leak it exists for. Two branches, two
+     * orders, removed at the end.
+     */
+    const floors = await prisma.branch.findMany({
+      where: { restaurantId: user.restaurantId!, deletedAt: null, isActive: true },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    })
+
+    const seeded: string[] = []
+    const makeOrder = async (branchId: string, suffix: string) => {
+      const row = await prisma.order.create({
+        data: {
+          restaurantId: user.restaurantId!, branchId,
+          orderNumber: `E2E-${stamp}-${suffix}`,
+          type: 'DINE_IN', channel: 'STAFF', status: 'PENDING',
+          customerName: 'E2E', customerPhone: '', subtotal: 1000, grandTotal: 1000,
+          placedAt: new Date(),
+        },
+        select: { id: true, branchId: true },
+      })
+      seeded.push(row.id)
+      return row
+    }
+
+    const mine = floors[0] ? await makeOrder(floors[0].id, 'A') : null
+
+    if (!mine) {
+      console.log('  · the fixture tenant has no branches — order-detail checks skipped')
+    } else {
+      const ok = await callAction('/dashboard/live', fetchId, [mine.id], await freshCookie(user))
+      check('an owner can open an order on their own floor', ok.body.includes('"ok":true'),
+        ok.body.slice(0, 120))
+      /*
+       * Read-only is enforced at the ENDPOINT, not at the call site. If this
+       * ever comes back true, a modal over a floor plan that repaints every
+       * second has grown a cancel button.
+       */
+      check('and it comes back read-only', ok.body.includes('"canUpdate":false'), ok.body.slice(0, 160))
+      check('cancel too', ok.body.includes('"canCancel":false'))
+
+      /*
+       * The ported cross-branch check. Nothing else covers it: the page's own
+       * version is exercised by page-render-test, and this action repeats the
+       * predicate — so deleting one line here would reopen the leak silently.
+       */
+      const elsewhere = floors[1] ? await makeOrder(floors[1].id, 'B') : null
+
+      if (!elsewhere) {
+        console.log('  · one branch has orders — the cross-branch refusal needs two, skipped')
+      } else {
+        const confined = await prisma.user.create({
+          data: {
+            restaurantId: user.restaurantId!, name: 'Confined', role: 'MANAGER',
+            email: `confined-${stamp}@e2e.test`, passwordHash: 'x',
+            branchId: mine.branchId, isActive: true, emailVerifiedAt: new Date(),
+          },
+        })
+        const theirRefresh = generateToken()
+        const theirSession = await prisma.session.create({
+          data: {
+            userId: confined.id, refreshTokenHash: hashToken(theirRefresh),
+            expiresAt: new Date(Date.now() + 86_400_000),
+          },
+        })
+        const theirAccess = await signAccessToken({
+          sub: confined.id, rid: confined.restaurantId, role: confined.role,
+          name: confined.name, email: confined.email, sid: theirSession.id,
+        })
+        const theirs = `${ACCESS_COOKIE}=${theirAccess}; ${REFRESH_COOKIE}=${theirRefresh}`
+
+        const refused = await callAction('/dashboard/live', fetchId, [elsewhere.id], theirs)
+        check(
+          'a manager cannot open another branch’s order',
+          refused.body.includes('"ok":false'),
+          refused.body.slice(0, 160),
+        )
+        check(
+          'and is told nothing about whether it exists',
+          refused.body.includes('Order was not found'),
+          refused.body.slice(0, 160),
+        )
+
+        await prisma.session.deleteMany({ where: { userId: confined.id } })
+        await prisma.user.delete({ where: { id: confined.id } })
+      }
+    }
+
+    if (seeded.length) await prisma.order.deleteMany({ where: { id: { in: seeded } } })
+  }
 
   console.log(`\n═══ ${passed} passed, ${failed} failed ═══\n`)
   process.exit(failed === 0 ? 0 : 1)

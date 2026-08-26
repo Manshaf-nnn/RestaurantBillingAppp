@@ -3,7 +3,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
-import type { CustomerHistoryRow, OpenOrderRow, ServiceCallRow } from './derive'
+import type { CustomerHistoryRow, FloorTableRow, OpenOrderRow, ServiceCallRow } from './derive'
 
 /**
  * What is happening on the floor, right now.
@@ -36,7 +36,12 @@ export interface LiveBoardData {
   orders: OpenOrderRow[]
   history: CustomerHistoryRow[]
   calls: ServiceCallRow[]
-  tablesTotal: number
+  /**
+   * Every table on this floor, occupied or not — the board draws the room, not
+   * just the busy parts of it. Which ones are free is worked out from the open
+   * orders above, never from `RestaurantTable.status`.
+   */
+  tables: FloorTableRow[]
 }
 
 const iso = (value: Date | null): string | null => value?.toISOString() ?? null
@@ -129,8 +134,19 @@ export async function getLiveBoard(params: {
        ORDER BY o."placedAt" ASC
     `,
 
-    prisma.restaurantTable.count({
+    /*
+     * An explicit `select` and not a spread: `createdAt` / `updatedAt` are
+     * Dates, and a Date handed to a client component fails to encode into the
+     * Flight payload at render time — after the loader has returned green.
+     * Nothing here crosses the boundary but strings and numbers.
+     */
+    prisma.restaurantTable.findMany({
       where: { restaurantId, branchId, isActive: true },
+      select: {
+        id: true, number: true, label: true, area: true,
+        capacity: true, status: true, sortOrder: true,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { number: 'asc' }],
     }),
 
     /*
@@ -201,7 +217,15 @@ export async function getLiveBoard(params: {
       type: row.type,
       createdAt: row.createdAt.toISOString(),
     })),
-    tablesTotal: floor,
+    tables: floor.map((row) => ({
+      id: row.id,
+      number: row.number,
+      label: row.label,
+      area: row.area,
+      capacity: row.capacity,
+      status: String(row.status),
+      sortOrder: row.sortOrder,
+    })),
   }
 }
 

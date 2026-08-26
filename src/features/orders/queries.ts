@@ -119,6 +119,14 @@ export async function getKitchenStats(restaurantId: string, branchIds?: string[]
         placedAt: { gte: startOfDay },
       },
       select: { acceptedAt: true, readyAt: true },
+      /*
+       * Newest first, because `take` without an order is not a sample — it is
+       * whatever the query plan happened to yield. Past 200 qualifying orders
+       * the average was computed over an arbitrary subset that could differ
+       * between two identical page loads, which is not a number to make a
+       * staffing decision on.
+       */
+      orderBy: { readyAt: 'desc' },
       take: 200,
     }),
   ])

@@ -81,6 +81,7 @@ export function OrderDetail({
   restaurant,
   canUpdate,
   canCancel,
+  backHref = '/dashboard/orders',
 }: {
   order: OrderDetailView
   currency: string
@@ -94,6 +95,13 @@ export function OrderDetail({
   }
   canUpdate: boolean
   canCancel: boolean
+  /**
+   * Where the back arrow goes, or `null` to drop it.
+   *
+   * A back arrow to the orders list is right on the orders page and wrong in a
+   * modal opened from the live floor, which has its own way out.
+   */
+  backHref?: string | null
 }) {
   const router = useRouter()
   const [status, setStatus] = React.useState(order.status)
@@ -173,11 +181,13 @@ export function OrderDetail({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild aria-label="Back">
-            <Link href="/dashboard/orders">
-              <ArrowLeft />
-            </Link>
-          </Button>
+          {backHref ? (
+            <Button variant="ghost" size="icon" asChild aria-label="Back">
+              <Link href={backHref}>
+                <ArrowLeft />
+              </Link>
+            </Button>
+          ) : null}
           <div>
             <h1 className="flex items-center gap-2 text-xl font-bold">
               #{order.orderNumber}
