@@ -73,3 +73,69 @@ export const cashControlsSchema = z.object({
   requireCashierSession: z.coerce.boolean().default(true),
 })
 export type CashControlsInput = z.infer<typeof cashControlsSchema>
+
+/**
+ * The live floor board's thresholds.
+ *
+ * ── Why the refinements matter ──────────────────────────────────────────────
+ *
+ * The waiting bands are read as a ladder — normal, then watch, then attention,
+ * then delayed, then everything above. If they are not strictly increasing the
+ * ladder has a rung that can never be reached: with `watchMax` below
+ * `normalMax`, nothing is ever WATCH, and the owner who typed it has no way to
+ * see why. The same is true of the return gaps, where a long-time return
+ * threshold below the welcome-back one silently retires one of the two badges.
+ *
+ * Caught here rather than in the UI so it holds however the action is reached.
+ */
+export const liveBoardPolicySchema = z
+  .object({
+    normalMax: z.coerce.number().int().min(1).max(600),
+    watchMax: z.coerce.number().int().min(1).max(600),
+    attentionMax: z.coerce.number().int().min(1).max(600),
+    delayedMax: z.coerce.number().int().min(1).max(600),
+
+    noFoodServedMin: z.coerce.number().int().min(1).max(600),
+    readyNotServedMin: z.coerce.number().int().min(1).max(600),
+    stuckPreparingMin: z.coerce.number().int().min(1).max(600),
+    paymentPendingMin: z.coerce.number().int().min(1).max(600),
+    longServiceMin: z.coerce.number().int().min(5).max(1440),
+    sensitiveWaitingMin: z.coerce.number().int().min(1).max(600),
+    serviceRequestMin: z.coerce.number().int().min(1).max(120),
+    lowProgressPct: z.coerce.number().int().min(1).max(99),
+
+    regularAfterVisits: z.coerce.number().int().min(2).max(500),
+    vipAfterVisits: z.coerce.number().int().min(2).max(1000),
+    /** Major units on the way in; the action converts. 0 turns the route off. */
+    vipAfterSpend: z.coerce.number().min(0).max(99_999_999),
+
+    welcomeBackDays: z.coerce.number().int().min(1).max(3650),
+    longTimeReturnDays: z.coerce.number().int().min(1).max(3650),
+  })
+  .superRefine((value, ctx) => {
+    const ladder: Array<[keyof typeof value, keyof typeof value, string]> = [
+      ['watchMax', 'normalMax', 'Watch must be longer than normal'],
+      ['attentionMax', 'watchMax', 'Attention must be longer than watch'],
+      ['delayedMax', 'attentionMax', 'Delayed must be longer than attention'],
+    ]
+    for (const [field, previous, message] of ladder) {
+      if (value[field] <= value[previous]) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message })
+      }
+    }
+    if (value.vipAfterVisits <= value.regularAfterVisits) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['vipAfterVisits'],
+        message: 'VIP must take more visits than regular',
+      })
+    }
+    if (value.longTimeReturnDays <= value.welcomeBackDays) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['longTimeReturnDays'],
+        message: 'A long-time return must be a longer gap than a welcome back',
+      })
+    }
+  })
+export type LiveBoardPolicyInput = z.infer<typeof liveBoardPolicySchema>

@@ -8,6 +8,7 @@ import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +68,8 @@ export default async function MenuPage({
     .map((b) => ({ id: b.id, name: b.name, type: b.type as string }))
 
   return (
+    <>
+      <AutoRefresh scope="catalog" intervalMs={10000} />
     <MenuManager
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
@@ -97,5 +100,6 @@ export default async function MenuPage({
         hasPriceOverride: food.hasPriceOverride,
       }))}
     />
+    </>
   )
 }

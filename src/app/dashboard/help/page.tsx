@@ -217,6 +217,66 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard
+          title="2d · The live floor"
+          description="One screen that answers 'how are we doing right now'."
+        >
+          <Rows
+            rows={[
+              [
+                'The tiles',
+                'Tables occupied, how many are still waiting on food, how many are late, and what share of everything ordered has actually gone out.',
+              ],
+              [
+                'Waiting longest',
+                'The order to walk the floor in. Longest wait at the top; a table drops off it the moment its last plate is served.',
+              ],
+              [
+                'Tables',
+                'One card per table — ordered, preparing, ready, served, and how far along. Tap one for who is sitting there.',
+              ],
+              [
+                'Needs attention',
+                'Only what is true right now. Nothing to tick off: fix the problem and the entry goes.',
+              ],
+            ]}
+          />
+          <Note>
+            <strong>The clock starts when the order reaches the kitchen</strong> —
+            not when somebody scans the QR code, not while they are still reading
+            the menu. And it stops when the last plate goes out, so a table
+            lingering over coffee is not counted as a failure.
+          </Note>
+          <Note>
+            <strong>A second round is timed on its own.</strong> Order pudding an
+            hour into a meal and the card counts from the pudding, not from when
+            the party sat down — otherwise every long, happy table would look
+            like a disaster.
+          </Note>
+          <Note>
+            <strong>Progress counts plates, not tickets.</strong> Five items with
+            two out is 40%. Anything you cancel leaves the sum entirely rather
+            than counting against you.
+          </Note>
+          <Note>
+            <strong>Guests you know are marked.</strong> First visit, returning,
+            regular, VIP — worked out from completed visits, so the meal they are
+            having right now never counts as one of them. Somebody back after a
+            long gap is flagged separately, because a regular who has been away
+            four months is both things at once and you would want to know.
+          </Note>
+          <Note>
+            <strong>A walk-in shows as “not identified”, deliberately.</strong> If
+            no phone number was taken there is no history to show, and inventing
+            one would be worse than saying so.
+          </Note>
+          <Note>
+            All the numbers — what counts as late, how many visits make a regular,
+            how long a gap is worth a fuss — are yours to set under{' '}
+            <Guide href="/dashboard/settings">Settings → Live floor</Guide>.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="3 · Stock going out">
           <Rows
             rows={[

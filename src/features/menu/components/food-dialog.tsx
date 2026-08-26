@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { useRouter } from 'next/navigation'
 import { Loader2, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -176,6 +177,7 @@ export function FoodDialog({
   const [loading, setLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [errors, setErrors] = React.useState<Record<string, string>>({})
+  const router = useRouter()
 
   React.useEffect(() => {
     if (!open) return
@@ -405,6 +407,18 @@ export function FoodDialog({
     }
 
     toast.success('Menu item saved')
+    /*
+     * Refreshed explicitly, on its own request.
+     *
+     * This dialog used to close and rely on the action's own re-render to
+     * repaint the list behind it. That mechanism has already failed here in
+     * production once — re-rendering a page this heavy inside the action's POST
+     * blew the serverless budget and the caller saw "that did not work" with
+     * the record already written (`features/branches/actions.ts:43-49`). An
+     * explicit refresh runs on its own budget, and the owner sees their dish
+     * immediately rather than waiting for the next pulse.
+     */
+    router.refresh()
     onOpenChange(false)
   }
 

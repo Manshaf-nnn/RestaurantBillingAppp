@@ -593,6 +593,14 @@ model Restaurant {
   /// [ApprovalPolicy] — thresholds above which an action needs a second
   /// pair of eyes. Null means the built-in defaults apply.
   approvalPolicy   Json?
+  /// [LiveBoardPolicy] — the live floor board's waiting-time bands, customer
+  /// tiers, return-gap days and alert timings. Null means the built-in
+  /// defaults apply, which is why the board works before anyone configures it.
+  ///
+  /// Separate from `approvalPolicy` on purpose: that one answers "how much is
+  /// worth a second pair of eyes", which is a different question from "how long
+  /// is too long to wait for food".
+  liveBoardPolicy  Json?
 
   @@index([isActive])
   @@map("restaurants")
@@ -1294,6 +1302,10 @@ model Order {
   @@index([restaurantId, updatedAt])
   @@index([restaurantId, tableId, status])
   @@index([customerId])
+  /// "Their previous completed visit" — the live board asks this for every
+  /// seated customer at once. `[customerId]` alone made it read every order a
+  /// regular has ever placed, filter the status on the heap and then sort.
+  @@index([customerId, status, placedAt])
   @@index([guestSessionId])
   @@index([restaurantId, heldAt])
   @@index([restaurantId, branchId, placedAt])

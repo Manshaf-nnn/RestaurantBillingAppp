@@ -1,5 +1,5 @@
 import 'server-only'
-import type { Order, OrderItem, OrderStatus, Prisma } from '@prisma/client'
+import type { Order, OrderItem, OrderStatus, Prisma, TableStatus } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
@@ -633,7 +633,22 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
         data: { soldCount: { increment: 1 } },
       })
 
-      if (table && table.status === 'AVAILABLE') {
+      /*
+       * Seat the party — from any state that means nobody is sitting there.
+       *
+       * This used to require `AVAILABLE`, and a settled table is left in
+       * `CLEANING` (see the release below, and `payments/service.ts`), which
+       * nothing in server code ever clears — a busser taps it. So the SECOND
+       * party of the day to sit at a table never marked it occupied, and every
+       * screen reading `RestaurantTable.status` under-reported the floor from
+       * about lunchtime onwards.
+       *
+       * Deliberately not "anything except OCCUPIED": `ORDERING`, `EATING` and
+       * `WAITING_BILL` are set by hand on the waiter board and say more than
+       * `OCCUPIED` does. A second round ordered while a table waits for its
+       * bill must not overwrite `WAITING_BILL` with something coarser.
+       */
+      if (table && NOBODY_SEATED.has(table.status)) {
         await tx.restaurantTable.update({
           where: { id: table.id },
           data: { status: 'OCCUPIED' },
@@ -725,6 +740,19 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
 }
 
 // ── status transitions ───────────────────────────────────────────────────────
+
+/**
+ * Table states that mean nobody is sitting there.
+ *
+ * `CLEANING` is on this list and that is the whole point: a table is left
+ * cleaning after its bill settles, only a busser clears it, and until this was
+ * widened the next party to sit down never marked the table occupied.
+ *
+ * `RESERVED` is here too — a booked party arriving and ordering is exactly the
+ * moment the booking becomes a seating. The four in-use states are absent on
+ * purpose; see the seating code above.
+ */
+const NOBODY_SEATED = new Set<TableStatus>(['AVAILABLE', 'CLEANING', 'RESERVED'])
 
 const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   PENDING: ['ACCEPTED', 'PREPARING', 'CANCELLED'],

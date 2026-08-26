@@ -60,11 +60,14 @@ const SERVICE = [
   'stock-count-branch-test',
   'expiry-tracking-test',
   'staff-attendance-test',
+  'live-board-test',
 ]
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
+  // Needs a served route: it asks the running app what its change-token says.
+  'pulse-scope-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
 ]

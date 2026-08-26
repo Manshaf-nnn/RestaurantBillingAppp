@@ -19,10 +19,19 @@ import { usePulse } from '@/hooks/use-pulse'
  * often, so stations feel live while doing much less work overall.
  *
  * `scope` decides what "changed" means:
- *   'staff'        — the signed-in restaurant (kitchen, waiter, cashier, dashboard)
- *   'order:<id>'   — one guest's order (tracking, bill)
- *   'none'         — no pulse available (the platform admin console, which is
- *                    not scoped to a restaurant); falls back to a plain timer.
+ *   'staff' / 'ops' — orders, items and service calls (kitchen, waiter, cashier,
+ *                     dashboard). The two names are the same thing.
+ *   'catalog'       — the menu and the stock behind it. What a till and the
+ *                     admin CRUD screens need: adding a dish used to be
+ *                     invisible everywhere until somebody reloaded the browser.
+ *   'live'          — ops plus the floor and its customers; the live board.
+ *   'order:<id>'    — one guest's order (tracking, bill)
+ *   'none'          — no pulse available (the platform admin console, which is
+ *                     not scoped to a restaurant); falls back to a plain timer.
+ *
+ * Pick the narrowest scope that covers the screen. A refresh re-renders the
+ * whole route, so watching more than you need is not free — it is the reason
+ * these are separate at all.
  */
 export function AutoRefresh({
   intervalMs = REALTIME_POLL_MS,

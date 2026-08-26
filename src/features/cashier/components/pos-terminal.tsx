@@ -97,6 +97,19 @@ export function PosTerminal({
   const [busy, setBusy] = React.useState(false)
   const [cartOpen, setCartOpen] = React.useState(false)
   const [tableId, setTableId] = React.useState('')
+  /*
+   * How many are sitting there. Optional, and dine-in only.
+   *
+   * `Order.guestCount` has existed and been accepted by both order schemas
+   * since the beginning with nothing anywhere to type it into, so it was null
+   * on every row ever written. It is what turns takings into spend-per-head,
+   * and it is what the live floor board shows beside a table.
+   *
+   * Not asked for a takeaway: `floor-summary.ts` already sums this column as
+   * covers per table, and a guest count on a counter sale would quietly
+   * corrupt that.
+   */
+  const [guests, setGuests] = React.useState('')
   // Defaults to whoever is signed in: a waiter taking their own order should
   // not have to find themselves in a list before they can start.
   const [servedById, setServedById] = React.useState(currentUserId ?? '')
@@ -195,6 +208,7 @@ export function PosTerminal({
     setPhone('')
     setNotes('')
     setTableId('')
+    setGuests('')
     setCartOpen(false)
     idempotencyKey.current = newKey()
   }
@@ -220,6 +234,7 @@ export function PosTerminal({
       createStaffOrder({
         type,
         tableId: type === 'DINE_IN' ? tableId : '',
+        guestCount: type === 'DINE_IN' && guests ? Number(guests) : undefined,
         servedById,
         customerName: name,
         customerPhone: phone,
@@ -381,6 +396,23 @@ export function PosTerminal({
                           No tables set up yet — add them under Tables.
                         </p>
                       )}
+                    </div>
+                  )}
+                  {type === 'DINE_IN' && (
+                    <div className="space-y-1">
+                      <Label htmlFor="pos-guests" className="text-xs">
+                        Guests <span className="text-muted-foreground">(optional)</span>
+                      </Label>
+                      <Input
+                        id="pos-guests"
+                        type="number"
+                        min={1}
+                        max={50}
+                        inputMode="numeric"
+                        placeholder="How many at the table?"
+                        value={guests}
+                        onChange={(e) => setGuests(e.target.value)}
+                      />
                     </div>
                   )}
 

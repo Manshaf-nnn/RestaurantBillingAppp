@@ -30,10 +30,20 @@ interface Poller {
 
 const pollers = new Map<string, Poller>()
 
+/**
+ * The scope name IS the poller key, so two screens watching different things
+ * get their own poller and their own token — which is the point. A till
+ * watching `catalog` must not be woken by the kitchen, and it is the key here
+ * that keeps them apart.
+ */
 function urlFor(scope: string): string {
-  return scope.startsWith('order:')
-    ? `/api/pulse?orderId=${encodeURIComponent(scope.slice('order:'.length))}`
-    : '/api/pulse'
+  if (scope.startsWith('order:')) {
+    return `/api/pulse?orderId=${encodeURIComponent(scope.slice('order:'.length))}`
+  }
+  // `staff` is the historical name for the operational scope; keep it meaning
+  // the same thing rather than renaming eleven existing call sites.
+  if (scope === 'staff' || scope === 'ops') return '/api/pulse?scope=ops'
+  return `/api/pulse?scope=${encodeURIComponent(scope)}`
 }
 
 function schedule(scope: string, poller: Poller) {

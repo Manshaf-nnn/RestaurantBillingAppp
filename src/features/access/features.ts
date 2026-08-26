@@ -460,6 +460,14 @@ export const FEATURES: Feature[] = [
     routes: ['/dashboard/customers/analytics'],
   },
   {
+    key: 'live',
+    label: 'Live floor',
+    group: 'Overview',
+    description: 'Tables, waiting times and who is sitting at them, as it happens.',
+    actions: [{ key: 'view', permission: PERMISSIONS.DASHBOARD_LIVE }],
+    routes: ['/dashboard/live'],
+  },
+  {
     key: 'staff',
     label: 'Staff',
     group: 'People',

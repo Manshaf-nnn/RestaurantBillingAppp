@@ -1,5 +1,7 @@
 'use server'
 
+import type { OrderStatus } from '@prisma/client'
+
 import { revalidatePath } from 'next/cache'
 
 import { resolvePublicBranch } from '@/features/branches/public-branch'
@@ -614,6 +616,15 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
   })
 }
 
+/**
+ * The states an order passes through on its way to SERVED.
+ *
+ * Read in order, so serving the last plate can walk an order from wherever it
+ * is up to SERVED one step at a time — stamping `readyAt` on the way rather
+ * than skipping it. See `updateItemStatus` below.
+ */
+const SERVE_LADDER: OrderStatus[] = ['ACCEPTED', 'PREPARING', 'READY', 'SERVED']
+
 export async function updateItemStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(updateItemStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
@@ -628,21 +639,48 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
     await prisma.orderItem.update({ where: { id: item.id }, data: { status: data.status } })
     realtime.orderItemStatus(user.restaurantId, data.orderId, data.itemId, data.status)
 
-    // Once the waiter serves the last outstanding item, the whole order is
-    // served — move the order to SERVED so it clears from the kitchen/waiter
-    // boards and the kitchen knows everything was delivered.
-    if (data.status === 'SERVED' && item.order.status === 'READY') {
+    /*
+     * Once the waiter serves the last outstanding item, the whole order is
+     * served — move the order along so it clears from the kitchen and waiter
+     * boards and the kitchen knows everything was delivered.
+     *
+     * ── Why it replays the ladder rather than jumping ───────────────────────
+     *
+     * This used to fire only when the order was already `READY`. But a waiter
+     * can carry out the last plate while the order still says `PREPARING` —
+     * the kitchen never tapped "ready", it just handed the food over — and
+     * then every item read SERVED while the order sat at PREPARING for ever.
+     * Its table never freed, and on the live board it showed as a permanently
+     * critical table at 100% served.
+     *
+     * The fix is not a `PREPARING → SERVED` edge in `ALLOWED_TRANSITIONS`:
+     * that would let the kitchen display jump straight to served without ever
+     * stamping `readyAt`, and every cook-time and ready-but-waiting figure is
+     * measured from that stamp. Instead each intervening step is applied in
+     * turn, so the timestamps stay monotonic and truthful — if every plate is
+     * out then the food was ready, and this instant is the latest moment that
+     * can have become true.
+     *
+     * `PENDING` is deliberately not on the ladder: an order the kitchen has
+     * never accepted is a different problem, and forcing it through the
+     * accept path here would post stock depletion as a side effect of a
+     * waiter's tap.
+     */
+    if (data.status === 'SERVED' && SERVE_LADDER.includes(item.order.status)) {
       const remaining = await prisma.orderItem.count({
         where: { orderId: data.orderId, status: { notIn: ['SERVED', 'CANCELLED'] } },
       })
       if (remaining === 0) {
-        await updateOrderStatusService({
-          restaurantId: user.restaurantId,
-          orderId: data.orderId,
-          status: 'SERVED',
-          actorId: user.id,
-          actorName: user.name,
-        })
+        const from = SERVE_LADDER.indexOf(item.order.status)
+        for (const next of SERVE_LADDER.slice(from + 1)) {
+          await updateOrderStatusService({
+            restaurantId: user.restaurantId,
+            orderId: data.orderId,
+            status: next,
+            actorId: user.id,
+            actorName: user.name,
+          })
+        }
       }
     }
 

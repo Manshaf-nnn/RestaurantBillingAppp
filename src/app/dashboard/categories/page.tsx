@@ -5,6 +5,7 @@ import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,6 +50,8 @@ export default async function CategoriesPage({
   })
 
   return (
+    <>
+      <AutoRefresh scope="catalog" intervalMs={10000} />
     <CategoryManager
       canManage={can(user, PERMISSIONS.CATEGORY_MANAGE)}
       categories={categories.map((category) => ({
@@ -61,5 +64,6 @@ export default async function CategoriesPage({
         itemCount: category._count.foods,
       }))}
     />
+    </>
   )
 }

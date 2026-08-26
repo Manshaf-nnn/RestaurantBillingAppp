@@ -15,6 +15,7 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -104,6 +105,14 @@ export default async function PosPage({
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 pb-24 lg:pb-4">
+      {/*
+        The menu on this screen is rendered on the server, so a dish added by
+        the owner did not appear here until the cashier reloaded the browser —
+        the exact complaint this was built for. `catalog` and not `ops`: a till
+        should notice a new dish, and should not be re-rendered every time the
+        kitchen touches a ticket.
+      */}
+      <AutoRefresh scope="catalog" intervalMs={10000} />
       <header className="mb-4">
         <h1 className="text-xl font-semibold">POS</h1>
         <p className="text-sm text-muted-foreground">

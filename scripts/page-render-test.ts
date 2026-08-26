@@ -23,6 +23,7 @@ const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
 /** Pages an owner should be able to open. Add new ones here. */
 const PAGES = [
+  '/dashboard/live',
   '/dashboard',
   '/dashboard/help',
   '/dashboard/tasks',

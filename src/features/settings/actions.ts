@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import type { Prisma } from '@prisma/client'
 
+import { getLiveBoardPolicy } from '@/features/live/policy'
 import { runAction, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -14,6 +15,7 @@ import { minorUnitFactor } from '@/lib/money'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import {
   cashControlsSchema,
+  liveBoardPolicySchema,
   paymentSettingsSchema,
   printerSettingsSchema,
   restaurantSettingsSchema,
@@ -205,5 +207,53 @@ export async function updateCashControls(input: unknown): Promise<ActionResult<{
       return { id: user.restaurantId }
     },
     'Cash controls saved.',
+  )
+}
+
+/**
+ * The live floor board's thresholds.
+ *
+ * Merged over what is stored rather than written wholesale, for the same reason
+ * `updateCashControls` above does it: saving this form must not silently reset
+ * a field that was added to the policy after this form was last opened.
+ */
+export async function updateLiveBoardPolicy(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    liveBoardPolicySchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      const restaurant = await requireRestaurant(user.restaurantId)
+      const factor = minorUnitFactor(restaurant.currency)
+
+      const existing = await getLiveBoardPolicy(user.restaurantId)
+      const next = {
+        ...existing,
+        ...data,
+        // Typed in whole currency, stored in minor units like every other
+        // amount in the schema.
+        vipAfterSpend: Math.round(data.vipAfterSpend * factor),
+      }
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: { liveBoardPolicy: next as unknown as Prisma.InputJsonValue },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        after: { liveBoard: next },
+      })
+
+      revalidatePath('/dashboard/settings')
+      revalidatePath('/dashboard/live')
+      return { id: user.restaurantId }
+    },
+    'Live floor settings saved.',
   )
 }

@@ -21,8 +21,10 @@ import {
   updateCashControls,
   updatePaymentSettings,
   updatePrinterSettings,
+  updateLiveBoardPolicy,
   updateRestaurantSettings,
 } from '../actions'
+import type { LiveBoardPolicy } from '@/features/live/policy'
 import { callAction } from '@/lib/use-action'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
@@ -83,6 +85,8 @@ export interface SettingsData {
     pettyCashApprovalAbove: number
     requireCashierSession: boolean
   }
+  /** The live floor board's thresholds. Spend is in whole currency here. */
+  live: LiveBoardPolicy
 }
 
 export function SettingsView({ initial, canManage }: { initial: SettingsData; canManage: boolean }) {
@@ -94,6 +98,8 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
   const [savingPrinter, setSavingPrinter] = React.useState(false)
   const [cash, setCash] = React.useState(initial.cash)
   const [savingCash, setSavingCash] = React.useState(false)
+  const [live, setLive] = React.useState(initial.live)
+  const [savingLive, setSavingLive] = React.useState(false)
 
   const set = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -111,6 +117,14 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
     const result = await callAction(() => updatePaymentSettings(payment))
     setSavingPayments(false)
     if (result.ok) toast.success('Payment settings saved')
+    else toast.error(result.error)
+  }
+
+  const saveLive = async () => {
+    setSavingLive(true)
+    const result = await callAction(() => updateLiveBoardPolicy(live))
+    setSavingLive(false)
+    if (result.ok) toast.success('Live floor settings saved')
     else toast.error(result.error)
   }
 
@@ -142,6 +156,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           <TabsTrigger value="loyalty">Loyalty</TabsTrigger>
           <TabsTrigger value="printer">Printer</TabsTrigger>
           <TabsTrigger value="cash">Cash controls</TabsTrigger>
+          <TabsTrigger value="live">Live floor</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-4">
@@ -423,6 +438,123 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
             <Button onClick={savePrinter} loading={savingPrinter}>
               Save printer settings
             </Button>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="live" className="space-y-4">
+          <SectionCard title="How long is too long">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Minutes from when an order reaches the kitchen. Each band has to be
+              longer than the one before it, or a rung of the ladder can never be
+              reached.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-4">
+              {([
+                ['normalMax', 'Normal up to'],
+                ['watchMax', 'Watch up to'],
+                ['attentionMax', 'Attention up to'],
+                ['delayedMax', 'Delayed up to'],
+              ] as const).map(([key, label]) => (
+                <Field key={key} label={label}>
+                  <Input
+                    inputMode="numeric"
+                    value={String(live[key])}
+                    disabled={!canManage}
+                    onChange={(e) => setLive((v) => ({ ...v, [key]: Number(e.target.value) || 0 }))}
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Anything past the last one is critical.
+            </p>
+          </SectionCard>
+
+          <SectionCard title="When to go and look">
+            <div className="grid gap-4 sm:grid-cols-2">
+              {([
+                ['noFoodServedMin', 'Nothing served after', 'Minutes with no food out at all.'],
+                ['readyNotServedMin', 'Ready but not taken out', 'Food sitting under the lamp.'],
+                ['stuckPreparingMin', 'Still preparing after', 'Measured from when the kitchen started.'],
+                ['paymentPendingMin', 'Bill unpaid after serving', 'Everything out, nobody has paid.'],
+                ['sensitiveWaitingMin', 'A guest worth greeting waits', 'First visit, VIP, or back after a long gap.'],
+                ['longServiceMin', 'A sitting runs longer than', 'The whole visit, not the wait for food.'],
+                ['serviceRequestMin', 'A call for service goes unanswered', 'Minutes since they asked.'],
+                ['lowProgressPct', 'Barely served, below', 'A percentage. Flags a late table that has had almost nothing.'],
+              ] as const).map(([key, label, hint]) => (
+                <Field key={key} label={label} hint={hint}>
+                  <Input
+                    inputMode="numeric"
+                    value={String(live[key])}
+                    disabled={!canManage}
+                    onChange={(e) => setLive((v) => ({ ...v, [key]: Number(e.target.value) || 0 }))}
+                  />
+                </Field>
+              ))}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Who counts as a regular">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Counted from completed visits only — an order in progress is not a
+              visit yet, and a cancelled one never was.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Regular after" hint="Completed visits.">
+                <Input
+                  inputMode="numeric"
+                  value={String(live.regularAfterVisits)}
+                  disabled={!canManage}
+                  onChange={(e) => setLive((v) => ({ ...v, regularAfterVisits: Number(e.target.value) || 0 }))}
+                />
+              </Field>
+              <Field label="VIP after" hint="Completed visits. Must be more than regular.">
+                <Input
+                  inputMode="numeric"
+                  value={String(live.vipAfterVisits)}
+                  disabled={!canManage}
+                  onChange={(e) => setLive((v) => ({ ...v, vipAfterVisits: Number(e.target.value) || 0 }))}
+                />
+              </Field>
+              <Field label="…or having spent" hint="Lifetime, in whole currency. 0 turns this route off.">
+                <Input
+                  inputMode="decimal"
+                  value={String(live.vipAfterSpend)}
+                  disabled={!canManage}
+                  onChange={(e) => setLive((v) => ({ ...v, vipAfterSpend: Number(e.target.value) || 0 }))}
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Coming back after a while">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Days since their last completed visit. These sit alongside the status
+              above rather than replacing it — a regular who has been away four
+              months is both.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Welcome back after" hint="Days away.">
+                <Input
+                  inputMode="numeric"
+                  value={String(live.welcomeBackDays)}
+                  disabled={!canManage}
+                  onChange={(e) => setLive((v) => ({ ...v, welcomeBackDays: Number(e.target.value) || 0 }))}
+                />
+              </Field>
+              <Field label="Worth making a fuss of after" hint="Days away. Must be longer than the above.">
+                <Input
+                  inputMode="numeric"
+                  value={String(live.longTimeReturnDays)}
+                  disabled={!canManage}
+                  onChange={(e) => setLive((v) => ({ ...v, longTimeReturnDays: Number(e.target.value) || 0 }))}
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          {canManage ? (
+            <Button onClick={saveLive} loading={savingLive}>Save live floor settings</Button>
           ) : null}
         </TabsContent>
 

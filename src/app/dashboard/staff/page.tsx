@@ -6,6 +6,7 @@ import { StaffManager } from '@/features/staff/components/staff-manager'
 import { assignableRoles, can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,6 +73,8 @@ export default async function StaffPage() {
   const pickable = locations.filter((l) => reach === null || reach.includes(l.id))
 
   return (
+    <>
+      <AutoRefresh scope="catalog" intervalMs={10000} />
     <StaffManager
       canManage={can(user, PERMISSIONS.STAFF_MANAGE)}
       currentUserId={user.id}
@@ -112,5 +115,6 @@ export default async function StaffPage() {
         staffRoleName: member.staffRole?.name ?? null,
       }))}
     />
+    </>
   )
 }

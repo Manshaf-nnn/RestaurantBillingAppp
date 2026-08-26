@@ -10,6 +10,18 @@ import type { UserRole } from '@prisma/client'
 export const PERMISSIONS = {
   // dashboards
   DASHBOARD_VIEW: 'dashboard.view',
+  /*
+   * The live floor board.
+   *
+   * Deliberately NOT in `SPLIT_FROM`. That list exists so splitting an existing
+   * screen does not silently downgrade the roles that could already reach it —
+   * but this screen never existed, so nothing is being split. Deriving it from
+   * `dashboard.view` would hand the floor, with guests' names on it, to every
+   * role holding that: the accountant, the cashier, warehouse staff. It lands
+   * on owners, admins and managers through ALL, and is granted deliberately to
+   * anybody else.
+   */
+  DASHBOARD_LIVE: 'dashboard.live',
   ANALYTICS_VIEW: 'analytics.view',
 
   // menu

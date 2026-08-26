@@ -38,6 +38,16 @@ export function ReviewsManager({
 }) {
   const [reviews, setReviews] = React.useState(initial)
 
+  /*
+   * Re-sync when the server sends a new list.
+   *
+   * Every other manager on the dashboard does this and this one did not, so a
+   * refresh — whether from the pulse or from somebody's own save — repainted
+   * the page around a list that still held the state it was first mounted with.
+   * The screen looked updated and was not.
+   */
+  React.useEffect(() => setReviews(initial), [initial])
+
   const distribution = [5, 4, 3, 2, 1].map((star) => ({
     star,
     count: reviews.filter((review) => review.rating === star).length,

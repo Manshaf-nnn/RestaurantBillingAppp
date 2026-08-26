@@ -1,4 +1,5 @@
 import {
+  MonitorDot,
   BarChart3,
   ChefHat,
   ClipboardList,
@@ -117,6 +118,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Production',
         icon: Factory,
         permission: PERMISSIONS.PRODUCTION_VIEW,
+      },
+      {
+        href: '/dashboard/live',
+        label: 'Live floor',
+        icon: MonitorDot,
+        permission: PERMISSIONS.DASHBOARD_LIVE,
       },
       {
         href: '/dashboard/approvals',

@@ -7,6 +7,7 @@ import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,6 +101,8 @@ export default async function InventoryPage({
       : item.quantity
 
   return (
+    <>
+      <AutoRefresh scope="catalog" intervalMs={10000} />
     <InventoryManager
       canManage={can(user, PERMISSIONS.INVENTORY_MANAGE)}
       branchName={branch?.name ?? null}
@@ -133,5 +136,6 @@ export default async function InventoryPage({
       locations={locations}
       selectedBranchId={selection.branchId}
     />
+    </>
   )
 }

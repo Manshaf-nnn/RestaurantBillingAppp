@@ -5,6 +5,7 @@ import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,6 +78,8 @@ export default async function TablesPage({
   const branches = allBranches
 
   return (
+    <>
+      <AutoRefresh scope="catalog" intervalMs={10000} />
     <TablesManager
       canManage={can(user, PERMISSIONS.TABLE_MANAGE)}
       branches={branches}
@@ -96,5 +99,6 @@ export default async function TablesPage({
         openOrders: table._count.orders,
       }))}
     />
+    </>
   )
 }
