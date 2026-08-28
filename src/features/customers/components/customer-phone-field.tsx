@@ -139,6 +139,14 @@ export function CustomerPhoneField({
          * the caret to show them a dropdown would make the field unusable.
          */
         onOpenAutoFocus={(e) => e.preventDefault()}
+        /*
+         * And it must not take focus back on the way out either. There is a
+         * `PopoverAnchor` here but no `PopoverTrigger`, so Radix's default
+         * close behaviour — restore focus to the trigger — has nothing to aim
+         * at and blurs the input instead. The list closes on its own whenever a
+         * keystroke narrows the matches to none, which is mid-typing.
+         */
+        onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <ul className="max-h-[40vh] overflow-y-auto">
           {matches.map((customer, index) => (

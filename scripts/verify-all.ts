@@ -62,6 +62,7 @@ const SERVICE = [
   'staff-attendance-test',
   'live-board-test',
   'recipe-costing-test',
+  'input-stability-test',
 ]
 
 const RUNTIME = [

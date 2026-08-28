@@ -28,7 +28,23 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
       />
     )
 
-    if (!startIcon && !endIcon) return field
+    /*
+     * Whether the props were PASSED, not whether they are truthy.
+     *
+     * These two shapes put the `<input>` at different depths, so a caller doing
+     * `endIcon={busy ? <Spinner/> : null}` used to flip between them mid-type.
+     * React sees the element type at that position change from `input` to `div`,
+     * unmounts the input and mounts a fresh one — and the caret goes with it.
+     * On the POS phone box that meant the cursor vanished on the third digit,
+     * came back 250ms later, and vanished again on the fourth: a number could
+     * only be typed by clicking the field before every keystroke.
+     *
+     * Testing for `undefined` keeps the structure stable for anyone who passes
+     * the prop at all, while a caller that passes no icons still gets the bare
+     * input — which matters, because `className` lands on the input and several
+     * screens put grid placement there.
+     */
+    if (startIcon === undefined && endIcon === undefined) return field
 
     return (
       <div className="relative">
