@@ -257,20 +257,79 @@ export async function splitBill(
           quantity: movedQty,
           lineTotal: unit * movedQty,
           options: item.options ?? undefined,
+          optionsTotal: item.optionsTotal,
           notes: item.notes,
           status: item.status,
           costPrice: item.costPrice,
+          /*
+           * The pinned recipe follows the food.
+           *
+           * Without this the moved remainder resolves against whatever recipe is
+           * active *now*, so a recipe changed since the kitchen accepted the bill
+           * would make the reconcile below post a real stock movement caused by
+           * nothing but somebody splitting a bill.
+           */
+          recipeId: item.recipeId,
           isVeg: item.isVeg,
           prepTimeMinutes: item.prepTimeMinutes,
         },
       })
     }
 
+    await rebalanceDepletion(tx, order.restaurantId, [order.id, target.id])
+
     const source = await recalculateOrderTotals(tx, order.id)
     const updatedTarget = await recalculateOrderTotals(tx, target.id)
 
     return { source, target: updatedTarget }
   })
+}
+
+/**
+ * Put stock back in step after order lines have moved between bills.
+ *
+ * ── The bug this exists to close ────────────────────────────────────────────
+ *
+ * Depletion is idempotent per ORDER: `OrderStockDepletion` is keyed
+ * `@@unique([orderId, itemId])` and records how much has already been taken.
+ * Splitting and merging re-parent `OrderItem` rows and used to leave that record
+ * behind, so the arithmetic silently broke both ways:
+ *
+ *   · split — the source still claimed to have deducted for lines it no longer
+ *     has, and the target deducted them again on its next status change. Five
+ *     burgers' worth of buns came out of stock for three burgers.
+ *   · merge — the source's rows were orphaned at a non-zero quantity for ever
+ *     against a bill with no items, and the raw CANCELLED update below bypasses
+ *     `cancelOrder`, so nothing ever gave them back.
+ *
+ * Reconciling is declarative — it computes want-minus-have per item — so running
+ * it on every affected order after the move is enough. A source left with no
+ * lines wants nothing and gets everything returned, which is why no `releaseAll`
+ * special case is needed here.
+ */
+async function rebalanceDepletion(
+  tx: TxClient,
+  restaurantId: string,
+  orderIds: string[],
+): Promise<void> {
+  const ids = [...new Set(orderIds)]
+
+  /*
+   * Only if something has actually been deducted.
+   *
+   * `reconcileOrderDepletion` pays no attention to order status, so running it
+   * on a bill the kitchen has not accepted would take the whole thing out of
+   * stock hours early. Whichever bill later reaches ACCEPTED deducts correctly
+   * on its own.
+   */
+  const applied = await tx.orderStockDepletion.count({ where: { orderId: { in: ids } } })
+  if (applied === 0) return
+
+  // Ascending id order. Each reconcile takes `FOR UPDATE` on its own order, so
+  // two merges over overlapping bills would deadlock in an arbitrary order.
+  for (const orderId of [...ids].sort()) {
+    await reconcileOrderDepletion(tx, { restaurantId, orderId })
+  }
 }
 
 /**
@@ -337,6 +396,13 @@ export async function mergeBills(
         data: { orderId: target.id },
       })
 
+      /*
+       * The source is set CANCELLED directly rather than through `cancelOrder`,
+       * which is deliberate: an absorbed bill is not a cancelled one, and
+       * `cancelOrder` would free the table and touch refunds. But that also
+       * means nothing here returns the stock it had deducted — `rebalanceDepletion`
+       * below is what does, once every line has moved.
+       */
       await tx.order.update({
         where: { id: source.id },
         data: {
@@ -363,6 +429,11 @@ export async function mergeBills(
         },
       })
     }
+
+    await rebalanceDepletion(tx, params.restaurantId, [
+      target.id,
+      ...sources.map((source) => source.id),
+    ])
 
     await tx.orderEvent.create({
       data: {

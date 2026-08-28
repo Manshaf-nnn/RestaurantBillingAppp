@@ -69,7 +69,6 @@ export interface CategoryOption {
 export function MenuManager({
   foods: initialFoods,
   categories,
-  inventoryItems,
   currency,
   locale,
   canManage,
@@ -80,7 +79,6 @@ export function MenuManager({
 }: {
   foods: ManagedFood[]
   categories: CategoryOption[]
-  inventoryItems: Array<{ id: string; name: string; unit: string }>
   currency: string
   locale: string
   canManage: boolean
@@ -349,7 +347,6 @@ export function MenuManager({
           onOpenChange={setDialogOpen}
           foodId={dialogFood?.id}
           categories={categories}
-          inventoryItems={inventoryItems}
           currency={currency}
           branches={branches}
           activeBranchId={activeBranchId}

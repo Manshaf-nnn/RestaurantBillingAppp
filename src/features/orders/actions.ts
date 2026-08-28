@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache'
 
 import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
-import { reconcileOrderDepletion } from '@/features/inventory/depletion'
+import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -394,6 +394,15 @@ export async function updateGuestOrderItems(
          * kept both sets of ingredients deducted — and because the order was
          * already accepted, nothing downstream ever reconciled it.
          */
+        /*
+         * A line added here is new to an order the kitchen already accepted, so
+         * it has missed the pin-and-cost step that runs on acceptance. Both are
+         * idempotent — they only fill a null recipe or a zero cost — so running
+         * them again for the sake of the new lines cannot re-price the old ones.
+         */
+        await pinRecipeVersions(tx, { restaurantId: restaurant.id, orderId: order.id })
+        await snapshotLineCosts(tx, { restaurantId: restaurant.id, orderId: order.id })
+
         await reconcileOrderDepletion(tx, {
           restaurantId: restaurant.id,
           orderId: order.id,

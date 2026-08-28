@@ -15,7 +15,7 @@ import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
-export const metadata: Metadata = { title: 'Production' }
+export const metadata: Metadata = { title: 'Kitchen jobs' }
 
 export default async function ProductionPage({
   searchParams,
@@ -47,11 +47,11 @@ export default async function ProductionPage({
   if (!data.house) {
     return (
       <>
-        <PageHeader title="Production" description="Making stock from other stock." />
-        <SectionCard title="No production house">
+        <PageHeader title="Kitchen jobs" description="Things you make rather than buy." />
+        <SectionCard title="No production kitchen">
           <EmptyState
             title="No production house set up"
-            description="Add a location of type Production house, and runs will appear here."
+            description="Add a location of type Production house, and kitchen jobs will appear here."
           />
         </SectionCard>
       </>
@@ -61,13 +61,13 @@ export default async function ProductionPage({
   return (
     <>
       <PageHeader
-        title="Production"
-        description={`${data.house.name} — raw materials in, finished goods out. Every run posts to the same stock ledger.`}
+        title="Kitchen jobs"
+        description={`${data.house.name} — ingredients in, a finished item out. Every job posts to the same stock ledger.`}
       />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Runs today" value={String(data.today.runs)} />
-        <StatCard label="Produced today" value={String(Math.round(data.today.produced * 100) / 100)} />
+        <StatCard label="Jobs done today" value={String(data.today.runs)} />
+        <StatCard label="Made today" value={String(Math.round(data.today.produced * 100) / 100)} />
         <StatCard label="Cost today" value={money(data.today.cost)} />
         <StatCard label="Cost this week" value={money(data.week.cost)} />
       </div>
@@ -75,7 +75,7 @@ export default async function ProductionPage({
       {data.pending.length > 0 && (
         <SectionCard
           title="Not finished yet"
-          description="Nothing here has consumed anything — stock only moves when a run is completed."
+          description="Nothing here has taken anything from stock — that happens when a job is marked done."
           actions={<Badge variant="warning">{data.pending.length}</Badge>}
         >
           <ul className="divide-y divide-border">
@@ -85,7 +85,7 @@ export default async function ProductionPage({
                 <Link href={`/dashboard/production/${p.id}`} className="font-medium tabular-nums hover:underline">
                   {p.number}
                 </Link>
-                <span>{p.specName ?? 'Run'}</span>
+                <span>{p.recipeName ?? 'Job'}</span>
                 <Badge variant="secondary">{p.status.replace(/_/g, ' ').toLowerCase()}</Badge>
                 <span className="text-muted-foreground">{p.plannedQty} planned</span>
                 <span className="ml-auto text-xs text-muted-foreground">{p.requestedByName ?? ''}</span>
@@ -153,7 +153,7 @@ export default async function ProductionPage({
                         <span className="block font-mono text-xs text-muted-foreground">{r.batchNumber}</span>
                       )}
                     </td>
-                    <td className="py-2.5 pr-3">{r.specName ?? '—'}</td>
+                    <td className="py-2.5 pr-3">{r.recipeName ?? '—'}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums text-muted-foreground">{r.plannedQty}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{r.actualQty ?? '—'}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">

@@ -5,8 +5,9 @@ import {
   recallTransfer, canTransition,
 } from '../src/features/transfers/service'
 import {
-  createProductionSpec, createProductionOrder, setProductionStatus, completeProduction,
+  createProductionOrder, setProductionStatus, completeProduction,
 } from '../src/features/production/service'
+import { saveRecipe } from '../src/features/recipes/service'
 import { getLocationBalance, getItemAcrossLocations } from '../src/features/inventory/location-stock'
 import { setOpeningBalance } from '../src/features/inventory/operations'
 import { recomputeBalance, directionOf } from '../src/features/inventory/ledger'
@@ -72,19 +73,23 @@ async function main() {
   ok('buns are not at the production house', await avail(buns.id, ph.id) === 0)
 
   console.log('\n── 3. Production: 100 patties ───────────────────────────')
-  const spec = await createProductionSpec({
-    restaurantId: shop.id, name: 'Chicken Patty', outputItemId: patty.id, outputQty: 100,
-    shelfLifeDays: 3,
-    items: [{ itemId: chicken.id, quantity: 20 }, { itemId: spices.id, quantity: 2 }],
+  // One run of the recipe makes 100 patties from 20kg chicken and 2kg spices.
+  const spec = await saveRecipe({
+    restaurantId: shop.id, producesItemId: patty.id, name: 'Chicken Patty',
+    yieldQty: 100, yieldUnit: 'PIECE', shelfLifeDays: 3,
+    ingredients: [
+      { inventoryItemId: chicken.id, quantity: 20, unit: 'KG' },
+      { inventoryItemId: spices.id, quantity: 2, unit: 'KG' },
+    ],
   })
   specs.push(spec.id)
 
   await throws('production at a branch is refused',
-    () => createProductionOrder({ restaurantId: shop.id, branchId: colombo.id, specId: spec.id, plannedQty: 1, userId: user.id }),
+    () => createProductionOrder({ restaurantId: shop.id, branchId: colombo.id, recipeId: spec.id, plannedQty: 100, userId: user.id }),
     'NOT_PRODUCTION_HOUSE')
 
   const run = await createProductionOrder({
-    restaurantId: shop.id, branchId: ph.id, specId: spec.id, plannedQty: 1, userId: user.id,
+    restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 100, userId: user.id,
   })
   ok('run starts as DRAFT', run.status === 'DRAFT')
   ok('planning consumes nothing', await avail(chicken.id, ph.id) === 100)
@@ -330,7 +335,7 @@ async function main() {
     () => requestTransfer({ restaurantId: shopB.id, fromBranchId: bBranch.id, toBranchId: bBranch.id,
       lines: [{ itemId: patty.id, quantity: 1 }], userId: user.id }))
   await throws('restaurant B cannot produce at restaurant A’s house',
-    () => createProductionOrder({ restaurantId: shopB.id, branchId: ph.id, specId: spec.id, plannedQty: 1, userId: user.id }))
+    () => createProductionOrder({ restaurantId: shopB.id, branchId: ph.id, recipeId: spec.id, plannedQty: 100, userId: user.id }))
   const leak = await prisma.inventoryStock.findFirst({ where: { itemId: patty.id, restaurantId: shopB.id } })
   ok('restaurant B sees none of restaurant A’s stock', leak === null)
   const leakT = await prisma.stockTransfer.findFirst({ where: { id: t1.id, restaurantId: shopB.id } })
@@ -342,8 +347,8 @@ async function main() {
   await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: { in: shops } } } })
   await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: { in: shops } } } })
   await prisma.productionOrder.deleteMany({ where: { restaurantId: { in: shops } } })
-  await prisma.productionSpecItem.deleteMany({ where: { specId: { in: specs } } })
-  await prisma.productionSpec.deleteMany({ where: { id: { in: specs } } })
+  await prisma.recipeIngredient.deleteMany({ where: { recipeId: { in: specs } } })
+  await prisma.recipe.deleteMany({ where: { id: { in: specs } } })
   await prisma.stockMovement.deleteMany({ where: { restaurantId: { in: shops } } })
   await prisma.stockBatch.deleteMany({ where: { restaurantId: { in: shops } } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: { in: shops } } })

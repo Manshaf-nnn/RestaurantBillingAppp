@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { costRecipes } from '@/features/inventory/recipe-resolver'
 import { prisma } from '@/server/db/prisma'
 import type { DateRange } from './range'
 
@@ -116,25 +117,20 @@ export async function getProfitReport(params: {
     reductionShare.set(order.id, order.subtotal > 0 ? reduction / order.subtotal : 0)
   }
 
-  // Recipe costs are resolved once per recipe rather than per line — a busy
-  // day is thousands of lines across a few dozen recipes.
+  /*
+   * Recipe costs are resolved once per recipe rather than per line — a busy day
+   * is thousands of lines across a few dozen recipes.
+   *
+   * Through `costRecipes`, which is the resolver the kitchen actually depletes
+   * against. This used to be a second implementation written inline here, and
+   * it was wrong three ways: it multiplied a quantity in the line's own unit by
+   * a cost per *base* unit with no conversion, so 200 g of a LKR 250/kg item
+   * booked LKR 50,000 instead of LKR 50; it never divided by the recipe's yield,
+   * overstating a batch recipe by its whole batch size; and it skipped every
+   * make-ahead line, so a sauce cost nothing at all. One implementation now.
+   */
   const recipeIds = [...new Set(lines.map((l) => l.recipeId).filter((id): id is string => Boolean(id)))]
-  const costByRecipe = new Map<string, number>()
-
-  if (recipeIds.length > 0) {
-    const ingredients = await prisma.recipeIngredient.findMany({
-      where: { recipeId: { in: recipeIds } },
-      include: { inventoryItem: { select: { costPerUnit: true } } },
-    })
-    for (const ing of ingredients) {
-      if (!ing.inventoryItem) continue
-      const withWastage = ing.quantity * (1 + Math.max(0, ing.wastagePercent) / 100)
-      costByRecipe.set(
-        ing.recipeId,
-        (costByRecipe.get(ing.recipeId) ?? 0) + withWastage * ing.inventoryItem.costPerUnit,
-      )
-    }
-  }
+  const costByRecipe = await costRecipes(prisma, params.restaurantId, recipeIds)
 
   let revenue = 0, cogs = 0
   let withRecipe = 0, withoutRecipe = 0, revenueWithout = 0

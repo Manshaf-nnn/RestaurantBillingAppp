@@ -233,27 +233,61 @@ export async function snapshotLineCosts(
   tx: TxClient,
   params: { restaurantId: string; orderId: string },
 ): Promise<number> {
+  /*
+   * Every line still at zero, with or without a recipe — this is the only thing
+   * that writes `OrderItem.costPrice`.
+   *
+   * It used to be written twice: once by `placeOrder`, which copied the menu's
+   * `Food.costPrice` onto the line, and once here. Since this only ever
+   * overwrites a zero — correctly, so an earlier snapshot cannot be re-priced —
+   * the copy meant any restaurant that HAD typed cost prices into its menu never
+   * received the real weighted-average snapshot at all. Their profit report
+   * showed the number they had guessed months earlier, for ever, while the
+   * ledger recorded what the food actually cost. The two disagreed silently.
+   *
+   * Nothing copies the menu figure onto the line any more, so a zero here means
+   * "not yet costed" and nothing else. The menu figure is still the fallback for
+   * a dish with no recipe — but applied at THIS moment, not at order time.
+   */
   const lines = await tx.orderItem.findMany({
-    where: { orderId: params.orderId, recipeId: { not: null } },
-    select: { id: true, recipeId: true, costPrice: true },
+    where: { orderId: params.orderId, costPrice: 0 },
+    select: { id: true, recipeId: true, foodId: true },
   })
   if (lines.length === 0) return 0
 
   const costByRecipe = new Map<string, number>()
   let written = 0
 
-  for (const line of lines) {
-    const recipeId = line.recipeId!
-    if (!costByRecipe.has(recipeId)) {
-      const resolved = await resolveRecipe(tx, { restaurantId: params.restaurantId, recipeId, portions: 1 })
-      costByRecipe.set(recipeId, resolved ? Math.round(resolved.totalCost) : 0)
-    }
-    const cost = costByRecipe.get(recipeId) ?? 0
+  const foodIds = [...new Set(lines.filter((l) => !l.recipeId && l.foodId).map((l) => l.foodId!))]
+  const menuCost = new Map<string, number>(
+    foodIds.length
+      ? (
+          await tx.food.findMany({
+            where: { id: { in: foodIds }, restaurantId: params.restaurantId },
+            select: { id: true, costPrice: true },
+          })
+        ).map((f) => [f.id, f.costPrice])
+      : [],
+  )
 
-    // Only overwrite a zero. A line already carrying a cost was either priced by
-    // an earlier snapshot or set deliberately, and re-pricing it later would
-    // change history.
-    if (cost > 0 && line.costPrice === 0) {
+  for (const line of lines) {
+    let cost = 0
+
+    if (line.recipeId) {
+      if (!costByRecipe.has(line.recipeId)) {
+        const resolved = await resolveRecipe(tx, {
+          restaurantId: params.restaurantId,
+          recipeId: line.recipeId,
+          portions: 1,
+        })
+        costByRecipe.set(line.recipeId, resolved ? Math.round(resolved.totalCost) : 0)
+      }
+      cost = costByRecipe.get(line.recipeId) ?? 0
+    } else if (line.foodId) {
+      cost = menuCost.get(line.foodId) ?? 0
+    }
+
+    if (cost > 0) {
       await tx.orderItem.update({ where: { id: line.id }, data: { costPrice: cost } })
       written += 1
     }

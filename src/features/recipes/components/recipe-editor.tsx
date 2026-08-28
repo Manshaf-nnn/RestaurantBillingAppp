@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { duplicateRecipeAction, saveRecipeAction, setRecipeActiveAction } from '../actions'
+import { costRecipeLines } from '../actions-fetch'
 import type { RecipeEditorData } from '../queries'
 import { callAction } from '@/lib/use-action'
 
@@ -55,12 +56,6 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
   const [copyTo, setCopyTo] = React.useState('')
 
   const itemById = React.useMemo(() => new Map(data.items.map((i) => [i.id, i])), [data.items])
-  // Cost per base unit comes from the last saved costing pass; good enough to
-  // steer a pricing decision while typing, and exact once saved.
-  const costById = React.useMemo(
-    () => new Map(data.cost.ingredients.map((i) => [i.itemId, i.costPerUnit])),
-    [data.cost.ingredients],
-  )
 
   const addLine = (kind: 'ITEM' | 'PREP') =>
     setLines((current) => [
@@ -73,17 +68,60 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
 
   const remove = (key: string) => setLines((current) => current.filter((l) => l.key !== key))
 
-  // Rough live total: only raw ingredients with a known cost contribute, so a
-  // prep line reads as "—" rather than silently counting as free.
-  const liveCost = lines.reduce((total, line) => {
-    if (line.kind !== 'ITEM' || !line.refId) return total
-    const qty = Number(line.quantity)
-    if (!Number.isFinite(qty)) return total
-    const unitCost = costById.get(line.refId) ?? 0
-    const waste = 1 + (Number(line.wastagePercent) || 0) / 100
-    return total + qty * unitCost * waste
-  }, 0)
+  /*
+   * Costing happens on the server, by the same code that decides what leaves
+   * stock — so the number on this screen cannot drift from the ledger's.
+   *
+   * It used to be worked out here as `quantity × costPerUnit × wastage`, with
+   * no unit conversion and no yield division: 200 g of a LKR 250/kg item read
+   * as LKR 50,000 rather than LKR 50, on the one screen whose entire job is to
+   * answer "is this dish worth selling at this price?". Make-ahead lines showed
+   * a dash and counted as free.
+   */
+  const [cost, setCost] = React.useState<{ total: number; byItem: Record<string, number> }>({
+    // Seeded from the saved costing so the figure is right on first paint,
+    // before the first keystroke triggers a re-cost.
+    total: data.cost.ingredientCost,
+    byItem: Object.fromEntries(data.cost.ingredients.map((i) => [i.itemId, i.lineCost])),
+  })
+  const [costing, setCosting] = React.useState(false)
 
+  const priced = React.useMemo(
+    () =>
+      lines
+        .filter((l) => l.refId && Number(l.quantity) > 0)
+        .map((l) => ({
+          inventoryItemId: l.kind === 'ITEM' ? l.refId : null,
+          subRecipeId: l.kind === 'PREP' ? l.refId : null,
+          quantity: Number(l.quantity),
+          unit: l.unit,
+          wastagePercent: Number(l.wastagePercent) || 0,
+        })),
+    [lines],
+  )
+
+  React.useEffect(() => {
+    if (priced.length === 0) {
+      setCost({ total: 0, byItem: {} })
+      return
+    }
+    // Debounced, and guarded so the slower of two requests cannot land last.
+    let stale = false
+    setCosting(true)
+    const timer = setTimeout(() => {
+      void callAction(() => costRecipeLines({ yieldQty: 1, lines: priced })).then((result) => {
+        if (stale) return
+        setCosting(false)
+        if (result.ok) setCost({ total: result.data.totalCost, byItem: result.data.byItem })
+      })
+    }, 350)
+    return () => {
+      stale = true
+      clearTimeout(timer)
+    }
+  }, [priced])
+
+  const liveCost = cost.total
   const percent = data.food.price > 0 ? (liveCost / data.food.price) * 100 : null
 
   const save = async () => {
@@ -149,10 +187,10 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-4">
         <Figure label="Selling price" value={money(data.food.price)} />
-        <Figure label="Ingredient cost" value={money(Math.round(liveCost))} />
+        <Figure label="What it costs you" value={costing ? '\u2026' : money(Math.round(liveCost))} />
         <Figure label="Gross profit" value={money(Math.round(data.food.price - liveCost))} />
         <Figure
-          label="Food cost"
+          label="Food cost %"
           value={percent === null ? '—' : `${percent.toFixed(1)}%`}
           tone={percent === null ? undefined : percent > 40 ? 'bad' : percent > 30 ? 'warn' : 'good'}
         />
@@ -171,11 +209,7 @@ export function RecipeEditor({ data }: { data: RecipeEditorData }) {
           <ul className="space-y-2">
             {lines.map((line) => {
               const item = line.kind === 'ITEM' ? itemById.get(line.refId) : null
-              const qty = Number(line.quantity) || 0
-              const lineCost =
-                line.kind === 'ITEM' && line.refId
-                  ? qty * (costById.get(line.refId) ?? 0) * (1 + (Number(line.wastagePercent) || 0) / 100)
-                  : null
+              const lineCost = line.refId ? cost.byItem[line.refId] ?? null : null
 
               return (
                 <li key={line.key} className="grid grid-cols-12 items-center gap-2">

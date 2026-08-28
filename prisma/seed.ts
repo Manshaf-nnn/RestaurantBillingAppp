@@ -94,7 +94,8 @@ async function main() {
     prisma.review.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.order.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.stockMovement.deleteMany({ where: { restaurantId: restaurant.id } }),
-    prisma.recipeItem.deleteMany({ where: { food: { restaurantId: restaurant.id } } }),
+    prisma.recipeIngredient.deleteMany({ where: { recipe: { restaurantId: restaurant.id } } }),
+    prisma.recipe.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.variantOption.deleteMany({ where: { group: { food: { restaurantId: restaurant.id } } } }),
     prisma.variantGroup.deleteMany({ where: { food: { restaurantId: restaurant.id } } }),
     prisma.food.deleteMany({ where: { restaurantId: restaurant.id } }),
@@ -326,13 +327,34 @@ async function main() {
     })
 
     if (food.recipe) {
-      for (const line of food.recipe) {
-        const itemId = inventory[line.item]
-        if (itemId) {
-          await prisma.recipeItem.create({
-            data: { foodId: created.id, itemId, quantity: line.qty },
-          })
-        }
+      // Quantities are written in the item's own base unit, so no conversion
+      // and no wastage — one portion of the dish, which is what yieldQty 1 says.
+      const lines = food.recipe
+        .map((line) => ({ itemId: inventory[line.item], quantity: line.qty }))
+        .filter((line): line is { itemId: string; quantity: number } => Boolean(line.itemId))
+
+      if (lines.length) {
+        const items = await prisma.inventoryItem.findMany({
+          where: { id: { in: lines.map((l) => l.itemId) } },
+          select: { id: true, unit: true },
+        })
+        const unitById = new Map(items.map((i) => [i.id, i.unit]))
+
+        await prisma.recipe.create({
+          data: {
+            restaurantId: restaurant.id,
+            foodId: created.id,
+            yieldQty: 1,
+            ingredients: {
+              create: lines.map((line, index) => ({
+                inventoryItemId: line.itemId,
+                quantity: line.quantity,
+                unit: unitById.get(line.itemId)!,
+                sortOrder: index,
+              })),
+            },
+          },
+        })
       }
     }
 

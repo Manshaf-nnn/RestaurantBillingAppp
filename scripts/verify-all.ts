@@ -61,6 +61,7 @@ const SERVICE = [
   'expiry-tracking-test',
   'staff-attendance-test',
   'live-board-test',
+  'recipe-costing-test',
 ]
 
 const RUNTIME = [

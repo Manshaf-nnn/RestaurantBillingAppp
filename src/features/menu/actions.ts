@@ -279,7 +279,6 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
           })
           if (!existing) throw new NotFoundError('Menu item')
           await tx.food.update({ where: { id: foodId }, data: base })
-          await tx.recipeItem.deleteMany({ where: { foodId } })
         } else {
           const created = await tx.food.create({
             data: { ...base, restaurantId: user.restaurantId },
@@ -399,23 +398,14 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
           }
         }
 
-        if (data.recipe.length) {
-          const validItems = await tx.inventoryItem.findMany({
-            where: {
-              id: { in: data.recipe.map((line) => line.itemId) },
-              restaurantId: user.restaurantId,
-            },
-            select: { id: true },
-          })
-          const allowed = new Set(validItems.map((item) => item.id))
-          await tx.recipeItem.createMany({
-            data: data.recipe
-              .filter((line) => allowed.has(line.itemId))
-              .map((line) => ({ foodId: foodId!, itemId: line.itemId, quantity: line.quantity })),
-            skipDuplicates: true,
-          })
-        }
-
+        /*
+         * A dish's ingredients are edited on the Recipes screen, not here.
+         *
+         * This used to write a second, flat recipe table that the depletion
+         * resolver ignored whenever the dish also had a versioned recipe — so
+         * ingredients typed into this dialog saved successfully and then did
+         * nothing, while stock moved by somebody else's numbers.
+         */
         return foodId
       })
 

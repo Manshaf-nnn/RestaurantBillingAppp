@@ -63,13 +63,6 @@ interface GroupRow {
   options: OptionRow[]
 }
 
-interface RecipeRow {
-  itemId: string
-  name: string
-  unit: string
-  quantity: number
-}
-
 interface FormState {
   categoryId: string
   name: string
@@ -92,7 +85,6 @@ interface FormState {
   happyHourEnd: string
   happyHourDays: number[]
   variantGroups: GroupRow[]
-  recipe: RecipeRow[]
   /** Which locations sell this dish, and what each charges. */
   branches: BranchRow[]
 }
@@ -132,7 +124,6 @@ const EMPTY: FormState = {
   happyHourEnd: '',
   happyHourDays: [],
   variantGroups: [],
-  recipe: [],
   branches: [],
 }
 
@@ -154,7 +145,6 @@ export function FoodDialog({
   onOpenChange,
   foodId,
   categories,
-  inventoryItems,
   currency,
   branches = [],
   activeBranchId = null,
@@ -163,7 +153,6 @@ export function FoodDialog({
   onOpenChange: (open: boolean) => void
   foodId?: string
   categories: CategoryOption[]
-  inventoryItems: Array<{ id: string; name: string; unit: string }>
   currency: string
   /** Locations this dish may be sold at. Empty for a single-site restaurant. */
   branches?: BranchOption[]
@@ -250,7 +239,6 @@ export function FoodDialog({
               isAvailable: option.isAvailable,
             })),
           })),
-          recipe: data.recipe,
         })
       })
       .finally(() => setLoading(false))
@@ -381,7 +369,6 @@ export function FoodDialog({
             sortOrder: optionIndex,
           })),
       })),
-      recipe: form.recipe.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
       branches: form.branches.map((row) => ({
         branchId: row.branchId,
         // Blank stays null: the branch inherits, and a later change to the
@@ -462,7 +449,7 @@ export function FoodDialog({
                   </span>
                 </TabsTrigger>
               ) : null}
-              {inventoryItems.length ? (
+              {foodId ? (
                 <TabsTrigger value="recipe" className="flex-1">
                   Recipe
                 </TabsTrigger>
@@ -941,65 +928,22 @@ export function FoodDialog({
             ) : null}
 
             {/* ── recipe ──────────────────────────────────────────── */}
-            {inventoryItems.length ? (
+            {foodId ? (
               <TabsContent value="recipe" className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Link ingredients so stock drops automatically when this item is cooked.
+                {/*
+                  This tab used to be a second ingredient editor, writing a flat
+                  table the depletion resolver ignored whenever the dish also had
+                  a recipe on the Recipes screen. Ingredients typed here saved
+                  and then did nothing. One screen owns a dish's ingredients now,
+                  and this points at it rather than competing with it.
+                */}
+                <p className="text-sm text-muted-foreground">
+                  Ingredients live on the Recipes screen, where you also see what
+                  the dish costs you and what it earns.
                 </p>
-                {form.recipe.map((line, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <span className="flex-1 text-sm">
-                      {line.name} <span className="text-muted-foreground">({line.unit})</span>
-                    </span>
-                    <Input
-                      type="number"
-                      step="any"
-                      value={line.quantity}
-                      onChange={(e) =>
-                        set(
-                          'recipe',
-                          form.recipe.map((r, i) =>
-                            i === index ? { ...r, quantity: Number(e.target.value) } : r,
-                          ),
-                        )
-                      }
-                      className="w-28"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => set('recipe', form.recipe.filter((_, i) => i !== index))}
-                      aria-label="Remove ingredient"
-                    >
-                      <Trash2 className="text-muted-foreground" />
-                    </Button>
-                  </div>
-                ))}
-                <Select
-                  value=""
-                  onValueChange={(itemId) => {
-                    const item = inventoryItems.find((entry) => entry.id === itemId)
-                    if (item && !form.recipe.some((line) => line.itemId === itemId)) {
-                      set('recipe', [
-                        ...form.recipe,
-                        { itemId, name: item.name, unit: item.unit, quantity: 1 },
-                      ])
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Add an ingredient…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {inventoryItems
-                      .filter((item) => !form.recipe.some((line) => line.itemId === item.id))
-                      .map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name} ({item.unit})
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                <Button variant="outline" onClick={() => router.push(`/dashboard/recipes/${foodId}`)}>
+                  Open this dish&rsquo;s recipe
+                </Button>
               </TabsContent>
             ) : null}
           </Tabs>

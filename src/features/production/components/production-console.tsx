@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, Factory, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChefHat, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -11,31 +11,31 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, parseMoney } from '@/lib/money'
 import { callAction } from '@/lib/use-action'
 import {
   completeProductionAction, createProductionOrderAction,
-  createProductionSpecAction, setProductionSpecActiveAction, setProductionStatusAction,
-  updateProductionSpecAction,
+  saveMakeAheadRecipeAction, setMakeAheadRecipeActiveAction, setProductionStatusAction,
 } from '../actions'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 const REASONS = [
-  { value: 'PRODUCTION_LOSS', label: 'Production loss' },
+  { value: 'PRODUCTION_LOSS', label: 'Some was lost making it' },
   { value: 'DAMAGED', label: 'Damaged' },
-  { value: 'INGREDIENT_SHORTAGE', label: 'Ingredient shortage' },
-  { value: 'QUALITY_ISSUE', label: 'Quality issue' },
-  { value: 'OTHER', label: 'Other' },
+  { value: 'INGREDIENT_SHORTAGE', label: 'Ran short of an ingredient' },
+  { value: 'QUALITY_ISSUE', label: 'Not good enough to use' },
+  { value: 'OTHER', label: 'Something else' },
 ] as const
 
-export interface ProductionSpecView {
+export interface MakeAheadRecipeView {
   id: string
   name: string
   isActive: boolean
-  outputItemId: string
+  producesItemId: string
   outputName: string
   outputUnit: string
-  outputQty: number
+  /** How much one run of the recipe makes. New recipes are created at 1. */
+  yieldQty: number
   shelfLifeDays: number | null
   notes: string | null
   items: Array<{ itemId: string; name: string; quantity: number; unit: string }>
@@ -44,28 +44,46 @@ export interface ProductionSpecView {
 export interface ProductionConsoleData {
   houses: Array<{ id: string; name: string }>
   items: Array<{ id: string; name: string; unit: string; quantity: number }>
-  specs: ProductionSpecView[]
+  recipes: MakeAheadRecipeView[]
   pending: Array<{
     id: string
     number: string
     status: string
-    specName: string | null
+    recipeName: string | null
     plannedQty: number
-    outputQtyPerBatch: number | null
     outputName: string | null
     outputUnit: string | null
   }>
   currency: string
 }
 
+/** Plain words for a status. The enum has more; only these are reachable. */
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'to make',
+  PLANNED: 'to make',
+  APPROVED: 'approved',
+  IN_PROGRESS: 'approved',
+  COMPLETED: 'done',
+  PARTIALLY_COMPLETED: 'done',
+  CANCELLED: 'cancelled',
+}
+
 /**
- * Running production.
+ * Kitchen jobs — making something ahead so it is on the shelf when you need it.
  *
- * Three things happen here and they are kept visibly separate, because only one
- * of them touches stock. Defining a recipe and planning a run change nothing;
- * completing a run consumes raw materials and creates finished goods in a
- * single transaction. The screen says so at each step rather than leaving
- * someone to find out.
+ * Two things happen here and only one of them touches stock. Writing a recipe
+ * and planning a job change nothing; finishing a job takes the ingredients out
+ * and puts the finished item in, in a single transaction. The screen says so at
+ * each step rather than leaving someone to find out.
+ *
+ * ── What this screen used to be ─────────────────────────────────────────────
+ *
+ * It asked for a number of BATCHES against a recipe that made ten of something,
+ * so "10" quietly meant a hundred loaves and the screen had to print the
+ * multiplication underneath every field. It also called its recipes something
+ * different from the Recipes screen while being the same idea, and apologised
+ * for it in a caption. Both are gone: a job says how many you want, in the
+ * finished item's own unit.
  */
 export function ProductionConsole({
   data,
@@ -88,83 +106,88 @@ export function ProductionConsole({
   // Non-null while editing an existing recipe; the same form does both jobs,
   // because "add" and "edit" of the same thing diverging is how two screens end
   // up validating differently.
-  const [editingSpec, setEditingSpec] = React.useState<string | null>(null)
-  const [specName, setSpecName] = React.useState('')
-  const [outputId, setOutputId] = React.useState('')
-  const [outputQty, setOutputQty] = React.useState('')
+  const [editingRecipe, setEditingRecipe] = React.useState<string | null>(null)
+  const [recipeName, setRecipeName] = React.useState('')
+  const [makesItemId, setMakesItemId] = React.useState('')
+  const [makesQty, setMakesQty] = React.useState('1')
   const [shelfLife, setShelfLife] = React.useState('')
   const [lines, setLines] = React.useState<Array<{ key: string; itemId: string; quantity: string; unit: string }>>([])
 
-  const clearSpecForm = () => {
-    setEditingSpec(null)
-    setSpecName(''); setOutputId(''); setOutputQty(''); setShelfLife(''); setLines([])
+  const makesItem = data.items.find((i) => i.id === makesItemId) ?? null
+
+  const clearRecipeForm = () => {
+    setEditingRecipe(null)
+    setRecipeName(''); setMakesItemId(''); setMakesQty('1'); setShelfLife(''); setLines([])
   }
 
-  const loadSpec = (spec: ProductionSpecView) => {
-    setEditingSpec(spec.id)
-    setSpecName(spec.name)
-    setOutputId(spec.outputItemId)
-    setOutputQty(String(spec.outputQty))
-    setShelfLife(spec.shelfLifeDays === null ? '' : String(spec.shelfLifeDays))
+  const loadRecipe = (recipe: MakeAheadRecipeView) => {
+    setEditingRecipe(recipe.id)
+    setRecipeName(recipe.name)
+    setMakesItemId(recipe.producesItemId)
+    setMakesQty(String(recipe.yieldQty))
+    setShelfLife(recipe.shelfLifeDays === null ? '' : String(recipe.shelfLifeDays))
     setLines(
-      spec.items.map((line, index) => ({
-        key: `${spec.id}-${index}`,
+      recipe.items.map((line, index) => ({
+        key: `${recipe.id}-${index}`,
         itemId: line.itemId,
         quantity: String(line.quantity),
         unit: line.unit,
       })),
     )
     if (typeof window !== 'undefined') {
-      document.getElementById('sp-name')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      document.getElementById('mr-name')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }
 
-  const saveSpec = async () => {
+  const saveRecipe = async () => {
     const items = lines.filter((l) => l.itemId && Number(l.quantity) > 0)
       .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity), unit: l.unit }))
-    if (!specName.trim() || !outputId || !(Number(outputQty) > 0) || items.length === 0) {
-      toast.error('Name it, say what it produces and add raw materials')
+    if (!recipeName.trim() || !makesItemId || !(Number(makesQty) > 0) || items.length === 0) {
+      toast.error('Name it, say what it makes, and add ingredients')
       return
-    }
-    const payload = {
-      name: specName, outputItemId: outputId, outputQty: Number(outputQty),
-      shelfLifeDays: shelfLife ? Number(shelfLife) : undefined, items,
     }
     setBusy(true)
     const r = await callAction(() =>
-      editingSpec
-        ? updateProductionSpecAction({ specId: editingSpec, ...payload })
-        : createProductionSpecAction(payload),
+      saveMakeAheadRecipeAction({
+        recipeId: editingRecipe ?? undefined,
+        name: recipeName,
+        producesItemId: makesItemId,
+        yieldQty: Number(makesQty),
+        shelfLifeDays: shelfLife ? Number(shelfLife) : undefined,
+        items,
+      }),
     )
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
-    toast.success(editingSpec ? 'Recipe updated' : 'Recipe saved')
-    clearSpecForm()
+    toast.success(editingRecipe ? 'Recipe updated' : 'Recipe saved')
+    clearRecipeForm()
     router.refresh()
   }
 
-  const retireSpec = async (specId: string, isActive: boolean) => {
+  const retireRecipe = async (recipeId: string, isActive: boolean) => {
     setBusy(true)
-    const r = await callAction(() => setProductionSpecActiveAction({ specId, isActive }))
+    const r = await callAction(() => setMakeAheadRecipeActiveAction({ recipeId, isActive }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
     toast.success(isActive ? 'Recipe is back in use' : 'Recipe retired')
     router.refresh()
   }
 
-  // ── run ───────────────────────────────────────────────────────────────────
+  // ── job ───────────────────────────────────────────────────────────────────
   const [houseId, setHouseId] = React.useState(data.houses[0]?.id ?? '')
-  const [specId, setSpecId] = React.useState('')
-  const [batches, setBatches] = React.useState('')
-  const chosenSpec = data.specs.find((s) => s.id === specId) ?? null
+  const [jobRecipeId, setJobRecipeId] = React.useState('')
+  const [howMany, setHowMany] = React.useState('')
+  const chosenRecipe = data.recipes.find((r) => r.id === jobRecipeId) ?? null
 
-  const startRun = async () => {
+  const startJob = async () => {
     setBusy(true)
-    const r = await callAction(() => createProductionOrderAction({ branchId: houseId, specId, plannedQty: Number(batches) }))
+    const r = await callAction(() => createProductionOrderAction({
+      branchId: houseId, recipeId: jobRecipeId, plannedQty: Number(howMany),
+    }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
-    toast.success(`${r.data.number} planned — nothing consumed yet`)
-    setSpecId(''); setBatches('')
+    toast.success(`${r.data.number} added — nothing taken from stock yet`)
+    setJobRecipeId(''); setHowMany('')
     router.refresh()
   }
 
@@ -177,27 +200,37 @@ export function ProductionConsole({
     router.refresh()
   }
 
-  // ── completion ────────────────────────────────────────────────────────────
+  // ── finishing ─────────────────────────────────────────────────────────────
   const [made, setMade] = React.useState<Record<string, string>>({})
   const [reason, setReason] = React.useState<Record<string, string>>({})
   const [overhead, setOverhead] = React.useState<Record<string, string>>({})
 
   const finish = async (orderId: string, planned: number) => {
-    const actual = made[orderId] === undefined ? planned : Number(made[orderId])
-    if (!Number.isFinite(actual) || actual < 0) { toast.error('Enter how many batches were made'); return }
+    const raw = made[orderId]
+    const actual = raw === undefined || raw === '' ? planned : Number(raw)
+    /*
+     * Zero is refused rather than treated as "all of it". A blank box gives
+     * `Number('')` === 0, which passes every finite/negative check — and used to
+     * consume every ingredient, produce nothing, and record a cost of zero
+     * without a word.
+     */
+    if (!Number.isFinite(actual) || actual <= 0) {
+      toast.error('Enter how many came out. If none did, cancel the job instead.')
+      return
+    }
     if (actual < planned && !reason[orderId]) {
-      toast.error('Made less than planned — choose a reason')
+      toast.error('Fewer came out than planned — say why')
       return
     }
     /*
-     * Overheads are entered in whole currency and stored in minor units, the
-     * same as every other money field in this app. Typing 500 must not become
-     * five rupees.
+     * Overheads are typed in whole currency and stored in minor units, through
+     * the same helper every other money field uses. This multiplied by 100 by
+     * hand, which is 100× too much in yen, won and dong.
      */
-    const overheadMajor = Number(overhead[orderId] ?? '')
+    const typed = overhead[orderId]
     const overheadMinor =
-      overhead[orderId] && Number.isFinite(overheadMajor) && overheadMajor >= 0
-        ? Math.round(overheadMajor * 100)
+      typed && Number.isFinite(Number(typed)) && Number(typed) >= 0
+        ? parseMoney(typed, data.currency)
         : undefined
 
     setBusy(true)
@@ -207,26 +240,28 @@ export function ProductionConsole({
     }))
     setBusy(false)
     if (!r.ok) { toast.error(r.error); return }
-    toast.success(`${r.data.produced} produced at ${money(r.data.unitCost)} each`)
+    toast.success(`${r.data.produced} made, at ${money(r.data.unitCost)} each`)
     router.refresh()
   }
 
   if (data.houses.length === 0) {
     return (
-      <SectionCard title="No production house">
+      <SectionCard title="No production kitchen yet">
         <p className="py-6 text-center text-sm text-muted-foreground">
-          Add a location of type <strong>Production house</strong> first, then production runs appear here.
+          Add a location of type <strong>Production house</strong> first, then kitchen jobs appear here.
         </p>
       </SectionCard>
     )
   }
 
+  const activeRecipes = data.recipes.filter((r) => r.isActive)
+
   return (
     <div className="space-y-5">
       {data.pending.length > 0 && (
         <SectionCard
-          title="Runs in progress"
-          description="None of these have consumed anything. Stock moves only when a run is completed."
+          title="Jobs to do"
+          description="Nothing here has taken anything from stock. That happens when you mark a job done."
         >
           <ul className="divide-y divide-border">
             {data.pending.map((p) => {
@@ -234,29 +269,25 @@ export function ProductionConsole({
               const short = Number(actual) < p.plannedQty
               const awaitingApproval = p.status === 'DRAFT' || p.status === 'PLANNED'
               const readyToRun = p.status === 'APPROVED' || p.status === 'IN_PROGRESS'
-              const yieldOf = (batches: number) =>
-                p.outputQtyPerBatch !== null && Number.isFinite(batches)
-                  ? `${Math.round(batches * p.outputQtyPerBatch * 1e6) / 1e6} ${p.outputUnit ?? ''} of ${p.outputName ?? ''}`.trim()
-                  : null
+              const unit = p.outputUnit?.toLowerCase() ?? ''
 
               return (
                 <li key={p.id} className="py-3">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <Factory className="h-4 w-4 text-muted-foreground" />
+                    <ChefHat className="h-4 w-4 text-muted-foreground" />
                     <Link href={`/dashboard/production/${p.id}`} className="font-medium tabular-nums hover:underline">
                       {p.number}
                     </Link>
-                    <span>{p.specName ?? 'Run'}</span>
-                    <Badge variant="secondary">{p.status.replace(/_/g, ' ').toLowerCase()}</Badge>
                     {/*
-                      "10 batches" means nothing on its own. Someone standing at
-                      the mixer needs to know it is 100 loaves, without doing the
-                      multiplication themselves.
+                      One quantity, in the finished item's own unit. This used to
+                      print "10 batches planned = 100 PIECE of Bread" because the
+                      number on file meant something nobody had asked for.
                     */}
-                    <span className="text-muted-foreground">
-                      {p.plannedQty} batch{p.plannedQty === 1 ? '' : 'es'} planned
-                      {yieldOf(p.plannedQty) ? ` = ${yieldOf(p.plannedQty)}` : ''}
+                    <span>
+                      Make <strong className="tabular-nums">{p.plannedQty}</strong> {unit}{' '}
+                      {p.outputName ?? p.recipeName ?? ''}
                     </span>
+                    <Badge variant="secondary">{STATUS_LABEL[p.status] ?? p.status.toLowerCase()}</Badge>
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-end gap-2">
@@ -268,25 +299,23 @@ export function ProductionConsole({
                     )}
                     {awaitingApproval && !canApprove && (
                       <p className="text-xs text-muted-foreground">
-                        Waiting for approval — you do not have permission to approve runs.
+                        Waiting for approval — you do not have permission to approve jobs.
                       </p>
                     )}
                     {readyToRun && (
                       <>
                         <div className="space-y-1">
-                          <Label className="text-xs">Batches actually made</Label>
+                          <Label className="text-xs">How many came out</Label>
                           <Input
                             className="w-32"
                             inputMode="decimal"
                             value={actual}
                             onChange={(e) => setMade((c) => ({ ...c, [p.id]: e.target.value }))}
                           />
-                          {yieldOf(Number(actual)) ? (
-                            <p className="text-xs text-muted-foreground">= {yieldOf(Number(actual))}</p>
-                          ) : null}
+                          <p className="text-xs text-muted-foreground">{unit || 'units'}</p>
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-xs">Overheads (optional)</Label>
+                          <Label className="text-xs">Other costs (optional)</Label>
                           <Input
                             className="w-32"
                             inputMode="decimal"
@@ -298,7 +327,7 @@ export function ProductionConsole({
                         </div>
                         {short && (
                           <div className="space-y-1">
-                            <Label className="text-xs">Why short?</Label>
+                            <Label className="text-xs">Why fewer?</Label>
                             <select
                               className="h-10 rounded-lg border border-input bg-background px-2 text-sm"
                               value={reason[p.id] ?? ''}
@@ -311,14 +340,14 @@ export function ProductionConsole({
                         )}
                         <Button size="sm" onClick={() => finish(p.id, p.plannedQty)} disabled={busy}>
                           <Play className="mr-1.5 h-4 w-4" />
-                          Complete run
+                          Mark done
                         </Button>
                       </>
                     )}
                     {/*
-                      A run with no way out of it is a row that sits on this list
-                      for ever. Cancelling consumes nothing — nothing has moved
-                      yet — so it is always safe before completion.
+                      A job with no way out of it is a row that sits on this list
+                      for ever. Cancelling takes nothing from stock — nothing has
+                      moved yet — so it is always safe before the job is done.
                     */}
                     <Button
                       size="sm"
@@ -332,10 +361,10 @@ export function ProductionConsole({
                   </div>
 
                   {short && readyToRun ? (
-                    <p className="mt-2 border-l-2 border-amber-500/50 pl-3 text-xs text-muted-foreground">
-                      All {p.plannedQty} batches&apos; worth of materials will be consumed — it was
-                      used whether or not it became product — and the cost divided over the{' '}
-                      {actual} that came out. Each one will cost more than on a good day.
+                    <p className="mt-2 border-l-2 border-warning/60 pl-3 text-xs text-muted-foreground">
+                      Ingredients for {p.plannedQty} come out of stock even though only {actual}{' '}
+                      came out of the kitchen — they were used either way. The cost is spread over
+                      the {actual}, so each one costs more than on a good day.
                     </p>
                   ) : null}
                 </li>
@@ -346,13 +375,13 @@ export function ProductionConsole({
       )}
 
       <SectionCard
-        title="Start a run"
-        description="Planning consumes nothing. Approve it, then complete it when the food is actually made."
+        title="Make something"
+        description="Adding a job takes nothing from stock. Approve it, then mark it done when the food is actually made."
       >
         <div className="grid gap-4 sm:grid-cols-3">
           {data.houses.length > 1 && (
             <div className="space-y-1.5">
-              <Label htmlFor="house">Production house</Label>
+              <Label htmlFor="house">Kitchen</Label>
               <select id="house" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
                 value={houseId} onChange={(e) => setHouseId(e.target.value)}>
                 {data.houses.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
@@ -360,64 +389,63 @@ export function ProductionConsole({
             </div>
           )}
           <div className="space-y-1.5">
-            <Label htmlFor="spec">What to make</Label>
-            <select id="spec" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-              value={specId} onChange={(e) => setSpecId(e.target.value)}>
+            <Label htmlFor="job-recipe">What are you making?</Label>
+            <select id="job-recipe" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+              value={jobRecipeId} onChange={(e) => setJobRecipeId(e.target.value)}>
               <option value="">Choose a recipe…</option>
-              {data.specs.filter((s) => s.isActive).map((s) => (
-                <option key={s.id} value={s.id}>{s.name} — {s.outputQty} {s.outputName} per batch</option>
+              {activeRecipes.map((r) => (
+                <option key={r.id} value={r.id}>{r.name}</option>
               ))}
             </select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="batches">Batches</Label>
-            <Input id="batches" inputMode="decimal" value={batches} onChange={(e) => setBatches(e.target.value)} />
-            {chosenSpec && Number(batches) > 0 ? (
+            <Label htmlFor="how-many">How many?</Label>
+            <Input id="how-many" inputMode="decimal" value={howMany} onChange={(e) => setHowMany(e.target.value)} />
+            {chosenRecipe ? (
               <p className="text-xs text-muted-foreground">
-                = {Math.round(Number(batches) * chosenSpec.outputQty * 1e6) / 1e6}{' '}
-                {chosenSpec.outputUnit} of {chosenSpec.outputName}
+                {chosenRecipe.outputUnit.toLowerCase()} of {chosenRecipe.outputName}
               </p>
             ) : null}
           </div>
         </div>
-        <Button className="mt-4" onClick={startRun} disabled={busy || !specId || !(Number(batches) > 0)}>
+        <Button className="mt-4" onClick={startJob} disabled={busy || !jobRecipeId || !(Number(howMany) > 0)}>
           <Plus className="mr-2 h-4 w-4" />
-          Plan run
+          Add job
         </Button>
-        {data.specs.filter((s) => s.isActive).length === 0 && (
-          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-            No production recipes yet — add one below first.
+        {activeRecipes.length === 0 && (
+          <p className="mt-2 text-xs text-warning">
+            No make-ahead recipes yet — write one below first.
           </p>
         )}
       </SectionCard>
 
-      {data.specs.length > 0 ? (
+      {data.recipes.length > 0 ? (
         <SectionCard
-          title="Recipes"
-          description="What each batch makes. Edit one and future runs use the new version; runs already completed keep the costs they were completed with."
+          title="Make-ahead recipes"
+          description="Edit one and future jobs use the new version. Jobs already done keep the costs they were done with."
         >
           <ul className="divide-y divide-border">
-            {data.specs.map((spec) => (
-              <li key={spec.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
-                <span className="font-medium">{spec.name}</span>
+            {data.recipes.map((recipe) => (
+              <li key={recipe.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+                <span className="font-medium">{recipe.name}</span>
                 <span className="text-muted-foreground">
-                  1 batch = {spec.outputQty} {spec.outputUnit} of {spec.outputName}
-                  {spec.items.length > 0 ? ` · ${spec.items.length} ingredient${spec.items.length === 1 ? '' : 's'}` : ''}
-                  {spec.shelfLifeDays ? ` · keeps ${spec.shelfLifeDays} days` : ''}
+                  makes {recipe.yieldQty} {recipe.outputUnit.toLowerCase()} of {recipe.outputName}
+                  {recipe.items.length > 0 ? ` · ${recipe.items.length} ingredient${recipe.items.length === 1 ? '' : 's'}` : ''}
+                  {recipe.shelfLifeDays ? ` · keeps ${recipe.shelfLifeDays} days` : ''}
                 </span>
-                {!spec.isActive ? <Badge variant="secondary">Retired</Badge> : null}
+                {!recipe.isActive ? <Badge variant="secondary">Retired</Badge> : null}
                 <div className="ml-auto flex gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => loadSpec(spec)} disabled={busy}>
+                  <Button size="sm" variant="ghost" onClick={() => loadRecipe(recipe)} disabled={busy}>
                     <Pencil className="mr-1.5 h-4 w-4" />
                     Edit
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => retireSpec(spec.id, !spec.isActive)}
+                    onClick={() => retireRecipe(recipe.id, !recipe.isActive)}
                     disabled={busy}
                   >
-                    {spec.isActive ? 'Retire' : 'Restore'}
+                    {recipe.isActive ? 'Retire' : 'Restore'}
                   </Button>
                 </div>
               </li>
@@ -427,33 +455,44 @@ export function ProductionConsole({
       ) : null}
 
       <SectionCard
-        title={editingSpec ? 'Edit recipe' : 'Production recipe'}
-        description="What one batch consumes and produces. Different from a menu recipe: this turns stock into different stock."
+        title={editingRecipe ? 'Edit recipe' : 'New make-ahead recipe'}
+        description="Something the kitchen makes in advance and puts on the shelf — sauce, stock, patties, dough."
       >
         <div className="grid gap-4 sm:grid-cols-4">
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="sp-name">Name</Label>
-            <Input id="sp-name" placeholder="e.g. Chicken Patty" value={specName} onChange={(e) => setSpecName(e.target.value)} />
+            <Label htmlFor="mr-name">Name</Label>
+            <Input id="mr-name" placeholder="e.g. Chicken patties" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="sp-out">Produces</Label>
-            <select id="sp-out" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-              value={outputId} onChange={(e) => setOutputId(e.target.value)}>
+            <Label htmlFor="mr-out">What it makes</Label>
+            <select id="mr-out" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+              value={makesItemId} onChange={(e) => setMakesItemId(e.target.value)}>
               <option value="">Choose…</option>
               {data.items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="sp-qty">Per batch</Label>
-            <Input id="sp-qty" inputMode="decimal" value={outputQty} onChange={(e) => setOutputQty(e.target.value)} />
+            <Label htmlFor="mr-qty">How much it makes</Label>
+            <Input id="mr-qty" inputMode="decimal" value={makesQty} onChange={(e) => setMakesQty(e.target.value)} />
+            {/*
+              Defaulted to 1 on purpose: then "make 100" means 100 and there is
+              no batch size for anyone to multiply in their head. Leave it at 1
+              and write the ingredients for one.
+            */}
+            <p className="text-xs text-muted-foreground">
+              {makesItem ? `${makesItem.unit.toLowerCase()} — leave at 1 and write the ingredients for one` : 'Leave at 1 unless you always make a fixed batch'}
+            </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="sp-life">Shelf life (days)</Label>
-            <Input id="sp-life" inputMode="numeric" placeholder="optional" value={shelfLife} onChange={(e) => setShelfLife(e.target.value)} />
+            <Label htmlFor="mr-life">Keeps for (days)</Label>
+            <Input id="mr-life" inputMode="numeric" placeholder="optional" value={shelfLife} onChange={(e) => setShelfLife(e.target.value)} />
           </div>
         </div>
 
-        <p className="mt-4 mb-2 text-sm font-medium">Raw materials used per batch</p>
+        <p className="mt-4 mb-2 text-sm font-medium">
+          Ingredients for {Number(makesQty) > 0 ? Number(makesQty) : 1}{' '}
+          {makesItem ? makesItem.unit.toLowerCase() : ''}
+        </p>
         <ul className="space-y-2">
           {lines.map((l) => (
             <li key={l.key} className="grid grid-cols-12 items-end gap-2">
@@ -466,7 +505,7 @@ export function ProductionConsole({
                 </select>
               </div>
               <div className="col-span-5 sm:col-span-3">
-                <Input inputMode="decimal" placeholder="Qty" value={l.quantity}
+                <Input inputMode="decimal" placeholder="How much" value={l.quantity}
                   onChange={(e) => setLines((c) => c.map((x) => x.key === l.key ? { ...x, quantity: e.target.value } : x))} />
               </div>
               <div className="col-span-5 sm:col-span-2">
@@ -489,13 +528,13 @@ export function ProductionConsole({
           <Button variant="outline" size="sm"
             onClick={() => setLines((c) => [...c, { key: `${Date.now()}-${c.length}`, itemId: '', quantity: '', unit: 'KG' }])}>
             <Plus className="mr-1.5 h-4 w-4" />
-            Add material
+            Add ingredient
           </Button>
-          <Button size="sm" onClick={saveSpec} disabled={busy}>
-            {editingSpec ? 'Save changes' : 'Save recipe'}
+          <Button size="sm" onClick={saveRecipe} disabled={busy}>
+            {editingRecipe ? 'Save changes' : 'Save recipe'}
           </Button>
-          {editingSpec ? (
-            <Button size="sm" variant="ghost" onClick={clearSpecForm} disabled={busy}>
+          {editingRecipe ? (
+            <Button size="sm" variant="ghost" onClick={clearRecipeForm} disabled={busy}>
               Cancel
             </Button>
           ) : null}

@@ -39,14 +39,9 @@ export default async function MenuPage({
     skipDuplicates: true,
   })
 
-  const [restaurant, menu, inventory, allBranches, branch] = await Promise.all([
+  const [restaurant, menu, allBranches, branch] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getManagedMenu(user.restaurantId, undefined, branchId),
-    prisma.inventoryItem.findMany({
-      where: { restaurantId: user.restaurantId, isActive: true },
-      select: { id: true, name: true, unit: true },
-      orderBy: { name: 'asc' },
-    }),
     // Only the locations this person may see, so the "Available at" list can
     // never be used to share a dish somewhere they have no business.
     prisma.branch.findMany({
@@ -79,7 +74,6 @@ export default async function MenuPage({
       activeBranchName={branch?.name ?? null}
       branchCount={menu.branchCount}
       categories={menu.categories.map((category) => ({ id: category.id, name: category.name }))}
-      inventoryItems={inventory}
       foods={menu.foods.map((food) => ({
         id: food.id,
         name: food.name,

@@ -7,9 +7,9 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { saveRecipe } from '@/features/recipes/service'
 import {
-  completeProduction, createProductionOrder, createProductionSpec, setProductionSpecActive,
-  setProductionStatus, updateProductionSpec,
+  completeProduction, createProductionOrder, setMakeAheadRecipeActive, setProductionStatus,
 } from './service'
 import { prisma } from '@/server/db/prisma'
 
@@ -22,81 +22,92 @@ const REASONS = ['PRODUCTION_LOSS', 'DAMAGED', 'INGREDIENT_SHORTAGE', 'QUALITY_I
  * in the file at runtime. Four features in this app were dead for weeks that
  * way.
  */
-const specShape = {
+const recipeShape = {
   name: z.string().trim().min(2, 'Name the recipe').max(80),
-  outputItemId: z.string().min(1, 'Choose what it produces'),
-  outputQty: z.coerce.number().positive('One batch must produce more than zero'),
+  producesItemId: z.string().min(1, 'Choose what it makes'),
+  yieldQty: z.coerce.number().positive('Say how much one batch makes'),
   shelfLifeDays: z.coerce.number().int().min(0).max(3650).optional(),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
   items: z.array(z.object({
     itemId: z.string().min(1),
     quantity: z.coerce.number().positive(),
     unit: z.enum(UNITS).optional(),
-  })).min(1, 'Add at least one raw material'),
-}
-
-/** Define what one batch consumes and produces. */
-export async function createProductionSpecAction(input: unknown): Promise<ActionResult<{ id: string }>> {
-  return runAction(
-    z.object(specShape),
-    input,
-    async (data) => {
-      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
-      const spec = await createProductionSpec({
-        restaurantId: user.restaurantId,
-        ...data,
-        notes: data.notes || null,
-      })
-      revalidatePath('/dashboard/production')
-      return { id: spec.id }
-    },
-    'Production recipe saved.',
-  )
+  })).min(1, 'Add at least one ingredient'),
 }
 
 /**
- * Change a recipe.
+ * Save a make-ahead recipe — what the kitchen makes in advance and puts on the
+ * shelf.
  *
- * Safe because completed runs keep the costs they were completed with —
- * consumption rows and the order's own totals are posted at the time and never
- * recalculated from the spec. Without this, a wrong yield meant creating a
- * near-duplicate recipe and hoping people picked the right one.
+ * This writes a `Recipe` with `producesItemId` set: the same model a dish recipe
+ * uses, so it versions, it nests, and completed jobs keep pointing at the exact
+ * version they were made against. It used to write a separate `ProductionSpec`
+ * table with none of that, which is how one product ended up describable — and
+ * costable — two different ways.
  */
-export async function updateProductionSpecAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+export async function saveMakeAheadRecipeAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
   return runAction(
-    z.object({ specId: z.string().min(1), ...specShape }),
+    z.object({ recipeId: z.string().optional(), ...recipeShape }),
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
-      const spec = await updateProductionSpec({
-        restaurantId: user.restaurantId,
-        ...data,
-        notes: data.notes || null,
+
+      const produces = await prisma.inventoryItem.findFirst({
+        where: { id: data.producesItemId, restaurantId: user.restaurantId },
+        select: { unit: true },
       })
+      if (!produces) throw new Error('That stock item no longer exists')
+
+      const recipe = await saveRecipe({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        producesItemId: data.producesItemId,
+        name: data.name,
+        yieldQty: data.yieldQty,
+        // A make-ahead recipe is measured in whatever the finished item is
+        // measured in — there is no second unit for the owner to get wrong.
+        yieldUnit: produces.unit,
+        prepNotes: data.notes || null,
+        shelfLifeDays: data.shelfLifeDays ?? null,
+        ingredients: data.items.map((line) => ({
+          inventoryItemId: line.itemId,
+          quantity: line.quantity,
+          unit: (line.unit ?? produces.unit) as never,
+        })),
+      })
+
       await audit({
         restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-        action: AUDIT_ACTIONS.PRODUCTION_SPEC_UPDATED, entity: 'ProductionSpec', entityId: spec.id,
-        after: { name: spec.name, outputQty: spec.outputQty, lines: data.items.length },
+        action: AUDIT_ACTIONS.PRODUCTION_SPEC_UPDATED, entity: 'Recipe', entityId: recipe.id,
+        after: { name: recipe.name, makes: recipe.yieldQty, lines: data.items.length },
       })
       revalidatePath('/dashboard/production')
-      return { id: spec.id }
+      return { id: recipe.id }
     },
-    'Recipe updated.',
+    'Recipe saved.',
   )
 }
 
-/** Retire a recipe, or bring it back. Never deleted — old runs point at it. */
-export async function setProductionSpecActiveAction(
+/** Retire a recipe, or bring it back. Never deleted — finished jobs point at it. */
+export async function setMakeAheadRecipeActiveAction(
   input: unknown,
 ): Promise<ActionResult<{ id: string; isActive: boolean }>> {
   return runAction(
-    z.object({ specId: z.string().min(1), isActive: z.coerce.boolean() }),
+    z.object({ recipeId: z.string().min(1), isActive: z.coerce.boolean() }),
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
-      const spec = await setProductionSpecActive({ restaurantId: user.restaurantId, ...data })
+      // The "still in use" guard lives in the service, so it holds however this
+      // is reached and is covered by the service tests.
+      const recipe = await setMakeAheadRecipeActive({
+        restaurantId: user.restaurantId,
+        recipeId: data.recipeId,
+        isActive: data.isActive,
+      })
       revalidatePath('/dashboard/production')
-      return { id: spec.id, isActive: spec.isActive }
+      return { id: recipe.id, isActive: recipe.isActive }
     },
     'Recipe updated.',
   )
@@ -108,8 +119,8 @@ export async function createProductionOrderAction(
   return runAction(
     z.object({
       branchId: z.string().min(1, 'Choose the production house'),
-      specId: z.string().min(1, 'Choose what to make'),
-      plannedQty: z.coerce.number().positive('Plan at least one batch'),
+      recipeId: z.string().min(1, 'Choose what to make'),
+      plannedQty: z.coerce.number().positive('Say how many to make'),
       notes: z.string().trim().max(300).optional().or(z.literal('')),
     }),
     input,
@@ -117,7 +128,7 @@ export async function createProductionOrderAction(
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
       await assertBranchAccess(user, data.branchId)
       const order = await createProductionOrder({
-        restaurantId: user.restaurantId, branchId: data.branchId, specId: data.specId,
+        restaurantId: user.restaurantId, branchId: data.branchId, recipeId: data.recipeId,
         plannedQty: data.plannedQty, notes: data.notes || null, userId: user.id,
       })
       await audit({
@@ -128,7 +139,7 @@ export async function createProductionOrderAction(
       revalidatePath('/dashboard/production')
       return { id: order.id, number: order.number }
     },
-    'Production run created.',
+    'Kitchen job created.',
   )
 }
 
@@ -136,7 +147,9 @@ export async function setProductionStatusAction(input: unknown): Promise<ActionR
   return runAction(
     z.object({
       orderId: z.string().min(1),
-      status: z.enum(['PLANNED', 'APPROVED', 'IN_PROGRESS', 'CANCELLED']),
+      // Three reachable states: to make, approved, cancelled. PLANNED and
+      // IN_PROGRESS existed in the enum but no screen could ever produce them.
+      status: z.enum(['DRAFT', 'APPROVED', 'CANCELLED']),
     }),
     input,
     async (data) => {
@@ -151,13 +164,13 @@ export async function setProductionStatusAction(input: unknown): Promise<ActionR
       revalidatePath('/dashboard/production')
       return { status: order.status }
     },
-    'Run updated.',
+    'Job updated.',
   )
 }
 
 /**
- * Finish a run: raw materials leave, finished goods appear, cost is worked out.
- * The only step here that moves stock.
+ * Finish a job: ingredients leave, the finished item appears, cost is worked
+ * out. The only step here that moves stock.
  */
 export async function completeProductionAction(
   input: unknown,
@@ -165,9 +178,9 @@ export async function completeProductionAction(
   return runAction(
     z.object({
       orderId: z.string().min(1),
-      actualQty: z.coerce.number().min(0),
+      actualQty: z.coerce.number().positive('Say how many came out'),
       /*
-       * Labour, power, gas — everything the run cost that is not an ingredient.
+       * Labour, power, gas — everything the job cost that is not an ingredient.
        * The costing already added it to the divisor's numerator; there was
        * simply no way to enter it, so it was always zero and every finished
        * item looked cheaper to make than it was.
@@ -182,15 +195,15 @@ export async function completeProductionAction(
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
       await assertBranchAccess(user, await houseOf(user.restaurantId, data.orderId))
 
-      if (data.overheadCost !== undefined) {
-        await prisma.productionOrder.updateMany({
-          where: { id: data.orderId, restaurantId: user.restaurantId },
-          data: { overheadCost: data.overheadCost },
-        })
-      }
-
+      /*
+       * Overhead goes in as a parameter rather than being written first. It used
+       * to be saved in its own statement before this call, so a job that failed
+       * to finish — short of stock, already completed by somebody else — kept
+       * the overhead anyway and carried it into the next attempt.
+       */
       const result = await completeProduction({
         restaurantId: user.restaurantId, orderId: data.orderId, actualQty: data.actualQty,
+        overheadCost: data.overheadCost,
         varianceReason: data.varianceReason ?? null, varianceNote: data.varianceNote || null,
         batchNumber: data.batchNumber || null, userId: user.id,
       })
@@ -206,12 +219,12 @@ export async function completeProductionAction(
       revalidatePath('/dashboard/inventory')
       return { produced: result.producedQty, unitCost: result.unitCost, variance: result.variance }
     },
-    'Production complete — stock updated.',
+    'Job finished — stock updated.',
   )
 }
 
 /**
- * Which production house a run belongs to.
+ * Which production house a job belongs to.
  *
  * Read separately so the branch check happens BEFORE the service starts a
  * transaction — refusing after the stock has begun moving would be a rollback

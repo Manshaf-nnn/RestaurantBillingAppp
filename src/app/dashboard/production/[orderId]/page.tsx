@@ -67,9 +67,13 @@ export default async function ProductionRunPage({
   const status = STATUS[run.status] ?? { label: run.status, variant: 'secondary' as const }
 
   const finished = run.status === 'COMPLETED' || run.status === 'PARTIALLY_COMPLETED'
-  const plannedOutput = run.outputQtyPerBatch ? run.plannedQty * run.outputQtyPerBatch : null
-  const actualOutput =
-    run.actualQty !== null && run.outputQtyPerBatch ? run.actualQty * run.outputQtyPerBatch : null
+  /*
+   * Both are already in the finished item's own unit. They used to count
+   * batches, so every figure on this page had to be multiplied by the recipe's
+   * yield before it meant anything.
+   */
+  const plannedOutput = run.plannedQty
+  const actualOutput = run.actualQty
 
   return (
     <>
@@ -83,7 +87,7 @@ export default async function ProductionRunPage({
 
       <PageHeader
         title={run.number}
-        description={`${run.specName ?? 'No recipe'} · ${run.branchName}`}
+        description={`${run.recipeName ?? 'No recipe'} · ${run.branchName}`}
         actions={<Badge variant={status.variant}>{status.label}</Badge>}
       />
 

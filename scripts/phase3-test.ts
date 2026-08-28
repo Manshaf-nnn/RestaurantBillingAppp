@@ -211,12 +211,18 @@ async function main() {
   ok('a dish with no recipe says so rather than claiming zero cost', nc.problems.length > 0 && nc.foodCostPercent === null)
 
   console.log('\n── 10. Versioning ───────────────────────────────────────')
+  /*
+   * Retire v1 BEFORE creating v2. Doing it the other way round leaves two active
+   * recipes for one dish, and `activeRecipeForFood` would then pick a winner
+   * arbitrarily — which is why a partial unique index now refuses it outright.
+   * `saveRecipe` has always ordered these two writes correctly; this test did not.
+   */
+  await prisma.recipe.update({ where: { id: recipe.id }, data: { isActive: false } })
   const v2 = await prisma.recipe.create({
     data: { restaurantId: shop.id, foodId: burger.id, version: 2, isActive: true, yieldQty: 1,
       ingredients: { create: [{ inventoryItemId: patty.id, quantity: 2, unit: 'PIECE' }] } },
   })
   recipes.push(v2.id)
-  await prisma.recipe.update({ where: { id: recipe.id }, data: { isActive: false } })
 
   const pinnedOrder = await mkOrder(1)
   await prisma.orderItem.updateMany({ where: { orderId: pinnedOrder.id }, data: { recipeId: recipe.id } })

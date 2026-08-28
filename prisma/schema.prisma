@@ -989,7 +989,6 @@ model Food {
   deletedAt DateTime?
 
   variantGroups VariantGroup[]
-  recipe        RecipeItem[]
   orderItems    OrderItem[]
   recipes       Recipe[]
   branches      FoodBranch[]
@@ -1082,20 +1081,12 @@ model VariantOption {
   @@map("variant_options")
 }
 
-/// Links a menu item to the ingredients it consumes — drives auto stock deduction.
-model RecipeItem {
-  id       String        @id @default(cuid())
-  foodId   String
-  food     Food          @relation(fields: [foodId], references: [id], onDelete: Cascade)
-  itemId   String
-  item     InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  /// quantity consumed per single unit sold, in the inventory item's unit
-  quantity Float
-
-  @@unique([foodId, itemId])
-  @@index([itemId])
-  @@map("recipe_items")
-}
+// `RecipeItem` lived here: a second, flat recipe table edited from a tab inside
+// the menu item dialog. It was silently ignored whenever a versioned `Recipe`
+// existed for the same dish — so an owner could type ingredients in, watch them
+// save, and see stock move by different numbers. Its rows were migrated into
+// `Recipe` by 20260912090000_recipes_and_production_merge. The `recipe_items`
+// table is deliberately left in the database for one release; nothing reads it.
 
 // ────────────────────────────────────────────────────────────── floor ──────
 
@@ -1599,7 +1590,6 @@ model InventoryItem {
   updatedAt DateTime @updatedAt
 
   movements          StockMovement[]
-  recipeItems        RecipeItem[]
   producedBy         Recipe[]                @relation("RecipeProduces")
   recipeUsages       RecipeIngredient[]
   depletions         OrderStockDepletion[]
@@ -2643,10 +2633,18 @@ model Recipe {
   /// Exactly one version per food/prep item is active at a time.
   isActive Boolean @default(true)
 
-  /// How much one batch makes. A menu recipe makes one portion; a prep recipe
-  /// might make 2 kg of sauce, and 20 g of that is 1% of a batch.
+  /// How much one batch makes. A menu recipe makes one portion; a make-ahead
+  /// recipe might make 2 kg of sauce, and 20 g of that is 1% of a batch.
+  ///
+  /// New make-ahead recipes are created with a yield of 1, so "make 100" means
+  /// 100 and the scaling division is a no-op. Recipes migrated from the old
+  /// production specs keep the batch size they were written with.
   yieldQty  Float      @default(1)
   yieldUnit StockUnit?
+
+  /// Days the finished product keeps, for a make-ahead recipe. Drives the
+  /// expiry date stamped on the batch a kitchen job creates.
+  shelfLifeDays Int?
 
   prepNotes String?
 
@@ -2657,14 +2655,26 @@ model Recipe {
   updatedAt  DateTime  @updatedAt
   archivedAt DateTime?
 
-  ingredients RecipeIngredient[]
-  usedIn      RecipeIngredient[] @relation("SubRecipe")
-  orderItems  OrderItem[]
+  ingredients      RecipeIngredient[]
+  usedIn           RecipeIngredient[] @relation("SubRecipe")
+  orderItems       OrderItem[]
+  productionOrders ProductionOrder[]
 
   @@index([restaurantId, foodId, isActive])
   @@index([restaurantId, producesItemId, isActive])
   @@map("recipes")
 }
+
+// Two partial unique indexes enforce "one active version per owner" and live in
+// SQL only, because Prisma cannot express a WHERE clause on a unique index:
+//
+//   recipes_active_produces_key  (restaurantId, producesItemId)
+//   recipes_active_food_key      (restaurantId, foodId)
+//
+// both WHERE "isActive" AND the id IS NOT NULL AND "archivedAt" IS NULL. They
+// were added by 20260912090000_recipes_and_production_merge. Until then this was
+// a convention that `findFirst(orderBy: version desc)` happened to honour, which
+// meant a second active row made the resolver pick a winner arbitrarily.
 
 /// One line of a recipe: either a raw inventory item or a nested prep recipe.
 model RecipeIngredient {
@@ -3180,6 +3190,10 @@ model StockTransferLine {
 /// chain is raw material → production spec → finished product → menu recipe →
 /// sale, and collapsing the two middle steps would make a burger patty both an
 /// ingredient and a dish.
+/// Deprecated. Superseded by `Recipe` with `producesItemId` set, which is the
+/// same idea with versioning, nesting and a UI. Rows were copied into `recipes`
+/// by 20260912090000_recipes_and_production_merge and are kept read-only for one
+/// release so the backfill stays repairable. Nothing writes these tables.
 model ProductionSpec {
   id           String     @id @default(cuid())
   restaurantId String
@@ -3230,6 +3244,13 @@ model ProductionOrder {
   /// The production house doing the work.
   branchId     String
   branch       Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  /// The make-ahead recipe being made.
+  recipeId     String?
+  recipe       Recipe?         @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  /// The recipe's name at the time, so a finished job stays readable even if the
+  /// recipe is later renamed, superseded or archived.
+  recipeName   String?
+  /// Deprecated: replaced by `recipeId`. Kept so the backfill stays repairable.
   specId       String?
   spec         ProductionSpec? @relation(fields: [specId], references: [id], onDelete: SetNull)
 
@@ -3237,10 +3258,12 @@ model ProductionOrder {
   batchNumber String?
   status      ProductionStatus @default(DRAFT)
 
-  /// Batches planned, and what was actually achieved.
   /// Labour, power and anything else the run cost beyond its ingredients.
   /// Materials alone understate what a finished item is worth to make.
   overheadCost   Int                       @default(0)
+  /// How many to make, and how many came out — both in the output item's own
+  /// unit. These counted BATCHES until 20260912090000, which is why `unit` used
+  /// to disagree with them.
   plannedQty     Float
   actualQty      Float?
   unit           StockUnit?
@@ -3274,6 +3297,7 @@ model ProductionOrder {
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, branchId, createdAt])
+  @@index([recipeId])
   @@map("production_orders")
 }
 

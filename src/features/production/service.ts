@@ -3,50 +3,62 @@ import 'server-only'
 import type { ProductionOrder, ProductionStatus, ProductionVarianceReason } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { guardLocks, prisma } from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { assertSufficient } from '@/features/inventory/location-stock'
 import { upsertBatch } from '@/features/inventory/batches'
-import { toBaseUnits } from '@/features/inventory/units'
+import { resolveRecipe } from '@/features/inventory/recipe-resolver'
+import { setRecipeActive } from '@/features/recipes/service'
 
 /**
- * Production: turning stock into different stock.
+ * Kitchen jobs: making something ahead, so it is on the shelf when you need it.
  *
- * A production house consumes raw materials and produces finished goods, both
- * through the same ledger the rest of the system uses. That is what keeps the
- * chain honest end to end:
+ * A production house consumes raw materials and produces a finished stock item,
+ * both through the same ledger the rest of the system uses. That is what keeps
+ * the chain honest end to end:
  *
- *   raw material → production spec → finished product → menu recipe → sale
+ *   raw material → make-ahead recipe → finished item → dish recipe → sale
  *
- * ── Nothing moves until completion ──────────────────────────────────────────
+ * ── One recipe, not two ─────────────────────────────────────────────────────
  *
- * Planning and approving a run change no stock. Ingredients leave and finished
- * goods appear at the moment the run is completed, in one transaction — a run
- * that consumed its chicken but failed before creating the patties would
- * destroy stock outright.
+ * A job points at a `Recipe` with `producesItemId` set — the same model a dish
+ * recipe uses. There used to be a second table, `ProductionSpec`, holding the
+ * same idea without versioning or nesting, which meant one product could be
+ * described two ways and costed two ways.
  *
- * ── Variance is compulsory ──────────────────────────────────────────────────
+ * ── How many, not how many batches ──────────────────────────────────────────
  *
- * Planning 500 and making 480 is normal; leaving the 20 unexplained is not. A
- * shortfall demands a reason, because "where did the other 20 go" is precisely
- * what a production house exists to answer.
+ * A job says how many of the finished item to make, in the item's own unit.
+ * It used to count BATCHES against a recipe that made ten of something, so
+ * "10" meant a hundred loaves and nothing on screen said so.
+ *
+ * ── Nothing moves until the job is finished ─────────────────────────────────
+ *
+ * Planning and approving change no stock. Ingredients leave and finished goods
+ * appear at the moment the job is marked done, in one transaction — a job that
+ * consumed its chicken but failed before creating the patties would destroy
+ * stock outright.
  */
 
 const ALLOWED: Record<ProductionStatus, ProductionStatus[]> = {
-  DRAFT: ['PLANNED', 'APPROVED', 'CANCELLED'],
-  PLANNED: ['APPROVED', 'DRAFT', 'CANCELLED'],
-  APPROVED: ['IN_PROGRESS', 'CANCELLED'],
-  IN_PROGRESS: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
+  DRAFT: ['APPROVED', 'CANCELLED'],
+  APPROVED: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
   COMPLETED: [],
   PARTIALLY_COMPLETED: [],
   CANCELLED: [],
+  // Reachable only on rows written before the status list was shortened.
+  PLANNED: ['APPROVED', 'DRAFT', 'CANCELLED'],
+  IN_PROGRESS: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
 }
+
+/** Statuses a job may still be completed from. */
+const COMPLETABLE: ProductionStatus[] = ['APPROVED', 'IN_PROGRESS']
 
 export function canTransitionProduction(from: ProductionStatus, to: ProductionStatus): boolean {
   return ALLOWED[from]?.includes(to) ?? false
 }
 
-/** Only a production house may run production. */
+/** Only a production house may run kitchen jobs. */
 async function requireProductionHouse(restaurantId: string, branchId: string) {
   const branch = await prisma.branch.findFirst({
     where: { id: branchId, restaurantId, deletedAt: null },
@@ -54,55 +66,81 @@ async function requireProductionHouse(restaurantId: string, branchId: string) {
   })
   if (!branch) throw new NotFoundError('Location')
   if (branch.type !== 'PRODUCTION_HOUSE') {
-    throw new AppError(
-      `${branch.name} is not a production house`,
-      400,
-      'NOT_PRODUCTION_HOUSE',
-    )
+    throw new AppError(`${branch.name} is not a production house`, 400, 'NOT_PRODUCTION_HOUSE')
   }
   return branch
+}
+
+/** A make-ahead recipe, with the item it produces. */
+async function requireMakeAheadRecipe(restaurantId: string, recipeId: string) {
+  const recipe = await prisma.recipe.findFirst({
+    where: { id: recipeId, restaurantId, archivedAt: null },
+    include: { producesItem: { select: { id: true, name: true, unit: true, trackBatches: true } } },
+  })
+  if (!recipe || !recipe.producesItem) throw new NotFoundError('Make-ahead recipe')
+  return { ...recipe, producesItem: recipe.producesItem }
 }
 
 export async function createProductionOrder(params: {
   restaurantId: string
   branchId: string
-  specId: string
-  /** Batches to make. */
+  recipeId: string
+  /** How many of the finished item to make, in its own unit. */
   plannedQty: number
   productionDate?: Date | null
   notes?: string | null
   userId?: string | null
 }): Promise<ProductionOrder> {
   if (!(params.plannedQty > 0)) {
-    throw new AppError('Plan a quantity above zero', 400, 'PRODUCTION_BAD_QTY')
+    throw new AppError('Say how many to make', 400, 'PRODUCTION_BAD_QTY')
   }
   await requireProductionHouse(params.restaurantId, params.branchId)
 
-  const spec = await prisma.productionSpec.findFirst({
-    where: { id: params.specId, restaurantId: params.restaurantId, isActive: true },
-    include: { outputItem: { select: { id: true, unit: true } } },
-  })
-  if (!spec) throw new NotFoundError('Production recipe')
+  const recipe = await requireMakeAheadRecipe(params.restaurantId, params.recipeId)
+  if (!recipe.isActive) {
+    throw new AppError('That recipe has been retired', 400, 'PRODUCTION_RECIPE_RETIRED')
+  }
 
   return prisma.$transaction(async (tx) => {
-    const count = await tx.productionOrder.count({ where: { restaurantId: params.restaurantId } })
-    const number = `PRD-${String(count + 1).padStart(6, '0')}`
-
     return tx.productionOrder.create({
       data: {
         restaurantId: params.restaurantId,
         branchId: params.branchId,
-        specId: spec.id,
-        number,
+        recipeId: recipe.id,
+        // Snapshotted so a finished job stays readable after a rename.
+        recipeName: recipe.name ?? recipe.producesItem.name,
+        number: await nextJobNumber(tx, params.restaurantId),
         status: 'DRAFT',
         plannedQty: params.plannedQty,
-        unit: spec.outputItem.unit,
+        unit: recipe.producesItem.unit,
         productionDate: params.productionDate ?? null,
         notes: params.notes?.trim() || null,
         requestedById: params.userId ?? null,
       },
     })
   })
+}
+
+/**
+ * The next job number.
+ *
+ * Derived from the highest number already issued rather than from a row count,
+ * which collided the moment anything was cancelled and deleted, and raced two
+ * jobs created in the same second into the same number. `@@unique([restaurantId,
+ * number])` turned that into a failed save rather than a duplicate, so this was
+ * never a data bug — but it was a job somebody could not create.
+ */
+async function nextJobNumber(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  restaurantId: string,
+): Promise<string> {
+  const last = await tx.productionOrder.findFirst({
+    where: { restaurantId },
+    orderBy: { number: 'desc' },
+    select: { number: true },
+  })
+  const previous = last ? Number.parseInt(last.number.replace(/\D/g, ''), 10) : 0
+  return `PRD-${String((Number.isFinite(previous) ? previous : 0) + 1).padStart(6, '0')}`
 }
 
 export async function setProductionStatus(params: {
@@ -114,13 +152,11 @@ export async function setProductionStatus(params: {
   const order = await prisma.productionOrder.findFirst({
     where: { id: params.orderId, restaurantId: params.restaurantId },
   })
-  if (!order) throw new NotFoundError('Production order')
+  if (!order) throw new NotFoundError('Kitchen job')
 
   if (!canTransitionProduction(order.status, params.status)) {
     throw new AppError(
-      `A ${order.status.replace(/_/g, ' ').toLowerCase()} run cannot become ${params.status
-        .replace(/_/g, ' ')
-        .toLowerCase()}`,
+      `A ${label(order.status)} job cannot become ${label(params.status)}`,
       409,
       'PRODUCTION_BAD_TRANSITION',
     )
@@ -133,10 +169,11 @@ export async function setProductionStatus(params: {
       ...(params.status === 'APPROVED'
         ? { approvedById: params.userId ?? null, approvedAt: new Date() }
         : {}),
-      ...(params.status === 'IN_PROGRESS' ? { startedAt: new Date() } : {}),
     },
   })
 }
+
+const label = (status: ProductionStatus) => status.replace(/_/g, ' ').toLowerCase()
 
 export interface CompleteProductionResult {
   order: ProductionOrder
@@ -149,108 +186,138 @@ export interface CompleteProductionResult {
 }
 
 /**
- * Complete a run: consume the raw materials, create the finished goods.
+ * Finish a job: consume the ingredients, put the finished item on the shelf.
  *
- * Everything happens in one transaction. Raw materials are checked against the
- * production house's own stock first, so a run cannot half-consume its way into
- * negative ingredients before failing.
+ * Everything happens in one transaction, and the job's status is read INSIDE it
+ * under a row lock, then claimed with a compare-and-swap. It used to be read
+ * before the transaction opened with no predicate on the final update, so one
+ * impatient double-click ran the whole body twice: ingredients consumed twice,
+ * finished goods created twice. Same shape as `approveStockCount`.
  *
- * Cost flows from what was actually consumed, not from a price list.
+ * ── Why a short job costs more per unit ─────────────────────────────────────
  *
- * Ingredients are consumed at the PLANNED quantity, because that is what was
+ * Ingredients are consumed for the number PLANNED, because that is what was
  * issued to the line — a batch of sauce that catches and yields 480 instead of
- * 500 still used all of its cream. Output is the actual figure. So the unit cost
- * is planned inputs divided by real output, and a poor yield raises it, which is
- * the true picture and the whole reason to record variance.
- *
- * This previously scaled the ingredients by actual output too, which cancelled
- * out: a run making 480 of 500 consumed exactly 480-worth and reported the same
- * unit cost as a perfect run. The docstring claimed the opposite of what the
- * code did.
+ * 500 still used all of its cream. Output is the actual figure. So unit cost is
+ * planned inputs divided by real output, and a poor run raises it, which is the
+ * true picture and the whole reason to record what went short.
  *
  * `overheadCost` — labour, power — is added on top before dividing, since
- * materials alone understate what a finished item costs to make.
+ * materials alone understate what a finished item costs to make. It is passed
+ * in here rather than written beforehand: it used to be saved outside this
+ * transaction, so a job that failed to complete kept the overhead anyway.
  */
 export async function completeProduction(params: {
   restaurantId: string
   orderId: string
-  /** Batches actually produced. Defaults to what was planned. */
+  /** How many actually came out. Defaults to what was planned. */
   actualQty?: number
+  /** Labour, power and the rest, in minor units. */
+  overheadCost?: number
   varianceReason?: ProductionVarianceReason | null
   varianceNote?: string | null
   batchNumber?: string | null
   userId?: string | null
 }): Promise<CompleteProductionResult> {
-  const order = await prisma.productionOrder.findFirst({
-    where: { id: params.orderId, restaurantId: params.restaurantId },
-    include: {
-      spec: {
-        include: {
-          items: { include: { item: true } },
-          outputItem: true,
+  return prisma.$transaction(async (tx) => {
+    /*
+     * Lock the job, then read it. Everything below decides what to consume from
+     * what this read returns, so reading it outside the lock is what allowed the
+     * same job to be completed twice.
+     */
+    await guardLocks(tx)
+    await tx.$queryRaw`SELECT id FROM production_orders WHERE id = ${params.orderId} FOR UPDATE`
+
+    const order = await tx.productionOrder.findFirst({
+      where: { id: params.orderId, restaurantId: params.restaurantId },
+      include: {
+        recipe: {
+          include: { producesItem: true },
         },
       },
-    },
-  })
-  if (!order) throw new NotFoundError('Production order')
-  if (!order.spec) throw new AppError('This run has no recipe', 400, 'PRODUCTION_NO_SPEC')
-  if (order.status === 'COMPLETED' || order.status === 'PARTIALLY_COMPLETED') {
-    throw new AppError('That run is already finished', 409, 'PRODUCTION_DONE')
-  }
-  if (order.status === 'CANCELLED') {
-    throw new AppError('That run was cancelled', 409, 'PRODUCTION_CANCELLED')
-  }
-  if (order.status !== 'APPROVED' && order.status !== 'IN_PROGRESS') {
-    throw new AppError('Approve the run before completing it', 409, 'PRODUCTION_NOT_APPROVED')
-  }
+    })
+    if (!order) throw new NotFoundError('Kitchen job')
+    if (order.status === 'COMPLETED' || order.status === 'PARTIALLY_COMPLETED') {
+      throw new AppError('That job is already finished', 409, 'PRODUCTION_DONE')
+    }
+    if (order.status === 'CANCELLED') {
+      throw new AppError('That job was cancelled', 409, 'PRODUCTION_CANCELLED')
+    }
+    if (!COMPLETABLE.includes(order.status)) {
+      throw new AppError('Approve the job before finishing it', 409, 'PRODUCTION_NOT_APPROVED')
+    }
+    if (!order.recipe || !order.recipe.producesItem) {
+      throw new AppError('This job has no recipe', 400, 'PRODUCTION_NO_SPEC')
+    }
 
-  const batches = params.actualQty ?? order.plannedQty
-  if (batches < 0) throw new AppError('Produced quantity cannot be negative', 400, 'PRODUCTION_NEGATIVE')
+    const recipe = order.recipe
+    const producesItem = recipe.producesItem!
 
-  const variance = round(batches - order.plannedQty)
-  if (variance < 0 && !params.varianceReason) {
-    throw new AppError(
-      `${Math.abs(variance)} short of plan — give a reason`,
-      400,
-      'PRODUCTION_VARIANCE_NO_REASON',
-    )
-  }
+    const producedQty = round(params.actualQty ?? order.plannedQty)
+    /*
+     * Zero is refused, not treated as "all of it".
+     *
+     * A blank input arrives as `Number('')`, which is 0 and passes every
+     * `Number.isFinite` / `< 0` check. That consumed every planned ingredient,
+     * produced nothing, and wrote a unit cost of zero without a word. A job that
+     * produced nothing is a cancellation, and `setProductionStatus` records it.
+     */
+    if (!(producedQty > 0)) {
+      throw new AppError(
+        'Say how many came out. If none did, cancel the job instead.',
+        400,
+        'PRODUCTION_NO_OUTPUT',
+      )
+    }
 
-  const spec = order.spec
-  /*
-   * Ingredients are consumed at the planned quantity — what was issued to the
-   * line — while output is what actually came off it. That gap is the yield
-   * loss, and costing it is the point: scaling inputs by output as well would
-   * make a wasteful run look exactly as efficient as a perfect one.
-   *
-   * A run that produced nothing consumed nothing; that is a cancellation, and
-   * `setProductionStatus` is the way to record it.
-   */
-  const scale = order.plannedQty
+    const variance = round(producedQty - order.plannedQty)
+    if (variance < 0 && !params.varianceReason) {
+      throw new AppError(
+        `${Math.abs(variance)} short of plan — give a reason`,
+        400,
+        'PRODUCTION_VARIANCE_NO_REASON',
+      )
+    }
 
-  return prisma.$transaction(async (tx) => {
+    /*
+     * `portions` is how many of the finished item are wanted; `resolveRecipe`
+     * divides by the recipe's own yield itself, so a recipe making 10 loaves
+     * asked for 100 runs ten times over. New make-ahead recipes are created
+     * with a yield of 1, so for everything made from now on this is just the
+     * quantity and the division is a no-op.
+     *
+     * PLANNED, not actual — this is the yield-variance rule from the docstring.
+     */
+    const resolved = await resolveRecipe(tx, {
+      restaurantId: params.restaurantId,
+      recipeId: recipe.id,
+      portions: order.plannedQty,
+    })
+    if (resolved.problems.length) {
+      throw new AppError(resolved.problems[0], 400, 'PRODUCTION_RECIPE_PROBLEM')
+    }
+
     const consumed: CompleteProductionResult['consumed'] = []
     let totalCost = 0
 
-    for (const line of spec.items) {
-      const perBatch = toBaseUnits(line.quantity, line.unit ?? line.item.unit, line.item)
-      const needed = round(perBatch * scale)
+    for (const ingredient of resolved.ingredients) {
+      const needed = round(ingredient.quantity)
       if (needed <= 0) continue
 
       await assertSufficient(tx, {
         restaurantId: params.restaurantId,
-        itemId: line.itemId,
+        itemId: ingredient.itemId,
         branchId: order.branchId,
         quantity: needed,
-        itemName: line.item.name,
+        itemName: ingredient.name,
       })
 
       const posted = await postMovement(tx, {
         restaurantId: params.restaurantId,
-        itemId: line.itemId,
+        itemId: ingredient.itemId,
         type: 'PRODUCTION_CONSUMPTION',
         quantity: needed,
-        reason: `Production ${order.number}`,
+        reason: `Kitchen job ${order.number}`,
         referenceType: 'ProductionOrder',
         referenceId: order.id,
         branchId: order.branchId,
@@ -263,91 +330,94 @@ export async function completeProduction(params: {
       await tx.productionConsumption.create({
         data: {
           orderId: order.id,
-          itemId: line.itemId,
+          itemId: ingredient.itemId,
           quantity: needed,
-          unit: line.item.unit,
+          unit: ingredient.unit,
           unitCost: posted.item.costPerUnit,
           lineCost,
         },
       })
 
       consumed.push({
-        itemId: line.itemId,
-        name: line.item.name,
+        itemId: ingredient.itemId,
+        name: ingredient.name,
         quantity: needed,
         cost: lineCost,
       })
     }
 
-    const producedQty = round(batches * spec.outputQty)
-    // Overhead is part of what the batch cost to make, so it belongs in the
-    // divisor's numerator rather than being reported separately and forgotten.
-    const runCost = totalCost + (order.overheadCost ?? 0)
-    const unitCost = producedQty > 0 ? Math.round(runCost / producedQty) : 0
+    // Overhead is part of what the job cost, so it belongs in the numerator
+    // rather than being reported separately and forgotten.
+    const overheadCost = Math.max(0, Math.round(params.overheadCost ?? order.overheadCost ?? 0))
+    const runCost = totalCost + overheadCost
+    const unitCost = Math.round(runCost / producedQty)
 
     const batchNumber =
       params.batchNumber?.trim().toUpperCase() ||
       `${order.number}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
 
-    const expiryDate = spec.shelfLifeDays
-      ? new Date(Date.now() + spec.shelfLifeDays * 86_400_000)
+    const expiryDate = recipe.shelfLifeDays
+      ? new Date(Date.now() + recipe.shelfLifeDays * 86_400_000)
       : null
 
+    const posted = await postMovement(tx, {
+      restaurantId: params.restaurantId,
+      itemId: producesItem.id,
+      type: 'PRODUCTION_OUTPUT',
+      quantity: producedQty,
+      // The finished item is costed from what it actually took to make.
+      unitCost,
+      reason: `Kitchen job ${order.number}`,
+      referenceType: 'ProductionOrder',
+      referenceId: order.id,
+      branchId: order.branchId,
+      batchNo: batchNumber,
+      expiryDate,
+      userId: params.userId,
+    })
+
     let batchId: string | null = null
-    if (producedQty > 0) {
-      const posted = await postMovement(tx, {
+    if (producesItem.trackBatches) {
+      const batch = await upsertBatch(tx, {
         restaurantId: params.restaurantId,
-        itemId: spec.outputItemId,
-        type: 'PRODUCTION_OUTPUT',
-        quantity: producedQty,
-        // The finished item is costed from what it actually took to make.
-        unitCost,
-        reason: `Production ${order.number}`,
-        referenceType: 'ProductionOrder',
-        referenceId: order.id,
-        branchId: order.branchId,
+        itemId: producesItem.id,
         batchNo: batchNumber,
+        quantity: producedQty,
+        unitCost,
         expiryDate,
-        userId: params.userId,
+        branchId: order.branchId,
       })
-
-      if (spec.outputItem.trackBatches) {
-        const batch = await upsertBatch(tx, {
-          restaurantId: params.restaurantId,
-          itemId: spec.outputItemId,
-          batchNo: batchNumber,
-          quantity: producedQty,
-          unitCost,
-          expiryDate,
-          branchId: order.branchId,
-        })
-        batchId = batch.id
-        await tx.stockMovement.update({
-          where: { id: posted.movement.id },
-          data: { batchId: batch.id },
-        })
-      }
-
-      await tx.productionOutput.create({
-        data: {
-          orderId: order.id,
-          itemId: spec.outputItemId,
-          quantity: producedQty,
-          unit: spec.outputItem.unit,
-          unitCost,
-          batchId,
-        },
+      batchId = batch.id
+      await tx.stockMovement.update({
+        where: { id: posted.movement.id },
+        data: { batchId: batch.id },
       })
     }
 
-    const updated = await tx.productionOrder.update({
-      where: { id: order.id },
+    await tx.productionOutput.create({
+      data: {
+        orderId: order.id,
+        itemId: producesItem.id,
+        quantity: producedQty,
+        unit: producesItem.unit,
+        unitCost,
+        batchId,
+      },
+    })
+
+    /*
+     * Claim the job. The `status` predicate is what makes the second of two
+     * concurrent completions lose instead of both committing.
+     */
+    const claimed = await tx.productionOrder.updateMany({
+      where: { id: order.id, status: order.status },
       data: {
         status: variance < 0 ? 'PARTIALLY_COMPLETED' : 'COMPLETED',
-        actualQty: batches,
+        actualQty: producedQty,
         variance,
         varianceReason: params.varianceReason ?? null,
         varianceNote: params.varianceNote?.trim() || null,
+        overheadCost,
         totalCost: runCost,
         unitCost,
         batchNumber,
@@ -356,6 +426,11 @@ export async function completeProduction(params: {
         productionDate: order.productionDate ?? new Date(),
       },
     })
+    if (claimed.count === 0) {
+      throw new AppError('That job was finished while you were finishing it', 409, 'PRODUCTION_RACE')
+    }
+
+    const updated = await tx.productionOrder.findUniqueOrThrow({ where: { id: order.id } })
 
     return {
       order: updated,
@@ -369,210 +444,46 @@ export async function completeProduction(params: {
   })
 }
 
-/** Create a production recipe. */
 /**
- * Everything a spec must satisfy before it is worth saving.
+ * Retire a make-ahead recipe, or bring it back.
  *
- * The unit check is the one that matters. `toBaseUnits` throws when a line is
- * written in a unit that cannot be resolved to the item's own — "2 BOX of
- * flour" where flour has no pack size — and it used to throw at *completion*,
- * inside the transaction that consumes the stock. So the recipe saved happily,
- * and then a run planned days later failed at the moment someone was standing
- * at the mixer waiting for it. Catching it here means the person who wrote the
- * mistake is the person who is told about it.
+ * Retiring is refused while jobs still depend on it: a job whose recipe has been
+ * retired cannot be finished, and the person retiring it has no way of knowing
+ * they have done that. Nothing is ever deleted — finished jobs point at the exact
+ * version they were made against.
+ *
+ * The guard lives here rather than in the action so it holds however this is
+ * reached, and so it is covered by the service tests.
  */
-async function validateSpec(params: {
+export async function setMakeAheadRecipeActive(params: {
   restaurantId: string
-  outputItemId: string
-  outputQty: number
-  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
-}) {
-  if (params.items.length === 0) {
-    throw new AppError('A production recipe needs ingredients', 400, 'SPEC_EMPTY')
-  }
-  if (!(params.outputQty > 0)) {
-    throw new AppError('Say how much one batch produces', 400, 'SPEC_BAD_OUTPUT')
-  }
-  if (params.items.some((i) => i.itemId === params.outputItemId)) {
-    throw new AppError('A recipe cannot consume the thing it produces', 400, 'SPEC_SELF_REFERENCE')
-  }
-
-  const seen = new Set<string>()
-  for (const line of params.items) {
-    if (seen.has(line.itemId)) {
-      throw new AppError('The same ingredient is listed twice', 400, 'SPEC_DUPLICATE_ITEM')
-    }
-    seen.add(line.itemId)
-    if (!(line.quantity > 0)) {
-      throw new AppError('Every ingredient needs a quantity', 400, 'SPEC_BAD_QUANTITY')
-    }
-  }
-
-  const ids = [params.outputItemId, ...params.items.map((i) => i.itemId)]
-  const items = await prisma.inventoryItem.findMany({
-    where: { id: { in: ids }, restaurantId: params.restaurantId },
-    select: {
-      id: true, name: true, unit: true, purchaseUnit: true, unitsPerPurchaseUnit: true,
-    },
-  })
-  if (items.length !== new Set(ids).size) throw new NotFoundError('Inventory item')
-
-  const byId = new Map(items.map((i) => [i.id, i]))
-  for (const line of params.items) {
-    const item = byId.get(line.itemId)
-    if (!item || !line.unit || line.unit === item.unit) continue
-    // Throws UnitConversionError with a message naming the item and the fix.
-    toBaseUnits(line.quantity, line.unit as never, item)
-  }
-}
-
-export async function createProductionSpec(params: {
-  restaurantId: string
-  name: string
-  outputItemId: string
-  outputQty: number
-  shelfLifeDays?: number | null
-  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
-  notes?: string | null
-}) {
-  await validateSpec(params)
-
-  return prisma.productionSpec.create({
-    data: {
-      restaurantId: params.restaurantId,
-      name: params.name.trim(),
-      outputItemId: params.outputItemId,
-      outputQty: params.outputQty,
-      shelfLifeDays: params.shelfLifeDays ?? null,
-      notes: params.notes?.trim() || null,
-      items: {
-        create: params.items.map((i) => ({
-          itemId: i.itemId,
-          quantity: i.quantity,
-          unit: (i.unit ?? null) as never,
-        })),
-      },
-    },
-  })
-}
-
-/**
- * Edit a production recipe.
- *
- * There was no way to. A yield that turned out wrong, an ingredient that
- * changed, a typo in the name — all of it meant creating a second recipe with
- * almost the same name and hoping people picked the right one. Two recipes for
- * one product is how a kitchen ends up costing the same bread two ways.
- *
- * Runs already completed keep the numbers they were completed with: cost lives
- * on `ProductionConsumption` and on the order itself, posted at the time and
- * never recalculated from the spec. So editing cannot rewrite history — which
- * is exactly why editing is safe to allow.
- *
- * Runs not yet completed WILL use the new version, and that is right too: an
- * approved run has reserved nothing and consumed nothing, so there is no older
- * truth to preserve.
- */
-export async function updateProductionSpec(params: {
-  restaurantId: string
-  specId: string
-  name: string
-  outputItemId: string
-  outputQty: number
-  shelfLifeDays?: number | null
-  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
-  notes?: string | null
-}) {
-  const existing = await prisma.productionSpec.findFirst({
-    where: { id: params.specId, restaurantId: params.restaurantId },
-    select: { id: true },
-  })
-  if (!existing) throw new NotFoundError('Production recipe')
-
-  await validateSpec(params)
-
-  /*
-   * Lines are replaced wholesale rather than diffed. `ProductionSpecItem` is a
-   * pure child of the spec — nothing references a line by id — so a diff would
-   * buy nothing and cost a class of bug where a stale line survives an edit.
-   */
-  return prisma.$transaction(async (tx) => {
-    await tx.productionSpecItem.deleteMany({ where: { specId: params.specId } })
-    return tx.productionSpec.update({
-      where: { id: params.specId },
-      data: {
-        name: params.name.trim(),
-        outputItemId: params.outputItemId,
-        outputQty: params.outputQty,
-        shelfLifeDays: params.shelfLifeDays ?? null,
-        notes: params.notes?.trim() || null,
-        items: {
-          create: params.items.map((i) => ({
-            itemId: i.itemId,
-            quantity: i.quantity,
-            unit: (i.unit ?? null) as never,
-          })),
-        },
-      },
-    })
-  })
-}
-
-/**
- * Retire a recipe, or bring it back.
- *
- * Deactivating rather than deleting, because completed runs point at it and a
- * run whose recipe has vanished cannot explain itself. A retired recipe stops
- * being offered for new runs and stays readable for old ones.
- */
-export async function setProductionSpecActive(params: {
-  restaurantId: string
-  specId: string
+  recipeId: string
   isActive: boolean
 }) {
-  const spec = await prisma.productionSpec.findFirst({
-    where: { id: params.specId, restaurantId: params.restaurantId },
+  const recipe = await prisma.recipe.findFirst({
+    where: { id: params.recipeId, restaurantId: params.restaurantId },
     select: { id: true },
   })
-  if (!spec) throw new NotFoundError('Production recipe')
+  if (!recipe) throw new NotFoundError('Make-ahead recipe')
 
   if (!params.isActive) {
-    /*
-     * Refuse while runs are in flight. Retiring a recipe that an approved run
-     * still depends on would leave that run unable to complete, and the person
-     * retiring it has no way of knowing they have done that.
-     */
     const open = await prisma.productionOrder.count({
       where: {
         restaurantId: params.restaurantId,
-        specId: params.specId,
+        recipeId: params.recipeId,
         status: { in: ['DRAFT', 'PLANNED', 'APPROVED', 'IN_PROGRESS'] },
       },
     })
     if (open > 0) {
       throw new AppError(
-        `${open} run${open === 1 ? ' is' : 's are'} still using this recipe — finish or cancel ${open === 1 ? 'it' : 'them'} first`,
+        `${open} job${open === 1 ? ' is' : 's are'} still using this recipe — finish or cancel ${open === 1 ? 'it' : 'them'} first`,
         409,
-        'SPEC_IN_USE',
+        'RECIPE_IN_USE',
       )
     }
   }
 
-  return prisma.productionSpec.update({
-    where: { id: params.specId },
-    data: { isActive: params.isActive },
-  })
-}
-
-/** One recipe with its lines, for the edit form. */
-export async function getProductionSpec(params: { restaurantId: string; specId: string }) {
-  return prisma.productionSpec.findFirst({
-    where: { id: params.specId, restaurantId: params.restaurantId },
-    include: {
-      outputItem: { select: { id: true, name: true, unit: true } },
-      items: { include: { item: { select: { id: true, name: true, unit: true } } } },
-    },
-  })
+  return setRecipeActive(params)
 }
 
 function round(v: number): number {

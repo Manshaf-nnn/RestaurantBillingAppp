@@ -86,15 +86,6 @@ export const foodSchema = z
     .max(50)
     .default([]),
   variantGroups: z.array(variantGroupSchema).max(10).default([]),
-    recipe: z
-      .array(
-        z.object({
-          itemId: z.string().cuid(),
-          quantity: z.coerce.number().positive('Quantity must be greater than zero'),
-        }),
-      )
-      .max(40)
-      .default([]),
   })
   .refine(
     (data) => data.discountPrice === null || data.discountPrice === undefined || data.discountPrice < data.price,

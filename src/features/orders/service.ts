@@ -236,7 +236,14 @@ export async function buildDraft(params: {
       options: selected,
       optionsTotal: extras,
       lineTotal: (price + extras) * quantity,
-      costPrice: food.costPrice,
+      /*
+       * Zero, not the menu's cost field. `snapshotLineCosts` is the sole writer
+       * of this column, and it only ever fills a zero — so copying the menu's
+       * figure here meant any restaurant that had typed one never received the
+       * real weighted-average snapshot, and its profit report reported an old
+       * guess for ever. A zero here means "not yet costed" and nothing else.
+       */
+      costPrice: 0,
       notes: line.notes?.trim() || null,
       isVeg: food.isVeg,
       prepTimeMinutes: food.prepTimeMinutes,

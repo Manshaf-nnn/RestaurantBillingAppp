@@ -28,11 +28,10 @@ import { prisma } from '../src/server/db/prisma'
 import {
   completeProduction,
   createProductionOrder,
-  createProductionSpec,
-  setProductionSpecActive,
+  setMakeAheadRecipeActive,
   setProductionStatus,
-  updateProductionSpec,
 } from '../src/features/production/service'
+import { saveRecipe } from '../src/features/recipes/service'
 import { getProductionRun } from '../src/features/production/queries'
 import { setOpeningBalance } from '../src/features/inventory/operations'
 
@@ -57,6 +56,36 @@ async function refuses(name: string, run: () => Promise<unknown>, expect: RegExp
     const message = error instanceof Error ? error.message : String(error)
     check(name, expect.test(message), `wrong error: ${message}`)
   }
+}
+
+/**
+ * A make-ahead recipe, in the shape the old production-spec API used.
+ *
+ * Saving twice for the same `producesItemId` supersedes rather than duplicates,
+ * which is what makes the edit-safety section below meaningful.
+ */
+function makeAheadRecipe(params: {
+  restaurantId: string
+  name: string
+  outputItemId: string
+  outputUnit: 'KG' | 'GRAM' | 'LITRE' | 'ML' | 'PIECE' | 'PACK' | 'BOTTLE' | 'DOZEN' | 'BOX'
+  outputQty: number
+  shelfLifeDays?: number | null
+  items: Array<{ itemId: string; quantity: number; unit?: string | null }>
+}) {
+  return saveRecipe({
+    restaurantId: params.restaurantId,
+    producesItemId: params.outputItemId,
+    name: params.name,
+    yieldQty: params.outputQty,
+    yieldUnit: params.outputUnit,
+    shelfLifeDays: params.shelfLifeDays ?? null,
+    ingredients: params.items.map((line) => ({
+      inventoryItemId: line.itemId,
+      quantity: line.quantity,
+      unit: (line.unit ?? params.outputUnit) as never,
+    })),
+  })
 }
 
 async function main() {
@@ -101,10 +130,11 @@ async function main() {
   await refuses(
     'a unit that cannot be resolved is refused at save time',
     () =>
-      createProductionSpec({
+      makeAheadRecipe({
         restaurantId: restaurant.id,
         name: 'Bad units',
         outputItemId: bread.id,
+        outputUnit: 'PIECE',
         outputQty: 10,
         items: [{ itemId: flour.id, quantity: 2, unit: 'BOX' }],
       }),
@@ -114,23 +144,25 @@ async function main() {
   await refuses(
     'and so is a recipe that eats its own output',
     () =>
-      createProductionSpec({
+      makeAheadRecipe({
         restaurantId: restaurant.id,
         name: 'Ouroboros',
         outputItemId: bread.id,
+        outputUnit: 'PIECE',
         outputQty: 10,
         items: [{ itemId: bread.id, quantity: 1, unit: 'PIECE' }],
       }),
-    /consume the thing it produces/i,
+    /the thing it makes/i,
   )
 
   await refuses(
     'and one that lists the same ingredient twice',
     () =>
-      createProductionSpec({
+      makeAheadRecipe({
         restaurantId: restaurant.id,
         name: 'Double flour',
         outputItemId: bread.id,
+        outputUnit: 'PIECE',
         outputQty: 10,
         items: [
           { itemId: flour.id, quantity: 5, unit: 'KG' },
@@ -140,13 +172,14 @@ async function main() {
     /twice/i,
   )
 
-  const spec = await createProductionSpec({
+  const spec = await makeAheadRecipe({
     restaurantId: restaurant.id,
     name: 'White loaf',
     outputItemId: bread.id,
-    outputQty: 10, // 10 loaves per batch
+    outputUnit: 'PIECE',
+    outputQty: 10, // one run of the recipe makes 10 loaves
     shelfLifeDays: 3,
-    items: [{ itemId: flour.id, quantity: 10, unit: 'KG' }], // 10kg per batch
+    items: [{ itemId: flour.id, quantity: 10, unit: 'KG' }], // 10kg per run
   })
   check('a good recipe saves', Boolean(spec.id))
 
@@ -155,8 +188,11 @@ async function main() {
   const order = await createProductionOrder({
     restaurantId: restaurant.id,
     branchId: house.id,
-    specId: spec.id,
-    plannedQty: 10, // 10 batches → 100kg of flour → 100 loaves
+    recipeId: spec.id,
+    // 100 LOAVES, not 10 batches. The recipe makes 10, so it runs ten times over
+    // and still draws 100kg of flour — the arithmetic below is unchanged, which
+    // is the point: only the unit the owner types in has changed.
+    plannedQty: 100,
   })
   await setProductionStatus({
     restaurantId: restaurant.id,
@@ -164,22 +200,19 @@ async function main() {
     status: 'APPROVED',
   })
 
-  // LKR 5,000 of labour and power on top of the flour.
-  await prisma.productionOrder.update({
-    where: { id: order.id },
-    data: { overheadCost: 500_000 },
-  })
-
   const result = await completeProduction({
     restaurantId: restaurant.id,
     orderId: order.id,
-    actualQty: 8, // two batches caught and were binned
+    actualQty: 80, // twenty loaves caught and were binned
+    // LKR 5,000 of labour and power on top of the flour. Passed in rather than
+    // written first, so a job that fails to finish does not keep the overhead.
+    overheadCost: 500_000,
     varianceReason: 'PRODUCTION_LOSS',
   })
 
-  check('80 loaves came out of 10 batches', result.producedQty === 80, `${result.producedQty}`)
+  check('80 loaves came out of the 100 planned', result.producedQty === 80, `${result.producedQty}`)
   check(
-    'all 100kg of flour was consumed, not 80',
+    'all 100kg of flour was consumed, not 80kg',
     result.consumed[0]?.quantity === 100,
     `${result.consumed[0]?.quantity}kg`,
   )
@@ -213,22 +246,23 @@ async function main() {
   check('it knows what went in', run?.consumption.length === 1, `${run?.consumption.length}`)
   check('and what came out', run?.outputs.length === 1, `${run?.outputs.length}`)
   check('it separates materials from overheads', run?.overheadCost === 500_000, `${run?.overheadCost}`)
-  check(
-    'and carries the yield so 10 batches can be shown as 100 loaves',
-    run?.outputQtyPerBatch === 10,
-    `${run?.outputQtyPerBatch}`,
-  )
+  /*
+   * `outputQtyPerBatch` used to be asserted here, so the screen could render
+   * "10 batches = 100 loaves". It is gone along with the multiplier: the job
+   * stores 100 and means 100.
+   */
+  check('the planned figure is already in loaves', run?.plannedQty === 100, `${run?.plannedQty}`)
 
   console.log('\n── editing a recipe leaves finished runs alone ──')
 
   const costBefore = run!.unitCost
 
-  await updateProductionSpec({
+  await makeAheadRecipe({
     restaurantId: restaurant.id,
-    specId: spec.id,
     name: 'White loaf (larger)',
     outputItemId: bread.id,
-    outputQty: 20, // the yield doubles from here on
+    outputUnit: 'PIECE',
+    outputQty: 20, // one run makes twice as much from here on
     shelfLifeDays: 3,
     items: [{ itemId: flour.id, quantity: 12, unit: 'KG' }],
   })
@@ -245,21 +279,27 @@ async function main() {
     `${after?.consumption[0]?.quantity}`,
   )
 
-  const edited = await prisma.productionSpec.findUniqueOrThrow({
-    where: { id: spec.id },
-    include: { items: true },
+  /*
+   * The edit superseded rather than overwrote, because a completed job points at
+   * the old version. That is stronger than the spec table managed: it edited in
+   * place and relied on the consumption rows alone to preserve history.
+   */
+  const edited = await prisma.recipe.findFirstOrThrow({
+    where: { restaurantId: restaurant.id, producesItemId: bread.id, isActive: true },
+    include: { ingredients: true },
   })
-  check('the recipe itself did change', edited.outputQty === 20, `${edited.outputQty}`)
-  check('and its lines were replaced, not appended', edited.items.length === 1, `${edited.items.length}`)
+  check('the recipe itself did change', edited.yieldQty === 20, `${edited.yieldQty}`)
+  check('and its lines were replaced, not appended', edited.ingredients.length === 1, `${edited.ingredients.length}`)
+  check('the version the finished job used is still there', edited.id !== spec.id, 'edited in place')
 
   await refuses(
     'an edit with an impossible unit is refused too',
     () =>
-      updateProductionSpec({
+      makeAheadRecipe({
         restaurantId: restaurant.id,
-        specId: spec.id,
         name: 'White loaf',
         outputItemId: bread.id,
+        outputUnit: 'PIECE',
         outputQty: 20,
         items: [{ itemId: flour.id, quantity: 1, unit: 'BOTTLE' }],
       }),
@@ -271,13 +311,13 @@ async function main() {
   const openRun = await createProductionOrder({
     restaurantId: restaurant.id,
     branchId: house.id,
-    specId: spec.id,
+    recipeId: edited.id,
     plannedQty: 1,
   })
 
   await refuses(
-    'a recipe with a run still in flight cannot be retired',
-    () => setProductionSpecActive({ restaurantId: restaurant.id, specId: spec.id, isActive: false }),
+    'a recipe with a job still in flight cannot be retired',
+    () => setMakeAheadRecipeActive({ restaurantId: restaurant.id, recipeId: edited.id, isActive: false }),
     /still using this recipe/i,
   )
 
@@ -287,9 +327,9 @@ async function main() {
     status: 'CANCELLED',
   })
 
-  const retired = await setProductionSpecActive({
+  const retired = await setMakeAheadRecipeActive({
     restaurantId: restaurant.id,
-    specId: spec.id,
+    recipeId: edited.id,
     isActive: false,
   })
   check('once nothing depends on it, it retires', retired.isActive === false)
@@ -300,15 +340,15 @@ async function main() {
       createProductionOrder({
         restaurantId: restaurant.id,
         branchId: house.id,
-        specId: spec.id,
+        recipeId: edited.id,
         plannedQty: 1,
       }),
-    /not found|Production recipe/i,
+    /retired/i,
   )
 
-  const restored = await setProductionSpecActive({
+  const restored = await setMakeAheadRecipeActive({
     restaurantId: restaurant.id,
-    specId: spec.id,
+    recipeId: edited.id,
     isActive: true,
   })
   check('but it can be brought back', restored.isActive === true)
@@ -316,15 +356,15 @@ async function main() {
   const stillThere = await getProductionRun({ restaurantId: restaurant.id, orderId: order.id })
   check(
     'and the completed run never stopped being readable',
-    stillThere?.specName !== null,
+    stillThere?.recipeName !== null,
     'retiring a recipe orphaned the runs that used it',
   )
 
   await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.productionOrder.deleteMany({ where: { restaurantId: restaurant.id } })
-  await prisma.productionSpecItem.deleteMany({ where: { spec: { restaurantId: restaurant.id } } })
-  await prisma.productionSpec.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.recipeIngredient.deleteMany({ where: { recipe: { restaurantId: restaurant.id } } })
+  await prisma.recipe.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.stockMovement.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.stockBatch.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: restaurant.id } })

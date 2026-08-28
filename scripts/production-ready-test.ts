@@ -197,24 +197,26 @@ async function main() {
       quantity: 1000, unitCost: 100, branchId: house.id,
     }),
   )
-  const spec = await prisma.productionSpec.create({
+  // One run of the recipe makes 10 loaves from 10 kg of flour.
+  const spec = await prisma.recipe.create({
     data: {
-      restaurantId: restaurant.id, name: 'Bread', outputItemId: bread.id, outputQty: 10,
-      items: { create: [{ itemId: flour.id, quantity: 10, unit: 'KG' }] },
+      restaurantId: restaurant.id, name: 'Bread', producesItemId: bread.id,
+      yieldQty: 10, yieldUnit: 'PIECE',
+      ingredients: { create: [{ inventoryItemId: flour.id, quantity: 10, unit: 'KG' }] },
     },
   })
   const run = await prisma.productionOrder.create({
     data: {
-      restaurantId: restaurant.id, branchId: house.id, specId: spec.id,
-      number: `PR-${stamp}`, plannedQty: 10, status: 'APPROVED', unit: 'PIECE',
+      restaurantId: restaurant.id, branchId: house.id, recipeId: spec.id,
+      number: `PR-${stamp}`, plannedQty: 100, status: 'APPROVED', unit: 'PIECE',
     },
   })
 
-  // Planned 10 batches (100 kg flour, 100 loaves). Only 80 loaves came out.
+  // Planned 100 loaves, which is 100 kg of flour. Only 80 came out.
   const done = await completeProduction({
     restaurantId: restaurant.id,
     orderId: run.id,
-    actualQty: 8,
+    actualQty: 80,
     varianceReason: 'PRODUCTION_LOSS',
     userId: user.id,
   })
@@ -235,8 +237,7 @@ async function main() {
   await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: restaurant.id } } })
   await prisma.productionOrder.deleteMany({ where: { restaurantId: restaurant.id } })
-  await prisma.productionSpecItem.deleteMany({ where: { spec: { restaurantId: restaurant.id } } })
-  await prisma.productionSpec.deleteMany({ where: { restaurantId: restaurant.id } })
+
   await prisma.orderStockDepletion.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.stockBatch.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.stockMovement.deleteMany({ where: { restaurantId: restaurant.id } })

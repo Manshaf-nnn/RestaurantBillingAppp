@@ -5,6 +5,7 @@ import type { Recipe, StockUnit } from '@prisma/client'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { resolveRecipe } from '@/features/inventory/recipe-resolver'
+import { toBaseUnits } from '@/features/inventory/units'
 
 /**
  * Recipe editing.
@@ -35,31 +36,95 @@ interface SaveParams {
   name?: string | null
   yieldQty?: number
   yieldUnit?: StockUnit | null
+  /** Days the finished item keeps, for a make-ahead recipe. */
+  shelfLifeDays?: number | null
   prepNotes?: string | null
   ingredients: IngredientInput[]
 }
 
-function validate(params: SaveParams) {
+/**
+ * Everything a recipe must satisfy before it is worth saving.
+ *
+ * The unit check is the one that matters, and it is the reason this is `async`.
+ * `toBaseUnits` throws when a line is written in a unit that cannot be resolved
+ * to the item's own — "2 BOX of flour" where flour has no pack size — and it
+ * used to throw at the moment stock was consumed, inside the transaction. So
+ * the recipe saved happily and a kitchen job days later failed with someone
+ * standing at the mixer. Catching it here means the person who wrote the
+ * mistake is the person who is told about it.
+ *
+ * Self-reference, duplicate lines and yield were checked on the production side
+ * only. Both screens are the same model now, so both get all three.
+ */
+async function validate(params: SaveParams) {
   if (!params.foodId && !params.producesItemId) {
     throw new AppError('A recipe must belong to a dish or produce a stock item', 400, 'RECIPE_NO_OWNER')
   }
   if (params.ingredients.length === 0) {
     throw new AppError('Add at least one ingredient', 400, 'RECIPE_EMPTY')
   }
+
+  const seenItems = new Set<string>()
+  const seenRecipes = new Set<string>()
+
   for (const line of params.ingredients) {
     if (!line.inventoryItemId && !line.subRecipeId) {
-      throw new AppError('Every line needs an ingredient or a prep recipe', 400, 'RECIPE_LINE_EMPTY')
+      throw new AppError('Every line needs an ingredient or a make-ahead recipe', 400, 'RECIPE_LINE_EMPTY')
     }
     if (line.inventoryItemId && line.subRecipeId) {
-      throw new AppError('A line is either an ingredient or a prep recipe, not both', 400, 'RECIPE_LINE_BOTH')
+      throw new AppError('A line is either an ingredient or a make-ahead recipe, not both', 400, 'RECIPE_LINE_BOTH')
     }
     if (!(line.quantity > 0)) {
       throw new AppError('Every ingredient needs a quantity above zero', 400, 'RECIPE_LINE_QTY')
     }
+
+    // Nothing may make itself: it would consume its own output for ever.
+    if (line.inventoryItemId && line.inventoryItemId === params.producesItemId) {
+      throw new AppError(
+        'A recipe cannot use the thing it makes as one of its own ingredients',
+        400,
+        'RECIPE_SELF_REFERENCE',
+      )
+    }
+
+    const key = line.inventoryItemId ?? line.subRecipeId!
+    const seen = line.inventoryItemId ? seenItems : seenRecipes
+    if (seen.has(key)) {
+      throw new AppError('The same ingredient is listed twice', 400, 'RECIPE_DUPLICATE_LINE')
+    }
+    seen.add(key)
   }
-  // A prep recipe is measured in batches of something, so it must say what.
-  if (params.producesItemId && !params.yieldUnit) {
-    throw new AppError('A prep recipe needs a yield unit — what does one batch make?', 400, 'RECIPE_NO_YIELD_UNIT')
+
+  if (params.producesItemId) {
+    // A make-ahead recipe is measured in batches of something, so it must say
+    // what, and how much one batch makes.
+    if (!params.yieldUnit) {
+      throw new AppError(
+        'Say what this recipe makes — grams, litres, pieces',
+        400,
+        'RECIPE_NO_YIELD_UNIT',
+      )
+    }
+    if (params.yieldQty !== undefined && !(params.yieldQty > 0)) {
+      throw new AppError('Say how much one batch makes', 400, 'RECIPE_BAD_YIELD')
+    }
+  }
+
+  const itemIds = [...seenItems]
+  if (itemIds.length === 0) return
+
+  const items = await prisma.inventoryItem.findMany({
+    where: { id: { in: itemIds }, restaurantId: params.restaurantId },
+    select: { id: true, name: true, unit: true, purchaseUnit: true, unitsPerPurchaseUnit: true },
+  })
+  if (items.length !== itemIds.length) throw new NotFoundError('Ingredient')
+
+  const byId = new Map(items.map((i) => [i.id, i]))
+  for (const line of params.ingredients) {
+    const item = line.inventoryItemId ? byId.get(line.inventoryItemId) : null
+    if (!item || line.unit === item.unit) continue
+    // Throws UnitConversionError with a message naming the item and the fix.
+    toBaseUnits(line.quantity, line.unit, item)
   }
 }
 
@@ -90,7 +155,7 @@ export async function getRecipe(restaurantId: string, recipeId: string) {
  * used: an untouched draft is edited, anything an order references is kept.
  */
 export async function saveRecipe(params: SaveParams): Promise<Recipe> {
-  validate(params)
+  await validate(params)
 
   const current = await prisma.recipe.findFirst({
     where: {
@@ -127,7 +192,14 @@ export async function saveRecipe(params: SaveParams): Promise<Recipe> {
         },
       })) > 0 ||
       (await prisma.productionOrder.count({
-        where: { spec: { outputItemId: current.producesItemId ?? '__none__' }, status: 'COMPLETED' },
+        where: {
+          // Scoped to the tenant. Without this, another restaurant completing a
+          // run against an item with the same id decided whether THIS recipe was
+          // edited in place or superseded.
+          restaurantId: params.restaurantId,
+          recipeId: current.id,
+          status: { in: ['COMPLETED', 'PARTIALLY_COMPLETED'] },
+        },
       })) > 0
     : false
 
@@ -141,6 +213,7 @@ export async function saveRecipe(params: SaveParams): Promise<Recipe> {
           name: params.name ?? current.name,
           yieldQty: params.yieldQty ?? current.yieldQty,
           yieldUnit: params.yieldUnit ?? current.yieldUnit,
+          shelfLifeDays: params.shelfLifeDays ?? current.shelfLifeDays,
           prepNotes: params.prepNotes ?? null,
           ingredients: { create: lineData(params.ingredients) },
         },
@@ -162,6 +235,7 @@ export async function saveRecipe(params: SaveParams): Promise<Recipe> {
         isActive: true,
         yieldQty: params.yieldQty ?? 1,
         yieldUnit: params.yieldUnit ?? null,
+        shelfLifeDays: params.shelfLifeDays ?? null,
         prepNotes: params.prepNotes ?? null,
         createdById: params.userId ?? null,
         ingredients: { create: lineData(params.ingredients) },

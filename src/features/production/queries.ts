@@ -16,7 +16,7 @@ export interface ProductionDashboard {
     id: string
     number: string
     status: string
-    specName: string | null
+    recipeName: string | null
     plannedQty: number
     requestedByName: string | null
   }>
@@ -24,7 +24,7 @@ export interface ProductionDashboard {
     id: string
     number: string
     status: string
-    specName: string | null
+    recipeName: string | null
     plannedQty: number
     actualQty: number | null
     variance: number | null
@@ -92,7 +92,6 @@ export async function getProductionDashboard(params: {
       orderBy: { createdAt: 'desc' },
       take: 60,
       include: {
-        spec: { select: { name: true, outputQty: true } },
         requestedBy: { select: { name: true } },
         outputs: { select: { quantity: true } },
       },
@@ -130,7 +129,7 @@ export async function getProductionDashboard(params: {
         id: o.id,
         number: o.number,
         status: o.status,
-        specName: o.spec?.name ?? null,
+        recipeName: o.recipeName,
         plannedQty: o.plannedQty,
         requestedByName: o.requestedBy?.name ?? null,
       })),
@@ -138,7 +137,7 @@ export async function getProductionDashboard(params: {
       id: o.id,
       number: o.number,
       status: o.status,
-      specName: o.spec?.name ?? null,
+      recipeName: o.recipeName,
       plannedQty: o.plannedQty,
       actualQty: o.actualQty,
       variance: o.variance,
@@ -170,7 +169,7 @@ export async function getProductionConsoleData(params: {
   /** Restrict the houses offered to the one chosen in the top bar. */
   branchId?: string | null
 }) {
-  const [houses, items, specs, pending] = await Promise.all([
+  const [houses, items, recipes, pending] = await Promise.all([
     prisma.branch.findMany({
       where: { restaurantId: params.restaurantId, type: 'PRODUCTION_HOUSE', deletedAt: null, isActive: true },
       select: { id: true, name: true }, orderBy: { name: 'asc' },
@@ -184,11 +183,18 @@ export async function getProductionConsoleData(params: {
      * apart by `isActive`, and only the active ones are offered for a new run —
      * a list that silently omits the thing you are looking for reads as a bug.
      */
-    prisma.productionSpec.findMany({
-      where: { restaurantId: params.restaurantId },
+    prisma.recipe.findMany({
+      where: {
+        restaurantId: params.restaurantId,
+        producesItemId: { not: null },
+        archivedAt: null,
+      },
       include: {
-        outputItem: { select: { id: true, name: true, unit: true } },
-        items: { include: { item: { select: { id: true, name: true, unit: true } } } },
+        producesItem: { select: { id: true, name: true, unit: true } },
+        ingredients: {
+          orderBy: { sortOrder: 'asc' },
+          include: { inventoryItem: { select: { id: true, name: true, unit: true } } },
+        },
       },
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     }),
@@ -199,9 +205,7 @@ export async function getProductionConsoleData(params: {
         ...(params.branchId ? { branchId: params.branchId } : {}),
       },
       include: {
-        spec: {
-          select: { name: true, outputQty: true, outputItem: { select: { name: true, unit: true } } },
-        },
+        recipe: { select: { producesItem: { select: { name: true, unit: true } } } },
       },
       orderBy: { createdAt: 'desc' },
     }),
@@ -211,34 +215,36 @@ export async function getProductionConsoleData(params: {
     currency: params.currency,
     houses,
     items: items.map((i) => ({ ...i, unit: i.unit as string })),
-    specs: specs.map((s) => ({
-      id: s.id,
-      name: s.name,
-      isActive: s.isActive,
-      outputItemId: s.outputItemId,
-      outputName: s.outputItem.name,
-      outputUnit: s.outputItem.unit as string,
-      outputQty: s.outputQty,
-      shelfLifeDays: s.shelfLifeDays,
-      notes: s.notes,
-      items: s.items.map((line) => ({
-        itemId: line.itemId,
-        name: line.item.name,
-        quantity: line.quantity,
-        unit: (line.unit ?? line.item.unit) as string,
+    recipes: recipes
+      .filter((r) => r.producesItem !== null)
+      .map((r) => ({
+        id: r.id,
+        name: r.name ?? r.producesItem!.name,
+        isActive: r.isActive,
+        producesItemId: r.producesItemId!,
+        outputName: r.producesItem!.name,
+        outputUnit: r.producesItem!.unit as string,
+        /** How much one run of the recipe makes. New recipes are created at 1. */
+        yieldQty: r.yieldQty,
+        shelfLifeDays: r.shelfLifeDays,
+        notes: r.prepNotes,
+        items: r.ingredients
+          .filter((line) => line.inventoryItem !== null)
+          .map((line) => ({
+            itemId: line.inventoryItemId!,
+            name: line.inventoryItem!.name,
+            quantity: line.quantity,
+            unit: line.unit as string,
+          })),
       })),
-    })),
     pending: pending.map((p) => ({
       id: p.id,
       number: p.number,
       status: p.status,
-      specName: p.spec?.name ?? null,
+      recipeName: p.recipeName,
       plannedQty: p.plannedQty,
-      // So the screen can say "10 batches = 100 loaves" rather than making
-      // someone do the multiplication in their head at the mixer.
-      outputQtyPerBatch: p.spec?.outputQty ?? null,
-      outputName: p.spec?.outputItem.name ?? null,
-      outputUnit: (p.spec?.outputItem.unit ?? null) as string | null,
+      outputName: p.recipe?.producesItem?.name ?? null,
+      outputUnit: (p.recipe?.producesItem?.unit ?? null) as string | null,
     })),
   }
 }
@@ -259,13 +265,13 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
     where: { id: params.orderId, restaurantId: params.restaurantId },
     include: {
       branch: { select: { id: true, name: true } },
-      spec: {
+      recipe: {
         select: {
           id: true,
           name: true,
-          outputQty: true,
+          yieldQty: true,
           shelfLifeDays: true,
-          outputItem: { select: { id: true, name: true, unit: true } },
+          producesItem: { select: { id: true, name: true, unit: true } },
         },
       },
       requestedBy: { select: { name: true } },
@@ -289,13 +295,12 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
     status: order.status as string,
     branchId: order.branchId,
     branchName: order.branch.name,
-    specId: order.specId,
-    specName: order.spec?.name ?? null,
-    outputName: order.spec?.outputItem.name ?? null,
-    outputUnit: (order.spec?.outputItem.unit ?? null) as string | null,
-    /** One batch's yield — what turns "10 batches" into "100 loaves". */
-    outputQtyPerBatch: order.spec?.outputQty ?? null,
-    shelfLifeDays: order.spec?.shelfLifeDays ?? null,
+    recipeId: order.recipeId,
+    /* The name as it was when the job ran, so a rename cannot rewrite history. */
+    recipeName: order.recipeName ?? order.recipe?.name ?? null,
+    outputName: order.recipe?.producesItem?.name ?? null,
+    outputUnit: (order.recipe?.producesItem?.unit ?? null) as string | null,
+    shelfLifeDays: order.recipe?.shelfLifeDays ?? null,
     plannedQty: order.plannedQty,
     actualQty: order.actualQty,
     variance: order.variance,

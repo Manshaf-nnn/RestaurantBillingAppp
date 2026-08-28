@@ -260,7 +260,6 @@ export async function getFoodForEdit(restaurantId: string, foodId: string) {
         orderBy: { sortOrder: 'asc' },
         include: { options: { orderBy: { sortOrder: 'asc' } } },
       },
-      recipe: { include: { item: { select: { id: true, name: true, unit: true } } } },
     },
   })
 }

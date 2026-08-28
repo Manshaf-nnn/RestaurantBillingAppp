@@ -14,8 +14,9 @@ import {
   requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer,
 } from '../src/features/transfers/service'
 import {
-  createProductionSpec, createProductionOrder, setProductionStatus, completeProduction,
+  createProductionOrder, setProductionStatus, completeProduction,
 } from '../src/features/production/service'
+import { saveRecipe } from '../src/features/recipes/service'
 
 let pass = 0, fail = 0
 const failures: Array<{ id: string; expected: string; actual: string; severity: string }> = []
@@ -145,15 +146,17 @@ async function main() {
   for (const [i, q] of [[meat, 20], [season, 2], [oil, 1]] as const) {
     await setOpeningBalance({ restaurantId: shop.id, itemId: i.id, quantity: q, userId: user.id, branchId: ph.id, unitCost: i.costPerUnit })
   }
-  const spec = await createProductionSpec({
-    restaurantId: shop.id, name: 'Chicken Patty', outputItemId: phPatty.id, outputQty: 50,
-    items: [
-      { itemId: meat.id, quantity: 10, unit: 'KG' },
-      { itemId: season.id, quantity: 1, unit: 'KG' },
-      { itemId: oil.id, quantity: 0.5, unit: 'LITRE' },
+  // One run makes 50 patties; the job below asks for 50 of them, not "1 batch".
+  const spec = await saveRecipe({
+    restaurantId: shop.id, producesItemId: phPatty.id, name: 'Chicken Patty',
+    yieldQty: 50, yieldUnit: 'PIECE',
+    ingredients: [
+      { inventoryItemId: meat.id, quantity: 10, unit: 'KG' },
+      { inventoryItemId: season.id, quantity: 1, unit: 'KG' },
+      { inventoryItemId: oil.id, quantity: 0.5, unit: 'LITRE' },
     ],
   })
-  const run = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, specId: spec.id, plannedQty: 1, userId: user.id })
+  const run = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 50, userId: user.id })
   ok('T5.1', 'planning consumes nothing', await avail(meat.id, ph.id) === 20, '20', String(await avail(meat.id, ph.id)), 'CRITICAL')
   await setProductionStatus({ restaurantId: shop.id, orderId: run.id, status: 'APPROVED', userId: user.id })
   const done = await completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id })
@@ -218,7 +221,7 @@ async function main() {
   await throws('T10.1', 'transferring more than held is refused',
     async () => { const t = await requestTransfer({ restaurantId: shop.id, fromBranchId: kandy.id, toBranchId: colombo.id, lines: [{ itemId: patty.id, quantity: 9999 }], userId: user.id }); await approveTransfer({ restaurantId: shop.id, transferId: t.id, userId: user.id }) })
   await throws('T10.2', 'producing without raw materials is refused',
-    async () => { const r = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, specId: spec.id, plannedQty: 99, userId: user.id }); await setProductionStatus({ restaurantId: shop.id, orderId: r.id, status: 'APPROVED', userId: user.id }); await completeProduction({ restaurantId: shop.id, orderId: r.id, userId: user.id }) })
+    async () => { const r = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 4950, userId: user.id }); await setProductionStatus({ restaurantId: shop.id, orderId: r.id, status: 'APPROVED', userId: user.id }); await completeProduction({ restaurantId: shop.id, orderId: r.id, userId: user.id }) })
 
   console.log('\n══ TEST 11 — ATOMICITY ════════════════════════════════')
   const atomicBefore = await avail(bun.id, colombo.id)
@@ -264,7 +267,7 @@ async function main() {
   await throws('T16.2', 'cross-tenant transfer refused',
     () => requestTransfer({ restaurantId: other.id, fromBranchId: colombo.id, toBranchId: kandy.id, lines: [{ itemId: patty.id, quantity: 1 }], userId: user.id }))
   await throws('T16.3', 'cross-tenant production refused',
-    () => createProductionOrder({ restaurantId: other.id, branchId: ph.id, specId: spec.id, plannedQty: 1, userId: user.id }))
+    () => createProductionOrder({ restaurantId: other.id, branchId: ph.id, recipeId: spec.id, plannedQty: 50, userId: user.id }))
   await throws('T16.4', 'cross-tenant purchase refused',
     () => createPurchaseOrder({ restaurantId: other.id, branchId: otherBranch, lines: [{ itemId: patty.id, quantity: 1, unitCost: 1 }] }))
   ok('T16.5', 'other tenant sees no stock rows',
@@ -284,8 +287,8 @@ async function main() {
   await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: { in: ids } } } })
   await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: { in: ids } } } })
   await prisma.productionOrder.deleteMany({ where: { restaurantId: { in: ids } } })
-  await prisma.productionSpecItem.deleteMany({ where: { spec: { restaurantId: { in: ids } } } })
-  await prisma.productionSpec.deleteMany({ where: { restaurantId: { in: ids } } })
+  await prisma.recipeIngredient.deleteMany({ where: { recipe: { restaurantId: { in: ids } } } })
+  await prisma.recipe.deleteMany({ where: { restaurantId: { in: ids } } })
   await prisma.wastageRecord.deleteMany({ where: { restaurantId: { in: ids } } })
   await prisma.purchaseReturnLine.deleteMany({ where: { return: { restaurantId: { in: ids } } } })
   await prisma.purchaseReturn.deleteMany({ where: { restaurantId: { in: ids } } })

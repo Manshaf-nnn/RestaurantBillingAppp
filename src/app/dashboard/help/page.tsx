@@ -676,22 +676,36 @@ export default async function HelpPage() {
 
         <SectionCard title="6 · Recipes" description="More important than they look.">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            A recipe links a dish to what it consumes. Without one, selling a burger takes
+            A recipe links a dish to what it uses. Without one, selling a burger takes
             nothing off any shelf and your food cost is unknowable.
           </p>
           <Rows
             rows={[
-              ['Menu recipe', 'One burger = 1 patty, 2 bun halves, 1 slice of cheese.'],
               [
-                'Prep recipe',
-                'One batch of burger sauce = mayo, ketchup, spices, and makes 2kg. A menu recipe can then use “50g of burger sauce” as an ingredient.',
+                'Recipe',
+                'What one plate of a dish uses. One burger = 1 patty, 2 bun halves, 1 slice of cheese.',
+              ],
+              [
+                'Make-ahead recipe',
+                'Something the kitchen makes in advance and puts on the shelf — sauce, stock, dough, patties. A dish recipe can then use “50 g of burger sauce” as if it were any other ingredient.',
               ],
             ]}
           />
           <Note>
-            Each line takes a <strong>wastage %</strong> for trim, peel and spillage. If 100g
-            reaches the plate but 105g leaves the store, say 5% and the books will match the
+            <strong>Where they live.</strong> A dish&apos;s recipe is on the Recipes screen.
+            A make-ahead recipe is on the Kitchen jobs screen, next to the button that makes
+            it. There used to be a third place — a Recipe tab inside the menu item — that
+            saved happily and was then ignored. It is gone.
+          </Note>
+          <Note>
+            Each line takes a <strong>wastage %</strong> for trim, peel and spillage. If 100 g
+            reaches the plate but 105 g leaves the store, say 5% and the books will match the
             bin.
+          </Note>
+          <Note>
+            <strong>Made-ahead things come off the shelf.</strong> If a burger uses 50 g of a
+            sauce you made this morning, selling it takes 50 g of <em>sauce</em>. It does not
+            take the tomatoes again — those left stock when you made the sauce.
           </Note>
           <Note>
             Edit a recipe that has already been sold against and the old version is kept.
@@ -701,53 +715,63 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
-        <SectionCard title="7 · Production" description="For anything you make rather than buy.">
+        <SectionCard title="7 · Kitchen jobs" description="For anything you make rather than buy.">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Bread, sauces, marinades, butchered cuts. Raw materials go in, a new stock item
+            Bread, sauces, marinades, butchered cuts. Ingredients go in, a new stock item
             comes out. It happens at a <strong>production house</strong>, because making things
             is a different job from serving guests.
           </p>
           <Rows
             rows={[
-              ['1 · Plan', '“Make 10 batches.” Nothing moves.'],
+              ['1 · Add the job', '“Make 100 loaves.” Nothing moves.'],
               ['2 · Approve', 'Someone senior signs it off. Nothing moves.'],
               [
-                '3 · Complete',
-                'Enter how many batches you actually got. Only now do the materials come off the shelves, the finished goods appear, and the cost get worked out.',
+                '3 · Mark it done',
+                'Enter how many actually came out. Only now do the ingredients come off the shelves, the finished item appear, and the cost get worked out.',
               ],
             ]}
           />
-          <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-            <p className="font-medium">The costing rule — the point of the whole feature</p>
+          <Note>
+            <strong>You say how many, not how many batches.</strong> This screen used to ask
+            for a number of batches against a recipe that made ten of something, so &ldquo;10&rdquo;
+            quietly meant a hundred loaves. Now 100 means 100.
+          </Note>
+          <div className="mt-3 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
+            <p className="font-medium">Why a bad day costs you more per loaf</p>
             <p className="mt-1 text-muted-foreground">
-              You planned 10 batches, so 100kg of flour went into the mixers. Only 8 came out;
-              two caught and were binned. <strong>All 100kg is consumed</strong> — it was used
-              whether or not it became bread — and the cost is divided by the 80 loaves you
-              actually got. Each loaf costs more than it would on a good day.
+              You asked for 100 loaves, so 100 kg of flour went into the mixers. Only 80 came
+              out; the rest caught and were binned. <strong>All 100 kg is used up</strong> — it
+              went in whether or not it became bread — and the cost is spread over the 80 loaves
+              you actually got. Each loaf costs more than it would on a good day.
             </p>
             <p className="mt-2 text-muted-foreground">
-              That is the true picture. A system that quietly consumed only 80 loaves&apos;
-              worth would report a disastrous run as perfectly efficient, and you would never
-              learn that your night shift was burning a fifth of your production.
+              That is the true picture. A system that quietly used only 80 loaves&apos; worth
+              would report a disastrous day as perfectly efficient, and you would never learn
+              that your night shift was burning a fifth of your flour.
             </p>
           </div>
           <Note>
-            <strong>Overheads.</strong> When you complete a run you can add what the labour, power
-            and gas cost. It is divided over the output along with the ingredients, so the cost per
-            loaf is what it really cost — not just what the flour cost.
+            <strong>Other costs.</strong> When you mark a job done you can add what the labour,
+            power and gas cost. It is spread over the output along with the ingredients, so the
+            cost per loaf is what it really cost — not just what the flour cost.
           </Note>
           <Note>
-            Click any run number to see it in full: what went in, what came out, what the gap cost,
-            and who approved it.
+            <strong>If none came out</strong>, cancel the job instead of entering zero. A
+            cancelled job takes nothing from stock; entering zero would use every ingredient
+            and give you nothing to show for it.
           </Note>
           <Note>
-            Recipes can be edited or retired. Editing changes future runs only — runs already
-            completed keep the costs they were completed with, so last month&apos;s margins never
-            move under you.
+            Click any job number to see it in full: what went in, what came out, what the gap
+            cost, and who approved it.
           </Note>
           <Note>
-            Finished goods sit at the production house. Send them out with a normal transfer.{' '}
-            <Guide href="/dashboard/production">Production</Guide>
+            Recipes can be edited or retired. Editing changes future jobs only — jobs already
+            done keep the costs they were done with, so last month&apos;s margins never move
+            under you.
+          </Note>
+          <Note>
+            Finished items sit at the production house. Send them out with a normal transfer.{' '}
+            <Guide href="/dashboard/production">Kitchen jobs</Guide>
           </Note>
         </SectionCard>
 

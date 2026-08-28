@@ -61,12 +61,6 @@ export async function fetchFoodForEdit(foodId: string) {
           isAvailable: option.isAvailable,
         })),
       })),
-      recipe: food.recipe.map((line) => ({
-        itemId: line.itemId,
-        name: line.item.name,
-        unit: line.item.unit,
-        quantity: line.quantity,
-      })),
     }
   })
 }
