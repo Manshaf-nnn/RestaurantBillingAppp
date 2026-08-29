@@ -114,6 +114,13 @@ enum OrderStatus {
   CANCELLED
 }
 
+/// How urgently the kitchen should treat an order.
+enum OrderPriority {
+  NORMAL
+  HIGH
+  URGENT
+}
+
 enum OrderItemStatus {
   QUEUED
   PREPARING
@@ -560,6 +567,7 @@ model Restaurant {
   stockCategories  InventoryCategory[]
   supplierPayments SupplierPayment[]
   foodBranches     FoodBranch[]
+  kitchenStations  KitchenStation[]
   suppliers        Supplier[]
   inventoryItems   InventoryItem[]
   stockMovements   StockMovement[]
@@ -768,6 +776,7 @@ model User {
   productionApproved  ProductionOrder[]   @relation("ProductionApprovedBy")
   approvalsRequested  ApprovalRequest[]   @relation("ApprovalRequestedBy")
   approvalsDecided    ApprovalRequest[]   @relation("ApprovalDecidedBy")
+  kitchenStations     KitchenStationStaff[]
 
   @@unique([email])
   @@unique([restaurantId, staffCode])
@@ -1038,13 +1047,79 @@ model FoodBranch {
   /// Overrides the dish's own order on this branch's menu.
   sortOrder     Int?
 
+  /// Which kitchen station cooks this dish AT THIS BRANCH.
+  ///
+  /// Per branch and not per dish, because the same pizza can come off a
+  /// dedicated Pizza Station at one site and the main kitchen at another. Null
+  /// means unmapped, which blocks the kitchen from accepting an order
+  /// containing it — unless `noKitchenRequired` says it never needed cooking.
+  stationId         String?
+  station           KitchenStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  /// Bottled water, packaged snacks — things that come off a shelf. They skip
+  /// kitchen routing entirely and are ready the moment the order is accepted.
+  noKitchenRequired Boolean         @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([foodId, branchId])
   @@index([restaurantId, branchId, isAvailable])
   @@index([branchId])
+  @@index([stationId])
   @@map("food_branches")
+}
+
+/// A section of a kitchen: the rice range, the pizza oven, the juice bar.
+///
+/// Branch-scoped, because two sites rarely have the same sections and an order
+/// taken at one must never appear on another's screen. Names are the owner's
+/// own — nothing here is hardcoded.
+model KitchenStation {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  /// Order the stations appear in, on the setup screen and the supervisor view.
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+  /// Free text naming the printer this station's tickets go to, for restaurants
+  /// that print. Nothing routes on it yet.
+  printerName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  staff      KitchenStationStaff[]
+  menu       FoodBranch[]
+  orderItems OrderItem[]
+
+  @@unique([branchId, name])
+  @@index([restaurantId, branchId, isActive])
+  @@map("kitchen_stations")
+}
+
+/// Which cooks work which station.
+///
+/// `User.branchId` confines someone to a site and nothing finer, so this is the
+/// only way to say "Chef A is on the rice range". A cook with NO rows sees every
+/// station at their branch — fail-open here on purpose, because the alternative
+/// is that a newly added cook sees nothing and cannot work.
+model KitchenStationStaff {
+  id        String         @id @default(cuid())
+  stationId String
+  station   KitchenStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([stationId, userId])
+  @@index([userId])
+  @@map("kitchen_station_staff")
 }
 
 model VariantGroup {
@@ -1274,6 +1349,14 @@ model Order {
   branch         Branch                @relation(fields: [branchId], references: [id])
   branchId       String
 
+  /// How urgently the kitchen should treat this order.
+  ///
+  /// On the ORDER and not on its items: a rush is a property of the table
+  /// waiting, not of one dish, and per-item priority would make the audit
+  /// trail's before/after ambiguous. Stations sort by priority, then by how
+  /// long the item has been waiting.
+  priority       OrderPriority         @default(NORMAL)
+
   /// Deduplicates a resubmitted order.
   ///
   /// The client sends one id per cart. A double tap, a flaky connection retry or
@@ -1328,12 +1411,41 @@ model OrderItem {
   isVeg           Boolean         @default(false)
   prepTimeMinutes Int             @default(0)
 
+  /// ── kitchen routing — MUTABLE BY DESIGN ────────────────────────────────
+  ///
+  /// Deliberately outside the immutable-snapshot block above. A supervisor may
+  /// move a pending item to another station when one goes down, so these change
+  /// after the order is placed; applying the immutability rule here would make
+  /// that reassignment impossible.
+  ///
+  /// The station this item is cooked at. Null means either "not routed yet" or
+  /// "needs no kitchen" — `routedAt` is what tells those apart.
+  stationId   String?
+  station     KitchenStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  /// The station's name at the time. Snapshotted for the same reason
+  /// `Order.tableNumber` is: a station may be renamed or deleted, and the
+  /// per-station reports still have to be readable afterwards.
+  stationName String?
+
+  /// When the kitchen accepted the order and this item was assigned a station.
+  ///
+  /// This is also the flag that decides whether the order runs in station mode.
+  /// A set of items with any `routedAt` is driven UP from its items; a set with
+  /// none is cascaded DOWN from the order, exactly as before stations existed.
+  /// Per-order rather than per-restaurant, so an order taken before the owner
+  /// created their first station keeps its original behaviour for life.
+  routedAt    DateTime?
+  preparingAt DateTime?
+  readyAt     DateTime?
+  servedAt    DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([orderId])
   @@index([foodId])
   @@index([orderId, status])
+  @@index([stationId, status])
   @@map("order_items")
 }
 
@@ -2238,6 +2350,7 @@ model Branch {
   instructions     BranchInstruction[]
   goodsReceipts    GoodsReceipt[]
   menu             FoodBranch[]
+  kitchenStations  KitchenStation[]
   shiftNotes       ShiftNote[]
   notifications    Notification[]
   purchaseReturns  PurchaseReturn[]

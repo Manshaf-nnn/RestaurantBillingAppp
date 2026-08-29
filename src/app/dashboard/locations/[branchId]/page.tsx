@@ -379,6 +379,14 @@ export default async function LocationPage({
               <Link href="/dashboard/staff" className="text-sm text-primary hover:underline">
                 Manage staff →
               </Link>
+              {can(user, PERMISSIONS.KITCHEN_STATION_VIEW) ? (
+                <Link
+                  href={`/dashboard/locations/${branchId}/kitchen-stations`}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Kitchen sections →
+                </Link>
+              ) : null}
             </div>
           ) : null}
         </SectionCard>

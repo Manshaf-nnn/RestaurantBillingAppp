@@ -269,8 +269,44 @@ export const FEATURES: Feature[] = [
     label: 'Kitchen display',
     group: 'Operations',
     description: 'The rail the kitchen cooks from.',
-    actions: [{ key: 'view', permission: PERMISSIONS.KITCHEN_VIEW }],
+    actions: [
+      { key: 'view', permission: PERMISSIONS.KITCHEN_VIEW },
+      {
+        key: 'approve',
+        label: 'Accept orders',
+        permission: PERMISSIONS.KITCHEN_ACCEPT,
+        hint: 'Taking an order onto the kitchen\u2019s books, which is what sends its dishes to their sections.',
+      },
+      {
+        key: 'transfer',
+        label: 'Move items between sections',
+        permission: PERMISSIONS.KITCHEN_REASSIGN,
+        hint: 'Overrides the menu\u2019s own routing when a section goes down. Every use is logged.',
+      },
+    ],
     routes: ['/kitchen'],
+  },
+  {
+    key: 'kitchenStations',
+    label: 'Kitchen sections',
+    group: 'Operations',
+    description:
+      'The sections a kitchen is divided into \u2014 rice range, pizza oven, juice bar \u2014 and which dishes each one cooks.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.KITCHEN_STATION_VIEW },
+      {
+        key: 'edit',
+        label: 'Manage',
+        permission: PERMISSIONS.KITCHEN_STATION_MANAGE,
+        hint: 'Creating and retiring sections, and putting cooks on them.',
+      },
+    ],
+    /*
+     * A location's kitchen sections belong here, not to Locations \u2014 the same
+     * argument the Staff screen makes below. `featureForRoute` matches the
+     * longest prefix, so this beats `/dashboard/locations`.
+     */
+    routes: ['/dashboard/locations/[branchId]/kitchen-stations'],
   },
   {
     key: 'waiter',

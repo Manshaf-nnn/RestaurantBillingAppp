@@ -175,6 +175,8 @@ async function catalogToken(restaurantId: string): Promise<string> {
       category_n: bigint
       branch_food_ts: number | null
       item_ts: number | null
+      station_ts: number | null
+      station_n: bigint
     }>
   >`
     SELECT
@@ -192,12 +194,20 @@ async function catalogToken(restaurantId: string): Promise<string> {
         WHERE f."restaurantId" = ${restaurantId})                                AS branch_food_ts,
       (SELECT EXTRACT(EPOCH FROM MAX(ii."updatedAt"))::double precision
          FROM inventory_items ii
-        WHERE ii."restaurantId" = ${restaurantId})                               AS item_ts
+        WHERE ii."restaurantId" = ${restaurantId})                               AS item_ts,
+      (SELECT EXTRACT(EPOCH FROM MAX(ks."updatedAt"))::double precision
+         FROM kitchen_stations ks
+        WHERE ks."restaurantId" = ${restaurantId})                               AS station_ts,
+      -- The count matters as much as the timestamp: retiring a section is an
+      -- UPDATE and moves the clock, but deleting one moves nothing at all.
+      (SELECT COUNT(*) FROM kitchen_stations ks
+        WHERE ks."restaurantId" = ${restaurantId})::bigint                       AS station_n
   `
 
   return [
     ts(row?.food_ts), n(row?.food_n), ts(row?.category_ts),
     n(row?.category_n), ts(row?.branch_food_ts), ts(row?.item_ts),
+    ts(row?.station_ts), n(row?.station_n),
   ].join('.')
 }
 

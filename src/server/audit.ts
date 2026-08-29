@@ -173,6 +173,14 @@ export const AUDIT_ACTIONS = {
   PRODUCTION_APPROVED: 'production.approved',
   PRODUCTION_COMPLETED: 'production.completed',
 
+  KITCHEN_STATION_SAVED: 'kitchen.station_saved',
+  KITCHEN_STATION_RETIRED: 'kitchen.station_retired',
+  KITCHEN_ORDER_ACCEPTED: 'kitchen.order_accepted',
+  /// A supervisor overriding the menu's own routing. Carries the section it
+  /// came from, the one it went to, and why.
+  KITCHEN_ITEM_REASSIGNED: 'kitchen.item_reassigned',
+  ORDER_PRIORITY_CHANGED: 'order.priority_changed',
+
   ROLE_CHANGED: 'user.role_changed',
   USER_DISABLED: 'user.disabled',
   PRICE_CHANGED: 'menu.price_changed',

@@ -61,6 +61,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/locations/[branchId]': 'IS one location; guarded by canAccessBranch on the id in the URL',
   'dashboard/locations/[branchId]/staff':
     'IS one location; canAccessBranch on the id in the URL, before anything is read',
+  'dashboard/locations/[branchId]/kitchen-stations':
+    'IS one location; canAccessBranch on the id in the URL, before anything is read',
   'dashboard/staff': 'Narrowed by visibleBranchIds — the roster is a permission question, not a filter',
   'dashboard/staff/codes': 'As above',
 

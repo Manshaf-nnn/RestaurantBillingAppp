@@ -40,6 +40,21 @@ export const PERMISSIONS = {
   ORDER_UPDATE_STATUS: 'order.updateStatus',
   ORDER_CANCEL: 'order.cancel',
   KITCHEN_VIEW: 'kitchen.view',
+  /// Taking an order onto the kitchen's books, which is what routes its items
+  /// to their stations. Split from KITCHEN_VIEW — the old board let anyone who
+  /// could see the rail press Accept, and taking that away on deploy day would
+  /// strand every existing kitchen account.
+  KITCHEN_ACCEPT: 'kitchen.accept',
+  /// Moving a pending item to a different station when one goes down. New
+  /// authority, deliberately NOT split: it overrides the menu's own routing and
+  /// every use is written to the audit log.
+  KITCHEN_REASSIGN: 'kitchen.reassign',
+  /// Seeing which stations a branch has. Split from KITCHEN_VIEW: a cook who
+  /// can see the rail can see which section they are cooking on.
+  KITCHEN_STATION_VIEW: 'kitchen.stationView',
+  /// Creating and retiring stations, and assigning cooks to them. Setup work,
+  /// not service work — not split.
+  KITCHEN_STATION_MANAGE: 'kitchen.stationManage',
   WAITER_VIEW: 'waiter.view',
 
   // money
@@ -334,6 +349,11 @@ const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   [PERMISSIONS.PETTY_CASH_VIEW, PERMISSIONS.CASH_DRAWER_OPERATE],
   [PERMISSIONS.PETTY_CASH_REQUEST, PERMISSIONS.CASH_DRAWER_OPERATE],
   [PERMISSIONS.PETTY_CASH_APPROVE, PERMISSIONS.CASH_DRAWER_MANAGE],
+  // Accepting an order and seeing the station list are both things anyone who
+  // could already work the kitchen rail could already do. Reassigning items and
+  // managing stations are not, so they are absent on purpose.
+  [PERMISSIONS.KITCHEN_ACCEPT, PERMISSIONS.KITCHEN_VIEW],
+  [PERMISSIONS.KITCHEN_STATION_VIEW, PERMISSIONS.KITCHEN_VIEW],
 ]
 
 /** Grant every split child to whoever already holds its parent. */
