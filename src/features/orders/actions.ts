@@ -378,6 +378,48 @@ export async function updateGuestOrderItems(
             continue
           }
 
+          /*
+           * Asking for more of something already cooked is a NEW line.
+           *
+           * Raising the quantity on a line that has gone past QUEUED used to
+           * keep its status, so two extra burgers added to a READY line read as
+           * ready the instant they were asked for — nobody had made them. With
+           * kitchen sections that is worse: the section has already finished
+           * with that card and will never see the extra.
+           *
+           * The original keeps its quantity and its status untouched, per §10,
+           * and the difference becomes its own QUEUED line with `routedAt` null
+           * so routing picks it up as a fresh addition. The live board sums
+           * quantities, so the table's totals are unchanged either way.
+           */
+          const uncooked = current.status === 'QUEUED' || current.status === 'CANCELLED'
+          if (!uncooked && quantity > current.quantity) {
+            const extra = quantity - current.quantity
+            await tx.orderItem.create({
+              data: {
+                orderId: order.id,
+                foodId: current.foodId,
+                name: current.name,
+                imageUrl: current.imageUrl,
+                unitPrice: current.unitPrice,
+                quantity: extra,
+                lineTotal: (current.unitPrice + current.optionsTotal) * extra,
+                options: current.options ?? undefined,
+                optionsTotal: current.optionsTotal,
+                notes: current.notes,
+                isVeg: current.isVeg,
+                prepTimeMinutes: current.prepTimeMinutes,
+                // The pinned recipe and the section follow the dish; the
+                // timestamps deliberately do not, because this one is new.
+                recipeId: current.recipeId,
+                stationId: current.stationId,
+                stationName: current.stationName,
+                status: 'QUEUED',
+              },
+            })
+            continue
+          }
+
           const lineTotal = (current.unitPrice + current.optionsTotal) * quantity
           await tx.orderItem.update({
             where: { id: current.id },

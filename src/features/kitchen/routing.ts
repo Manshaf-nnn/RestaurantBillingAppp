@@ -145,6 +145,14 @@ export async function routeOrderItems(
 ): Promise<number> {
   const plan = await planRouting(tx, params)
   if (!plan.configured || plan.unmapped.length > 0) return 0
+
+  /*
+   * A line added to an order already cooking routes on its own.
+   *
+   * `routeOrderItems` only ever touches rows whose `routedAt` is null, so a
+   * later addition picks up its section without disturbing anything the
+   * sections have already started — §10's whole requirement.
+   */
   if (plan.assignments.length === 0 && plan.noKitchen.length === 0) return 0
 
   const now = new Date()

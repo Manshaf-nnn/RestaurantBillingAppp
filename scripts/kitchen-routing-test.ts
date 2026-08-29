@@ -249,6 +249,39 @@ async function main() {
   })
   check('nor does Main’s work appear at Kandy', kandySeesMain === 0)
 
+  // ── 7 · asking for more of something already cooked ─────────────────────
+
+  console.log('\n7. More of a dish already cooked is a new line, not a bigger one')
+
+  const addTo = await order(main.id, [pizza])
+  await updateOrderStatus({ restaurantId: restaurant.id, orderId: addTo.id, status: 'ACCEPTED' })
+  const original = await prisma.orderItem.findFirstOrThrow({ where: { orderId: addTo.id } })
+  await prisma.orderItem.update({ where: { id: original.id }, data: { status: 'READY', readyAt: new Date() } })
+
+  /*
+   * The shape `updateGuestOrderItems` now writes: the cooked line is left
+   * exactly as it is and the difference becomes its own queued line.
+   */
+  await prisma.orderItem.create({
+    data: {
+      orderId: addTo.id, foodId: pizza.id, name: 'Pizza', unitPrice: 50_000,
+      quantity: 2, lineTotal: 100_000, status: 'QUEUED',
+      stationId: original.stationId, stationName: original.stationName,
+    },
+  })
+
+  const after = await prisma.orderItem.findMany({ where: { orderId: addTo.id }, orderBy: { createdAt: 'asc' } })
+  check('the cooked line is untouched', after[0]?.status === 'READY', String(after[0]?.status))
+  check('and the extra is its own queued line', after[1]?.status === 'QUEUED' && after[1]?.quantity === 2)
+  check('pointing at the same section', after[1]?.stationId === original.stationId)
+
+  const routedAdd = await prisma.$transaction((tx) =>
+    routeOrderItems(tx, { restaurantId: restaurant.id, orderId: addTo.id }),
+  )
+  check('routing picks up the addition without disturbing the rest', routedAdd === 1, `${routedAdd} routed`)
+  const afterRoute = await prisma.orderItem.findUniqueOrThrow({ where: { id: after[0].id } })
+  check('the already-ready line still reads ready', afterRoute.status === 'READY')
+
   // ── cleanup ─────────────────────────────────────────────────────────────
 
   await prisma.orderStockDepletion.deleteMany({ where: { restaurantId: restaurant.id } })
