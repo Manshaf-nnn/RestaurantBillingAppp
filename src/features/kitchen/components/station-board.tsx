@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { updateItemStatus } from '@/features/orders/actions'
+import { reassignItemAction } from '../actions'
 import type { StationTicketItem } from '../queries'
 
 const COLUMNS = [
@@ -40,11 +41,20 @@ export function StationBoard({
   stationName,
   items,
   siblings,
+  canReassign = false,
 }: {
   stationId: string
   stationName: string
   items: StationTicketItem[]
   siblings: Array<{ id: string; name: string }>
+  /**
+   * Whether this person may push a dish to another section.
+   *
+   * Offered only to whoever holds it. Showing the control and answering the tap
+   * with a refusal teaches people the app is broken; the honest version is not
+   * to offer it.
+   */
+  canReassign?: boolean
 }) {
   const router = useRouter()
   const [pendingId, setPendingId] = React.useState<string | null>(null)
@@ -72,6 +82,26 @@ export function StationBoard({
       toast.error(result.error)
       return
     }
+    router.refresh()
+  }
+
+  /*
+   * §18's escape hatch: an oven fails, a section is swamped, and a supervisor
+   * pushes the dish somewhere it can actually be cooked. Automatic routing
+   * stays the rule — this is the exception, and every use is written to the
+   * audit log with where it came from and why.
+   */
+  const reassign = async (item: StationTicketItem, toStationId: string) => {
+    setPendingId(item.id)
+    const result = await callAction(() =>
+      reassignItemAction({ itemId: item.id, stationId: toStationId }),
+    )
+    setPendingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`${item.name} moved`)
     router.refresh()
   }
 
@@ -225,6 +255,31 @@ export function StationBoard({
                             </span>
                           ) : null}
                         </div>
+
+                        {/* Only before it is cooked: once a dish is ready it
+                            was made where it was made, and rewriting that
+                            would put a lie in the reports. */}
+                        {canReassign && siblings.length > 1 && column.key !== 'READY' ? (
+                          <div className="mt-2 border-t border-border pt-2">
+                            <select
+                              className="h-8 w-full rounded-lg border border-input bg-background px-2 text-xs"
+                              value=""
+                              disabled={pendingId === item.id}
+                              onChange={(event) =>
+                                event.target.value && reassign(item, event.target.value)
+                              }
+                            >
+                              <option value="">Move to another section…</option>
+                              {siblings
+                                .filter((sibling) => sibling.id !== stationId)
+                                .map((sibling) => (
+                                  <option key={sibling.id} value={sibling.id}>
+                                    {sibling.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        ) : null}
                       </li>
                     )
                   })}

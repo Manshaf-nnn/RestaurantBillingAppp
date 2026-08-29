@@ -6,13 +6,15 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
-import { AppError } from '@/lib/errors'
+import { AppError, NotFoundError } from '@/lib/errors'
 import { updateOrderStatus } from '@/features/orders/service'
 import { prisma } from '@/server/db/prisma'
 import { planRouting } from './routing'
 import {
   acceptOrderSchema,
   assignAllDishesSchema,
+  reassignItemSchema,
+  setOrderPrioritySchema,
   deleteStationSchema,
   saveStationSchema,
   setStationActiveSchema,
@@ -242,5 +244,138 @@ export async function acceptOrderAction(input: unknown): Promise<ActionResult<{ 
       return { id: order.id }
     },
     'Order accepted.',
+  )
+}
+
+/**
+ * Move a pending dish to a different section.
+ *
+ * ── Why this exists at all ──────────────────────────────────────────────────
+ *
+ * Routing is automatic and should stay that way. But an oven fails, a section
+ * is swamped, somebody calls in sick — and §18 asks for a way out that is
+ * controlled rather than a silent reroute to whatever is nearby. Every use is
+ * written to the audit log with where it came from, where it went and why.
+ *
+ * Only before it is cooked. Once a dish is READY it has been made at the
+ * section that made it, and rewriting that would put a lie in the reports.
+ */
+export async function reassignItemAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    reassignItemSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.KITCHEN_REASSIGN)
+
+      const item = await prisma.orderItem.findFirst({
+        where: { id: data.itemId, order: { restaurantId: user.restaurantId } },
+        select: {
+          id: true, name: true, status: true, stationId: true, stationName: true,
+          order: { select: { id: true, branchId: true, orderNumber: true } },
+        },
+      })
+      if (!item) throw new AppError('That item no longer exists', 404, 'ITEM_NOT_FOUND')
+      await assertBranchAccess(user, item.order.branchId)
+
+      if (item.status !== 'QUEUED' && item.status !== 'PREPARING') {
+        throw new AppError(
+          `${item.name} is already ${item.status.toLowerCase()} — it cannot be moved now`,
+          409,
+          'ITEM_NOT_MOVABLE',
+        )
+      }
+
+      // The destination must be a live section at the SAME branch. Without this
+      // an id from the URL could push a dish onto another site's screen.
+      const target = await prisma.kitchenStation.findFirst({
+        where: {
+          id: data.stationId,
+          restaurantId: user.restaurantId,
+          branchId: item.order.branchId,
+          isActive: true,
+        },
+        select: { id: true, name: true },
+      })
+      if (!target) throw new NotFoundError('Kitchen section')
+
+      await prisma.orderItem.update({
+        where: { id: item.id },
+        data: { stationId: target.id, stationName: target.name },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: item.order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.KITCHEN_ITEM_REASSIGNED,
+        entity: 'OrderItem',
+        entityId: item.id,
+        before: { station: item.stationName, stationId: item.stationId },
+        after: {
+          station: target.name,
+          stationId: target.id,
+          order: item.order.orderNumber,
+          dish: item.name,
+          reason: data.reason || null,
+        },
+      })
+
+      revalidatePath('/kitchen')
+      return { id: item.id }
+    },
+    'Moved.',
+  )
+}
+
+/**
+ * Mark an order urgent, or put it back to normal.
+ *
+ * Sections sort by priority before waiting time, so this jumps a table up every
+ * screen at once rather than needing to be said to each section in turn. Logged
+ * with the previous value, because "who marked this urgent and why" is the
+ * question somebody asks afterwards.
+ */
+export async function setOrderPriorityAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; priority: string }>> {
+  return runAction(
+    setOrderPrioritySchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.KITCHEN_ACCEPT)
+
+      const order = await prisma.order.findFirst({
+        where: { id: data.orderId, restaurantId: user.restaurantId },
+        select: { id: true, branchId: true, orderNumber: true, priority: true },
+      })
+      if (!order) throw new AppError('That order no longer exists', 404, 'ORDER_NOT_FOUND')
+      await assertBranchAccess(user, order.branchId)
+
+      const updated = await prisma.order.update({
+        where: { id: order.id },
+        data: { priority: data.priority },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_PRIORITY_CHANGED,
+        entity: 'Order',
+        entityId: order.id,
+        before: { priority: order.priority },
+        after: {
+          priority: updated.priority,
+          order: order.orderNumber,
+          reason: data.reason || null,
+        },
+      })
+
+      revalidatePath('/kitchen')
+      return { id: order.id, priority: updated.priority as string }
+    },
+    'Priority updated.',
   )
 }

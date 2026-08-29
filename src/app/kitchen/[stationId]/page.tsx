@@ -6,7 +6,7 @@ import { StationBoard } from '@/features/kitchen/components/station-board'
 import { getStationQueue } from '@/features/kitchen/queries'
 import { listStations, stationsFor } from '@/features/kitchen/service'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
@@ -78,6 +78,7 @@ export default async function StationPage({
         stationName={station.name}
         items={items}
         siblings={mine.map((s) => ({ id: s.id, name: s.name }))}
+        canReassign={can(user, PERMISSIONS.KITCHEN_REASSIGN)}
       />
     </>
   )

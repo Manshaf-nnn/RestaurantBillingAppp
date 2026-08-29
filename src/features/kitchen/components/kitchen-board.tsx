@@ -19,7 +19,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
-import { acceptOrderAction } from '../actions'
+import { acceptOrderAction, setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
 import { callAction } from '@/lib/use-action'
 
@@ -252,6 +252,28 @@ export function KitchenBoard({
     )
   }
 
+  /*
+   * §15: jump a table up every section's screen at once.
+   *
+   * Sections sort by priority before waiting time, so this is said once here
+   * rather than to each section in turn. Logged with the previous value —
+   * "who marked this urgent, and why" is the question asked afterwards.
+   */
+  const prioritise = async (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => {
+    setPendingId(ticket.id)
+    const result = await callAction(() =>
+      setOrderPriorityAction({ orderId: ticket.id, priority }),
+    )
+    setPendingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setTickets((current) =>
+      current.map((entry) => (entry.id === ticket.id ? { ...entry, priority } : entry)),
+    )
+  }
+
   const advance = async (ticket: KitchenTicket, status: OrderStatus) => {
     setPendingId(ticket.id)
     const result = await callAction(() => updateOrderStatus({ orderId: ticket.id, status }))
@@ -403,6 +425,7 @@ export function KitchenBoard({
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
                       onAccept={accept}
+                      onPrioritise={prioritise}
                       restaurantName={restaurantName}
                       paperWidth={paperWidth}
                     />
@@ -424,6 +447,7 @@ function TicketCard({
   pending,
   onAdvance,
   onAccept,
+  onPrioritise,
   restaurantName,
   paperWidth,
 }: {
@@ -433,6 +457,7 @@ function TicketCard({
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
   onAccept: (ticket: KitchenTicket) => void
+  onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
   restaurantName: string
   paperWidth: PaperWidth
 }) {
@@ -601,6 +626,18 @@ function TicketCard({
             <Utensils /> Handed over
           </Button>
         ) : null}
+
+        {/* Rush this table. Sections sort on it, so one tap here moves it up
+            every screen rather than needing to be said to each in turn. */}
+        <Button
+          variant={ticket.priority === 'NORMAL' ? 'ghost' : 'destructive'}
+          size="icon-sm"
+          onClick={() => onPrioritise(ticket, ticket.priority === 'NORMAL' ? 'URGENT' : 'NORMAL')}
+          aria-label={ticket.priority === 'NORMAL' ? 'Mark urgent' : 'Back to normal priority'}
+          title={ticket.priority === 'NORMAL' ? 'Mark urgent' : 'Back to normal priority'}
+        >
+          <Flame />
+        </Button>
 
         {ticket.status === 'PENDING' ? (
           <Button
