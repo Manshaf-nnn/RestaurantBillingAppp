@@ -192,13 +192,24 @@ export function FoodDialog({
        * ticked and they choose deliberately, which is the behaviour that stops
        * a Main Branch dish appearing at Kandy on its own.
        */
+      /*
+       * A new dish starts at the location being worked in, and nowhere else.
+       * With no location chosen — an owner on "All locations" — nothing is
+       * ticked and they choose deliberately, which is the behaviour that stops
+       * a Main Branch dish appearing at Kandy on its own.
+       *
+       * The exception is a restaurant with ONE location: there is no choice to
+       * make, saving already falls back to the default branch, and leaving the
+       * list empty meant the form had nowhere to put a kitchen section.
+       */
+      const startsAt = activeBranchId ?? (branches.length === 1 ? branches[0].id : null)
       setForm({
         ...EMPTY,
         categoryId: categories[0]?.id ?? '',
-        branches: activeBranchId
+        branches: startsAt
           ? [
               {
-                branchId: activeBranchId,
+                branchId: startsAt,
                 price: '',
                 isAvailable: true,
                 stationId: '',
@@ -265,13 +276,51 @@ export function FoodDialog({
         })
       })
       .finally(() => setLoading(false))
-  }, [open, foodId, categories, onOpenChange])
+  }, [open, foodId, categories, branches, activeBranchId, onOpenChange])
 
   /** Sections at one branch. Empty when that branch does not use them. */
   const stationsAt = React.useCallback(
     (branchId: string) => stations.filter((station) => station.branchId === branchId),
     [stations],
   )
+
+  /*
+   * The one location this dish is sold at, when there is exactly one.
+   *
+   * That covers both the single-location restaurant and the common "this dish
+   * is only at Main" case, and it is what lets the Details tab hold a single
+   * kitchen-section field instead of sending everybody to a per-location grid
+   * to answer one question.
+   */
+  const soleBranch = form.branches.length === 1 ? form.branches[0].branchId : null
+  const soleRow = soleBranch ? form.branches[0] : null
+  const soleStationId = soleRow?.stationId ?? ''
+  const soleNoKitchen = soleRow?.noKitchenRequired ?? false
+
+  const setSoleStation = (value: string) =>
+    setForm((current) => ({
+      ...current,
+      branches: current.branches.map((row) =>
+        row.branchId === soleBranch
+          ? {
+              ...row,
+              noKitchenRequired: value === 'none',
+              stationId: value === 'none' || value === 'unset' ? '' : value,
+            }
+          : row,
+      ),
+    }))
+
+  /** What is set where, for a dish sold at more than one location. */
+  const sectionSummary = React.useMemo(() => {
+    const parts = form.branches.map((row) => {
+      const branchName = branches.find((b) => b.id === row.branchId)?.name ?? 'a location'
+      if (row.noKitchenRequired) return `no kitchen at ${branchName}`
+      const station = stations.find((s) => s.id === row.stationId)
+      return station ? `${station.name} at ${branchName}` : `nothing set at ${branchName}`
+    })
+    return parts.join(' · ')
+  }, [form.branches, branches, stations])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -471,10 +520,19 @@ export function FoodDialog({
               <TabsTrigger value="pricing" className="flex-1">
                 Pricing
               </TabsTrigger>
-              {/* Only worth a tab when there is more than one location. */}
-              {branches.length > 1 ? (
+              {/*
+                Worth a tab when there is more than one location, OR when the
+                kitchen has sections — because then it holds which section cooks
+                this dish at each place.
+
+                This condition and the panel's own used to disagree: the panel
+                allowed sections, the button did not, so on a single-location
+                restaurant the section picker existed and could not be reached
+                by any means at all.
+              */}
+              {branches.length > 1 || stations.length > 0 ? (
                 <TabsTrigger value="branches" className="flex-1">
-                  Locations
+                  {stations.length > 0 && branches.length <= 1 ? 'Kitchen' : 'Locations'}
                   <span className="ml-1.5 rounded bg-muted px-1 text-[10px] tabular-nums">
                     {form.branches.length}
                   </span>
@@ -523,6 +581,60 @@ export function FoodDialog({
                     </SelectContent>
                   </Select>
                 </Field>
+
+                {/*
+                  Which section of the kitchen cooks it.
+                  Here, beside the category, and not only on the Locations tab:
+                  this is the question asked while a dish is being written, and
+                  a dish with no section is what stops the kitchen accepting the
+                  order it lands on.
+
+                  Sections belong to ONE location, so a dish sold at several
+                  genuinely needs a different section at each and no single
+                  value can express it. That case shows what is set and sends
+                  you to the per-location pickers; the ordinary case — one
+                  location — is answered right here.
+                */}
+                {stations.length > 0 && soleBranch ? (
+                  <Field
+                    label="Kitchen section"
+                    className="sm:col-span-2"
+                    hint={
+                      soleStationId || soleNoKitchen
+                        ? undefined
+                        : 'Until this is set, the kitchen cannot accept an order containing this dish.'
+                    }
+                  >
+                    <Select
+                      value={soleNoKitchen ? 'none' : soleStationId || 'unset'}
+                      onValueChange={(value) => setSoleStation(value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unset">Not decided yet</SelectItem>
+                        {stationsAt(soleBranch).map((station) => (
+                          <SelectItem key={station.id} value={station.id}>
+                            {station.name}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="none">Needs no kitchen</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                ) : null}
+
+                {stations.length > 0 && !soleBranch && form.branches.length > 1 ? (
+                  <Field label="Kitchen section" className="sm:col-span-2">
+                    <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                      {sectionSummary}{' '}
+                      <span className="text-foreground">
+                        Set it per location on the Locations tab.
+                      </span>
+                    </p>
+                  </Field>
+                ) : null}
               </div>
 
               <Field label="Description">

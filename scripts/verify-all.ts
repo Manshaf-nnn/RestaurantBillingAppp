@@ -64,6 +64,7 @@ const SERVICE = [
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',
+  'menu-station-test',
   'feature-access-test',
 ]
 

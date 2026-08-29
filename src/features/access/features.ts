@@ -306,7 +306,10 @@ export const FEATURES: Feature[] = [
      * argument the Staff screen makes below. `featureForRoute` matches the
      * longest prefix, so this beats `/dashboard/locations`.
      */
-    routes: ['/dashboard/locations/[branchId]/kitchen-stations'],
+    routes: [
+      '/dashboard/kitchen-stations',
+      '/dashboard/locations/[branchId]/kitchen-stations',
+    ],
   },
   {
     key: 'waiter',

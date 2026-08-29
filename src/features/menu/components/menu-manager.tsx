@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import Image from 'next/image'
-import { Copy, MoreVertical, Pencil, Plus, Search, Trash2, UtensilsCrossed } from 'lucide-react'
+import {
+  AlertTriangle, Copy, MoreVertical, Pencil, Plus, Search, Trash2, UtensilsCrossed } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -53,6 +54,13 @@ export interface ManagedFood {
   branchCount: number
   /** True when the location being viewed charges its own price. */
   hasPriceOverride: boolean
+  /**
+   * No kitchen section is assigned to cook this here.
+   *
+   * Only ever true once the location HAS sections, and it is not cosmetic: the
+   * kitchen cannot accept an order containing a dish nobody is assigned to.
+   */
+  needsSection?: boolean
 }
 
 export interface BranchOption {
@@ -251,6 +259,16 @@ export function MenuManager({
                       <span className="truncate">{food.name}</span>
                     </p>
                     <p className="text-xs text-muted-foreground">{food.categoryName}</p>
+                    {food.needsSection ? (
+                      <button
+                        type="button"
+                        onClick={() => canManage && openEdit(food)}
+                        className="mt-1 inline-flex items-center gap-1 rounded-md border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning"
+                      >
+                        <AlertTriangle className="size-3" />
+                        No kitchen section
+                      </button>
+                    ) : null}
                   </div>
 
                   {canManage ? (

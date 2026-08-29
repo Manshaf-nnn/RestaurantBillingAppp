@@ -6,6 +6,7 @@ import { getManagedMenu } from '@/features/menu/queries'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
+import { unmappedDishes } from '@/features/kitchen/service'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { AutoRefresh } from '@/components/auto-refresh'
@@ -39,7 +40,7 @@ export default async function MenuPage({
     skipDuplicates: true,
   })
 
-  const [restaurant, menu, stations, allBranches, branch] = await Promise.all([
+  const [restaurant, menu, stations, unmapped, allBranches, branch] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getManagedMenu(user.restaurantId, undefined, branchId),
     /*
@@ -52,6 +53,14 @@ export default async function MenuPage({
       select: { id: true, name: true, branchId: true },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
+    /*
+     * Dishes this location sells that no section is responsible for. Only
+     * meaningful once the location has sections, and `unmappedDishes` returns
+     * nothing when it has none.
+     */
+    branchId
+      ? unmappedDishes(prisma, { restaurantId: user.restaurantId, branchId })
+      : Promise.resolve([]),
     // Only the locations this person may see, so the "Available at" list can
     // never be used to share a dish somewhere they have no business.
     prisma.branch.findMany({
@@ -71,6 +80,8 @@ export default async function MenuPage({
   const branches = allBranches
     .filter((b) => allowed === null || allowed.includes(b.id))
     .map((b) => ({ id: b.id, name: b.name, type: b.type as string }))
+
+  const unmappedIds = new Set(unmapped.map((dish) => dish.foodId))
 
   return (
     <>
@@ -100,6 +111,15 @@ export default async function MenuPage({
         soldCount: food.soldCount,
         categoryId: food.categoryId,
         categoryName: food.category.name,
+        /*
+         * Nobody is assigned to cook this yet.
+         *
+         * The same warning already appears on the sections screen and on the
+         * kitchen ticket, but both are places you look AFTER it bites — the
+         * kitchen cannot accept an order containing an unmapped dish. The menu
+         * is where it actually gets fixed, so it belongs here too.
+         */
+        needsSection: unmappedIds.has(food.id),
         variantCount: food.variantGroups.length,
         branchCount: food.branchCount,
         hasPriceOverride: food.hasPriceOverride,

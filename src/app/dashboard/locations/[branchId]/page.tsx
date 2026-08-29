@@ -379,14 +379,21 @@ export default async function LocationPage({
               <Link href="/dashboard/staff" className="text-sm text-primary hover:underline">
                 Manage staff →
               </Link>
-              {can(user, PERMISSIONS.KITCHEN_STATION_VIEW) ? (
-                <Link
-                  href={`/dashboard/locations/${branchId}/kitchen-stations`}
-                  className="text-sm text-primary hover:underline"
-                >
-                  Kitchen sections →
-                </Link>
-              ) : null}
+            </div>
+          ) : null}
+
+          {/*
+            Outside the Staff block it used to be nested in, which gated a
+            kitchen link behind the staff permission and filed it under people.
+          */}
+          {can(user, PERMISSIONS.KITCHEN_STATION_VIEW) ? (
+            <div className="mt-3">
+              <Link
+                href={`/dashboard/locations/${branchId}/kitchen-stations`}
+                className="text-sm text-primary hover:underline"
+              >
+                Kitchen sections →
+              </Link>
             </div>
           ) : null}
         </SectionCard>

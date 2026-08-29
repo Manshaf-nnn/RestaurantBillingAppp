@@ -151,6 +151,20 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.RESERVATION_MANAGE,
       },
       { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
+      /*
+       * Beside the kitchen display, because that is what it configures.
+       *
+       * It had no entry at all — the only way in was a link on a location's
+       * page — and with no sections created the menu has nothing to route to
+       * and the kitchen has nothing to route with. Everything else in this
+       * feature depends on it, so it belongs where it can be found.
+       */
+      {
+        href: '/dashboard/kitchen-stations',
+        label: 'Kitchen sections',
+        icon: Utensils,
+        permission: PERMISSIONS.KITCHEN_STATION_VIEW,
+      },
       { href: '/waiter', label: 'Waiter station', icon: HandPlatter, permission: PERMISSIONS.WAITER_VIEW },
       /*
        * One entry, because there was only ever one screen.
