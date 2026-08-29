@@ -23,6 +23,8 @@ export async function fetchFoodForEdit(foodId: string) {
         branchId: row.branchId,
         price: row.price !== null ? toMajor(row.price) : null,
         isAvailable: row.isAvailable,
+        stationId: row.stationId,
+        noKitchenRequired: row.noKitchenRequired,
       })),
       id: food.id,
       categoryId: food.categoryId,

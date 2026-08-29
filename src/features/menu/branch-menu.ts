@@ -128,6 +128,8 @@ export async function foodBranchRows(params: { restaurantId: string; foodId: str
       discountPrice: true,
       isAvailable: true,
       sortOrder: true,
+      stationId: true,
+      noKitchenRequired: true,
     },
   })
 }
@@ -155,6 +157,9 @@ export async function replaceFoodBranches(
       discountPrice?: number | null
       isAvailable?: boolean
       sortOrder?: number | null
+      /** Which kitchen section cooks this dish here. */
+      stationId?: string | null
+      noKitchenRequired?: boolean
     }>
   },
 ) {
@@ -179,12 +184,33 @@ export async function replaceFoodBranches(
         discountPrice: branch.discountPrice ?? null,
         isAvailable: branch.isAvailable ?? true,
         sortOrder: branch.sortOrder ?? null,
+        stationId: branch.stationId ?? null,
+        noKitchenRequired: branch.noKitchenRequired ?? false,
       },
+      /*
+       * A field the caller did not mention is LEFT ALONE; only an explicit null
+       * clears it.
+       *
+       * It used to write `x ?? null` for everything, which quietly wiped any
+       * column the payload happened not to carry. `sortOrder` is not in the
+       * menu form's schema at all and `discountPrice` is not in what the dialog
+       * submits, so both were reset to null on every single save — a per-branch
+       * menu order nobody could make stick, and a branch discount that survived
+       * exactly until someone edited the dish.
+       *
+       * With a kitchen section on this row the same bug would silently
+       * unassign every dish's section on save, which is why it is fixed here
+       * rather than worked around at the call site.
+       */
       update: {
         price: branch.price ?? null,
-        discountPrice: branch.discountPrice ?? null,
         isAvailable: branch.isAvailable ?? true,
-        sortOrder: branch.sortOrder ?? null,
+        ...(branch.discountPrice === undefined ? {} : { discountPrice: branch.discountPrice }),
+        ...(branch.sortOrder === undefined ? {} : { sortOrder: branch.sortOrder }),
+        ...(branch.stationId === undefined ? {} : { stationId: branch.stationId }),
+        ...(branch.noKitchenRequired === undefined
+          ? {}
+          : { noKitchenRequired: branch.noKitchenRequired }),
       },
     })
   }

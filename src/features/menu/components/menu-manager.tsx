@@ -30,7 +30,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { deleteFood, duplicateFood, toggleFoodAvailability } from '../actions'
-import { FoodDialog, type FoodFormData } from './food-dialog'
+import { FoodDialog, type FoodFormData, type StationOption } from './food-dialog'
 import { callAction } from '@/lib/use-action'
 
 export interface ManagedFood {
@@ -69,6 +69,7 @@ export interface CategoryOption {
 export function MenuManager({
   foods: initialFoods,
   categories,
+  stations = [],
   currency,
   locale,
   canManage,
@@ -79,6 +80,8 @@ export function MenuManager({
 }: {
   foods: ManagedFood[]
   categories: CategoryOption[]
+  /** Kitchen sections across every branch, for the per-branch routing picker. */
+  stations?: StationOption[]
   currency: string
   locale: string
   canManage: boolean
@@ -347,6 +350,7 @@ export function MenuManager({
           onOpenChange={setDialogOpen}
           foodId={dialogFood?.id}
           categories={categories}
+          stations={stations}
           currency={currency}
           branches={branches}
           activeBranchId={activeBranchId}

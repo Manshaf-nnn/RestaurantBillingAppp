@@ -94,6 +94,16 @@ export interface BranchRow {
   /** Blank means "same as the price above" — nothing is copied. */
   price: string
   isAvailable: boolean
+  /** Which kitchen section cooks it here. Blank = not decided yet. */
+  stationId: string
+  /** Bottled water and the like: never enters the kitchen at all. */
+  noKitchenRequired: boolean
+}
+
+export interface StationOption {
+  id: string
+  name: string
+  branchId: string
 }
 
 export interface BranchOption {
@@ -145,6 +155,7 @@ export function FoodDialog({
   onOpenChange,
   foodId,
   categories,
+  stations = [],
   currency,
   branches = [],
   activeBranchId = null,
@@ -153,6 +164,8 @@ export function FoodDialog({
   onOpenChange: (open: boolean) => void
   foodId?: string
   categories: CategoryOption[]
+  /** Kitchen sections, across every branch. Empty when nobody uses them. */
+  stations?: StationOption[]
   currency: string
   /** Locations this dish may be sold at. Empty for a single-site restaurant. */
   branches?: BranchOption[]
@@ -183,7 +196,15 @@ export function FoodDialog({
         ...EMPTY,
         categoryId: categories[0]?.id ?? '',
         branches: activeBranchId
-          ? [{ branchId: activeBranchId, price: '', isAvailable: true }]
+          ? [
+              {
+                branchId: activeBranchId,
+                price: '',
+                isAvailable: true,
+                stationId: '',
+                noKitchenRequired: false,
+              },
+            ]
           : [],
       })
       return
@@ -219,6 +240,8 @@ export function FoodDialog({
             branchId: row.branchId,
             price: row.price !== null ? String(row.price) : '',
             isAvailable: row.isAvailable,
+            stationId: row.stationId ?? '',
+            noKitchenRequired: row.noKitchenRequired,
           })),
           happyHourPrice: data.happyHourPrice !== null ? String(data.happyHourPrice) : '',
           happyHourStart: minutesToTime(data.happyHourStartMin),
@@ -243,6 +266,12 @@ export function FoodDialog({
       })
       .finally(() => setLoading(false))
   }, [open, foodId, categories, onOpenChange])
+
+  /** Sections at one branch. Empty when that branch does not use them. */
+  const stationsAt = React.useCallback(
+    (branchId: string) => stations.filter((station) => station.branchId === branchId),
+    [stations],
+  )
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -375,6 +404,8 @@ export function FoodDialog({
         // base price still reaches it.
         price: row.price.trim() ? parseMoney(row.price, currency) : null,
         isAvailable: row.isAvailable,
+        stationId: row.stationId || null,
+        noKitchenRequired: row.noKitchenRequired,
       })),
     }
 
@@ -819,7 +850,7 @@ export function FoodDialog({
             </TabsContent>
 
             {/* ── which locations sell it ─────────────────────────── */}
-            {branches.length > 1 ? (
+            {branches.length > 1 || stations.length > 0 ? (
               <TabsContent value="branches" className="space-y-3">
                 <p className="text-sm text-muted-foreground">
                   Tick a location to put this on its menu. Each keeps its own price and can take it
@@ -849,7 +880,13 @@ export function FoodDialog({
                                   branches: event.target.checked
                                     ? [
                                         ...current.branches,
-                                        { branchId: branch.id, price: '', isAvailable: true },
+                                        {
+                                          branchId: branch.id,
+                                          price: '',
+                                          isAvailable: true,
+                                          stationId: '',
+                                          noKitchenRequired: false,
+                                        },
                                       ]
                                     : current.branches.filter((b) => b.branchId !== branch.id),
                                 }))
@@ -903,6 +940,52 @@ export function FoodDialog({
                             </>
                           ) : null}
                         </div>
+
+                        {/*
+                          Which section of this branch's kitchen cooks it.
+                          Shown only where sections actually exist, so a
+                          restaurant that does not use them never sees the
+                          question — and an unmapped dish is what stops the
+                          kitchen accepting an order, so the empty option says
+                          so rather than reading as a harmless blank.
+                        */}
+                        {on && stationsAt(branch.id).length > 0 ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2">
+                            <span className="text-xs text-muted-foreground">Cooked at</span>
+                            <select
+                              className="h-9 rounded-lg border border-input bg-background px-2 text-sm"
+                              value={row?.noKitchenRequired ? 'none' : row?.stationId ?? ''}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  branches: current.branches.map((b) =>
+                                    b.branchId === branch.id
+                                      ? {
+                                          ...b,
+                                          noKitchenRequired: event.target.value === 'none',
+                                          stationId:
+                                            event.target.value === 'none' ? '' : event.target.value,
+                                        }
+                                      : b,
+                                  ),
+                                }))
+                              }
+                            >
+                              <option value="">Not decided — blocks the kitchen</option>
+                              {stationsAt(branch.id).map((station) => (
+                                <option key={station.id} value={station.id}>
+                                  {station.name}
+                                </option>
+                              ))}
+                              <option value="none">Needs no kitchen</option>
+                            </select>
+                            {!row?.noKitchenRequired && !row?.stationId ? (
+                              <span className="text-xs text-warning">
+                                The kitchen cannot accept an order with this on it
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </li>
                     )
                   })}

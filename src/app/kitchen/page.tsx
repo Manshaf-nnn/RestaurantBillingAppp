@@ -99,6 +99,10 @@ export default async function KitchenPage({
         notes: order.notes,
         placedAt: order.placedAt.toISOString(),
         estimatedMinutes: order.estimatedMinutes,
+        priority: order.priority as string,
+        // Dishes on this ticket that no kitchen section is responsible for.
+        // Empty for every restaurant that does not use sections.
+        unmappedNames: order.unmappedNames,
         items: order.items
           .filter((item) => item.status !== 'CANCELLED')
           .map((item) => ({

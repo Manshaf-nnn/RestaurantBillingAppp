@@ -81,6 +81,13 @@ export const foodSchema = z
         price: money.nullable().optional(),
         discountPrice: money.nullable().optional(),
         isAvailable: z.coerce.boolean().default(true),
+        /*
+         * Which kitchen section cooks this dish at this branch. Absent means
+         * "leave whatever is stored alone", null means "clear it" — the menu
+         * dialog only sends it when the restaurant actually uses sections.
+         */
+        stationId: z.string().cuid().nullable().optional(),
+        noKitchenRequired: z.coerce.boolean().optional(),
       }),
     )
     .max(50)

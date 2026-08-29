@@ -6,6 +6,7 @@ import { formatMoney } from '@/lib/money'
 import { resolveBranchId } from '@/features/branches/service'
 import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-menu'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
+import { orderIsRouted, routeOrderItems } from '@/features/kitchen/routing'
 import {
   prisma,
   isUniqueViolation,
@@ -780,6 +781,96 @@ const STATUS_TIMESTAMP: Partial<Record<OrderStatus, keyof Prisma.OrderUpdateInpu
   CANCELLED: 'cancelledAt',
 }
 
+/**
+ * The rungs an order climbs. `PENDING` is a starting point, never a target.
+ */
+const LADDER: OrderStatus[] = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED']
+
+/**
+ * Work out an order's status from its items, and walk it there.
+ *
+ * ── One arrow, one direction ────────────────────────────────────────────────
+ *
+ * This calls `updateOrderStatus`. `updateOrderStatus` must never call this.
+ * That asymmetry is the only thing stopping the two from chasing each other:
+ * once an order's items have been sent to kitchen sections, the order status is
+ * a readout of them and its downward cascade is switched off.
+ *
+ * ── Why it replays the ladder rather than jumping ───────────────────────────
+ *
+ * (Carried from `updateItemStatus`, which did this for SERVED alone. The
+ * reasoning is the whole justification for the replay, so it travels with the
+ * code.)
+ *
+ * A waiter can carry out the last plate while the order still says `PREPARING`
+ * — the kitchen never tapped "ready", it just handed the food over — and then
+ * every item read SERVED while the order sat at PREPARING for ever. Its table
+ * never freed, and on the live board it showed as a permanently critical table
+ * at 100% served.
+ *
+ * The fix is not a `PREPARING → SERVED` edge in `ALLOWED_TRANSITIONS`: that
+ * would let the kitchen jump straight to served without ever stamping
+ * `readyAt`, and every cook-time and ready-but-waiting figure is measured from
+ * that stamp. Instead each intervening step is applied in turn, so the
+ * timestamps stay monotonic and truthful — if every plate is out then the food
+ * was ready, and this instant is the latest moment that can have become true.
+ *
+ * `PENDING` is deliberately not a target: an order the kitchen has never
+ * accepted is a different problem, and forcing it through the accept path here
+ * would post stock depletion as a side effect of a cook's tap.
+ *
+ * ── Never backwards ─────────────────────────────────────────────────────────
+ *
+ * A later dish arriving on a table whose food is already out does not un-ready
+ * the order. Going backwards would unstamp nothing (the timestamps are already
+ * written) but would churn the boards and the event log for no gain, and
+ * `ALLOWED_TRANSITIONS` forbids it in any case.
+ */
+export async function deriveOrderStatus(params: {
+  restaurantId: string
+  orderId: string
+  actorId?: string | null
+  actorName?: string | null
+}): Promise<OrderStatus | null> {
+  const order = await prisma.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    select: {
+      status: true,
+      items: { where: { status: { not: 'CANCELLED' } }, select: { status: true } },
+    },
+  })
+  if (!order) return null
+
+  // An order the kitchen has not taken on yet is not derived from anything.
+  if (order.status === 'PENDING') return null
+  if (order.items.length === 0) return null
+
+  const statuses = order.items.map((item) => item.status)
+  const target: OrderStatus | null = statuses.every((s) => s === 'SERVED')
+    ? 'SERVED'
+    : statuses.every((s) => s === 'READY' || s === 'SERVED')
+      ? 'READY'
+      : statuses.some((s) => s === 'PREPARING')
+        ? 'PREPARING'
+        : null
+  if (!target) return null
+
+  const from = LADDER.indexOf(order.status)
+  const to = LADDER.indexOf(target)
+  if (from === -1 || to <= from) return null
+
+  for (const next of LADDER.slice(from + 1, to + 1)) {
+    await updateOrderStatus({
+      restaurantId: params.restaurantId,
+      orderId: params.orderId,
+      status: next,
+      actorId: params.actorId ?? null,
+      actorName: params.actorName ?? null,
+    })
+  }
+  return target
+}
+
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false
 }
@@ -812,6 +903,21 @@ export async function updateOrderStatus(params: {
   const timestampField = STATUS_TIMESTAMP[params.status]
 
   const updated = await prisma.$transaction(async (tx) => {
+    /*
+     * Which direction this order's statuses flow.
+     *
+     * An order whose items have been sent to kitchen sections is a READOUT of
+     * those items: each section advances its own dishes and `deriveOrderStatus`
+     * walks the order up behind them. Cascading down as well would flatten
+     * every section's progress the moment anybody touched the order — a
+     * supervisor marking one thing ready would mark the untouched juice ready
+     * too.
+     *
+     * Decided per order and fixed for its life, so an order taken before the
+     * owner made their first section keeps cascading to the end.
+     */
+    const routed = await orderIsRouted(tx, order.id)
+
     const next = await tx.order.update({
       where: { id: order.id },
       data: {
@@ -820,11 +926,12 @@ export async function updateOrderStatus(params: {
         ...(params.estimatedMinutes !== undefined
           ? { estimatedMinutes: params.estimatedMinutes }
           : {}),
-        // Accepting an order implies its items have entered the queue.
-        ...(params.status === 'PREPARING'
+        // Accepting an order implies its items have entered the queue —
+        // unless the sections own them, in which case they say when.
+        ...(params.status === 'PREPARING' && !routed
           ? { items: { updateMany: { where: { status: 'QUEUED' }, data: { status: 'PREPARING' } } } }
           : {}),
-        ...(params.status === 'READY'
+        ...(params.status === 'READY' && !routed
           ? {
               items: {
                 updateMany: {
@@ -834,6 +941,12 @@ export async function updateOrderStatus(params: {
               },
             }
           : {}),
+        /*
+         * SERVED still cascades in both modes. It is not progress — it is a
+         * waiter closing the whole table out at once, which stays a legitimate
+         * bulk action however the food was cooked. Cancellation likewise, in
+         * `cancelOrder`.
+         */
         ...(params.status === 'SERVED'
           ? {
               items: {
@@ -858,6 +971,16 @@ export async function updateOrderStatus(params: {
     // already has — so running it twice, or after a line changes, converges on
     // the right answer instead of double-deducting.
     if (params.status === 'ACCEPTED' || params.status === 'PREPARING') {
+      /*
+       * Send the dishes to their sections, at the moment the kitchen commits.
+       *
+       * Here rather than on the ACCEPTED edge alone, because PENDING→PREPARING
+       * is a legal transition the old board still takes — hanging routing off
+       * ACCEPTED would leave those orders with no sections at all. Idempotent,
+       * so passing through both edges routes once.
+       */
+      await routeOrderItems(tx, { restaurantId: order.restaurantId, orderId: order.id })
+
       await pinRecipeVersions(tx, { restaurantId: order.restaurantId, orderId: order.id })
       // Same moment, same recipe version: record what those ingredients cost, so
       // the profit report reads the ledger's numbers rather than a menu field.
@@ -950,6 +1073,21 @@ export async function cancelOrder(params: {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    /*
+     * Which direction this order's statuses flow.
+     *
+     * An order whose items have been sent to kitchen sections is a READOUT of
+     * those items: each section advances its own dishes and `deriveOrderStatus`
+     * walks the order up behind them. Cascading down as well would flatten
+     * every section's progress the moment anybody touched the order — a
+     * supervisor marking one thing ready would mark the untouched juice ready
+     * too.
+     *
+     * Decided per order and fixed for its life, so an order taken before the
+     * owner made their first section keeps cascading to the end.
+     */
+    const routed = await orderIsRouted(tx, order.id)
+
     const next = await tx.order.update({
       where: { id: order.id },
       data: {

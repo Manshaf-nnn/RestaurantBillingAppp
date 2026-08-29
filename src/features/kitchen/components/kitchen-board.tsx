@@ -18,6 +18,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
+import { acceptOrderAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
 import { callAction } from '@/lib/use-action'
 
@@ -32,6 +33,9 @@ export interface KitchenTicket {
   notes: string | null
   placedAt: string
   estimatedMinutes: number
+  priority: string
+  /** Dishes here that no section is assigned to cook. Blocks acceptance. */
+  unmappedNames: string[]
   items: Array<{
     id: string
     name: string
@@ -140,6 +144,14 @@ export function KitchenBoard({
   }, [initialTickets, play])
 
   const toTicket = (payload: OrderSummaryPayload): KitchenTicket => ({
+    /*
+     * A socket payload carries no priority and no routing verdict — those come
+     * from the queue query. Defaults here are the safe ones: normal urgency,
+     * and nothing known to be unmapped, so a pushed ticket is never wrongly
+     * shown as un-acceptable. The next poll replaces it with the real answer.
+     */
+    priority: 'NORMAL',
+    unmappedNames: [],
     id: payload.id,
     orderNumber: payload.orderNumber,
     type: payload.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
@@ -206,6 +218,29 @@ export function KitchenBoard({
     setTickets((current) => current.filter((ticket) => ticket.id !== payload.orderId))
     toast.warning(`Order ${payload.orderNumber} was cancelled`)
   })
+
+  /*
+   * Taking an order on is its own action now, not a status change.
+   *
+   * It used to jump PENDING straight to PREPARING, which meant `ACCEPTED` was
+   * never set by anybody and `acceptedAt` was never stamped — so the average
+   * cook time, measured from that stamp, had almost no orders to average.
+   * Accepting is also what sends each dish to the section that cooks it, and
+   * that has to be able to refuse: `acceptOrderAction` checks the whole ticket
+   * can be routed before it writes anything.
+   */
+  const accept = async (ticket: KitchenTicket) => {
+    setPendingId(ticket.id)
+    const result = await callAction(() => acceptOrderAction({ orderId: ticket.id }))
+    setPendingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setTickets((current) =>
+      current.map((entry) => (entry.id === ticket.id ? { ...entry, status: 'ACCEPTED' } : entry)),
+    )
+  }
 
   const advance = async (ticket: KitchenTicket, status: OrderStatus) => {
     setPendingId(ticket.id)
@@ -324,6 +359,7 @@ export function KitchenBoard({
                       flashing={flashing.has(ticket.id)}
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
+                      onAccept={accept}
                       restaurantName={restaurantName}
                       paperWidth={paperWidth}
                     />
@@ -344,6 +380,7 @@ function TicketCard({
   flashing,
   pending,
   onAdvance,
+  onAccept,
   restaurantName,
   paperWidth,
 }: {
@@ -352,6 +389,7 @@ function TicketCard({
   flashing: boolean
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
+  onAccept: (ticket: KitchenTicket) => void
   restaurantName: string
   paperWidth: PaperWidth
 }) {
@@ -421,6 +459,25 @@ function TicketCard({
         </div>
       </div>
 
+      {/*
+        The warning rides on the ticket, not on the button.
+        A dish nobody is assigned to cook stops this order being accepted at
+        all. Saying so here means it is found while somebody is reading the
+        queue, with time to go and fix the menu — rather than by the Accept
+        button failing in the middle of service with no explanation of why.
+      */}
+      {ticket.unmappedNames.length > 0 ? (
+        <div className="border-t border-warning/40 bg-warning/5 px-3 py-2">
+          <p className="text-xs font-medium text-warning">
+            No kitchen section for {ticket.unmappedNames.slice(0, 3).join(', ')}
+            {ticket.unmappedNames.length > 3 ? ` +${ticket.unmappedNames.length - 3}` : ''}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Set it on the menu and this can be accepted.
+          </p>
+        </div>
+      ) : null}
+
       <ul className="divide-y">
         {ticket.items.map((item) => (
           <li key={item.id} className="flex gap-2.5 px-3 py-2.5">
@@ -470,8 +527,13 @@ function TicketCard({
         </Button>
 
         {ticket.status === 'PENDING' ? (
-          <Button className="flex-1" loading={pending} onClick={() => onAdvance(ticket, 'PREPARING')}>
-            <Hand /> Accept &amp; start
+          <Button
+            className="flex-1"
+            loading={pending}
+            disabled={ticket.unmappedNames.length > 0}
+            onClick={() => onAccept(ticket)}
+          >
+            <Hand /> Accept
           </Button>
         ) : null}
 

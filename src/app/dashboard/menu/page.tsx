@@ -39,9 +39,19 @@ export default async function MenuPage({
     skipDuplicates: true,
   })
 
-  const [restaurant, menu, allBranches, branch] = await Promise.all([
+  const [restaurant, menu, stations, allBranches, branch] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getManagedMenu(user.restaurantId, undefined, branchId),
+    /*
+     * Kitchen sections across every location, so the branch rows can ask which
+     * one cooks the dish. Empty for a restaurant that does not use sections,
+     * and the picker then never appears.
+     */
+    prisma.kitchenStation.findMany({
+      where: { restaurantId: user.restaurantId, isActive: true },
+      select: { id: true, name: true, branchId: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    }),
     // Only the locations this person may see, so the "Available at" list can
     // never be used to share a dish somewhere they have no business.
     prisma.branch.findMany({
@@ -74,6 +84,7 @@ export default async function MenuPage({
       activeBranchName={branch?.name ?? null}
       branchCount={menu.branchCount}
       categories={menu.categories.map((category) => ({ id: category.id, name: category.name }))}
+      stations={stations}
       foods={menu.foods.map((food) => ({
         id: food.id,
         name: food.name,

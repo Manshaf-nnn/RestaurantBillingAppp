@@ -1,6 +1,6 @@
 'use server'
 
-import type { OrderStatus } from '@prisma/client'
+import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 
 import { revalidatePath } from 'next/cache'
 
@@ -33,6 +33,7 @@ import {
 import {
   buildDraft,
   cancelOrder as cancelOrderService,
+  deriveOrderStatus,
   placeOrder as placeOrderService,
   updateOrderStatus as updateOrderStatusService,
 } from './service'
@@ -626,13 +627,18 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
 }
 
 /**
- * The states an order passes through on its way to SERVED.
+ * When each item status happened, so a section's own timings can be measured.
  *
- * Read in order, so serving the last plate can walk an order from wherever it
- * is up to SERVED one step at a time — stamping `readyAt` on the way rather
- * than skipping it. See `updateItemStatus` below.
+ * `OrderItem` had no status timestamps at all, which meant every elapsed figure
+ * had to be read off the ORDER — and an order-level `preparingAt` stamps when
+ * the FIRST section starts, so a second section beginning twenty minutes later
+ * inherited the older clock and looked instantly overdue.
  */
-const SERVE_LADDER: OrderStatus[] = ['ACCEPTED', 'PREPARING', 'READY', 'SERVED']
+const ITEM_TIMESTAMP: Partial<Record<OrderItemStatus, 'preparingAt' | 'readyAt' | 'servedAt'>> = {
+  PREPARING: 'preparingAt',
+  READY: 'readyAt',
+  SERVED: 'servedAt',
+}
 
 export async function updateItemStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(updateItemStatusSchema, input, async (data) => {
@@ -645,53 +651,34 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
     })
     if (!item) throw new NotFoundError('Order item')
 
-    await prisma.orderItem.update({ where: { id: item.id }, data: { status: data.status } })
+    const stampField = ITEM_TIMESTAMP[data.status]
+    await prisma.orderItem.update({
+      where: { id: item.id },
+      data: {
+        status: data.status,
+        // Only the first time it reaches a state. Bouncing an item back and
+        // forth must not rewrite when it was actually cooked.
+        ...(stampField && item[stampField] === null ? { [stampField]: new Date() } : {}),
+      },
+    })
     realtime.orderItemStatus(user.restaurantId, data.orderId, data.itemId, data.status)
 
     /*
-     * Once the waiter serves the last outstanding item, the whole order is
-     * served — move the order along so it clears from the kitchen and waiter
-     * boards and the kitchen knows everything was delivered.
+     * Let the order catch up with its items.
      *
-     * ── Why it replays the ladder rather than jumping ───────────────────────
-     *
-     * This used to fire only when the order was already `READY`. But a waiter
-     * can carry out the last plate while the order still says `PREPARING` —
-     * the kitchen never tapped "ready", it just handed the food over — and
-     * then every item read SERVED while the order sat at PREPARING for ever.
-     * Its table never freed, and on the live board it showed as a permanently
-     * critical table at 100% served.
-     *
-     * The fix is not a `PREPARING → SERVED` edge in `ALLOWED_TRANSITIONS`:
-     * that would let the kitchen display jump straight to served without ever
-     * stamping `readyAt`, and every cook-time and ready-but-waiting figure is
-     * measured from that stamp. Instead each intervening step is applied in
-     * turn, so the timestamps stay monotonic and truthful — if every plate is
-     * out then the food was ready, and this instant is the latest moment that
-     * can have become true.
-     *
-     * `PENDING` is deliberately not on the ladder: an order the kitchen has
-     * never accepted is a different problem, and forcing it through the
-     * accept path here would post stock depletion as a side effect of a
-     * waiter's tap.
+     * `deriveOrderStatus` owns this now — it used to be an inline block here
+     * that only fired on the last SERVE. With kitchen sections, an order's
+     * status is a readout of its items in every direction: one section starting
+     * makes the order PREPARING, and the last section finishing makes it READY.
+     * The reasoning behind walking the ladder rather than jumping moved with the
+     * code; read it there before changing this.
      */
-    if (data.status === 'SERVED' && SERVE_LADDER.includes(item.order.status)) {
-      const remaining = await prisma.orderItem.count({
-        where: { orderId: data.orderId, status: { notIn: ['SERVED', 'CANCELLED'] } },
-      })
-      if (remaining === 0) {
-        const from = SERVE_LADDER.indexOf(item.order.status)
-        for (const next of SERVE_LADDER.slice(from + 1)) {
-          await updateOrderStatusService({
-            restaurantId: user.restaurantId,
-            orderId: data.orderId,
-            status: next,
-            actorId: user.id,
-            actorName: user.name,
-          })
-        }
-      }
-    }
+    await deriveOrderStatus({
+      restaurantId: user.restaurantId,
+      orderId: data.orderId,
+      actorId: user.id,
+      actorName: user.name,
+    })
 
     return { id: item.id }
   })
