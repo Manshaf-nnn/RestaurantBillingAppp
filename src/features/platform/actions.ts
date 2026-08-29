@@ -8,6 +8,7 @@ import { NotFoundError, AppError, ConflictError } from '@/lib/errors'
 import { audit } from '@/server/audit'
 import { requireSuperAdmin } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { setRestaurantFeatures } from './feature-service'
 import { notify } from '@/server/notifications'
 
 const idSchema = z.object({ restaurantId: z.string().cuid() })
@@ -22,9 +23,19 @@ const domainSchema = idSchema.extend({
  * Approve a pending restaurant: enable it, start its trial, and notify the
  * owner. Idempotent — approving an already-active tenant is a no-op.
  */
+/**
+ * Approve a registration, and decide what they have bought while doing it.
+ *
+ * `featureKeys` is optional and an empty list means everything, so approving
+ * without choosing anything gives them the whole system — which is what every
+ * restaurant approved before feature plans existed already has.
+ */
 export async function approveRestaurant(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
-    idSchema,
+    idSchema.extend({
+      featureKeys: z.array(z.string().min(1)).max(200).optional(),
+      packageId: z.string().cuid().nullable().optional(),
+    }),
     input,
     async (data) => {
       const admin = await requireSuperAdmin()
@@ -43,6 +54,16 @@ export async function approveRestaurant(input: unknown): Promise<ActionResult<{ 
           trialEndsAt: restaurant.trialEndsAt ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
         },
       })
+
+      // Only when the operator actually chose something. Omitting it leaves the
+      // list empty, which reads as unrestricted.
+      if (data.featureKeys !== undefined) {
+        await setRestaurantFeatures({
+          restaurantId: restaurant.id,
+          featureKeys: data.featureKeys,
+          packageId: data.packageId ?? null,
+        })
+      }
 
       await notify({
         restaurantId: restaurant.id,

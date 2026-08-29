@@ -173,6 +173,8 @@ export const AUDIT_ACTIONS = {
   PRODUCTION_APPROVED: 'production.approved',
   PRODUCTION_COMPLETED: 'production.completed',
 
+  PLATFORM_FEATURES_CHANGED: 'platform.features_changed',
+
   KITCHEN_STATION_SAVED: 'kitchen.station_saved',
   KITCHEN_STATION_RETIRED: 'kitchen.station_retired',
   KITCHEN_ORDER_ACCEPTED: 'kitchen.order_accepted',

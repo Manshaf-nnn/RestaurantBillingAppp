@@ -64,11 +64,14 @@ export function PlatformConsole({
   stats,
   recentFeedback,
   appUrl,
+  packages = [],
 }: {
   restaurants: PlatformRestaurant[]
   stats: PlatformStats
   recentFeedback: PlatformFeedbackItem[]
   appUrl: string
+  /** Sellable bundles, offered at the moment of approval. */
+  packages?: Array<{ id: string; name: string; featureKeys: string[] }>
 }) {
   const [restaurants, setRestaurants] = React.useState(initial)
   const [filter, setFilter] = React.useState<'ALL' | RestaurantStatus>(
@@ -102,13 +105,31 @@ export function PlatformConsole({
   const trialExpired = (restaurant: PlatformRestaurant) =>
     restaurant.plan === 'TRIAL' && restaurant.trialEndsAt !== null && new Date(restaurant.trialEndsAt).getTime() < Date.now()
 
-  const approve = async (restaurant: PlatformRestaurant) => {
+  /*
+   * Approving is also where what they have bought is decided.
+   *
+   * `pkg` undefined means no package was chosen, which sends no feature list at
+   * all — and an empty list reads as unrestricted. So the plain Approve button
+   * behaves exactly as it always did, and choosing a package is the deliberate
+   * act.
+   */
+  const approve = async (
+    restaurant: PlatformRestaurant,
+    pkg?: { id: string; featureKeys: string[] },
+  ) => {
     setBusyId(restaurant.id)
-    const result = await callAction(() => approveRestaurant({ restaurantId: restaurant.id }))
+    const result = await callAction(() =>
+      approveRestaurant({
+        restaurantId: restaurant.id,
+        ...(pkg ? { featureKeys: pkg.featureKeys, packageId: pkg.id } : {}),
+      }),
+    )
     setBusyId(null)
     if (result.ok) {
       patch(restaurant.id, 'ACTIVE')
-      toast.success(`${restaurant.name} approved`)
+      toast.success(
+          pkg ? `${restaurant.name} approved on its package` : `${restaurant.name} approved`,
+      )
     } else toast.error(result.error)
   }
 
@@ -234,8 +255,25 @@ export function PlatformConsole({
                 {restaurant.status === 'PENDING' ? (
                   <>
                     <Button size="sm" loading={busyId === restaurant.id} onClick={() => approve(restaurant)}>
-                      <Check /> Approve
+                      <Check /> Approve with everything
                     </Button>
+                    {/*
+                      One button per package rather than a dialog. There are
+                      rarely more than three, and the decision is "which plan
+                      did they buy" — a question better answered by reading the
+                      options than by opening something to find them.
+                    */}
+                    {packages.map((pkg) => (
+                      <Button
+                        key={pkg.id}
+                        size="sm"
+                        variant="outline"
+                        loading={busyId === restaurant.id}
+                        onClick={() => approve(restaurant, pkg)}
+                      >
+                        Approve on {pkg.name}
+                      </Button>
+                    ))}
                     <Button
                       size="sm"
                       variant="outline"

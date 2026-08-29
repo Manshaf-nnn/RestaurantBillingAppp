@@ -27,7 +27,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             Super Admin
           </Badge>
 
-          <Link href="/admin/media" className="ml-2 text-sm font-medium text-muted-foreground transition hover:text-foreground">
+          <Link href="/admin/plans" className="ml-2 text-sm font-medium text-muted-foreground transition hover:text-foreground">
+            Feature plans
+          </Link>
+
+          <Link href="/admin/media" className="text-sm font-medium text-muted-foreground transition hover:text-foreground">
             Media backups
           </Link>
 

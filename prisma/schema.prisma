@@ -537,8 +537,31 @@ model Restaurant {
   printerConfig Json?
   /// [PaymentConfig] — { cash: true, card: true, qr: true, upiId: "x@bank", online: false }
   paymentConfig Json?
-  /// [FeatureFlags] — { reservations: true, loyalty: true, happyHour: false }
+  /// Dead since it was added: written once at registration, read by nothing.
+  /// Superseded by `enabledFeatures` below, which is a real list the platform
+  /// operator controls rather than a shape nobody agreed on.
   features      Json?
+
+  /// Which features this restaurant has bought.
+  ///
+  /// Keys from `src/features/access/features.ts` — the registry that already
+  /// drives the sidebar, the role builder and the page guards. There is no
+  /// second list to keep in step.
+  ///
+  /// **Empty means everything.** Not "nothing": selling a restaurant zero
+  /// features is meaningless, while "we have not restricted this tenant" is the
+  /// normal case and must not require writing 45 rows for every existing
+  /// customer. Same spirit as `approvalPolicy` below — absent means the
+  /// built-in default applies.
+  ///
+  /// Disabling a feature never touches its data. The rows stay exactly where
+  /// they are and come back the moment it is re-enabled.
+  enabledFeatures  String[]        @default([])
+  /// Which package that list came from, for display and for upgrade/downgrade.
+  /// The resolved list above is the authority — a per-restaurant tweak diverges
+  /// from its package rather than being silently overwritten by it.
+  featurePackageId String?
+  featurePackage   FeaturePackage? @relation(fields: [featurePackageId], references: [id], onDelete: SetNull)
 
   loyaltyEnabled      Boolean @default(true)
   /// points awarded per unit of currency spent, x100 (100 = 1 point per 1 currency)
@@ -1067,6 +1090,29 @@ model FoodBranch {
   @@index([branchId])
   @@index([stationId])
   @@map("food_branches")
+}
+
+/// A sellable bundle of features, owned by the platform operator.
+///
+/// Not per restaurant and not hardcoded: `superadmin.md` is explicit that the
+/// operator creates and edits these himself. Applying one copies its keys onto
+/// the restaurant, so a later edit to the package does not silently re-scope
+/// every tenant already on it.
+model FeaturePackage {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  /// Feature keys from `src/features/access/features.ts`.
+  featureKeys String[] @default([])
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurants Restaurant[]
+
+  @@map("feature_packages")
 }
 
 /// A section of a kitchen: the rice range, the pizza oven, the juice bar.

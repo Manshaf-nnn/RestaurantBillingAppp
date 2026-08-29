@@ -446,6 +446,19 @@ export interface PermissionSubject {
    * fall back to them.
    */
   rolePermissions?: string[] | null
+  /**
+   * Every permission the platform operator has sold this restaurant.
+   *
+   * Undefined or empty means unrestricted. Anything here is intersected with
+   * whatever the role grants, which is the chain `superadmin.md` describes:
+   * platform availability, then role permission, then user access.
+   *
+   * Permissions rather than feature keys, because the feature registry imports
+   * from this module and resolving keys here would close the loop. The session
+   * layer expands the restaurant's feature list once, with
+   * `permissionsForFeatures`, and hands the result down.
+   */
+  availablePermissions?: string[] | null
 }
 
 /**
@@ -477,7 +490,23 @@ export interface PermissionSubject {
  * the only level that matters. The same applies to the platform operator.
  */
 export function permissionsFor(subject: PermissionSubject): Set<string> {
-  if (subject.role === 'OWNER' || subject.role === 'SUPER_ADMIN') return new Set<string>(ALL)
+  /*
+   * The platform operator's list first, then the role's.
+   *
+   * A restaurant can only use what it has been sold. This wraps the OWNER
+   * short-circuit below rather than living inside it, because an owner must be
+   * denied a feature their restaurant does not have just as firmly as a waiter
+   * is — otherwise every tenant's owner holds every feature and the whole plan
+   * is decorative.
+   *
+   * `undefined` means unrestricted, which is what keeps every existing caller
+   * and every test that builds a bare `{ role }` working unchanged.
+   */
+  const available = availableSet(subject.availablePermissions)
+
+  if (subject.role === 'OWNER' || subject.role === 'SUPER_ADMIN') {
+    return available ? new Set([...ALL].filter((p) => available.has(p))) : new Set<string>(ALL)
+  }
   /*
    * `withSplits` applies to the PRESET list and deliberately not to a saved one.
    *
@@ -499,7 +528,19 @@ export function permissionsFor(subject: PermissionSubject): Set<string> {
    * permissions from a MANAGER and asserts the pages go on refusing.
    */
   const base = subject.rolePermissions ?? ROLE_PERMISSIONS[subject.role]
-  return new Set<string>([...base, ...(subject.permissions ?? [])])
+  const granted = new Set<string>([...base, ...(subject.permissions ?? [])])
+  if (!available) return granted
+  return new Set([...granted].filter((permission) => available.has(permission)))
+}
+
+/**
+ * `null` means no restriction. An empty list means the same thing — "we have
+ * not scoped this tenant" is the ordinary case, and it must not require writing
+ * out every permission for every restaurant that already exists.
+ */
+function availableSet(permissions: string[] | null | undefined): Set<string> | null {
+  if (!permissions || permissions.length === 0) return null
+  return new Set(permissions)
 }
 
 export function can(subject: PermissionSubject | null | undefined, permission: Permission): boolean {

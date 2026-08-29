@@ -3,6 +3,7 @@ import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
 import type { UserRole } from '@prisma/client'
 
+import { permissionsForFeatures } from '@/features/access/features'
 import { prisma } from '@/server/db/prisma'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
@@ -71,6 +72,14 @@ export interface AuthUser {
    * instead of whenever their token happens to expire.
    */
   rolePermissions: string[] | null
+  /**
+   * Every permission the platform operator has sold this restaurant.
+   *
+   * Empty means unrestricted. `permissionsFor` intersects with it, so a feature
+   * the tenant has not bought is refused to everybody in it — including the
+   * owner.
+   */
+  availablePermissions: string[]
   sessionId: string
 }
 
@@ -168,6 +177,13 @@ export async function rotateSession(
           branchId: true, avatarUrl: true, permissions: true, isActive: true,
           deletedAt: true,
           staffRole: { select: { permissions: true, isActive: true } },
+          /*
+           * What the platform operator has sold this restaurant.
+           *
+           * On the query that was already loading the session, so the feature
+           * gate costs no extra round trip on any request.
+           */
+          restaurant: { select: { enabledFeatures: true } },
         },
       },
     },
@@ -221,6 +237,7 @@ export async function rotateSession(
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
     rolePermissions: activeRolePermissions(user.staffRole),
+    availablePermissions: permissionsForFeatures(user.restaurant?.enabledFeatures ?? []),
     sessionId: updated.id,
   }
 }
@@ -315,6 +332,13 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
           branchId: true, avatarUrl: true, permissions: true, isActive: true,
           deletedAt: true,
           staffRole: { select: { permissions: true, isActive: true } },
+          /*
+           * What the platform operator has sold this restaurant.
+           *
+           * On the query that was already loading the session, so the feature
+           * gate costs no extra round trip on any request.
+           */
+          restaurant: { select: { enabledFeatures: true } },
         },
       },
     },
@@ -351,6 +375,7 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
     rolePermissions: activeRolePermissions(user.staffRole),
+    availablePermissions: permissionsForFeatures(user.restaurant?.enabledFeatures ?? []),
     sessionId: session.id,
   }
 }
@@ -382,6 +407,13 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
           isActive: true,
           deletedAt: true,
           staffRole: { select: { permissions: true, isActive: true } },
+          /*
+           * What the platform operator has sold this restaurant.
+           *
+           * On the query that was already loading the session, so the feature
+           * gate costs no extra round trip on any request.
+           */
+          restaurant: { select: { enabledFeatures: true } },
         },
       },
     },
@@ -432,6 +464,15 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
     avatarUrl: session.user.avatarUrl,
     permissions: session.user.permissions,
     rolePermissions: activeRolePermissions(session.user.staffRole),
+    /*
+     * Expanded once, here, rather than wherever a permission is checked.
+     *
+     * Empty stays empty: `permissionsFor` reads that as "unrestricted", which
+     * is what every restaurant that has never been scoped should get.
+     */
+    availablePermissions: permissionsForFeatures(
+      session.user.restaurant?.enabledFeatures ?? [],
+    ),
     sessionId: session.id,
   }
 }

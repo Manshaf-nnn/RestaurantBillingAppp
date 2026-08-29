@@ -28,6 +28,9 @@ const PROTECTED_PREFIXES = [
   '/onboarding',
   '/pending-approval',
   '/trial-ended',
+  // Needs a session to say WHICH feature is locked and where to go back to.
+  // Like the two above, it is never entered by the middleware itself.
+  '/locked',
 ] as const
 
 /*

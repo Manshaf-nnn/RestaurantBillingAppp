@@ -103,9 +103,31 @@ function markWorking(user: TenantUser): void {
   touchShift(user.id).catch(() => {})
 }
 
+/**
+ * Is this permission missing because the restaurant never bought the feature,
+ * rather than because this person's role does not include it?
+ *
+ * The distinction matters to whoever is reading the screen. "Ask your manager
+ * for access" is useless advice when no amount of role editing can help — the
+ * feature is not part of what the restaurant pays for, and only the platform
+ * operator can change that.
+ *
+ * An empty list means unrestricted, so this is false for every restaurant that
+ * has never been scoped.
+ */
+function lockedByPlan(user: { availablePermissions?: string[] | null }, permission: string): boolean {
+  const available = user.availablePermissions
+  return Boolean(available && available.length > 0 && !available.includes(permission))
+}
+
 export async function requirePermission(permission: Permission): Promise<TenantUser> {
   const user = await requireTenantUser()
   if (!can(user, permission)) {
+    if (lockedByPlan(user, permission)) {
+      throw new ForbiddenError(
+        'That feature is not part of this restaurant\u2019s plan. Nothing has been deleted — it comes back the moment it is switched on.',
+      )
+    }
     throw new ForbiddenError(`Missing permission: ${permission}`)
   }
   markWorking(user)
@@ -136,7 +158,17 @@ export async function requirePagePermission(
 ): Promise<TenantUser> {
   const user = await requirePageUser(nextPath)
   if (!user.restaurantId) redirect('/onboarding')
-  if (!can(user, permission)) redirect('/forbidden')
+  if (!can(user, permission)) {
+    /*
+     * Two different dead ends, and they need different pages.
+     *
+     * `/forbidden` tells somebody their role does not reach this, which is
+     * something their manager can fix. A feature the restaurant does not have
+     * is not that: no role edit will ever open it, and the honest thing is to
+     * say so and name who can.
+     */
+    redirect(lockedByPlan(user, permission) ? `/locked?feature=${encodeURIComponent(permission)}` : '/forbidden')
+  }
   return user as TenantUser
 }
 
@@ -146,7 +178,10 @@ export async function requirePageAnyPermission(
 ): Promise<TenantUser> {
   const user = await requirePageUser(nextPath)
   if (!user.restaurantId) redirect('/onboarding')
-  if (!canAny(user, permissions)) redirect('/forbidden')
+  if (!canAny(user, permissions)) {
+    const locked = permissions.every((permission) => lockedByPlan(user, permission))
+    redirect(locked ? `/locked?feature=${encodeURIComponent(permissions[0])}` : '/forbidden')
+  }
   return user as TenantUser
 }
 

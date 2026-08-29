@@ -64,6 +64,7 @@ const SERVICE = [
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',
+  'feature-access-test',
 ]
 
 const RUNTIME = [
