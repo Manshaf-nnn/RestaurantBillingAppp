@@ -176,13 +176,38 @@ export async function getKitchenStats(restaurantId: string, branchIds?: string[]
 export async function getWaiterBoard(restaurantId: string, branchIds?: string[] | null) {
   const here = atBranch(branchIds)
   const [ready, serving, requests, tables] = await Promise.all([
+    /*
+     * Anything with food waiting to be carried out — by ITEM, not by order.
+     *
+     * This asked for orders whose own status was READY, which was right when
+     * one rail cooked a whole ticket at once. With kitchen sections it is
+     * wrong in the way that matters most: the pizza is up and the rice is
+     * still in the pan, so the order reads PREPARING, and nothing tells the
+     * waiter there is a pizza going cold under the lamp.
+     *
+     * Any open order holding at least one READY item now surfaces here.
+     * Whole-order READY is a special case of that, so nothing regresses for a
+     * restaurant with no sections.
+     */
     prisma.order.findMany({
-      where: { restaurantId, ...here, status: 'READY' },
+      where: {
+        restaurantId,
+        ...here,
+        status: { in: ['ACCEPTED', 'PREPARING', 'READY', 'SERVED'] },
+        items: { some: { status: 'READY' } },
+      },
       include: { items: true, table: { select: { id: true, number: true } } },
-      orderBy: { readyAt: 'asc' },
+      orderBy: [{ readyAt: 'asc' }, { placedAt: 'asc' }],
     }),
     prisma.order.findMany({
-      where: { restaurantId, ...here, status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] } },
+      where: {
+        restaurantId,
+        ...here,
+        status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] },
+        // Kept off the "waiting to be cooked" list once something on it is
+        // ready, or a half-finished table would appear in both columns.
+        items: { none: { status: 'READY' } },
+      },
       include: { items: true, table: { select: { id: true, number: true } } },
       orderBy: { placedAt: 'asc' },
       take: 40,

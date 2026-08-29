@@ -4,6 +4,8 @@ import { redirect } from 'next/navigation'
 import { KitchenBoard } from '@/features/kitchen/components/kitchen-board'
 import { readPaperWidths } from '@/features/printing/paper'
 import { getKitchenQueue, getKitchenStats, readOptions } from '@/features/orders/queries'
+import { getStationWorkload } from '@/features/kitchen/queries'
+import { stationsFor } from '@/features/kitchen/service'
 import {
   listStationBranches,
   scopeToOne,
@@ -74,11 +76,34 @@ export default async function KitchenPage({
   const branchIds = branchId ? [branchId] : selection.branchIds
 
 
-  const [restaurant, queue, stats] = await Promise.all([
+  const [restaurant, queue, stats, workload, mine] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getKitchenQueue(user.restaurantId, branchIds),
     getKitchenStats(user.restaurantId, branchIds),
+    /*
+     * The sections this cook may stand at, with what each is carrying.
+     *
+     * `stationsFor` returns null for somebody assigned to none, which reads as
+     * "all of them" — the right default for a kitchen where everyone covers
+     * everything. Empty for a restaurant that does not use sections, and the
+     * strip then never appears.
+     */
+    /*
+     * Only when the screen is showing exactly one location. An owner watching
+     * "all locations" has no single kitchen whose sections these would be, and
+     * `'__none__'` is the sentinel for somebody confined to no branch at all.
+     */
+    branchId && branchId !== '__none__'
+      ? getStationWorkload({ restaurantId: user.restaurantId, branchId })
+      : Promise.resolve([]),
+    branchId && branchId !== '__none__'
+      ? stationsFor({ restaurantId: user.restaurantId, branchId, userId: user.id })
+      : Promise.resolve(null),
   ])
+
+  const sections = workload.filter(
+    (row: { stationId: string }) => mine === null || mine.includes(row.stationId),
+  )
 
   return (
     <KitchenBoard
@@ -87,6 +112,7 @@ export default async function KitchenPage({
       branchIds={branchIds}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       exit={<StationExit user={user} current="/kitchen" />}
+      sections={sections}
       initialStats={stats}
       initialTickets={queue.map((order) => ({
         id: order.id,

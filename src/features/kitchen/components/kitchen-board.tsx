@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 import { Check, ChefHat, Clock, Flame, Hand, Printer, Timer, Utensils, X } from 'lucide-react'
@@ -78,6 +79,7 @@ export function KitchenBoard({
   initialStats,
   user,
   exit,
+  sections = [],
   restaurantName,
   paperWidth,
   branchIds,
@@ -94,6 +96,14 @@ export function KitchenBoard({
    * elements serialize, functions do not.
    */
   exit?: React.ReactNode
+  /** Sections this cook may open, with what each is carrying. */
+  sections?: Array<{
+    stationId: string
+    name: string
+    queued: number
+    preparing: number
+    ready: number
+  }>
   restaurantName: string
   paperWidth: PaperWidth
   /**
@@ -307,6 +317,39 @@ export function KitchenBoard({
           { label: 'Avg cook time', value: `${stats.averageCookMinutes} min` },
         ]}
       />
+
+      {/*
+        The sections, if this kitchen has any.
+        This rail stays the place orders are taken on; each section's own screen
+        is where its dishes are cooked. A restaurant with no sections never sees
+        this strip and works exactly as it always has.
+      */}
+      {sections.length > 0 ? (
+        <div className="flex flex-wrap gap-2 px-4 pt-4">
+          {sections.map((section) => {
+            const waiting = section.queued + section.preparing
+            return (
+              <Link
+                key={section.stationId}
+                href={`/kitchen/${section.stationId}`}
+                className="flex items-center gap-2 rounded-lg border-2 border-border bg-card px-3 py-2 text-sm font-medium hover:border-primary/50"
+              >
+                {section.name}
+                {waiting > 0 ? (
+                  <span className="rounded-md bg-primary/10 px-1.5 text-xs font-bold tabular-nums text-primary">
+                    {waiting}
+                  </span>
+                ) : null}
+                {section.ready > 0 ? (
+                  <span className="rounded-md bg-success/10 px-1.5 text-xs font-bold tabular-nums text-success">
+                    {section.ready} up
+                  </span>
+                ) : null}
+              </Link>
+            )
+          })}
+        </div>
+      ) : null}
 
       <div className="px-4 pt-4">
         <div className="max-w-md">
