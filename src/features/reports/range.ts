@@ -150,7 +150,15 @@ function fromZoned(
   return new Date(naive - offsetAt(new Date(once), timeZone))
 }
 
-function startOfDay(d: Date, tz: string): Date {
+/**
+ * Midnight in the RESTAURANT'S day, not the server's.
+ *
+ * Exported because "has this drawer been open since yesterday?" is a question
+ * about the restaurant's yesterday — a Netlify function runs in UTC, and a
+ * Colombo till judged by server midnight would be flagged five and a half
+ * hours wrong.
+ */
+export function startOfDay(d: Date, tz: string): Date {
   const p = zonedParts(d, tz)
   return fromZoned(tz, p.year, p.month, p.day)
 }

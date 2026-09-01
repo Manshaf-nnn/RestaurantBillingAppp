@@ -51,6 +51,27 @@ async function main() {
     },
   })
 
+  /*
+   * A second, bare tenant. It sells nothing and nobody signs into it — it
+   * exists so the phase test suites can prove tenant isolation against a REAL
+   * other restaurant rather than a mocked id. They used to find one of these
+   * lying around in an old dev database and crashed the day it was rebuilt;
+   * seeding it makes the fixture reproducible for ever.
+   */
+  await prisma.restaurant.upsert({
+    where: { slug: 'kava' },
+    update: { status: 'ACTIVE', isActive: true },
+    create: {
+      slug: 'kava',
+      name: 'Kava',
+      status: 'ACTIVE',
+      isActive: true,
+      approvedAt: new Date(),
+      currency: 'LKR',
+      timezone: 'Asia/Colombo',
+    },
+  })
+
   const restaurant = await prisma.restaurant.upsert({
     where: { slug: SLUG },
     update: { status: 'ACTIVE', isActive: true },
@@ -98,6 +119,7 @@ async function main() {
     prisma.recipe.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.variantOption.deleteMany({ where: { group: { food: { restaurantId: restaurant.id } } } }),
     prisma.variantGroup.deleteMany({ where: { food: { restaurantId: restaurant.id } } }),
+    prisma.foodBranch.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.food.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.category.deleteMany({ where: { restaurantId: restaurant.id } }),
     prisma.customer.deleteMany({ where: { restaurantId: restaurant.id } }),
@@ -360,6 +382,25 @@ async function main() {
 
     foodIds.push({ id: created.id, price: food.price, category: food.category, name: food.name })
   }
+
+  /*
+   * Put every dish on the main branch's menu.
+   *
+   * A `FoodBranch` row's existence IS the "this branch sells it" decision, and
+   * `placeOrder` refuses a dish with no row for the ordering branch. Without
+   * this block, a freshly seeded database looked complete and could not take a
+   * single order — the old dev database only worked because a long-gone
+   * migration had backfilled these rows.
+   */
+  await prisma.foodBranch.createMany({
+    data: foodIds.map((food) => ({
+      restaurantId: restaurant.id,
+      foodId: food.id,
+      branchId: mainBranch.id,
+      isAvailable: true,
+    })),
+    skipDuplicates: true,
+  })
 
   // ── coupons ────────────────────────────────────────────────────────────────
   await prisma.coupon.createMany({

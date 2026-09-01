@@ -65,6 +65,7 @@ const SERVICE = [
   'input-stability-test',
   'kitchen-routing-test',
   'menu-station-test',
+  'cash-drawer-flow-test',
   'feature-access-test',
 ]
 

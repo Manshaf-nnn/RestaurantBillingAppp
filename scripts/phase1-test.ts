@@ -230,28 +230,18 @@ async function main() {
   console.log('\n── 6. Closing and variance ──────────────────────────────')
   const SHORT_BY = 25_00
 
-  // A drawer that does not balance has to say why. See cash-drawer-test §7 for
-  // the rule itself; this asserts the older path here still obeys it.
-  await throws(
-    'closing short with no explanation is refused',
-    () =>
-      closeDrawer({
-        restaurantId: shop.id,
-        actor: atTill,
-        sessionId: drawer.id,
-        countedCash: afterRefund.expectedCash - SHORT_BY,
-        note: 'test close',
-        userId: cashier.id,
-      }),
-    'DRAWER_NO_VARIANCE_REASON',
-  )
-
+  /*
+   * DELIBERATE behaviour change, 2026-08: 25.00 is under the review threshold
+   * (default 500.00), so no explanation is demanded any more — the whole point
+   * of the tolerance. A gap PAST the threshold without a reason is still
+   * refused; cash-drawer-test §7 owns that rule, this suite only proves the
+   * small-gap path closes cleanly.
+   */
   const closed = await closeDrawer({
     restaurantId: shop.id,
     actor: atTill,
     sessionId: drawer.id,
     countedCash: afterRefund.expectedCash - SHORT_BY,
-    varianceReason: 'miscounted change on the last bill',
     note: 'test close',
     userId: cashier.id,
   })

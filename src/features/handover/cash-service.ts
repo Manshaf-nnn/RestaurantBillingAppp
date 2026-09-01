@@ -130,15 +130,6 @@ export async function requestHandover(params: {
   const totals = await computeDrawerTotals(session.id)
   const variance = params.countedAmount - totals.expectedCash
 
-  const reason = params.varianceReason?.trim() || null
-  if (variance !== 0 && (!reason || reason.length < 2)) {
-    throw new AppError(
-      'Say why the drawer does not balance before handing it on.',
-      400,
-      'DRAWER_NO_VARIANCE_REASON',
-    )
-  }
-
   /*
    * A handover is a close, so it stops for review on the same threshold.
    *
@@ -149,6 +140,16 @@ export async function requestHandover(params: {
    * way, so the next person is never held up by somebody else's shortfall.
    */
   const needsReview = await varianceNeedsReview(params.restaurantId, variance)
+
+  // Same rule as closing: only a gap big enough to matter has to be explained.
+  const reason = params.varianceReason?.trim() || null
+  if (needsReview && (!reason || reason.length < 2)) {
+    throw new AppError(
+      'That is a big enough difference to explain before handing the till on.',
+      400,
+      'DRAWER_NO_VARIANCE_REASON',
+    )
+  }
 
   return prisma.$transaction(async (tx) => {
     await tx.cashDrawerSession.update({

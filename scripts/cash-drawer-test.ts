@@ -153,11 +153,13 @@ async function main() {
   const actorFor = (
     u: { id: string; role: string; branchId?: string | null },
     manage = false,
+    review = manage,
   ): DrawerActor => ({
     id: u.id,
     role: u.role as DrawerActor['role'],
     branchId: u.branchId ?? null,
     canManageOthers: manage,
+    canReviewVariance: review,
   })
   const pettyActorFor = (
     u: { id: string; role: string; branchId?: string | null },
@@ -874,36 +876,47 @@ async function main() {
 
   const kandyExpected = (await computeDrawerTotals(kumarSession.id)).expectedCash
 
-  await refuses(
-    'closing short with no reason is refused',
-    () =>
-      closeDrawer({
-        restaurantId: restaurant.id,
-        sessionId: kumarSession.id,
-        countedCash: kandyExpected - 300_00,
-        userId: kumar.id,
-        actor: actorFor(kumar),
-      }),
-    /why the drawer does not balance/i,
-  )
-
+  /*
+   * DELIBERATE behaviour change, 2026-08: a gap under the review threshold no
+   * longer demands a written reason. It used to — any non-zero variance
+   * disabled the close until somebody typed a sentence, which meant a drawer
+   * two rupees light at midnight required prose. One number (Settings → Cash,
+   * default 500.00) now governs both the explanation and the sign-off.
+   */
   const smallShort = await closeDrawer({
     restaurantId: restaurant.id,
     sessionId: kumarSession.id,
     countedCash: kandyExpected - 300_00,
-    varianceReason: 'Gave the wrong change on a 5000 note',
     userId: kumar.id,
     actor: actorFor(kumar),
   })
   check('variance is counted minus expected', smallShort.variance === -300_00, `${smallShort.variance}`)
   check(
-    'a small gap closes outright',
+    'a small gap closes outright, with no reason demanded',
     smallShort.session.status === 'CLOSED' && smallShort.needsReview === false,
   )
-  check('the reason is kept on the row', smallShort.session.varianceReason !== null)
+  check(
+    'and records no invented explanation',
+    smallShort.session.varianceReason === null,
+    String(smallShort.session.varianceReason),
+  )
 
   // Bob's till, short by more than the 500.00 default threshold.
   const bobExpected = (await computeDrawerTotals(bobSession.id)).expectedCash
+
+  await refuses(
+    'a gap past the threshold with no reason is refused',
+    () =>
+      closeDrawer({
+        restaurantId: restaurant.id,
+        sessionId: bobSession.id,
+        countedCash: bobExpected - 900_00,
+        userId: bob.id,
+        actor: actorFor(bob),
+      }),
+    /big enough difference/i,
+  )
+
   const bigShort = await closeDrawer({
     restaurantId: restaurant.id,
     sessionId: bobSession.id,
@@ -954,7 +967,21 @@ async function main() {
         userId: ann.id,
         actor: actorFor(ann, false),
       }),
-    /manager/i,
+    /owner or admin/i,
+  )
+
+  await refuses(
+    'not even a manager: sign-off is the owner\u2019s or admin\u2019s act',
+    () =>
+      reviewDrawer({
+        restaurantId: restaurant.id,
+        sessionId: bobSession.id,
+        userId: ann.id,
+        // Every other drawer power, deliberately without the review one — the
+        // exact split the MANAGER preset now ships with.
+        actor: actorFor(ann, true, false),
+      }),
+    /owner or admin/i,
   )
 
   const reviewed = await reviewDrawer({
@@ -964,7 +991,7 @@ async function main() {
     note: 'Watched the CCTV, it was a miscount',
     actor: actorFor(boss, true),
   })
-  check('a manager signs it off', reviewed.status === 'CLOSED' && reviewed.reviewedById === boss.id)
+  check('the owner signs it off', reviewed.status === 'CLOSED' && reviewed.reviewedById === boss.id)
   check(
     'and the count itself is never edited by the review',
     reviewed.countedCash === bobExpected - 900_00 && reviewed.variance === -900_00,
@@ -1042,25 +1069,18 @@ async function main() {
       }),
     /manager/i,
   )
-  await refuses(
-    'and a reason is required even from a manager',
-    () =>
-      forceCloseDrawer({
-        restaurantId: restaurant.id,
-        sessionId: forgotten.id,
-        countedCash: null,
-        reason: ' ',
-        userId: boss.id,
-        actor: actorFor(boss, true),
-      }),
-    /why you are closing/i,
-  )
-
+  /*
+   * DELIBERATE behaviour change, 2026-08: the reason is optional now. The
+   * commonest force-close is "the cashier went home and forgot", and demanding
+   * that sentence at 9am before yesterday's till could be shut was ceremony.
+   * A blank reason gets an honest default rather than an invented one — the
+   * assertion further down pins that the record is never empty.
+   */
   const uncounted = await forceCloseDrawer({
     restaurantId: restaurant.id,
     sessionId: forgotten.id,
     countedCash: null,
-    reason: 'Kumar went home without closing',
+    reason: ' ',
     userId: boss.id,
     actor: actorFor(boss, true),
   })
@@ -1080,7 +1100,11 @@ async function main() {
     'the shift still belongs to the cashier who opened it',
     uncounted.session.openedById === kumar.id && uncounted.session.closedById === boss.id,
   )
-  check('and the owner’s explanation is on the record', uncounted.session.varianceReason !== null)
+  check(
+    'and the record still says why, even though nobody typed a word',
+    uncounted.session.varianceReason === 'Closed on the cashier\u2019s behalf',
+    String(uncounted.session.varianceReason),
+  )
 
   const nightSession = await openDrawer({
     restaurantId: restaurant.id,
@@ -1199,18 +1223,24 @@ async function main() {
     /does not work at this location/i,
   )
 
+  /*
+   * DELIBERATE behaviour change, 2026-08: a handover follows the same tolerance
+   * as closing. A 100.00 gap is under the 500.00 threshold and passes with no
+   * reason; a gap past it is refused without one, exactly as at the close form
+   * — "Hand over" must never be the softer door.
+   */
   await refuses(
-    'handing over a drawer that does not balance still needs a reason',
+    'a big gap still needs a reason before handing the till on',
     () =>
       requestHandover({
         restaurantId: restaurant.id,
         sessionId: annSession.id,
         toUserId: boss.id,
-        countedAmount: annExpected - 100_00,
+        countedAmount: annExpected - 900_00,
         userId: ann.id,
         actor: actorFor(ann),
       }),
-    /does not balance/i,
+    /big enough difference/i,
   )
 
   const handover = await requestHandover({

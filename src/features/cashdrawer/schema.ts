@@ -63,14 +63,16 @@ export const closeDrawerSchema = z.object({
  *
  * `countedCash` is nullable and that is the whole design: `null` says nobody
  * counted, which is a different and more honest record than a variance of zero.
- * The reason is required either way — this is somebody reaching into another
- * person's shift, and the record should say why.
+ * The reason is OPTIONAL: the commonest case is "the cashier went home and
+ * forgot", and demanding that sentence at 9am before yesterday's till could be
+ * shut was pure ceremony. Who closed it, when, and that it was on the
+ * cashier's behalf are recorded regardless.
  */
 export const forceCloseDrawerSchema = z.object({
   sessionId: z.string().min(1),
   counted: z.boolean(),
   countedCash: majorAmount.optional(),
-  reason: z.string().trim().min(2, 'Say why you are closing it').max(200),
+  reason: z.string().trim().max(200).optional().or(z.literal('')),
 })
 
 export const reviewDrawerSchema = z.object({

@@ -37,11 +37,12 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { PeriodPicker } from '@/features/dashboard/components/period-picker'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { flagForgottenDrawers } from '@/features/cashdrawer/service'
 import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
@@ -65,6 +66,19 @@ export default async function DashboardPage({
   const selection = await selectedBranch(user, params)
   const branchId = scopeToOne(selection)
   const restaurant = await requireRestaurant(user.restaurantId)
+
+  /*
+   * A drawer nobody closed yesterday raises its notification the moment a
+   * manager looks at anything — and the home dashboard is the screen every
+   * morning starts on. Deduplicated inside, so this costs one indexed query
+   * when there is nothing to say.
+   */
+  if (can(user, PERMISSIONS.CASH_DRAWER_MANAGE)) {
+    await flagForgottenDrawers({
+      restaurantId: user.restaurantId,
+      timezone: restaurant.timezone,
+    }).catch(() => {})
+  }
   const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
 
   /*

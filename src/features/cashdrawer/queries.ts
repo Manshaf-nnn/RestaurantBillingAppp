@@ -5,6 +5,7 @@ import type { CashDrawerStatus, PettyCashStatus } from '@prisma/client'
 import { listBranches, type BranchSummary } from '@/features/branches/service'
 import { getFundBalance, listRequests } from '@/features/pettycash/service'
 import { listHandoverCandidates, listPendingForUser } from '@/features/handover/cash-service'
+import { getApprovalPolicy } from '@/features/approvals/service'
 import { prisma } from '@/server/db/prisma'
 import {
   computeDrawerTotals,
@@ -107,6 +108,18 @@ export interface DrawerPageData {
   canManage: boolean
   canApprovePetty: boolean
   currency: string
+  /**
+   * The gap, in minor units, at which a difference is worth explaining and
+   * worth somebody senior seeing.
+   *
+   * Sent to the browser so the close form stops demanding a sentence for a
+   * two-rupee rounding. It used to ask for one at ANY non-zero gap, which is
+   * most of why closing a drawer felt like paperwork. Zero means the owner has
+   * switched the whole check off in Settings.
+   */
+  varianceThreshold: number
+  /** May sign off a large difference — owner/admin, not manager, by default. */
+  canReview: boolean
 }
 
 function toSessionRow(s: Awaited<ReturnType<typeof listDrawerSessions>>[number]): DrawerSessionRow {
@@ -167,6 +180,7 @@ export async function getDrawerPageData(params: {
   currency: string
   canSeeAll: boolean
   canApprovePetty?: boolean
+  canReview?: boolean
   /** Only tills at this location. Null means every location. */
   branchId?: string | null
   /** What this person may see at all. Null is unrestricted, `[]` is nothing. */
@@ -268,6 +282,8 @@ export async function getDrawerPageData(params: {
   ])
 
   return {
+    canReview: params.canReview ?? false,
+    varianceThreshold: (await getApprovalPolicy(params.restaurantId)).cashVarianceAbove,
     open,
     openBranchName: openNames?.branch?.name ?? null,
     openRegisterName: openNames?.register?.name ?? null,

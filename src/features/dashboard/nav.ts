@@ -95,12 +95,11 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Wallet,
         permission: PERMISSIONS.CASH_DRAWER_OPERATE,
       },
-      {
-        href: '/dashboard/petty-cash',
-        label: 'Petty cash',
-        icon: Coins,
-        permission: PERMISSIONS.PETTY_CASH_VIEW,
-      },
+      /*
+       * Petty cash has no entry of its own any more. The tin is a field on the
+       * drawer row, so it is managed on the Cash drawer screen; the old page
+       * survives as a deep link from there for history and filters.
+       */
       {
         href: '/dashboard/locations',
         label: 'Locations',

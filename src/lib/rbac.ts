@@ -160,6 +160,12 @@ export const PERMISSIONS = {
   // variance and force-closing a drawer someone left open is a manager's.
   CASH_DRAWER_OPERATE: 'cashDrawer.operate',
   CASH_DRAWER_MANAGE: 'cashDrawer.manage',
+  /// Signing off a cash difference that crossed the review threshold.
+  /// Split OUT of `cashDrawer.manage` at the owner's request: a manager still
+  /// sees every drawer and can force-close one, but confirming a large gap has
+  /// been looked at is the owner's or admin's act. Grantable from the roles
+  /// screen if a restaurant wants a manager to hold it after all.
+  CASH_VARIANCE_REVIEW: 'cashDrawer.varianceReview',
 
   // petty cash — three permissions because there are three different jobs.
   // Anybody at the till may need to see what the tin has left; raising a
@@ -178,7 +184,12 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
 const ALL: Permission[] = Object.values(PERMISSIONS)
 
 const MANAGER: Permission[] = ALL.filter(
-  (p) => p !== PERMISSIONS.SETTINGS_MANAGE && p !== PERMISSIONS.PAYMENT_REFUND,
+  (p) =>
+    p !== PERMISSIONS.SETTINGS_MANAGE &&
+    p !== PERMISSIONS.PAYMENT_REFUND &&
+    // Sign-off on a large cash gap stays with the owner/admin — the manager may
+    // BE the person whose shift produced it.
+    p !== PERMISSIONS.CASH_VARIANCE_REVIEW,
 )
 
 // A cashier handles money at the till, not the restaurant's buying. They are

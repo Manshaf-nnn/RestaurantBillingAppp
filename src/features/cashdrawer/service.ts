@@ -7,6 +7,8 @@ import type { UserRole } from '@prisma/client'
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { canAccessBranch } from '@/lib/rbac'
 import { prisma, type TxClient } from '@/server/db/prisma'
+import { startOfDay } from '@/features/reports/range'
+import { notify } from '@/server/notifications'
 import { ensureDefaultBranch, resolveBranchId } from '@/features/branches/service'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import { MOVEMENT_TYPES, directionOf } from './movement-types'
@@ -572,16 +574,31 @@ export async function closeDrawer(params: {
   const totals = await computeDrawerTotals(params.sessionId)
   const variance = params.countedCash - totals.expectedCash
 
+  /*
+   * One number decides both questions.
+   *
+   * A written reason used to be demanded for ANY non-zero gap, so being a
+   * single rupee out disabled the Close button until somebody typed a sentence.
+   * That is the whole of "technically perfect but practically too hard": a
+   * cashier at the end of a shift, holding a drawer that is 2 rupees light,
+   * inventing prose about it.
+   *
+   * The restaurant already sets a figure for what counts as a real difference
+   * — Settings, Cash, "Drawer variance to review". It now governs both: under
+   * it the drawer simply closes, at or over it the gap is worth explaining AND
+   * worth somebody senior seeing. One number the owner already understands,
+   * rather than a second invisible rule at zero.
+   */
+  const needsReview = await varianceNeedsReview(params.restaurantId, variance)
+
   const reason = params.varianceReason?.trim() || null
-  if (variance !== 0 && (!reason || reason.length < 2)) {
+  if (needsReview && (!reason || reason.length < 2)) {
     throw new AppError(
-      'Say why the drawer does not balance. It will not be remembered tomorrow.',
+      'That is a big enough difference to explain. What happened?',
       400,
       'DRAWER_NO_VARIANCE_REASON',
     )
   }
-
-  const needsReview = await varianceNeedsReview(params.restaurantId, variance)
 
   const session = await prisma.cashDrawerSession.update({
     where: { id: params.sessionId },
@@ -636,7 +653,7 @@ export async function forceCloseDrawer(params: {
   sessionId: string
   /** What the owner counted, or null when they could not. */
   countedCash: number | null
-  reason: string
+  reason?: string | null
   userId: string
   actor: DrawerActor
 }): Promise<{ session: CashDrawerSession; totals: DrawerTotals; variance: number | null }> {
@@ -647,14 +664,14 @@ export async function forceCloseDrawer(params: {
     throw new AppError('Counted cash cannot be negative', 400, 'DRAWER_BAD_COUNT')
   }
 
-  const reason = params.reason.trim()
-  if (reason.length < 2) {
-    throw new AppError(
-      'Say why you are closing somebody else’s drawer',
-      400,
-      'DRAWER_NO_FORCE_REASON',
-    )
-  }
+  /*
+   * The reason is optional now. It used to be mandatory even for a manager,
+   * which meant the commonest case — "the cashier went home and forgot" — had
+   * to be typed out at 9am before yesterday's till could be shut. Who closed
+   * it and that it was on the cashier's behalf are recorded regardless, and a
+   * blank reason gets an honest default rather than an invented sentence.
+   */
+  const reason = params.reason?.trim() || 'Closed on the cashier\u2019s behalf'
 
   const session = await prisma.cashDrawerSession.findFirst({
     where: { id: params.sessionId, restaurantId: params.restaurantId },
@@ -761,8 +778,8 @@ export async function reviewDrawer(params: {
   note?: string | null
   actor: DrawerActor
 }): Promise<CashDrawerSession> {
-  if (!params.actor.canManageOthers) {
-    throw new ForbiddenError('Only a manager can sign off a drawer')
+  if (!params.actor.canReviewVariance) {
+    throw new ForbiddenError('Signing off a cash difference is for the owner or admin')
   }
 
   const session = await prisma.cashDrawerSession.findFirst({
@@ -874,11 +891,95 @@ export async function getUnattributedCash(params: {
  * `canManageOthers` is the CASH_DRAWER_MANAGE permission, resolved by the
  * caller: a cashier operates their own till, a manager reconciles the floor.
  */
+
+/**
+ * Tell the managers about drawers nobody closed.
+ *
+ * A drawer still OPEN after the restaurant's own midnight is a forgotten
+ * drawer: the cashier went home, the till shows yesterday's shift, and nobody
+ * senior knows unless they happen to open the right screen.
+ *
+ * ── Why this runs on read, not on a schedule ────────────────────────────────
+ *
+ * There is no job runner in this deployment — no cron, no scheduled function —
+ * and adding one would work on the PM2 host and silently not exist on Netlify,
+ * which is the worst of both. Same position `autoCloseStale` in attendance
+ * argues at length. So this runs lazily whenever a manager loads the dashboard
+ * or the drawer screen, which is exactly when a notification can be seen
+ * anyway.
+ *
+ * ── Once per drawer ─────────────────────────────────────────────────────────
+ *
+ * Deduplicated on the session id carried in the notification's data, so a
+ * manager refreshing five times gets one bell entry, not five. The comparison
+ * uses the restaurant's OWN midnight — a Netlify function runs in UTC, and a
+ * Colombo till judged by server midnight would be flagged five and a half
+ * hours wrong.
+ */
+export async function flagForgottenDrawers(params: {
+  restaurantId: string
+  timezone: string
+}): Promise<number> {
+  const dayStart = startOfDay(new Date(), params.timezone)
+
+  const forgotten = await prisma.cashDrawerSession.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      status: 'OPEN',
+      openedAt: { lt: dayStart },
+    },
+    select: {
+      id: true,
+      sessionNumber: true,
+      branchId: true,
+      openedAt: true,
+      openedBy: { select: { name: true } },
+      register: { select: { name: true } },
+    },
+  })
+  if (forgotten.length === 0) return 0
+
+  let raised = 0
+  for (const session of forgotten) {
+    const already = await prisma.notification.findFirst({
+      where: {
+        restaurantId: params.restaurantId,
+        type: 'SYSTEM',
+        data: { path: ['forgottenSessionId'], equals: session.id },
+      },
+      select: { id: true },
+    })
+    if (already) continue
+
+    await notify({
+      restaurantId: params.restaurantId,
+      branchId: session.branchId,
+      type: 'SYSTEM',
+      audience: 'MANAGEMENT',
+      title: `${session.openedBy?.name ?? 'A cashier'} never closed their drawer`,
+      body: `${session.sessionNumber}${session.register ? ` on ${session.register.name}` : ''} has been open since yesterday. Close it from the Cash drawer screen — enter the cash if somebody counted it, or close it uncounted.`,
+      data: {
+        forgottenSessionId: session.id,
+        href: '/dashboard/cash-drawer',
+      },
+    })
+    raised += 1
+  }
+  return raised
+}
+
 export interface DrawerActor {
   id: string
   role: UserRole
   branchId?: string | null
   canManageOthers: boolean
+  /**
+   * May sign off a large cash difference. Deliberately separate from
+   * `canManageOthers`: a manager keeps every other drawer power, but the
+   * owner asked for sign-off to be the owner's or admin's act — the manager
+   * may be the person whose shift produced the gap.
+   */
+  canReviewVariance?: boolean
 }
 
 /**

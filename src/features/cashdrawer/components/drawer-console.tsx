@@ -34,10 +34,10 @@ import { callAction } from '@/lib/use-action'
  * once, not spread over steps. The variance is shown live as they type so a
  * miscount is caught before the drawer is closed rather than after.
  *
- * The close form asks for a reason the moment the count stops matching, and the
- * button stays disabled until there is one. The server refuses either way — the
- * client half exists so nobody types a count, presses close, and is told off
- * afterwards.
+ * The close form asks for a reason only when the gap crosses the restaurant's
+ * own tolerance (Settings → Cash), and then the button waits for it. The server
+ * refuses either way — the client half exists so nobody types a count, presses
+ * close, and is told off afterwards.
  */
 export function DrawerConsole({ data }: { data: DrawerPageData }) {
   const money = (minor: number) => formatMoney(minor, data.currency)
@@ -208,7 +208,18 @@ function OpenDrawerPanel({
       ? Math.round(countedMinor) - open.expectedCash
       : null
 
-  const needsReason = variance !== null && variance !== 0
+  /*
+   * Only a difference big enough to matter has to be explained.
+   *
+   * This used to be `variance !== 0`, so a drawer two rupees light disabled
+   * the Close button until the cashier wrote a sentence about it. The
+   * restaurant already sets the figure that counts as a real difference
+   * (Settings, Cash) and it now governs both the explanation and the sign-off,
+   * so there is one number rather than an invisible second rule at zero.
+   */
+  const threshold = data.varianceThreshold
+  const needsReason =
+    variance !== null && threshold > 0 && Math.abs(variance) >= threshold
   const reasonMissing = needsReason && varianceReason.trim().length < 2
 
   const close = async () => {
@@ -339,28 +350,38 @@ function OpenDrawerPanel({
           </div>
           <div className="space-y-1.5">
             <Label>Variance</Label>
+            {/*
+              Three tones, not two. A couple of rupees of change rounding is
+              normal life and reads calmly; only a gap past the restaurant's own
+              tolerance turns amber — the same line at which a written reason
+              and a sign-off start being asked for. One rule, one colour change.
+            */}
             <div
               className={`flex h-10 items-center rounded-lg border px-3 text-sm tabular-nums ${
                 variance === null
                   ? 'border-input text-muted-foreground'
                   : variance === 0
                     ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                    : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                    : needsReason
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                      : 'border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400'
               }`}
             >
               {variance === null
                 ? 'Enter your count'
                 : variance === 0
                   ? 'Balanced exactly'
-                  : `${variance > 0 ? 'Over' : 'Short'} by ${money(Math.abs(variance))}`}
+                  : `${variance > 0 ? 'Over' : 'Short'} by ${money(Math.abs(variance))}${
+                      needsReason ? '' : ' — close enough, no explanation needed'
+                    }`}
             </div>
           </div>
 
           {/*
-            Appears the instant the count stops matching, and the close button
-            waits for it. This used to be one optional box labelled "(optional)",
-            which meant the most useful sentence about the shift was the one
-            nobody had to write — and by morning nobody could.
+            Appears only when the gap crosses the restaurant's tolerance, and
+            then the close button waits for it. It used to appear at ANY
+            non-zero variance, so a drawer two rupees light demanded a sentence
+            — most of what made closing feel like paperwork.
           */}
           {needsReason && (
             <div className="space-y-1.5 sm:col-span-2">
@@ -526,7 +547,12 @@ function HandoverForm({
     counted.trim() && Number.isFinite(countedMinor)
       ? Math.round(countedMinor) - open.expectedCash
       : null
-  const reasonMissing = gap !== null && gap !== 0 && reason.trim().length < 2
+  // Same rule as closing: only a gap big enough to matter has to be explained.
+  const reasonMissing =
+    gap !== null &&
+    data.varianceThreshold > 0 &&
+    Math.abs(gap) >= data.varianceThreshold &&
+    reason.trim().length < 2
 
   const submit = async () => {
     const value = Number(counted)
@@ -732,10 +758,6 @@ function ForceCloseRow({
       toast.error('Enter what you counted, or say you could not count it')
       return
     }
-    if (reason.trim().length < 2) {
-      toast.error('Say why you are closing somebody else’s drawer')
-      return
-    }
     setBusy(true)
     const result = await callAction(() =>
       forceCloseDrawerAction({
@@ -839,7 +861,7 @@ function ForceCloseRow({
 
           <div className="space-y-1.5">
             <Label htmlFor={`fc-why-${row.id}`}>
-              Why are you closing it? <span className="text-destructive">*</span>
+              Why are you closing it? (optional)
             </Label>
             <Input
               id={`fc-why-${row.id}`}
@@ -875,58 +897,116 @@ function ReviewQueue({ data, money }: { data: DrawerPageData; money: (m: number)
       toast.error(result.error)
       return
     }
-    toast.success('Signed off')
+    toast.success('Checked')
     router.refresh()
   }
 
   return (
     <SectionCard
-      title="Waiting for you to sign off"
-      description="These drawers were counted and came out far enough from expected to need a second pair of eyes."
+      title="A cash difference needs attention"
+      description="Somebody counted a drawer and the money did not match what the sales say should be in it. Nothing is blocked — this is here so a big gap is never quietly forgotten."
       actions={<Badge variant="warning">{data.review.length}</Badge>}
     >
       <ul className="space-y-3">
-        {data.review.map((s) => (
-          <li key={s.id} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-              <span className="font-medium">
-                {s.sessionNumber} · {s.openedByName}
-                {s.branchName ? ` · ${s.branchName}` : ''}
-                {s.registerName ? ` · ${s.registerName}` : ''}
-              </span>
-              <span className="tabular-nums text-amber-700 dark:text-amber-400">
-                {s.variance === null
-                  ? '—'
-                  : `${s.variance > 0 ? 'Over' : 'Short'} by ${money(Math.abs(s.variance))}`}
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Expected {s.expectedCash === null ? '—' : money(s.expectedCash)}, counted{' '}
-              {s.countedCash === null ? '—' : money(s.countedCash)}.
-            </p>
-            {s.varianceReason ? (
-              <p className="mt-1 text-sm italic text-muted-foreground">“{s.varianceReason}”</p>
-            ) : null}
-            <div className="mt-3 flex flex-wrap items-end gap-2">
-              <div className="min-w-[16rem] flex-1 space-y-1.5">
-                <Label htmlFor={`rn-${s.id}`}>Your note (optional)</Label>
-                <Input
-                  id={`rn-${s.id}`}
-                  value={notes[s.id] ?? ''}
-                  onChange={(e) => setNotes((n) => ({ ...n, [s.id]: e.target.value }))}
-                  placeholder="What you did about it"
-                />
+        {data.review.map((s) => {
+          /*
+           * Show the working, not just the verdict.
+           *
+           * The owner's own question was "the float was 10,000, so why does a
+           * bigger count need checking?" — because expected cash is not "more
+           * than the float": it is the float plus every cash sale, minus every
+           * refund and payout. Without the sum on screen, "over by 9,000" reads
+           * as good news, when it usually means a sale was taken in cash and
+           * never rung up. `shiftFlow` is that whole middle section in one
+           * line: everything that moved through the drawer after opening.
+           */
+          const shiftFlow =
+            s.expectedCash !== null ? s.expectedCash - s.openingFloat : null
+
+          return (
+            <li key={s.id} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                <span className="font-medium">
+                  {s.registerName ?? s.sessionNumber}
+                  {s.branchName ? ` · ${s.branchName}` : ''}
+                  {s.closedAt ? (
+                    <span className="font-normal text-muted-foreground">
+                      {' '}· counted by {s.closedByName ?? s.openedByName},{' '}
+                      <LocalDateTime value={s.closedAt} />
+                    </span>
+                  ) : null}
+                </span>
+                <span className="font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+                  {s.variance === null
+                    ? '—'
+                    : `${money(Math.abs(s.variance))} ${s.variance > 0 ? 'MORE' : 'LESS'} than expected`}
+                </span>
               </div>
-              <Button size="sm" disabled={busy === s.id} onClick={() => signOff(s.id)}>
-                <ShieldCheck className="mr-2 h-4 w-4" />
-                {busy === s.id ? 'Signing…' : 'Sign off'}
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              The count is not changed by signing off. It records that you have seen it.
-            </p>
-          </li>
-        ))}
+
+              <dl className="mt-2 max-w-xs space-y-0.5 text-sm tabular-nums">
+                <div className="flex justify-between gap-6">
+                  <dt className="text-muted-foreground">Started with (float)</dt>
+                  <dd>{money(s.openingFloat)}</dd>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <dt className="text-muted-foreground">Cash sales − payouts</dt>
+                  <dd>{shiftFlow === null ? '—' : `${shiftFlow < 0 ? '−' : '+'} ${money(Math.abs(shiftFlow))}`}</dd>
+                </div>
+                <div className="flex justify-between gap-6 border-t border-border pt-0.5 font-medium">
+                  <dt>Should have been</dt>
+                  <dd>{s.expectedCash === null ? '—' : money(s.expectedCash)}</dd>
+                </div>
+                <div className="flex justify-between gap-6 font-medium">
+                  <dt>Actually counted</dt>
+                  <dd>{s.countedCash === null ? '—' : money(s.countedCash)}</dd>
+                </div>
+              </dl>
+
+              {s.variance !== null && s.variance > 0 ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  More money than expected usually means a cash sale was never rung up.
+                </p>
+              ) : null}
+              {s.varianceReason ? (
+                <p className="mt-1 text-sm italic text-muted-foreground">
+                  {s.closedByName ?? s.openedByName} said: “{s.varianceReason}”
+                </p>
+              ) : null}
+
+              {data.canReview ? (
+                <>
+                  <div className="mt-3 flex flex-wrap items-end gap-2">
+                    <div className="min-w-[16rem] flex-1 space-y-1.5">
+                      <Label htmlFor={`rn-${s.id}`}>What happened? (optional)</Label>
+                      <Input
+                        id={`rn-${s.id}`}
+                        value={notes[s.id] ?? ''}
+                        onChange={(e) => setNotes((n) => ({ ...n, [s.id]: e.target.value }))}
+                        placeholder="e.g. till roll checked, two unrung teas"
+                      />
+                    </div>
+                    <Button size="sm" disabled={busy === s.id} onClick={() => signOff(s.id)}>
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      {busy === s.id ? 'Saving…' : "I've checked this"}
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    This changes nothing about the count — it records that you have seen it.
+                  </p>
+                </>
+              ) : (
+                /*
+                 * A manager sees the queue but not the button. Saying WHY beats
+                 * the blank space the approvals screen leaves managers with —
+                 * a control that seems broken teaches people to ignore it.
+                 */
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Waiting for the owner or admin to check this.
+                </p>
+              )}
+            </li>
+          )
+        })}
       </ul>
     </SectionCard>
   )

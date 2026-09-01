@@ -50,6 +50,7 @@ function actorFor(user: {
     role: user.role,
     branchId: user.branchId ?? null,
     canManageOthers: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
+    canReviewVariance: can(user, PERMISSIONS.CASH_VARIANCE_REVIEW),
   }
 }
 
@@ -317,7 +318,13 @@ export async function reviewDrawerAction(
     reviewDrawerSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.CASH_DRAWER_MANAGE)
+      /*
+       * Not CASH_DRAWER_MANAGE. A manager keeps every other drawer power —
+       * seeing all of them, force-closing an abandoned one — but confirming a
+       * large gap has been looked at belongs to the owner or admin, who is not
+       * the person whose shift may have produced it.
+       */
+      const user = await requirePermission(PERMISSIONS.CASH_VARIANCE_REVIEW)
 
       const session = await reviewDrawer({
         restaurantId: user.restaurantId,
