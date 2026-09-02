@@ -20,6 +20,27 @@ CREATE INDEX "stock_movements_itemId_branchId_createdAt_idx"
   ON "stock_movements"("itemId", "branchId", "createdAt");
 
 -- Two items sharing a SKU is how the wrong thing gets scanned out.
--- (Verified duplicate-free before this migration; NULLs stay distinct.)
+--
+-- The index cannot be created over existing duplicates, and production HAD
+-- some — this exact statement failed the 2026-09-02 deploy with P3009 while
+-- the local check came back clean. The pre-clean below resolves any
+-- duplicate claim deterministically: the OLDEST item keeps the SKU (it made
+-- the claim first), later claimants lose theirs to NULL — which the unique
+-- index permits, and which reads honestly in the UI as "no SKU assigned,
+-- pick a real one". Nothing is deleted, nothing is invented.
+WITH ranked AS (
+  SELECT id,
+         ROW_NUMBER() OVER (
+           PARTITION BY "restaurantId", "sku"
+           ORDER BY "createdAt" ASC, id ASC
+         ) AS rn
+  FROM "inventory_items"
+  WHERE "sku" IS NOT NULL
+)
+UPDATE "inventory_items" i
+SET "sku" = NULL
+FROM ranked r
+WHERE r.id = i.id AND r.rn > 1;
+
 CREATE UNIQUE INDEX "inventory_items_restaurantId_sku_key"
   ON "inventory_items"("restaurantId", "sku");

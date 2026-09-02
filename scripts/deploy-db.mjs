@@ -68,6 +68,27 @@ function run(args) {
   }
 }
 
+/**
+ * Failed migrations this script may mark rolled back and re-apply.
+ *
+ * P3009 blocks every deploy once a migration has failed, and clearing it
+ * normally needs a human at a terminal with the production URL. That is the
+ * right default: auto-resolving a HALF-APPLIED migration would re-run
+ * statements against their own partial effects. So the automation is opt-in
+ * per migration, and the bar for the list is strict:
+ *
+ *   1. every statement in the file is transactional in Postgres, so Prisma's
+ *      per-migration transaction rolled the failure back to nothing, and
+ *   2. the file has since been amended so the failure cannot recur.
+ *
+ * 20260915100000_inventory_truth: failed 2026-09-02 creating the unique
+ * (restaurantId, sku) index over duplicate production SKUs. All statements
+ * transactional (column adds, FK over an all-NULL column, plain indexes, a
+ * guarded UPDATE) — nothing partial exists. Amended with a deterministic
+ * SKU pre-clean, so the re-apply succeeds on the same data.
+ */
+const RESOLVABLE_FAILURES = ['20260915100000_inventory_truth']
+
 /** Migration folder names, in the order Prisma applies them. */
 function migrationNames() {
   return readdirSync('prisma/migrations', { withFileTypes: true })
@@ -129,8 +150,30 @@ async function main() {
   if (tables === 0 || history) {
     const label = tables === 0 ? 'fresh database' : 'applying new migrations'
     console.log(`${label} → prisma migrate deploy`)
-    const result = run(['migrate', 'deploy'])
+    let result = run(['migrate', 'deploy'])
     console.log(result.out.trim())
+
+    /*
+     * A previous deploy's failed migration (P3009). If it is on the
+     * explicitly-allowlisted list above — meaning a human has verified it
+     * rolled back atomically AND fixed its cause — mark it rolled back and
+     * try once more. Anything else keeps stopping the deploy, on purpose.
+     */
+    if (!result.ok && /P3009/.test(result.out)) {
+      const failed = RESOLVABLE_FAILURES.find((name) => result.out.includes(name))
+      if (failed) {
+        console.log(`\nfailed migration ${failed} is on the resolvable list —`)
+        console.log('marking it rolled back (its transaction left nothing behind) and retrying…')
+        const resolved = run(['migrate', 'resolve', '--rolled-back', failed])
+        if (!resolved.ok) {
+          console.error(`\n✖ could not mark ${failed} rolled back:\n${resolved.out}`)
+          process.exit(1)
+        }
+        result = run(['migrate', 'deploy'])
+        console.log(result.out.trim())
+      }
+    }
+
     if (!result.ok) {
       console.error('\n✖ migrations failed — the deploy is stopping here on purpose.')
       console.error('  Shipping code against a database that did not get its schema')
