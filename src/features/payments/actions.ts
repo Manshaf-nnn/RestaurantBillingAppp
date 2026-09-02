@@ -23,6 +23,7 @@ import {
   paymentIntentSchema,
   refundPaymentSchema,
 } from './schema'
+import { needsApproval, requestApproval } from '@/features/approvals/service'
 import { capturePayment, createPaymentIntent, refundPayment } from './service'
 
 // ── guest ────────────────────────────────────────────────────────────────────
@@ -76,17 +77,39 @@ export async function declareGuestPayment(input: unknown): Promise<ActionResult<
         throw new AppError('This bill is already settled', 409, 'ALREADY_PAID')
       }
 
-      await prisma.payment.updateMany({
+      /*
+       * The claim becomes a ROW, not just a toast. When the guest paid by a
+       * method that never opened an intent — a bank transfer from their own
+       * app — there was no UNPAID row to annotate, so the reference they
+       * typed went nowhere and the cashier had nothing to confirm against.
+       * An UNPAID BANK_TRANSFER row for the outstanding amount is the
+       * cashier's worklist item; capturing it settles the bill, deleting it
+       * rejects the claim. Nothing is booked as paid here — a guest saying
+       * so is a claim, and only staff confirmation moves money (§6).
+       */
+      const annotated = await prisma.payment.updateMany({
         where: { orderId: order.id, status: 'UNPAID' },
         data: { reference: data.reference || 'Guest reported payment' },
       })
+      if (annotated.count === 0) {
+        await prisma.payment.create({
+          data: {
+            restaurantId: restaurant.id,
+            orderId: order.id,
+            method: 'BANK_TRANSFER',
+            status: 'UNPAID',
+            amount: Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
+            reference: data.reference || 'Guest reported payment',
+          },
+        })
+      }
 
       await notify({
         restaurantId: restaurant.id,
         branchId: order.branchId,
         type: 'PAYMENT_RECEIVED',
         title: `Table ${order.table?.number ?? '—'} says they have paid`,
-        body: `${order.orderNumber} · ${formatMoney(order.grandTotal - order.paidTotal, restaurant.currency)} — please verify`,
+        body: `${order.orderNumber} · ${formatMoney(order.grandTotal + order.tipAmount - order.paidTotal, restaurant.currency)} — please verify`,
         audience: 'CASHIER',
         data: { orderId: order.id, orderNumber: order.orderNumber, needsVerification: true },
       })
@@ -203,16 +226,61 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
       // Same rule as collecting, and it matters more: a refund moves money out.
       const original = await prisma.payment.findFirst({
         where: { id: data.paymentId, restaurantId: user.restaurantId },
-        select: { order: { select: { branchId: true } } },
+        select: {
+          amount: true,
+          refunds: { select: { amount: true } },
+          order: { select: { branchId: true } },
+        },
       })
       if (!original) throw new NotFoundError('Payment')
       await assertRecordBranch(user, original.order, 'payment')
 
-      const refunded = await refundPayment({
+      /*
+       * Past the restaurant's threshold, the money stops here until a manager
+       * has signed it off — the same gate discounts go through. The retry
+       * after approval finds the signed request and goes through.
+       */
+      const refundable =
+        original.amount - original.refunds.reduce((sum, row) => sum + row.amount, 0)
+      const amount = data.amount ?? Math.max(0, refundable)
+      if (
+        await needsApproval({ restaurantId: user.restaurantId, kind: 'REFUND', amount })
+      ) {
+        const approved = await prisma.approvalRequest.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            entity: 'Payment',
+            entityId: data.paymentId,
+            kind: 'REFUND',
+            status: 'APPROVED',
+            amount: { gte: amount },
+          },
+        })
+        if (!approved) {
+          await requestApproval({
+            restaurantId: user.restaurantId,
+            branchId: original.order.branchId,
+            kind: 'REFUND',
+            entity: 'Payment',
+            entityId: data.paymentId,
+            amount,
+            reason: data.reason,
+            userId: user.id,
+          })
+          throw new AppError(
+            'Sent for approval. A refund this size needs a manager to sign off — they can do that from the approvals screen, then refund again.',
+            403,
+            'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
+      const refund = await refundPayment({
         restaurantId: user.restaurantId,
         paymentId: data.paymentId,
         reason: data.reason,
         actorId: user.id,
+        amount: data.amount,
       })
 
       await audit({
@@ -221,13 +289,13 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
         actorName: user.name,
         action: AUDIT_ACTIONS.PAYMENT_REFUNDED,
         entity: 'Payment',
-        entityId: refunded.id,
-        after: { reason: data.reason, amount: refunded.amount },
+        entityId: data.paymentId,
+        after: { reason: data.reason, amount: refund.amount, refundId: refund.id },
       })
 
       revalidatePath('/cashier')
       revalidatePath('/dashboard/orders')
-      return { id: refunded.id }
+      return { id: refund.id }
     },
     'Refund recorded.',
   )

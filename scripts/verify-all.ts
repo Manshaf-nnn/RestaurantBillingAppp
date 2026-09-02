@@ -52,6 +52,8 @@ const SERVICE = [
   'role-permissions-test',
   'access-links-test',
   'pos-billing-test',
+  // AUDIT.md Slice 2 — tips, refund rows, discount split, counters, loyalty ledger.
+  'payment-model-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',

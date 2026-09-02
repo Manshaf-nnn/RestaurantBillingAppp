@@ -18,15 +18,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/input'
+import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, ORDER_STATUS_META, PaymentStatusBadge, VegIndicator } from '@/components/ui/status'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
 import { buildReceipt } from '@/features/printing/receipt'
 import type { PaperWidth } from '@/features/printing/paper'
 import { cancelOrder, updateOrderStatus } from '../actions'
+import { refundOrderPayment } from '@/features/payments/actions'
 import { callAction } from '@/lib/use-action'
 
 const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
@@ -71,7 +72,15 @@ export interface OrderDetailView {
     status: string
   }>
   events: Array<{ id: string; status: OrderStatus; note: string | null; actorName: string | null; createdAt: string }>
-  payments: Array<{ id: string; method: string; amount: number; status: string; createdAt: string }>
+  payments: Array<{
+    id: string
+    method: string
+    amount: number
+    status: string
+    createdAt: string
+    /** Minor units already sent back against this payment. */
+    refunded: number
+  }>
 }
 
 export function OrderDetail({
@@ -81,6 +90,7 @@ export function OrderDetail({
   restaurant,
   canUpdate,
   canCancel,
+  canRefund,
   backHref = '/dashboard/orders',
 }: {
   order: OrderDetailView
@@ -95,6 +105,7 @@ export function OrderDetail({
   }
   canUpdate: boolean
   canCancel: boolean
+  canRefund: boolean
   /**
    * Where the back arrow goes, or `null` to drop it.
    *
@@ -158,9 +169,16 @@ export function OrderDetail({
           items: order.items,
           subtotal: order.subtotal,
           discountTotal: order.discountTotal,
+          loyaltyDiscount: order.loyaltyDiscount,
           serviceCharge: order.serviceCharge,
           taxTotal: order.taxTotal,
+          roundingAdj: order.roundingAdj,
           grandTotal: order.grandTotal,
+          tipAmount: order.tipAmount,
+          paidTotal: order.paidTotal,
+          payments: order.payments
+            .filter((payment) => payment.status === 'PAID' || payment.status === 'REFUNDED')
+            .map((payment) => ({ method: payment.method, amount: payment.amount })),
         },
         {
           name: restaurant.name,
@@ -251,12 +269,31 @@ export function OrderDetail({
               {order.loyaltyDiscount > 0 ? <Row label="Loyalty" value={`− ${money(order.loyaltyDiscount)}`} /> : null}
               {order.serviceCharge > 0 ? <Row label="Service charge" value={money(order.serviceCharge)} /> : null}
               {order.taxTotal > 0 ? <Row label={order.taxLabel} value={money(order.taxTotal)} /> : null}
-              {order.tipAmount > 0 ? <Row label="Tip" value={money(order.tipAmount)} /> : null}
+              {order.roundingAdj !== 0 ? <Row label="Rounding" value={money(order.roundingAdj)} /> : null}
               <Separator className="my-2" />
               <div className="flex justify-between text-base font-bold">
                 <span>Total</span>
                 <span>{money(order.grandTotal)}</span>
               </div>
+              {/* The tip is the staff's money riding on top, not part of the bill. */}
+              {order.tipAmount > 0 ? (
+                <>
+                  <Row label="Tip" value={money(order.tipAmount)} />
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span>Total with tip</span>
+                    <span>{money(order.grandTotal + order.tipAmount)}</span>
+                  </div>
+                </>
+              ) : null}
+              {order.paidTotal > 0 && order.paidTotal < order.grandTotal + order.tipAmount ? (
+                <>
+                  <Row label="Paid so far" value={money(order.paidTotal)} />
+                  <div className="flex justify-between text-sm font-semibold text-warning">
+                    <span>Balance due</span>
+                    <span>{money(order.grandTotal + order.tipAmount - order.paidTotal)}</span>
+                  </div>
+                </>
+              ) : null}
             </div>
           </section>
 
@@ -267,14 +304,31 @@ export function OrderDetail({
               </header>
               <ul className="divide-y">
                 {order.payments.map((payment) => (
-                  <li key={payment.id} className="flex items-center justify-between px-5 py-3 text-sm">
-                    <span className="flex items-center gap-2">
-                      <Badge variant="secondary">{payment.method}</Badge>
-                      <span className="text-muted-foreground">
-                        {new Date(payment.createdAt).toLocaleString(locale)}
+                  <li key={payment.id} className="px-5 py-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <Badge variant="secondary">{payment.method}</Badge>
+                        <span className="text-muted-foreground">
+                          {new Date(payment.createdAt).toLocaleString(locale)}
+                        </span>
                       </span>
-                    </span>
-                    <span className="font-semibold">{money(payment.amount)}</span>
+                      <span className="flex items-center gap-3">
+                        <span className="font-semibold">{money(payment.amount)}</span>
+                        {canRefund &&
+                        (payment.status === 'PAID' || payment.status === 'REFUNDED') &&
+                        payment.refunded < payment.amount ? (
+                          <RefundButton payment={payment} currency={currency} locale={locale} />
+                        ) : null}
+                      </span>
+                    </div>
+                    {payment.refunded > 0 ? (
+                      <p className="mt-1 text-xs font-medium text-destructive">
+                        {money(payment.refunded)} refunded
+                        {payment.refunded < payment.amount
+                          ? ` — ${money(payment.amount - payment.refunded)} still held`
+                          : ''}
+                      </p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -364,5 +418,101 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-muted-foreground">{label}</span>
       <span className="tabular-nums">{value}</span>
     </div>
+  )
+}
+
+
+/**
+ * Give money back, from the record of it arriving.
+ *
+ * The amount defaults to everything the payment still holds and may be less —
+ * a partial refund is several of these over time, each with its own reason.
+ * Anything at or over the restaurant's approval threshold comes back with
+ * "sent for approval"; the button is pressed again once a manager signs off.
+ */
+function RefundButton({
+  payment,
+  currency,
+  locale,
+}: {
+  payment: { id: string; amount: number; refunded: number }
+  currency: string
+  locale: string
+}) {
+  const router = useRouter()
+  const remaining = payment.amount - payment.refunded
+  const [open, setOpen] = React.useState(false)
+  const [amount, setAmount] = React.useState('')
+  const [reason, setReason] = React.useState('')
+  const [pending, setPending] = React.useState(false)
+
+  const amountMinor = amount ? parseMoney(amount, currency as never) : remaining
+
+  const submit = async () => {
+    setPending(true)
+    const result = await callAction(() =>
+      refundOrderPayment({ paymentId: payment.id, reason, amount: amountMinor }),
+    )
+    setPending(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Refund recorded')
+    setOpen(false)
+    setAmount('')
+    setReason('')
+    router.refresh()
+  }
+
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Refund
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Refund payment</DialogTitle>
+            <DialogDescription>
+              Up to {formatMoney(remaining, currency, locale)} can go back on this payment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Field label="Amount" htmlFor="refund-amount">
+              <Input
+                id="refund-amount"
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                placeholder={String(toMajor(remaining, currency as never))}
+              />
+            </Field>
+            <Field label="Reason" htmlFor="refund-reason">
+              <Textarea
+                id="refund-reason"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Why is this money going back?"
+                rows={2}
+              />
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Keep it
+            </Button>
+            <Button
+              variant="destructive"
+              loading={pending}
+              disabled={reason.trim().length < 3 || amountMinor < 1 || amountMinor > remaining}
+              onClick={submit}
+            >
+              Refund {formatMoney(amountMinor, currency, locale)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

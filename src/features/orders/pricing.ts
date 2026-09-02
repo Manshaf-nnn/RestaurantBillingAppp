@@ -184,6 +184,8 @@ export interface TotalsInput {
 export interface OrderTotals {
   subtotal: number
   discountTotal: number
+  couponDiscount: number
+  manualDiscount: number
   loyaltyDiscount: number
   taxableBase: number
   serviceCharge: number
@@ -203,8 +205,16 @@ export interface OrderTotals {
 export function computeTotals(input: TotalsInput): OrderTotals {
   const subtotal = input.lines.reduce((total, line) => total + line.lineTotal, 0)
 
-  const requestedDiscount = (input.couponDiscount ?? 0) + (input.manualDiscount ?? 0)
-  const discountTotal = Math.min(Math.max(0, requestedDiscount), subtotal)
+  /*
+   * The two discounts stay two numbers all the way through. When they exceed
+   * the bill, the coupon is honoured first and the manual discount takes the
+   * clamp — a manager comping "the rest" after a coupon is the common case,
+   * and this makes the recorded split match what each instrument actually
+   * took off.
+   */
+  const couponDiscount = Math.min(Math.max(0, input.couponDiscount ?? 0), subtotal)
+  const manualDiscount = Math.min(Math.max(0, input.manualDiscount ?? 0), subtotal - couponDiscount)
+  const discountTotal = couponDiscount + manualDiscount
 
   const loyaltyDiscount = Math.min(
     Math.max(0, input.loyaltyDiscount ?? 0),
@@ -225,8 +235,15 @@ export function computeTotals(input: TotalsInput): OrderTotals {
 
   const tipAmount = Math.max(0, input.tipAmount ?? 0)
 
+  /*
+   * The tip is deliberately NOT in the total. grandTotal is what the
+   * restaurant charges — goods, service, tax, less discounts — and is what
+   * every revenue figure reads (§110: tips are the staff's money passing
+   * through, not income). What the guest actually hands over is
+   * grandTotal + tip: `outstandingOn` below is the one place that sum lives.
+   */
   const beforeRounding =
-    taxableBase + serviceCharge + (input.taxInclusive ? 0 : taxTotal) + tipAmount
+    taxableBase + serviceCharge + (input.taxInclusive ? 0 : taxTotal)
 
   const { total, adjustment } = input.roundTotal
     ? roundToNearestMajor(beforeRounding, input.currency ?? 'INR')
@@ -235,6 +252,8 @@ export function computeTotals(input: TotalsInput): OrderTotals {
   return {
     subtotal,
     discountTotal,
+    couponDiscount,
+    manualDiscount,
     loyaltyDiscount,
     taxableBase,
     serviceCharge,
@@ -243,6 +262,20 @@ export function computeTotals(input: TotalsInput): OrderTotals {
     roundingAdj: adjustment,
     grandTotal: total,
   }
+}
+
+/**
+ * What is left to hand over on a bill: the charge plus any tip already
+ * promised, less what has been paid. The ONE definition — every till screen,
+ * intent and settlement check reads this, so "paid in full" cannot mean
+ * different things on different screens.
+ */
+export function outstandingOn(order: {
+  grandTotal: number
+  tipAmount: number
+  paidTotal: number
+}): number {
+  return Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal)
 }
 
 // ── loyalty ──────────────────────────────────────────────────────────────────

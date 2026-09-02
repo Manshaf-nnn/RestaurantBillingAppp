@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { outstandingOn } from '@/features/orders/pricing'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -19,8 +20,7 @@ import {
   Search,
   Smartphone,
   Split,
-  Wallet,
-} from 'lucide-react'
+  Wallet, Landmark, CircleEllipsis } from 'lucide-react'
 import { toast } from 'sonner'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 
@@ -93,6 +93,7 @@ export interface CashierBill {
   serviceCharge: number
   taxTotal: number
   grandTotal: number
+  tipAmount: number
   paidTotal: number
   items: Array<{ id: string; name: string; optionsLabel: string; quantity: number; lineTotal: number }>
 }
@@ -105,6 +106,9 @@ const METHODS = [
   { key: 'QR' as const, label: 'QR / UPI', icon: QrCode },
   { key: 'ONLINE' as const, label: 'Online', icon: Smartphone },
   { key: 'WALLET' as const, label: 'Wallet', icon: Wallet },
+  // Recorded, never processed (§6). The reference field carries the proof.
+  { key: 'BANK_TRANSFER' as const, label: 'Bank transfer', icon: Landmark },
+  { key: 'OTHER' as const, label: 'Other', icon: CircleEllipsis },
 ]
 
 export function CashierBoard({
@@ -391,6 +395,7 @@ export function CashierBoard({
         serviceCharge: bill.serviceCharge,
         taxTotal: bill.taxTotal,
         grandTotal: bill.grandTotal,
+        tipAmount: 0,
         paidTotal: 0,
         items: bill.items.map((entry, index) => ({
           id: `${bill.orderId}-${index}`,
@@ -416,7 +421,7 @@ export function CashierBoard({
     if (fullySettled) setSelectedId(null)
   }
 
-  const outstanding = bills.reduce((sum, bill) => sum + (bill.grandTotal - bill.paidTotal), 0)
+  const outstanding = bills.reduce((sum, bill) => sum + outstandingOn(bill), 0)
 
   return (
     <OpsShell title="Cashier" subtitle={restaurant.name} user={user} actions={exit}>
@@ -693,7 +698,7 @@ export function CashierBoard({
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold">
-                          {formatMoney(bill.grandTotal - bill.paidTotal, restaurant.currency, restaurant.locale)}
+                          {formatMoney(outstandingOn(bill), restaurant.currency, restaurant.locale)}
                         </span>
                         {bill.type === 'TAKEAWAY' && (
                           <Button
@@ -929,7 +934,7 @@ function BillingDetailPanel({
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Due now</span>
             <span className="font-semibold tabular-nums">
-              {formatMoney(Math.max(0, bill.grandTotal - bill.paidTotal), restaurant.currency, restaurant.locale)}
+              {formatMoney(outstandingOn(bill), restaurant.currency, restaurant.locale)}
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -951,8 +956,9 @@ function BillPanel({
   restaurant: ReceiptRestaurant
   onSettled: (billId: string, amount: number, fullySettled: boolean) => void
 }) {
-  const due = Math.max(0, bill.grandTotal - bill.paidTotal)
+  const due = outstandingOn(bill)
   const [method, setMethod] = React.useState<(typeof METHODS)[number]['key']>('CASH')
+  const [taking, setTaking] = React.useState('')
   const [tendered, setTendered] = React.useState('')
   const [reference, setReference] = React.useState('')
   const [tip, setTip] = React.useState('')
@@ -961,7 +967,14 @@ function BillPanel({
   const [discountOpen, setDiscountOpen] = React.useState(false)
 
   const tipMinor = tip ? parseMoney(tip, restaurant.currency) : 0
-  const amountDue = due + tipMinor
+  /*
+   * How much of the bill THIS payment covers. Blank means all of it — the
+   * common case — but a table paying "half now, half by card" types the half
+   * here and settles twice. Partial payment always existed server-side; the
+   * till just never offered a way to say it.
+   */
+  const takingMinor = Math.min(taking ? parseMoney(taking, restaurant.currency) : due, due)
+  const amountDue = takingMinor + tipMinor
   const tenderedMinor = tendered ? parseMoney(tendered, restaurant.currency) : 0
   const change = method === 'CASH' && tenderedMinor > amountDue ? tenderedMinor - amountDue : 0
 
@@ -988,6 +1001,7 @@ function BillPanel({
         : 'Payment recorded',
     )
     onSettled(bill.id, amountDue, result.data.settled)
+    setTaking('')
     setTendered('')
     setReference('')
     setTip('')
@@ -1092,6 +1106,16 @@ function BillPanel({
               />
             </Field>
           )}
+
+          <Field label="Amount to take" htmlFor="taking" hint="Leave blank for the full bill — enter less to split the payment">
+            <Input
+              id="taking"
+              inputMode="decimal"
+              value={taking}
+              onChange={(event) => setTaking(event.target.value)}
+              placeholder={String(toMajor(due, restaurant.currency))}
+            />
+          </Field>
 
           <Field label="Tip" htmlFor="tip" hint="Optional">
             <Input

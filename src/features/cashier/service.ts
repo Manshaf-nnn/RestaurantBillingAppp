@@ -49,7 +49,8 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
     // The order already stores what was actually granted; a discount is not
     // re-evaluated here, only re-applied, and it is clamped to the new subtotal
     // by computeTotals so a split can never leave a discount larger than the bill.
-    manualDiscount: order.discountTotal,
+    couponDiscount: order.couponDiscount,
+    manualDiscount: order.manualDiscount,
     loyaltyDiscount: order.loyaltyDiscount,
     tipAmount: order.tipAmount,
     currency: restaurant.currency,
@@ -65,6 +66,8 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
     data: {
       subtotal: totals.subtotal,
       discountTotal: totals.discountTotal,
+      couponDiscount: totals.couponDiscount,
+      manualDiscount: totals.manualDiscount,
       loyaltyDiscount: totals.loyaltyDiscount,
       serviceCharge: totals.serviceCharge,
       taxTotal: totals.taxTotal,
@@ -412,6 +415,8 @@ export async function mergeBills(
           mergedIntoId: target.id,
           subtotal: 0,
           discountTotal: 0,
+          couponDiscount: 0,
+          manualDiscount: 0,
           loyaltyDiscount: 0,
           serviceCharge: 0,
           taxTotal: 0,

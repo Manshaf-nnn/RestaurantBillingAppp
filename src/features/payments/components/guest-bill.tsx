@@ -97,7 +97,7 @@ export function GuestBill({
   const [feedbackSubmitted, setFeedbackSubmitted] = React.useState(false)
   const [feedbackDismissed, setFeedbackDismissed] = React.useState(false)
 
-  const due = Math.max(0, bill.grandTotal - bill.paidTotal)
+  const due = Math.max(0, bill.grandTotal + bill.tipAmount - bill.paidTotal)
   const settled = bill.paymentStatus === 'PAID' || due === 0
 
   React.useEffect(() => {

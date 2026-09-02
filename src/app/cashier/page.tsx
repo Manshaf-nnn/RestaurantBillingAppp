@@ -158,6 +158,7 @@ export default async function CashierPage({
         serviceCharge: order.serviceCharge,
         taxTotal: order.taxTotal,
         grandTotal: order.grandTotal,
+        tipAmount: order.tipAmount,
         paidTotal: order.paidTotal,
         items: order.items.map((item) => ({
           id: item.id,

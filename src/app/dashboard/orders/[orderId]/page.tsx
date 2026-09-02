@@ -50,6 +50,7 @@ export default async function OrderDetailPage({
       }}
       canUpdate={can(user, PERMISSIONS.ORDER_UPDATE_STATUS)}
       canCancel={can(user, PERMISSIONS.ORDER_CANCEL)}
+      canRefund={can(user, PERMISSIONS.PAYMENT_REFUND)}
       order={{
         id: order.id,
         orderNumber: order.orderNumber,
@@ -96,6 +97,7 @@ export default async function OrderDetailPage({
           amount: payment.amount,
           status: payment.status,
           createdAt: payment.createdAt.toISOString(),
+          refunded: payment.refunds.reduce((sum, refund) => sum + refund.amount, 0),
         })),
       }}
     />

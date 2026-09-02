@@ -41,6 +41,7 @@ export interface OpenOrderRow {
   readyAt: string | null
   servedAt: string | null
   grandTotal: number
+  tipAmount: number
   paidTotal: number
   ordered: number
   queued: number
@@ -318,7 +319,7 @@ export function foldOrdersToTables(params: {
         ready: row.ready,
         served: row.served,
         cancelled: row.cancelled,
-        outstanding: Math.max(0, row.grandTotal - row.paidTotal),
+        outstanding: Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal),
         paymentStatus: row.paymentStatus,
         customer: null,
         walkInName: row.customerName,
@@ -335,7 +336,7 @@ export function foldOrdersToTables(params: {
       existing.ready += row.ready
       existing.served += row.served
       existing.cancelled += row.cancelled
-      existing.outstanding += Math.max(0, row.grandTotal - row.paidTotal)
+      existing.outstanding += Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal)
       // A party is only fully paid when every one of its bills is.
       if (row.paymentStatus !== 'PAID') existing.paymentStatus = row.paymentStatus
       // The freshest kitchen milestone across the party's tickets.

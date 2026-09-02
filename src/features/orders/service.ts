@@ -594,6 +594,8 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               couponId: draft.couponId,
               subtotal: draft.totals.subtotal,
               discountTotal: draft.totals.discountTotal,
+              couponDiscount: draft.totals.couponDiscount,
+              manualDiscount: draft.totals.manualDiscount,
               loyaltyDiscount: draft.totals.loyaltyDiscount,
               taxTotal: draft.totals.taxTotal,
               serviceCharge: draft.totals.serviceCharge,
@@ -624,8 +626,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
             },
           })
 
-      // Coupon accounting.
-      if (draft.couponId && draft.totals.discountTotal > 0) {
+      // Coupon accounting. The redemption records what the COUPON took —
+      // this used to write the whole discount blob, so a manual discount on
+      // the same order was booked against the coupon's name.
+      if (draft.couponId && draft.totals.couponDiscount > 0) {
         await tx.coupon.update({
           where: { id: draft.couponId },
           data: { usedCount: { increment: 1 } },
@@ -635,16 +639,41 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
             couponId: draft.couponId,
             orderId: created.id,
             customerId: customer?.id ?? null,
-            amount: draft.totals.discountTotal,
+            amount: draft.totals.couponDiscount,
           },
         })
       }
 
       // Loyalty spend is debited now; the earn happens at settlement.
       if (draft.loyaltyPointsUsed > 0 && customer) {
-        await tx.customer.update({
-          where: { id: customer.id },
+        /*
+         * Conditional, not blind: two orders spending the same points at the
+         * same moment both priced against the same balance, and the second
+         * decrement drove it negative — a discount granted against points the
+         * guest did not have. The guarded update finds the row only while the
+         * balance still covers the spend; the CHECK constraint underneath is
+         * the last line if this is ever bypassed.
+         */
+        const spent = await tx.customer.updateMany({
+          where: { id: customer.id, loyaltyPoints: { gte: draft.loyaltyPointsUsed } },
           data: { loyaltyPoints: { decrement: draft.loyaltyPointsUsed } },
+        })
+        if (spent.count === 0) {
+          throw new AppError(
+            'Those loyalty points were just spent on another order. The balance no longer covers this redemption.',
+            409,
+            'POINTS_SPENT',
+          )
+        }
+        await tx.loyaltyEntry.create({
+          data: {
+            restaurantId: params.restaurantId,
+            customerId: customer.id,
+            orderId: created.id,
+            points: -draft.loyaltyPointsUsed,
+            kind: 'REDEEMED',
+            note: `Redeemed against ${created.orderNumber}`,
+          },
         })
       }
 
@@ -1154,12 +1183,20 @@ export async function cancelOrder(params: {
         select: { loyaltyPointValue: true },
       })
       if (restaurant.loyaltyPointValue > 0) {
+        const returned = Math.round(order.loyaltyDiscount / restaurant.loyaltyPointValue)
         await tx.customer.update({
           where: { id: order.customerId },
+          data: { loyaltyPoints: { increment: returned } },
+        })
+        await tx.loyaltyEntry.create({
           data: {
-            loyaltyPoints: {
-              increment: Math.round(order.loyaltyDiscount / restaurant.loyaltyPointValue),
-            },
+            restaurantId: order.restaurantId,
+            customerId: order.customerId,
+            orderId: order.id,
+            points: returned,
+            kind: 'RETURNED',
+            note: `${order.orderNumber} cancelled — redeemed points returned`,
+            actorId: params.actorId ?? null,
           },
         })
       }
@@ -1362,12 +1399,26 @@ export async function settleLoyalty(orderId: string): Promise<void> {
 
   const earned = pointsEarned(order.grandTotal, order.restaurant.loyaltyEarnRateX100)
 
-  await prisma.customer.update({
-    where: { id: order.customerId },
-    data: {
-      loyaltyPoints: { increment: earned },
-      totalSpent: { increment: order.grandTotal },
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.customer.update({
+      where: { id: order.customerId! },
+      data: {
+        loyaltyPoints: { increment: earned },
+        totalSpent: { increment: order.grandTotal },
+      },
+    })
+    if (earned > 0) {
+      await tx.loyaltyEntry.create({
+        data: {
+          restaurantId: order.restaurantId,
+          customerId: order.customerId!,
+          orderId: order.id,
+          points: earned,
+          kind: 'EARNED',
+          note: `Earned on ${order.orderNumber}`,
+        },
+      })
+    }
   })
 }
 

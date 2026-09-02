@@ -137,6 +137,17 @@ enum PaymentStatus {
   FAILED
 }
 
+enum LoyaltyEntryKind {
+  /// Points for a settled order.
+  EARNED
+  /// Points spent against a bill.
+  REDEEMED
+  /// Points given back when an order that spent them was cancelled.
+  RETURNED
+  /// A hand correction, or the opening balance when the ledger began.
+  ADJUSTED
+}
+
 enum PaymentMethod {
   CASH
   CARD
@@ -144,6 +155,9 @@ enum PaymentMethod {
   ONLINE
   WALLET
   BANK_TRANSFER
+  /// A method the presets do not name — recorded, never processed (§6: no
+  /// gateways). The reference field says what it actually was.
+  OTHER
 }
 
 enum CashDrawerStatus {
@@ -579,8 +593,11 @@ model Restaurant {
   customers        Customer[]
   orders           Order[]
   payments         Payment[]
+  refunds          Refund[]
   invoices         Invoice[]
   coupons          Coupon[]
+  loyaltyEntries   LoyaltyEntry[]
+  counters         RestaurantCounter[]
   reservations     Reservation[]
   reviews          Review[]
   feedback         Feedback[]
@@ -751,6 +768,7 @@ model User {
   createdOrders       Order[]             @relation("OrderCreatedBy")
   servedOrders        Order[]             @relation("OrderServedBy")
   receivedPayments    Payment[]           @relation("PaymentReceivedBy")
+  refundsIssued       Refund[]            @relation("RefundIssuedBy")
   stockMovements      StockMovement[]
   shifts              StaffShift[]
   shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
@@ -1274,10 +1292,11 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders       Order[]
-  reservations Reservation[]
-  reviews      Review[]
-  redemptions  CouponRedemption[]
+  orders         Order[]
+  reservations   Reservation[]
+  reviews        Review[]
+  redemptions    CouponRedemption[]
+  loyaltyEntries LoyaltyEntry[]
 
   @@unique([restaurantId, phone])
   @@index([restaurantId, lastOrderAt])
@@ -1331,7 +1350,11 @@ model Order {
 
   // ── money, all minor units ───────────────────────────────
   subtotal        Int @default(0)
+  /// couponDiscount + manualDiscount, kept because every report reads it.
+  /// The two columns underneath are the truth; this is their sum, always.
   discountTotal   Int @default(0)
+  couponDiscount  Int @default(0)
+  manualDiscount  Int @default(0)
   loyaltyDiscount Int @default(0)
   taxTotal        Int @default(0)
   serviceCharge   Int @default(0)
@@ -1381,6 +1404,7 @@ model Order {
   items          OrderItem[]
   events         OrderEvent[]
   payments       Payment[]
+  refunds        Refund[]
   invoice        Invoice?
   review         Review?
   redemptions    CouponRedemption[]
@@ -1562,10 +1586,93 @@ model Payment {
   cashDrawerSessionId String?
   /// The drawer movement a refund of this payment produced, if it produced one.
   cashMovements       CashMovement[]
+  refunds             Refund[]
 
   @@index([restaurantId, status, createdAt])
   @@index([orderId])
   @@map("payments")
+}
+
+/**
+ * Money going back. A payment is a fact — it happened, and editing it is how
+ * books stop balancing — so a refund is its own row: how much of which payment
+ * went back, when, why, and on whose authority. Partial refunds are several
+ * rows against one payment; the payment flips to REFUNDED only when the sum
+ * of its refunds covers it.
+ */
+model Refund {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orderId      String
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentId    String
+  payment      Payment    @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  amount Int
+  /// How the money went back — normally the method it arrived by.
+  method PaymentMethod
+  reason String
+
+  refundedById String?
+  refundedBy   User?   @relation("RefundIssuedBy", fields: [refundedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@index([orderId])
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+/**
+ * Why a loyalty balance is what it is (§72).
+ *
+ * `Customer.loyaltyPoints` used to be a bare number three code paths
+ * incremented and decremented — no history, no way to answer "where did this
+ * guest's points go". Every earn, spend and give-back is a signed row now;
+ * the balance column stays as the cached sum because every screen reads it,
+ * and the opening state was captured as one ADJUSTED entry per customer so
+ * sum(entries) equals the balance from the first day.
+ */
+model LoyaltyEntry {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customerId   String
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// The order that caused it, when one did.
+  orderId      String?
+
+  /// Signed: earns positive, spends negative.
+  points Int
+  kind   LoyaltyEntryKind
+  note   String?
+
+  actorId   String?
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, customerId, createdAt])
+  @@index([orderId])
+  @@map("loyalty_entries")
+}
+
+/**
+ * Named counters, one row per (restaurant, key) — e.g. `invoice:2026`.
+ *
+ * Invoice numbers used to come from `count(*) this year + 1`, which two
+ * simultaneous settlements both compute identically: one bill settles, the
+ * other dies on the unique constraint. An atomic upsert-increment cannot
+ * collide and never reuses a number, even for deleted invoices.
+ */
+model RestaurantCounter {
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  key          String
+  value        Int    @default(0)
+
+  @@id([restaurantId, key])
+  @@map("restaurant_counters")
 }
 
 model Invoice {

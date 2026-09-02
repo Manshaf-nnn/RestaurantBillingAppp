@@ -3,6 +3,8 @@ import type { PaymentMethod, Prisma } from '@prisma/client'
 import QRCode from 'qrcode'
 
 import { AppError, NotFoundError } from '@/lib/errors'
+import { outstandingOn } from '@/features/orders/pricing'
+import { nextCounterValue, yearIn } from '@/server/db/counters'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { prisma, guardLocks } from '@/server/db/prisma'
 import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
@@ -94,7 +96,7 @@ export async function createPaymentIntent(params: {
   if (!order) throw new NotFoundError('Order')
   if (order.paymentStatus === 'PAID') throw new AppError('This bill is already settled', 409, 'ALREADY_PAID')
 
-  const due = Math.max(0, order.grandTotal - order.paidTotal)
+  const due = outstandingOn(order)
   if (due <= 0) throw new AppError('Nothing left to pay on this bill', 409, 'NOTHING_DUE')
 
   const existing = order.payments.find(
@@ -190,9 +192,16 @@ export async function capturePayment(params: {
       throw new AppError('This order was cancelled', 409, 'ORDER_CANCELLED')
     }
 
+    /*
+     * The tip rides on TOP of the bill, it does not become the bill.
+     * grandTotal used to absorb the tip here, which made every revenue figure
+     * downstream count the staff's money as the restaurant's income (§110).
+     * grandTotal is never written by settlement now; what the guest owes is
+     * the charge plus every tip promised so far.
+     */
     const tip = Math.max(0, params.tipAmount ?? 0)
-    const grandTotal = order.grandTotal + tip
-    const due = Math.max(0, grandTotal - order.paidTotal)
+    const owed = order.grandTotal + order.tipAmount + tip
+    const due = Math.max(0, owed - order.paidTotal)
 
     /*
      * Exactly what is due, no slack. The ceiling used to be `due + 1`, an
@@ -289,14 +298,13 @@ export async function capturePayment(params: {
         })
 
     const paidTotal = order.paidTotal + params.amount
-    const fullySettled = paidTotal >= grandTotal
+    const fullySettled = paidTotal >= owed
 
     const updatedOrder = await tx.order.update({
       where: { id: order.id },
       data: {
         paidTotal,
         tipAmount: order.tipAmount + tip,
-        grandTotal,
         paymentStatus: fullySettled ? 'PAID' : 'PARTIAL',
         // Settling the bill closes the order unless the food is still coming.
         ...(fullySettled && ['SERVED', 'READY'].includes(order.status)
@@ -307,22 +315,34 @@ export async function capturePayment(params: {
 
     let invoiceNumber: string | null = null
     if (fullySettled) {
-      const startOfYear = new Date(new Date().getFullYear(), 0, 1)
-      const issued = await tx.invoice.count({
-        where: { restaurantId: params.restaurantId, issuedAt: { gte: startOfYear } },
-      })
-      invoiceNumber = `INV-${new Date().getFullYear()}-${String(issued + 1).padStart(5, '0')}`
-
-      await tx.invoice.upsert({
+      /*
+       * Numbered from a per-restaurant counter, in the restaurant's own year.
+       * The old `count(this year) + 1` raced (two settlements, same number,
+       * one dies on the unique constraint) and the year came from the
+       * server's clock — a Colombo restaurant settling at half past midnight
+       * on New Year's Day was numbering into the wrong year. An order that
+       * already holds an invoice keeps it; the counter only advances when a
+       * number will actually be used.
+       */
+      const existingInvoice = await tx.invoice.findUnique({
         where: { orderId: order.id },
-        create: {
-          restaurantId: params.restaurantId,
-          orderId: order.id,
-          number: invoiceNumber,
-          snapshot: buildInvoiceSnapshot(order, restaurant, updatedOrder) as unknown as Prisma.InputJsonValue,
-        },
-        update: {},
+        select: { number: true },
       })
+      if (existingInvoice) {
+        invoiceNumber = existingInvoice.number
+      } else {
+        const year = yearIn(restaurant.timezone)
+        const sequence = await nextCounterValue(tx, params.restaurantId, `invoice:${year}`)
+        invoiceNumber = `INV-${year}-${String(sequence).padStart(5, '0')}`
+        await tx.invoice.create({
+          data: {
+            restaurantId: params.restaurantId,
+            orderId: order.id,
+            number: invoiceNumber,
+            snapshot: buildInvoiceSnapshot(order, restaurant, updatedOrder) as unknown as Prisma.InputJsonValue,
+          },
+        })
+      }
 
       // Free the table when nothing else is open on it.
       if (order.tableId) {
@@ -471,6 +491,8 @@ export async function refundPayment(params: {
   paymentId: string
   reason: string
   actorId: string
+  /** Minor units. Absent means everything this payment has left to refund. */
+  amount?: number
 }) {
   const located = await prisma.payment.findFirst({
     where: { id: params.paymentId, restaurantId: params.restaurantId },
@@ -498,28 +520,70 @@ export async function refundPayment(params: {
 
     const payment = await tx.payment.findFirst({
       where: { id: params.paymentId, restaurantId: params.restaurantId },
-      include: { order: true },
+      include: { order: { include: { restaurant: { select: { currency: true } } } } },
     })
     if (!payment) throw new NotFoundError('Payment')
-    if (payment.status !== 'PAID') {
+    if (payment.status !== 'PAID' && payment.status !== 'REFUNDED') {
       throw new AppError('Only settled payments can be refunded', 409, 'NOT_PAID')
     }
 
-    const refunded = await tx.payment.update({
-      where: { id: payment.id },
-      data: { status: 'REFUNDED', failureReason: params.reason },
-    })
-
     /*
-     * What is paid is the sum of the payments that still stand — not the old
-     * figure minus this one. Subtraction preserves whatever drift the column
-     * had already accumulated; the sum is self-correcting every time it runs.
+     * The payment row is a fact and stays one. What changes hands comes back
+     * as a Refund ROW — several of them for partial refunds — and the payment
+     * only flips to REFUNDED when the rows cover it. The old code mutated the
+     * payment in place: no amount could be partial, no reason survived a
+     * second refund, and the books had an edit where they needed a record.
      */
-    const standing = await tx.payment.aggregate({
-      where: { orderId: payment.orderId, status: 'PAID' },
+    const already = await tx.refund.aggregate({
+      where: { paymentId: payment.id },
       _sum: { amount: true },
     })
-    const paidTotal = standing._sum.amount ?? 0
+    const refundable = payment.amount - (already._sum.amount ?? 0)
+    const amount = params.amount ?? refundable
+    if (refundable <= 0) {
+      throw new AppError('This payment has already been fully refunded', 409, 'ALREADY_REFUNDED')
+    }
+    if (amount <= 0 || amount > refundable) {
+      throw new AppError(
+        `Up to ${formatMoney(refundable, payment.order.restaurant.currency)} can go back on this payment`,
+        400,
+        'REFUND_TOO_LARGE',
+      )
+    }
+
+    const refund = await tx.refund.create({
+      data: {
+        restaurantId: params.restaurantId,
+        orderId: payment.orderId,
+        paymentId: payment.id,
+        amount,
+        method: payment.method,
+        reason: params.reason,
+        refundedById: params.actorId,
+      },
+    })
+
+    if ((already._sum.amount ?? 0) + amount >= payment.amount) {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: 'REFUNDED', failureReason: params.reason },
+      })
+    }
+
+    /*
+     * What is paid is what arrived minus what went back — summed fresh, not
+     * the old figure minus this one. Subtraction preserves whatever drift the
+     * column had accumulated; the sums are self-correcting every time.
+     */
+    const received = await tx.payment.aggregate({
+      where: { orderId: payment.orderId, status: { in: ['PAID', 'REFUNDED'] } },
+      _sum: { amount: true },
+    })
+    const returned = await tx.refund.aggregate({
+      where: { orderId: payment.orderId },
+      _sum: { amount: true },
+    })
+    const paidTotal = Math.max(0, (received._sum.amount ?? 0) - (returned._sum.amount ?? 0))
     await tx.order.update({
       where: { id: payment.orderId },
       data: {
@@ -527,7 +591,7 @@ export async function refundPayment(params: {
         paymentStatus:
           paidTotal === 0
             ? 'REFUNDED'
-            : paidTotal >= payment.order.grandTotal
+            : paidTotal >= payment.order.grandTotal + payment.order.tipAmount
               ? 'PAID'
               : 'PARTIAL',
       },
@@ -544,7 +608,7 @@ export async function refundPayment(params: {
         restaurantId: params.restaurantId,
         branchId: payment.order.branchId,
         userId: params.actorId,
-        amount: payment.amount,
+        amount,
         orderNumber: payment.order.orderNumber,
         // Links the movement back to the payment, so a refund that produced no
         // movement is a visible absence rather than a silence.
@@ -552,6 +616,6 @@ export async function refundPayment(params: {
       })
     }
 
-    return refunded
+    return refund
   })
 }

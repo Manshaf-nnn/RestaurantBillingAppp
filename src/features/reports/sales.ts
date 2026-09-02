@@ -90,10 +90,13 @@ export async function getSalesReport(params: {
 
   // Refunds are attributed to the order they belong to, not the day they were
   // given, so a report always reconciles against the bill it describes.
-  const refunded = await prisma.payment.aggregate({
+  /*
+   * From the refunds ledger, not from payment rows flipped to REFUNDED —
+   * partial refunds only exist there, and the backfill carried history over.
+   */
+  const refunded = await prisma.refund.aggregate({
     where: {
       restaurantId: params.restaurantId,
-      status: 'REFUNDED',
       order: {
         placedAt: { gte: params.range.from, lte: params.range.to },
         /*

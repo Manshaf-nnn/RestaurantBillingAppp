@@ -64,6 +64,17 @@ export interface PrintableBill {
   serviceCharge: number
   taxTotal: number
   grandTotal: number
+  /*
+   * The rest of the money story, all optional so the three existing callers
+   * keep working. A receipt that shows a total but not the loyalty discount
+   * that shaped it, the tip riding on top, or what remains unpaid is a
+   * receipt whose lines cannot produce its own bottom line (§92).
+   */
+  loyaltyDiscount?: number
+  tipAmount?: number
+  roundingAdj?: number
+  paidTotal?: number
+  payments?: Array<{ method: string; amount: number }>
 }
 
 export function buildReceipt(
@@ -95,12 +106,28 @@ export function buildReceipt(
       quantity: item.quantity,
       lineTotal: money(item.lineTotal),
     })),
-    totals: [
-      { label: 'Subtotal', value: money(bill.subtotal) },
-      ...(bill.discountTotal ? [{ label: 'Discount', value: `-${money(bill.discountTotal)}` }] : []),
-      ...(bill.serviceCharge ? [{ label: 'Service', value: money(bill.serviceCharge) }] : []),
-      ...(bill.taxTotal ? [{ label: restaurant.taxLabel, value: money(bill.taxTotal) }] : []),
-      { label: 'TOTAL', value: money(bill.grandTotal), strong: true },
-    ],
+    totals: (() => {
+      const tip = bill.tipAmount ?? 0
+      const paid = bill.paidTotal ?? 0
+      const owed = bill.grandTotal + tip
+      const balance = owed - paid
+      return [
+        { label: 'Subtotal', value: money(bill.subtotal) },
+        ...(bill.discountTotal ? [{ label: 'Discount', value: `-${money(bill.discountTotal)}` }] : []),
+        ...(bill.loyaltyDiscount ? [{ label: 'Loyalty', value: `-${money(bill.loyaltyDiscount)}` }] : []),
+        ...(bill.serviceCharge ? [{ label: 'Service', value: money(bill.serviceCharge) }] : []),
+        ...(bill.taxTotal ? [{ label: restaurant.taxLabel, value: money(bill.taxTotal) }] : []),
+        ...(bill.roundingAdj ? [{ label: 'Rounding', value: money(bill.roundingAdj) }] : []),
+        { label: 'TOTAL', value: money(bill.grandTotal), strong: true },
+        // The tip is the staff's, riding on top of the bill — shown after the
+        // total precisely because it is not part of it.
+        ...(tip ? [{ label: 'Tip', value: money(tip) }, { label: 'TO PAY', value: money(owed), strong: true }] : []),
+        ...(bill.payments ?? []).map((payment) => ({
+          label: `Paid · ${payment.method}`,
+          value: money(payment.amount),
+        })),
+        ...(paid > 0 && balance > 0 ? [{ label: 'BALANCE DUE', value: money(balance), strong: true }] : []),
+      ]
+    })(),
   }
 }

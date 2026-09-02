@@ -136,7 +136,7 @@ export async function resolveTable(
         status: { notIn: ['COMPLETED', 'CANCELLED'] },
         paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
       },
-      select: { grandTotal: true, paidTotal: true, items: { select: { quantity: true } } },
+      select: { grandTotal: true, tipAmount: true, paidTotal: true, items: { select: { quantity: true } } },
     })
 
     const openBill = openOrders.length
@@ -147,7 +147,7 @@ export async function resolveTable(
             0,
           ),
           outstanding: openOrders.reduce(
-            (sum, order) => sum + Math.max(0, order.grandTotal - order.paidTotal),
+            (sum, order) => sum + Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
             0,
           ),
         }
@@ -385,7 +385,8 @@ export async function updateGuestOrderItems(
         taxRateBps: order.taxRateBps || order.restaurant.taxRateBps,
         serviceChargeBps: order.serviceChargeBps || order.restaurant.serviceChargeBps,
         taxInclusive: order.restaurant.taxInclusive,
-        couponDiscount: order.discountTotal,
+        couponDiscount: order.couponDiscount,
+        manualDiscount: order.manualDiscount,
         loyaltyDiscount: order.loyaltyDiscount,
         currency: order.restaurant.currency,
         roundTotal: true,
@@ -480,7 +481,9 @@ export async function updateGuestOrderItems(
           where: { id: order.id },
           data: {
             subtotal: totals.subtotal,
-            discountTotal: order.discountTotal,
+            discountTotal: totals.discountTotal,
+            couponDiscount: totals.couponDiscount,
+            manualDiscount: totals.manualDiscount,
             loyaltyDiscount: order.loyaltyDiscount,
             taxTotal: totals.taxTotal,
             serviceCharge: totals.serviceCharge,
@@ -1017,10 +1020,10 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
        * every line, voided ones included — void a dish, discount the bill, and
        * the dead line quietly came back into the base. And it overwrote
        * `discountTotal` with the manual amount alone, erasing any coupon
-       * already on the order; the redemption rows say what the coupon took, so
-       * both discounts survive together until the columns are split.
+       * already on the order; the coupon's own column says what it took, so
+       * both discounts survive together.
        */
-      const couponDiscount = order.redemptions.reduce((total, row) => total + row.amount, 0)
+      const couponDiscount = order.couponDiscount
       const totals = computeTotals({
         lines: order.items
           .filter((item) => item.status !== 'CANCELLED')
@@ -1040,6 +1043,8 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
         data: {
           subtotal: totals.subtotal,
           discountTotal: totals.discountTotal,
+          couponDiscount: totals.couponDiscount,
+          manualDiscount: totals.manualDiscount,
           taxTotal: totals.taxTotal,
           serviceCharge: totals.serviceCharge,
           roundingAdj: totals.roundingAdj,

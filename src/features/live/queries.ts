@@ -88,6 +88,7 @@ export async function getLiveBoard(params: {
         readyAt: Date | null
         servedAt: Date | null
         grandTotal: number
+        tipAmount: number
         paidTotal: number
         ordered: number | null
         queued: number | null
@@ -119,7 +120,7 @@ export async function getLiveBoard(params: {
              o."tableId", o."tableNumber", o."guestCount",
              o."customerId", o."customerName", o."customerPhone",
              o."placedAt", o."acceptedAt", o."preparingAt", o."readyAt", o."servedAt",
-             o."grandTotal", o."paidTotal",
+             o."grandTotal", o."tipAmount", o."paidTotal",
              t.label AS table_label, t.area AS table_area,
              t.capacity AS table_capacity, t.status::text AS table_status,
              COALESCE(r.ordered, 0)::int   AS ordered,
@@ -201,6 +202,7 @@ export async function getLiveBoard(params: {
       readyAt: iso(row.readyAt),
       servedAt: iso(row.servedAt),
       grandTotal: row.grandTotal,
+      tipAmount: row.tipAmount,
       paidTotal: row.paidTotal,
       ordered: row.ordered ?? 0,
       queued: row.queued ?? 0,

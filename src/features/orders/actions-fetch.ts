@@ -93,6 +93,7 @@ export async function fetchOrderDetail(orderId: string) {
         amount: payment.amount,
         status: payment.status,
         createdAt: payment.createdAt.toISOString(),
+        refunded: payment.refunds.reduce((sum, refund) => sum + refund.amount, 0),
       })),
     }
 
@@ -108,6 +109,7 @@ export async function fetchOrderDetail(orderId: string) {
       },
       canUpdate: false,
       canCancel: false,
+      canRefund: false,
     }
   })
 }
