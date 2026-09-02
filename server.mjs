@@ -170,24 +170,14 @@ const io = new SocketServer(httpServer, {
   transports: ['websocket', 'polling'],
 })
 
-// Horizontal scaling: attach the Redis adapter when REDIS_URL is present so
-// events reach clients connected to other instances.
-if (process.env.REDIS_URL) {
-  try {
-    const [{ createAdapter }, { default: Redis }] = await Promise.all([
-      import('@socket.io/redis-adapter').catch(() => ({ createAdapter: null })),
-      import('ioredis'),
-    ])
-    if (createAdapter) {
-      const pub = new Redis(process.env.REDIS_URL)
-      const sub = pub.duplicate()
-      io.adapter(createAdapter(pub, sub))
-      console.log('  ✓ Socket.IO Redis adapter enabled')
-    }
-  } catch (error) {
-    console.warn('  ! Socket.IO Redis adapter unavailable:', error.message)
-  }
-}
+/*
+ * No multi-instance socket scaling, honestly. A Redis adapter block sat here
+ * importing @socket.io/redis-adapter — a package that was never in
+ * package.json — with the failure swallowed, so it silently did nothing while
+ * reading as if horizontal scaling worked. This server is single-instance by
+ * design (VPS/Docker mode); if it ever needs to scale out, install the
+ * adapter and wire it deliberately rather than resurrecting a no-op.
+ */
 
 io.use(async (socket, nextFn) => {
   const { user, guestId } = await identify(socket)

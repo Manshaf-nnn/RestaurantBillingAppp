@@ -85,9 +85,16 @@ const nextConfig = {
     staleTimes: { dynamic: 0, static: 180 },
   },
   images: {
-    // Allow any HTTPS image URL owners paste for menu photos/logos.
-    remotePatterns: [{ protocol: 'https', hostname: '**' }],
-    formats: ['image/avif', 'image/webp'],
+    /*
+     * No image optimizer, deliberately. The optimizer is an open proxy: with
+     * `hostname: '**'` (which the paste-any-image-URL feature needs) anyone
+     * could route arbitrary hosts through this site's bandwidth, and every
+     * optimized image is a paid function invocation on the serverless host.
+     * Our own images are stored pre-sized and served from /api/media with
+     * immutable caching; pasted external URLs now load directly from their
+     * source. Same pictures, no proxy, no per-image bill.
+     */
+    unoptimized: true,
   },
   eslint: { ignoreDuringBuilds: true },
   async headers() {
