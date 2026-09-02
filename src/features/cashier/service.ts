@@ -4,6 +4,7 @@ import type { Order } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { computeTotals } from '@/features/orders/pricing'
+import { assertPeriodOpen } from '@/features/accounting/service'
 import { reconcileIfDepleted, reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { prisma, type TxClient } from '@/server/db/prisma'
 
@@ -281,6 +282,52 @@ export async function splitBill(
 
     await rebalanceDepletion(tx, order.restaurantId, [order.id, target.id])
 
+    /*
+     * The discounts travel with the food, pro-rata by what each side is now
+     * worth. They used to stay on the source in full: split a discounted bill
+     * and the target was re-billed at list price while the source kept a
+     * discount sized for food it no longer holds — the two halves stopped
+     * summing to the original the moment anything was taken off it. Rounding
+     * remainders stay on the source, so the sum is conserved to the minor unit.
+     */
+    if (order.couponDiscount > 0 || order.manualDiscount > 0 || order.loyaltyDiscount > 0) {
+      const [sourceSub, targetSub] = await Promise.all([
+        tx.orderItem.aggregate({
+          where: { orderId: order.id, status: { not: 'CANCELLED' } },
+          _sum: { lineTotal: true },
+        }),
+        tx.orderItem.aggregate({
+          where: { orderId: target.id, status: { not: 'CANCELLED' } },
+          _sum: { lineTotal: true },
+        }),
+      ])
+      const sourceValue = sourceSub._sum.lineTotal ?? 0
+      const targetValue = targetSub._sum.lineTotal ?? 0
+      const combined = sourceValue + targetValue
+      if (combined > 0 && targetValue > 0) {
+        const share = targetValue / combined
+        const targetCoupon = Math.round(order.couponDiscount * share)
+        const targetManual = Math.round(order.manualDiscount * share)
+        const targetLoyalty = Math.round(order.loyaltyDiscount * share)
+        await tx.order.update({
+          where: { id: target.id },
+          data: {
+            couponDiscount: targetCoupon,
+            manualDiscount: targetManual,
+            loyaltyDiscount: targetLoyalty,
+          },
+        })
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            couponDiscount: order.couponDiscount - targetCoupon,
+            manualDiscount: order.manualDiscount - targetManual,
+            loyaltyDiscount: order.loyaltyDiscount - targetLoyalty,
+          },
+        })
+      }
+    }
+
     const source = await recalculateOrderTotals(tx, order.id)
     const updatedTarget = await recalculateOrderTotals(tx, target.id)
 
@@ -440,6 +487,25 @@ export async function mergeBills(
       ...sources.map((source) => source.id),
     ])
 
+    /*
+     * The absorbed bills' discounts come along with their food. Zeroing the
+     * sources (above) without moving their discounts meant merging two
+     * discounted bills quietly re-billed one of them at list price.
+     */
+    const absorbedCoupon = sources.reduce((sum, source) => sum + source.couponDiscount, 0)
+    const absorbedManual = sources.reduce((sum, source) => sum + source.manualDiscount, 0)
+    const absorbedLoyalty = sources.reduce((sum, source) => sum + source.loyaltyDiscount, 0)
+    if (absorbedCoupon > 0 || absorbedManual > 0 || absorbedLoyalty > 0) {
+      await tx.order.update({
+        where: { id: target.id },
+        data: {
+          couponDiscount: { increment: absorbedCoupon },
+          manualDiscount: { increment: absorbedManual },
+          loyaltyDiscount: { increment: absorbedLoyalty },
+        },
+      })
+    }
+
     await tx.orderEvent.create({
       data: {
         orderId: target.id,
@@ -478,6 +544,9 @@ export async function voidOrderItem(
   }
 
   const order = await loadOpenBill(params.restaurantId, params.orderId)
+
+  // Signed books do not quietly change (§59).
+  await assertPeriodOpen(prisma, params.restaurantId, order.placedAt)
 
   if (order.paymentStatus === 'PAID') {
     throw new AppError('This bill is paid — refund it instead of voiding a line', 409, 'ORDER_PAID')

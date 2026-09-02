@@ -48,7 +48,7 @@ import { useSocketEvent } from '@/hooks/use-socket'
 import { downloadReceipt, printReceipt } from '@/features/printing/print'
 import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
-import { collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
+import { presentBill, collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import {
   holdBillAction,
   mergeBillsAction,
@@ -770,9 +770,21 @@ function BillingDetailPanel({
   const [mergeOpen, setMergeOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
-  const print = () => {
+  const print = async () => {
+    /*
+     * Printing the bill is PRESENTING it: the invoice is finalised first so
+     * the paper in the guest's hand carries its number (§57/§92). If minting
+     * fails the bill still prints — a guest waiting to pay beats a number —
+     * and the next print will try again.
+     */
+    let invoiceNumber: string | null = null
+    const presented = await callAction(() => presentBill({ orderId: bill.id }))
+    if (presented.ok) invoiceNumber = presented.data.invoiceNumber
     try {
-      printReceipt(buildReceipt(bill, restaurant), restaurant.paper.receipt)
+      printReceipt(
+        buildReceipt({ ...bill, invoiceNumber }, restaurant),
+        restaurant.paper.receipt,
+      )
     } catch {
       toast.error('Unable to print receipt')
     }

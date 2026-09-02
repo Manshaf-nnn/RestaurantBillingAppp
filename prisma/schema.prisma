@@ -137,6 +137,17 @@ enum PaymentStatus {
   FAILED
 }
 
+enum TableSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum AccountingPeriodStatus {
+  CLOSED
+  /// A closed period deliberately unsealed to fix something, on the record.
+  REOPENED
+}
+
 enum LoyaltyEntryKind {
   /// Points for a settled order.
   EARNED
@@ -598,6 +609,9 @@ model Restaurant {
   coupons          Coupon[]
   loyaltyEntries   LoyaltyEntry[]
   counters         RestaurantCounter[]
+  tableSessions    TableSession[]
+  dailyCloses      DailyClose[]
+  accountingPeriods AccountingPeriod[]
   reservations     Reservation[]
   reviews          Review[]
   feedback         Feedback[]
@@ -1266,6 +1280,7 @@ model RestaurantTable {
   branchId        String
 
   /// Numbers restart per branch, which is why this is not [restaurantId, number].
+  sessions TableSession[]
   @@unique([restaurantId, branchId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, branchId])
@@ -1408,6 +1423,9 @@ model Order {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  tableSessionId String?
+  tableSession   TableSession? @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
 
   items          OrderItem[]
   events         OrderEvent[]
@@ -1681,6 +1699,84 @@ model RestaurantCounter {
 
   @@id([restaurantId, key])
   @@map("restaurant_counters")
+}
+
+/**
+ * One sitting at one table (§TableSession). Orders come and go over a meal —
+ * a starter round, more drinks, a split for the bill — and until this existed
+ * nothing tied them together: "what does table 4 owe" was a query over open
+ * orders with no notion of when the sitting began or ended. A session opens
+ * with the first dine-in order at a free table and closes when the table
+ * finally clears. Historical orders keep a null session; sittings cannot be
+ * honestly reconstructed after the fact.
+ */
+model TableSession {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  tableId      String
+  table        RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  status     TableSessionStatus @default(OPEN)
+  guestCount Int?
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+
+  orders Order[]
+
+  @@index([restaurantId, tableId, status])
+  @@index([restaurantId, openedAt])
+  @@map("table_sessions")
+}
+
+/**
+ * A business day, signed off (§50–51). Closing a day freezes the accountant's
+ * daily report — sales, payments by method, refunds, drawer variances, COGS —
+ * as a snapshot nothing can rewrite, and records who signed it. One row per
+ * restaurant per local business date; branch-level closes use branchId.
+ */
+model DailyClose {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+
+  /// The LOCAL business date being closed, as midnight UTC of that date.
+  businessDate DateTime
+  closedById   String?
+  closedAt     DateTime @default(now())
+  notes        String?
+  /// [DailyCloseSnapshot] — the §51 daily report, frozen at sign-off.
+  snapshot     Json
+
+  @@unique([restaurantId, branchId, businessDate])
+  @@index([restaurantId, businessDate])
+  @@map("daily_closes")
+}
+
+/**
+ * A range of business the books consider settled (§59). While a period is
+ * CLOSED, the orders inside it refuse cancellation, voids, discount edits and
+ * guest changes — the numbers were signed; changing them needs the period
+ * reopened, on the record.
+ */
+model AccountingPeriod {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  periodStart DateTime
+  periodEnd   DateTime
+  status      AccountingPeriodStatus @default(CLOSED)
+  closedById  String?
+  closedAt    DateTime @default(now())
+  reopenedById String?
+  reopenedAt   DateTime?
+  notes       String?
+
+  @@index([restaurantId, periodStart, periodEnd])
+  @@map("accounting_periods")
 }
 
 model Invoice {

@@ -5,6 +5,7 @@ import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { resolveBranchId } from '@/features/branches/service'
 import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-menu'
+import { assertPeriodOpen } from '@/features/accounting/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { orderIsRouted, routeOrderItems } from '@/features/kitchen/routing'
 import { notifyLowStock } from '@/features/inventory/alerts'
@@ -552,6 +553,34 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
         throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
       }
 
+      /*
+       * The sitting this order belongs to (§TableSession). The first dine-in
+       * order at a free table opens one; everything ordered until the table
+       * clears joins it. "What does table 4 owe tonight" is a question about
+       * the session, not about whichever order happens to be newest.
+       */
+      let tableSessionId: string | null = null
+      if (table) {
+        const existing = await tx.tableSession.findFirst({
+          where: { restaurantId: params.restaurantId, tableId: table.id, status: 'OPEN' },
+          select: { id: true },
+          orderBy: { openedAt: 'desc' },
+        })
+        if (existing) {
+          tableSessionId = existing.id
+        } else {
+          const session = await tx.tableSession.create({
+            data: {
+              restaurantId: params.restaurantId,
+              branchId,
+              tableId: table.id,
+              guestCount: params.guestCount ?? null,
+            },
+          })
+          tableSessionId = session.id
+        }
+      }
+
       // No retry loop here: a Postgres transaction is aborted the moment a
       // statement violates a constraint, so every later statement in it fails
       // with "current transaction is aborted". Retrying inside the transaction
@@ -579,6 +608,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               status: 'PENDING',
               paymentStatus: 'UNPAID',
               tableId: table?.id ?? null,
+              tableSessionId,
               // Snapshotted, not derived. `tableId` is SetNull, so deleting a
               // table used to erase which table every past order had been at.
               tableNumber: table?.number ?? null,
@@ -923,6 +953,60 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false
 }
 
+/**
+ * The waiter's "everything is out" tap, from wherever the order stands.
+ *
+ * The board's primary button used to send SERVED straight into
+ * `updateOrderStatus`, which correctly refuses PREPARING → SERVED — so the
+ * most common tap on the waiter's screen threw "cannot move to served" at
+ * exactly the moment food was being carried out in waves. The rule the
+ * ladder replay documents applies here too: if every plate is out, the food
+ * WAS ready, and each intervening step is applied in turn so `readyAt` is
+ * stamped and every cook-time figure stays truthful.
+ *
+ * PENDING is refused outright: serving an order the kitchen never accepted
+ * would post stock depletion as a side effect of a waiter's tap.
+ */
+export async function serveWholeOrder(params: {
+  restaurantId: string
+  orderId: string
+  actorId?: string | null
+  actorName?: string | null
+}): Promise<Order> {
+  const order = await prisma.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    select: { id: true, status: true },
+  })
+  if (!order) throw new NotFoundError('Order')
+  if (order.status === 'PENDING') {
+    throw new AppError(
+      'The kitchen has not taken this order on yet — accept it there first',
+      409,
+      'ORDER_NOT_ACCEPTED',
+    )
+  }
+  if (order.status === 'SERVED' || order.status === 'COMPLETED') {
+    return (await prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
+  }
+  if (order.status === 'CANCELLED') {
+    throw new AppError('This order was cancelled', 409, 'ORDER_CANCELLED')
+  }
+
+  const LADDER: OrderStatus[] = ['ACCEPTED', 'PREPARING', 'READY', 'SERVED']
+  const from = LADDER.indexOf(order.status)
+  let updated: Order | null = null
+  for (const next of LADDER.slice(from + 1)) {
+    updated = await updateOrderStatus({
+      restaurantId: params.restaurantId,
+      orderId: params.orderId,
+      status: next,
+      actorId: params.actorId ?? null,
+      actorName: params.actorName ?? null,
+    })
+  }
+  return updated ?? (await prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
+}
+
 export async function updateOrderStatus(params: {
   restaurantId: string
   orderId: string
@@ -1072,6 +1156,11 @@ export async function updateOrderStatus(params: {
           where: { id: order.tableId },
           data: { status: 'CLEANING' },
         })
+        // The table clearing is what ends the sitting.
+        await tx.tableSession.updateMany({
+          where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
+          data: { status: 'CLOSED', closedAt: new Date() },
+        })
       }
     }
 
@@ -1141,6 +1230,8 @@ export async function cancelOrder(params: {
   })
   if (!order) throw new NotFoundError('Order')
   if (order.status === 'CANCELLED') return order
+  // Signed books do not quietly change (§59).
+  await assertPeriodOpen(prisma, order.restaurantId, order.placedAt)
   /*
    * Any money at all, not just full settlement. The old check was
    * `paymentStatus === 'PAID'`, so a PARTIAL bill — half paid in cash, the
@@ -1261,6 +1352,10 @@ export async function cancelOrder(params: {
         await tx.restaurantTable.update({
           where: { id: order.tableId },
           data: { status: 'AVAILABLE' },
+        })
+        await tx.tableSession.updateMany({
+          where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
+          data: { status: 'CLOSED', closedAt: new Date() },
         })
       }
     }

@@ -166,6 +166,10 @@ export const PERMISSIONS = {
   /// been looked at is the owner's or admin's act. Grantable from the roles
   /// screen if a restaurant wants a manager to hold it after all.
   CASH_VARIANCE_REVIEW: 'cashDrawer.varianceReview',
+  /// Close business days and accounting periods, and reopen sealed ones.
+  /// Deliberately NOT held by the accountant role: an auditor who can seal
+  /// and unseal the periods they audit is not an audit.
+  ACCOUNTING_CLOSE: 'accounting.close',
 
   // petty cash — three permissions because there are three different jobs.
   // Anybody at the till may need to see what the tin has left; raising a

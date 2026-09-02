@@ -336,7 +336,7 @@ export const FEATURES: Feature[] = [
       { key: 'edit', label: 'Apply discount', permission: PERMISSIONS.DISCOUNT_APPLY },
       { key: 'export', label: 'See invoices', permission: PERMISSIONS.INVOICE_VIEW },
     ],
-    routes: ['/cashier', '/dashboard/online-payments'],
+    routes: ['/cashier', '/dashboard/online-payments', '/dashboard/invoices'],
   },
 
   // ── Menu ──────────────────────────────────────────────────────────────────
@@ -611,6 +611,17 @@ export const FEATURES: Feature[] = [
     description: 'Proving the stock ledger adds up.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_RECONCILIATION }],
     routes: ['/dashboard/reports/reconciliation'],
+  },
+  {
+    key: 'accountingClose',
+    label: 'Daily close & periods',
+    group: 'Back office',
+    description: 'Signing off business days and sealing accounting periods.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.REPORT_VIEW },
+      { key: 'approve', permission: PERMISSIONS.ACCOUNTING_CLOSE },
+    ],
+    routes: ['/dashboard/reports/daily-close'],
   },
   {
     key: 'reportCash',

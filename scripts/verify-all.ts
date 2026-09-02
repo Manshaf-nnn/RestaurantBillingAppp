@@ -58,6 +58,9 @@ const SERVICE = [
   'inventory-truth-test',
   // AUDIT.md Slice 4 / §102 — every screen answers with the same number.
   'report-agreement-test',
+  // AUDIT.md Slice 5 — sessions, apportionment, invoices-at-presentation,
+  // the daily close and sealed periods.
+  'structural-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',

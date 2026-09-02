@@ -4,6 +4,7 @@ import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 
 import { revalidatePath } from 'next/cache'
 
+import { assertPeriodOpen } from '@/features/accounting/service'
 import { needsApproval, requestApproval } from '@/features/approvals/service'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
@@ -30,6 +31,7 @@ import {
   updateGuestOrderItemsSchema,
   updateItemStatusSchema,
   updateOrderStatusSchema,
+  serveOrderSchema,
 } from './schema'
 import {
   buildDraft,
@@ -37,6 +39,7 @@ import {
   deriveOrderStatus,
   placeOrder as placeOrderService,
   updateOrderStatus as updateOrderStatusService,
+  serveWholeOrder,
 } from './service'
 import { computeTotals, estimatePrepMinutes } from './pricing'
 import { readOptions } from './queries'
@@ -335,6 +338,8 @@ export async function updateGuestOrderItems(
       if (['SERVED', 'COMPLETED', 'CANCELLED'].includes(order.status)) {
         throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
       }
+      // Signed books do not quietly change (§59).
+      await assertPeriodOpen(prisma, restaurant.id, order.placedAt)
 
       /*
        * The payload is the whole order, not a patch.
@@ -759,6 +764,30 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
   })
 }
 
+/**
+ * The waiter's serve-all: every plate on the table is out. Walks the status
+ * ladder so it works from PREPARING — the common case the plain status
+ * action rightly refuses — while stamping every intervening timestamp.
+ */
+export async function serveOrder(input: unknown): Promise<ActionResult<{ id: string; status: string }>> {
+  return runAction(serveOrderSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
+    await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
+
+    const order = await serveWholeOrder({
+      restaurantId: user.restaurantId,
+      orderId: data.orderId,
+      actorId: user.id,
+      actorName: user.name,
+    })
+
+    revalidatePath('/waiter')
+    revalidatePath('/kitchen')
+    revalidatePath('/dashboard/orders')
+    return { id: order.id, status: order.status }
+  })
+}
+
 export async function cancelOrder(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
     cancelOrderSchema,
@@ -971,6 +1000,8 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
       if (order.paymentStatus === 'PAID') {
         throw new AppError('This order is already paid', 409, 'ORDER_PAID')
       }
+      // Signed books do not quietly change (§59).
+      await assertPeriodOpen(prisma, user.restaurantId, order.placedAt)
 
       /*
        * Past the restaurant's threshold, the discount stops here until a

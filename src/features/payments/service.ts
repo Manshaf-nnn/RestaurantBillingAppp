@@ -6,7 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { outstandingOn } from '@/features/orders/pricing'
 import { nextCounterValue, yearIn } from '@/server/db/counters'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
-import { prisma, guardLocks } from '@/server/db/prisma'
+import { prisma, guardLocks, type TxClient } from '@/server/db/prisma'
 import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
@@ -315,34 +315,10 @@ export async function capturePayment(params: {
 
     let invoiceNumber: string | null = null
     if (fullySettled) {
-      /*
-       * Numbered from a per-restaurant counter, in the restaurant's own year.
-       * The old `count(this year) + 1` raced (two settlements, same number,
-       * one dies on the unique constraint) and the year came from the
-       * server's clock — a Colombo restaurant settling at half past midnight
-       * on New Year's Day was numbering into the wrong year. An order that
-       * already holds an invoice keeps it; the counter only advances when a
-       * number will actually be used.
-       */
-      const existingInvoice = await tx.invoice.findUnique({
-        where: { orderId: order.id },
-        select: { number: true },
+      invoiceNumber = await ensureInvoice(tx, {
+        restaurantId: params.restaurantId,
+        orderId: order.id,
       })
-      if (existingInvoice) {
-        invoiceNumber = existingInvoice.number
-      } else {
-        const year = yearIn(restaurant.timezone)
-        const sequence = await nextCounterValue(tx, params.restaurantId, `invoice:${year}`)
-        invoiceNumber = `INV-${year}-${String(sequence).padStart(5, '0')}`
-        await tx.invoice.create({
-          data: {
-            restaurantId: params.restaurantId,
-            orderId: order.id,
-            number: invoiceNumber,
-            snapshot: buildInvoiceSnapshot(order, restaurant, updatedOrder) as unknown as Prisma.InputJsonValue,
-          },
-        })
-      }
 
       // Free the table when nothing else is open on it.
       if (order.tableId) {
@@ -358,6 +334,11 @@ export async function capturePayment(params: {
           await tx.restaurantTable.update({
             where: { id: order.tableId },
             data: { status: 'CLEANING' },
+          })
+          // Settled in full and nothing else open: the sitting is over.
+          await tx.tableSession.updateMany({
+            where: { restaurantId: params.restaurantId, tableId: order.tableId, status: 'OPEN' },
+            data: { status: 'CLOSED', closedAt: new Date() },
           })
         }
       }
@@ -441,6 +422,60 @@ export interface InvoiceSnapshot {
     roundingAdj: number
     grandTotal: number
   }
+}
+
+/**
+ * The invoice exists from the moment the bill is PRESENTED, not paid.
+ *
+ * It used to be minted only at full settlement, which made "outstanding
+ * invoices" a contradiction: every unpaid bill had no invoice to be
+ * outstanding against, and a guest handed a printed bill was holding a
+ * document with no number. Presentation finalises it — numbered from the
+ * per-restaurant counter in the restaurant's own year (the old
+ * `count(this year)+1` raced two settlements onto one number, and used the
+ * server's clock for the year), snapshotting the bill as presented. An order
+ * that already holds one keeps it: the number never changes after it is
+ * first shown to a guest.
+ */
+export async function ensureInvoice(
+  tx: TxClient,
+  params: { restaurantId: string; orderId: string },
+): Promise<string> {
+  const existing = await tx.invoice.findUnique({
+    where: { orderId: params.orderId },
+    select: { number: true },
+  })
+  if (existing) return existing.number
+
+  const order = await tx.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    include: { items: true, table: true },
+  })
+  if (!order) throw new NotFoundError('Order')
+  const restaurant = await tx.restaurant.findUniqueOrThrow({
+    where: { id: params.restaurantId },
+    select: {
+      name: true, addressLine: true, city: true, phone: true,
+      taxLabel: true, currency: true, timezone: true,
+    },
+  })
+
+  const year = yearIn(restaurant.timezone)
+  const sequence = await nextCounterValue(tx, params.restaurantId, `invoice:${year}`)
+  const number = `INV-${year}-${String(sequence).padStart(5, '0')}`
+  await tx.invoice.create({
+    data: {
+      restaurantId: params.restaurantId,
+      orderId: order.id,
+      number,
+      snapshot: buildInvoiceSnapshot(
+        order,
+        restaurant,
+        { grandTotal: order.grandTotal, tipAmount: order.tipAmount },
+      ) as unknown as Prisma.InputJsonValue,
+    },
+  })
+  return number
 }
 
 function buildInvoiceSnapshot(

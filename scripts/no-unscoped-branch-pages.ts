@@ -54,6 +54,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/inventory/setup': 'Units and stock categories are shared definitions',
 
   // ── Settings and administration. About the business itself.
+  'dashboard/reports/daily-close':
+    'The day is signed for the BUSINESS: branch closes are a later refinement, and the snapshot deliberately spans every site',
   'dashboard/settings': 'Restaurant-level settings',
   'dashboard/settings/profile': 'The signed-in user’s own account',
   'dashboard/help': 'Static guidance',

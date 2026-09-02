@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { resolveServiceRequest, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
+import { resolveServiceRequest, serveOrder, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
 import { callAction } from '@/lib/use-action'
 
@@ -258,7 +258,7 @@ export function WaiterBoard({
 
   const markDelivered = async (order: WaiterOrder) => {
     setBusyId(order.id)
-    const result = await callAction(() => updateOrderStatus({ orderId: order.id, status: 'SERVED' }))
+    const result = await callAction(() => serveOrder({ orderId: order.id }))
     setBusyId(null)
 
     if (!result.ok) {

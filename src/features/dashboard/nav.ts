@@ -142,6 +142,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Operations',
     items: [
       { href: '/dashboard/orders', label: 'Orders', icon: ListOrdered, permission: PERMISSIONS.ORDER_VIEW },
+      { href: '/dashboard/invoices', label: 'Invoices', icon: ListOrdered, permission: PERMISSIONS.INVOICE_VIEW },
       { href: '/dashboard/tables', label: 'Tables', icon: ClipboardList, permission: PERMISSIONS.TABLE_VIEW },
       {
         href: '/dashboard/reservations',
@@ -259,6 +260,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Reconciliation',
         icon: Scale,
         permission: PERMISSIONS.REPORT_RECONCILIATION,
+      },
+      {
+        href: '/dashboard/reports/daily-close',
+        label: 'Daily close',
+        icon: Scale,
+        permission: PERMISSIONS.REPORT_VIEW,
       },
       {
         // Under Inventory, because it answers a question asked while adding an

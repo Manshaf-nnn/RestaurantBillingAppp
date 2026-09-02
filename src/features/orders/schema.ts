@@ -139,6 +139,10 @@ export const updateGuestOrderItemsSchema = z.object({
 })
 export type UpdateGuestOrderItemsInput = z.infer<typeof updateGuestOrderItemsSchema>
 
+export const serveOrderSchema = z.object({
+  orderId: z.string().cuid(),
+})
+
 export const cancelOrderSchema = z.object({
   orderId: z.string().cuid(),
   reason: z.string().trim().min(3, 'Give a short reason').max(200),

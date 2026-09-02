@@ -24,7 +24,7 @@ import {
   refundPaymentSchema,
 } from './schema'
 import { needsApproval, requestApproval } from '@/features/approvals/service'
-import { capturePayment, createPaymentIntent, refundPayment } from './service'
+import { ensureInvoice, capturePayment, createPaymentIntent, refundPayment } from './service'
 
 // ── guest ────────────────────────────────────────────────────────────────────
 
@@ -161,6 +161,34 @@ export async function emailReceipt(input: unknown): Promise<ActionResult<{ sent:
 }
 
 // ── staff ────────────────────────────────────────────────────────────────────
+
+/**
+ * Presenting the bill finalises its invoice (§Invoice-at-presentation).
+ *
+ * Called by the till the moment a bill is printed for a guest: the invoice is
+ * numbered and its snapshot frozen THEN, so the document in the guest's hand
+ * has a number and "outstanding invoices" means something before settlement.
+ * Idempotent — a re-print keeps the number the guest already saw.
+ */
+export async function presentBill(input: unknown): Promise<ActionResult<{ invoiceNumber: string }>> {
+  return runAction(guestPaidSchema.pick({ orderId: true }), input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.PAYMENT_COLLECT)
+    const order = await prisma.order.findFirst({
+      where: { id: data.orderId, restaurantId: user.restaurantId },
+      select: { branchId: true, status: true },
+    })
+    if (!order) throw new NotFoundError('Order')
+    await assertRecordBranch(user, order, 'order')
+    if (order.status === 'CANCELLED') {
+      throw new AppError('This order was cancelled', 409, 'ORDER_CANCELLED')
+    }
+
+    const invoiceNumber = await prisma.$transaction((tx) =>
+      ensureInvoice(tx, { restaurantId: user.restaurantId, orderId: data.orderId }),
+    )
+    return { invoiceNumber }
+  })
+}
 
 export async function collectPayment(
   input: unknown,
