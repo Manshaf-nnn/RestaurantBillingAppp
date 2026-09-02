@@ -10,9 +10,17 @@ export default function OfflinePage() {
           <WifiOff className="size-8" />
         </span>
         <h1 className="text-2xl font-bold tracking-tight">You’re offline</h1>
+        {/*
+          §81, and honestly. This page used to promise "new data will sync the
+          moment you're back online" — there is no offline queue, and an order
+          taken on faith in that sentence was simply lost. The truth is less
+          comfortable and far safer to act on.
+        */}
         <p className="text-balance text-sm text-muted-foreground">
-          TableFlow can’t reach the network right now. Any screen you’ve already opened still
-          works — new data will sync the moment you’re back online.
+          TableFlow can’t reach the network right now. Nothing entered while
+          offline is saved — take orders on paper until the connection is
+          back, then key them in. Screens you already opened may still show
+          their last-loaded data.
         </p>
       </div>
     </main>

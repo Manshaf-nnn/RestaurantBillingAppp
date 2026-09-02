@@ -28,6 +28,7 @@ import { buildReceipt } from '@/features/printing/receipt'
 import type { PaperWidth } from '@/features/printing/paper'
 import { cancelOrder, updateOrderStatus } from '../actions'
 import { refundOrderPayment } from '@/features/payments/actions'
+import { recordPrint } from '@/features/printing/actions'
 import { callAction } from '@/lib/use-action'
 
 const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
@@ -158,9 +159,8 @@ export function OrderDetail({
    * the same thing. This used to be a third hand-written copy of the same
    * mapping — which is how one of them ends up omitting a row the others show.
    */
-  const print = () =>
-    printReceipt(
-      buildReceipt(
+  const print = () => {
+    const receipt = buildReceipt(
         {
           orderNumber: order.orderNumber,
           placedAt: order.placedAt,
@@ -189,11 +189,18 @@ export function OrderDetail({
           addressLine: restaurant.addressLine,
           phone: restaurant.phone,
         },
-      ),
-      // Was omitted, so this screen silently printed 58mm whatever the owner
-      // had chosen in Settings.
-      restaurant.paper.receipt,
-    )
+      )
+    let ok = true
+    try {
+      // The paper width was omitted here once, silently printing 58mm
+      // whatever the owner had chosen in Settings.
+      printReceipt(receipt, restaurant.paper.receipt)
+    } catch {
+      ok = false
+    }
+    // On the record either way (§80).
+    void callAction(() => recordPrint({ orderId: order.id, kind: 'RECEIPT', ok, payload: receipt }))
+  }
 
   return (
     <div className="space-y-5">

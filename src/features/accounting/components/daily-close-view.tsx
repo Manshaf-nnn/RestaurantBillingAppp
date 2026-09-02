@@ -11,6 +11,7 @@ import { Field } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { closeDayAction, closePeriodAction, reopenPeriodAction } from '@/features/accounting/actions'
 import type { DailyCloseSnapshot } from '@/features/accounting/service'
+import type { IntegrityReport } from '@/features/accounting/integrity'
 import { callAction } from '@/lib/use-action'
 import { formatMoney } from '@/lib/money'
 
@@ -21,6 +22,7 @@ export function DailyCloseView({
   canClose,
   currency,
   locale,
+  integrity,
 }: {
   days: Array<{ date: string; closed: boolean; snapshot: DailyCloseSnapshot }>
   todayKey: string
@@ -28,6 +30,7 @@ export function DailyCloseView({
   canClose: boolean
   currency: string
   locale: string
+  integrity: IntegrityReport
 }) {
   const router = useRouter()
   const money = (value: number) => formatMoney(value, currency, locale)
@@ -72,8 +75,43 @@ export function DailyCloseView({
     router.refresh()
   }
 
+  const tone = (status: string) =>
+    status === 'ERROR' ? 'destructive' : status === 'WARNING' ? 'outline' : 'secondary'
+
   return (
     <div className="space-y-5">
+      {/* §115–116: the integrity checker, run live on every visit. Nothing on
+          this screen is worth signing while a row of it says ERROR. */}
+      <SectionCard
+        title="Reconciliation status"
+        description="Questions the database should never answer yes to, asked against the live rows."
+      >
+        <div className="mb-3">
+          <Badge variant={tone(integrity.status)}>
+            {integrity.status === 'OK'
+              ? 'Everything reconciles'
+              : integrity.status === 'WARNING'
+                ? 'Worth a look'
+                : 'The books do not balance'}
+          </Badge>
+        </div>
+        <ul className="grid gap-1.5 text-sm sm:grid-cols-2">
+          {integrity.checks.map((check) => (
+            <li key={check.key} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{check.label}</span>
+                {check.status !== 'OK' ? (
+                  <span className="block truncate text-xs text-muted-foreground" title={check.examples.join(', ')}>
+                    {check.count} affected · e.g. {check.examples[0]}
+                  </span>
+                ) : null}
+              </span>
+              <Badge variant={tone(check.status)}>{check.status}</Badge>
+            </li>
+          ))}
+        </ul>
+      </SectionCard>
+
       <SectionCard
         title="The last seven days"
         description="A closed day shows its frozen snapshot — the figures exactly as signed, whatever has happened since."

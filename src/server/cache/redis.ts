@@ -150,6 +150,40 @@ export async function incrementCounter(
     }
   }
 
+  /*
+   * Second tier: Postgres. On a serverless host with no Redis the in-memory
+   * counter below counts per INSTANCE — on a platform that may give every
+   * request a fresh instance, that is counting to one, and every limit in
+   * the product was decorative. A fixed-window row per (key, window) with an
+   * atomic upsert-increment is shared across all of them. Memory remains the
+   * last resort, for when the database itself is what is being protected.
+   */
+  try {
+    const { prisma } = await import('@/server/db/prisma')
+    const windowStart = new Date(
+      Math.floor(Date.now() / (windowSeconds * 1000)) * windowSeconds * 1000,
+    )
+    const rows = await prisma.$queryRaw<Array<{ count: number }>>`
+      INSERT INTO "rate_limit_counters" ("key", "windowStart", "count")
+      VALUES (${key}, ${windowStart}, 1)
+      ON CONFLICT ("key", "windowStart")
+      DO UPDATE SET "count" = "rate_limit_counters"."count" + 1
+      RETURNING "count"
+    `
+    // Sweep stale windows on ~1% of calls — no cron, by house rule.
+    if (Math.random() < 0.01) {
+      void prisma.rateLimitCounter
+        .deleteMany({ where: { windowStart: { lt: new Date(Date.now() - 86_400_000) } } })
+        .catch(() => null)
+    }
+    return {
+      count: rows[0]?.count ?? 1,
+      resetAt: windowStart.getTime() + windowSeconds * 1000,
+    }
+  } catch {
+    /* fall through to per-process memory */
+  }
+
   sweep()
   const now = Date.now()
   const entry = memory.get(key)

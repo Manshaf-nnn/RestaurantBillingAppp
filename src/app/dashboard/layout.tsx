@@ -10,6 +10,24 @@ import { visibleBranchIds } from '@/lib/rbac'
 import { requirePageUser } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
+/**
+ * Which notification audiences a role belongs to. Management hears
+ * everything staff-side — a manager IS the escalation path — while floor
+ * roles hear their own room plus what was addressed to nobody in particular.
+ */
+function audiencesFor(role: string): Array<'KITCHEN' | 'WAITER' | 'CASHIER' | 'MANAGEMENT'> {
+  switch (role) {
+    case 'KITCHEN':
+      return ['KITCHEN']
+    case 'WAITER':
+      return ['WAITER']
+    case 'CASHIER':
+      return ['CASHIER']
+    default:
+      return ['KITCHEN', 'WAITER', 'CASHIER', 'MANAGEMENT']
+  }
+}
+
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await requirePageUser('/dashboard')
 
@@ -84,6 +102,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
         AND: [
           { OR: [{ userId: user.id }, { userId: null }] },
           ...(reach ? [{ OR: [{ branchId: null }, { branchId: { in: reach } }] }] : []),
+          /*
+           * WHO it is for, at last enforced on read. `audience` has been
+           * written on every notification since the column existed and
+           * checked by nothing — a waiter's bell carried the cash-variance
+           * reviews and low-stock warnings addressed to management. Null
+           * stays audible to everyone: it means the sender named nobody.
+           */
+          {
+            OR: [
+              { audience: null },
+              { audience: { in: audiencesFor(user.role) } },
+            ],
+          },
         ],
       },
       orderBy: { createdAt: 'desc' },

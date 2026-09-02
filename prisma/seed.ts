@@ -213,16 +213,45 @@ async function main() {
   ]
   const inventory: Record<string, string> = {}
   for (const item of inventoryData) {
+    /*
+     * The balance arrives as an OPENING_BALANCE movement, not a typed-in
+     * quantity. The integrity checker replays every item's ledger against its
+     * cached balance, and a demo restaurant that fails its own integrity
+     * screen on first boot is not a demo — it is a warning label.
+     */
     const record = await prisma.inventoryItem.create({
       data: {
         restaurantId: restaurant.id,
         name: item.name,
         unit: item.unit,
         quantity: item.quantity,
+        stockValue: item.quantity * item.cost,
         reorderLevel: item.reorder,
         costPerUnit: item.cost,
         supplierId: supplier.id,
         category: 'Food',
+      },
+    })
+    await prisma.stockMovement.create({
+      data: {
+        restaurantId: restaurant.id,
+        itemId: record.id,
+        type: 'OPENING_BALANCE',
+        quantity: item.quantity,
+        quantityEntered: item.quantity,
+        enteredUnit: item.unit,
+        balanceAfter: item.quantity,
+        unitCost: item.cost,
+        reason: 'Opening stock',
+        branchId: mainBranch.id,
+      },
+    })
+    await prisma.inventoryStock.create({
+      data: {
+        restaurantId: restaurant.id,
+        itemId: record.id,
+        branchId: mainBranch.id,
+        available: item.quantity,
       },
     })
     inventory[item.name] = record.id

@@ -137,6 +137,20 @@ enum PaymentStatus {
   FAILED
 }
 
+enum PrintJobKind {
+  /// The pre-payment bill presented to a guest.
+  BILL
+  /// The settled receipt.
+  RECEIPT
+  /// A kitchen ticket.
+  KITCHEN
+}
+
+enum PrintJobStatus {
+  PRINTED
+  FAILED
+}
+
 enum TableSessionStatus {
   OPEN
   CLOSED
@@ -610,6 +624,7 @@ model Restaurant {
   loyaltyEntries   LoyaltyEntry[]
   counters         RestaurantCounter[]
   tableSessions    TableSession[]
+  printJobs        PrintJob[]
   dailyCloses      DailyClose[]
   accountingPeriods AccountingPeriod[]
   reservations     Reservation[]
@@ -1691,6 +1706,52 @@ model LoyaltyEntry {
  * other dies on the unique constraint. An atomic upsert-increment cannot
  * collide and never reuses a number, even for deleted invoices.
  */
+/**
+ * Fixed-window rate-limit counters, shared across serverless instances.
+ * Redis serves this where configured; on hosts without it the in-memory
+ * fallback counted per instance — which on a per-request serverless platform
+ * is counting to one, i.e. no limit at all. Rows are transient and swept
+ * opportunistically.
+ */
+/**
+ * Every print, on the record (§80). Printing happens in the browser and used
+ * to be fire-and-forget: a receipt that never came out left no trace, and
+ * "print it again" meant reconstructing the bill by hand. Each attempt lands
+ * here with the exact payload that was rendered, so a reprint is the SAME
+ * document — not a fresh one that might differ — and a failed print is a row
+ * somebody can see, not a shrug.
+ */
+model PrintJob {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  orderId      String?
+
+  kind     PrintJobKind
+  status   PrintJobStatus @default(PRINTED)
+  attempts Int            @default(1)
+  /// The rendered receipt, verbatim — what reprint reproduces.
+  payload  Json
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([restaurantId, createdAt])
+  @@index([orderId])
+  @@map("print_jobs")
+}
+
+model RateLimitCounter {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+  @@map("rate_limit_counters")
+}
+
 model RestaurantCounter {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)

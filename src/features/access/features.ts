@@ -402,7 +402,7 @@ export const FEATURES: Feature[] = [
         hint: 'Changing what stock is worth, which moves gross profit.',
       },
     ],
-    routes: ['/dashboard/inventory'],
+    routes: ['/dashboard/inventory', '/dashboard/inventory/ledger'],
   },
   {
     key: 'stockCounts',

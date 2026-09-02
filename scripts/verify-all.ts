@@ -61,6 +61,8 @@ const SERVICE = [
   // AUDIT.md Slice 5 — sessions, apportionment, invoices-at-presentation,
   // the daily close and sealed periods.
   'structural-test',
+  // AUDIT.md Slice 6 — the integrity checker and shared rate limits.
+  'hardening-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { DailyCloseView } from '@/features/accounting/components/daily-close-view'
+import { runIntegrityChecks } from '@/features/accounting/integrity'
 import { buildDailySnapshot, businessDateOf, type DailyCloseSnapshot } from '@/features/accounting/service'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { can, PERMISSIONS } from '@/lib/rbac'
@@ -59,6 +60,8 @@ export default async function DailyClosePage() {
     }
   }
 
+  const integrity = await runIntegrityChecks(user.restaurantId)
+
   const periods = await prisma.accountingPeriod.findMany({
     where: { restaurantId: user.restaurantId },
     orderBy: { periodStart: 'desc' },
@@ -85,6 +88,7 @@ export default async function DailyClosePage() {
         canClose={can(user, PERMISSIONS.ACCOUNTING_CLOSE)}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        integrity={integrity}
       />
     </>
   )

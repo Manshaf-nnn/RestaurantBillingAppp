@@ -231,6 +231,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Inventory',
     items: [
       { href: '/dashboard/inventory', label: 'Stock', icon: Package, permission: PERMISSIONS.INVENTORY_VIEW },
+      { href: '/dashboard/inventory/ledger', label: 'Stock ledger', icon: Package, permission: PERMISSIONS.INVENTORY_VIEW },
       {
         href: '/dashboard/inventory/counts',
         label: 'Stock counts',

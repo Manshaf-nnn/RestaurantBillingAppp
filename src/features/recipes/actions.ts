@@ -62,7 +62,10 @@ export async function saveRecipeAction(input: unknown): Promise<ActionResult<{ i
 
     await audit({
       restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-      action: AUDIT_ACTIONS.UPDATE, entity: 'Recipe', entityId: recipe.id,
+      // Its own action name: a recipe change moves every future COGS figure
+      // for the dish, and the trail should say so without a diff exercise.
+      action: AUDIT_ACTIONS.RECIPE_CHANGED, entity: 'Recipe', entityId: recipe.id,
+      before: { version: recipe.version - 1 },
       after: { version: recipe.version, foodId: data.foodId, lines: data.ingredients.length },
     })
 

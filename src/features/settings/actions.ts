@@ -28,6 +28,14 @@ export async function updateRestaurantSettings(input: unknown): Promise<ActionRe
     async (data) => {
       const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
 
+      const before = await prisma.restaurant.findUnique({
+        where: { id: user.restaurantId },
+        select: {
+          name: true, currency: true, taxRateBps: true,
+          serviceChargeBps: true, taxInclusive: true, timezone: true,
+        },
+      })
+
       const updated = await prisma.restaurant.update({
         where: { id: user.restaurantId },
         data: {
@@ -63,7 +71,25 @@ export async function updateRestaurantSettings(input: unknown): Promise<ActionRe
         action: AUDIT_ACTIONS.SETTINGS_UPDATED,
         entity: 'Restaurant',
         entityId: user.restaurantId,
-        after: { name: data.name, currency: data.currency },
+        // The full before/after of the money-shaping fields: tax and service
+        // rates decide every bill, and a change to them with no prior value
+        // recorded is unexplainable a month later.
+        before: {
+          name: before?.name,
+          currency: before?.currency,
+          taxRateBps: before?.taxRateBps,
+          serviceChargeBps: before?.serviceChargeBps,
+          taxInclusive: before?.taxInclusive,
+          timezone: before?.timezone,
+        },
+        after: {
+          name: data.name,
+          currency: data.currency,
+          taxRateBps: updated.taxRateBps,
+          serviceChargeBps: updated.serviceChargeBps,
+          taxInclusive: updated.taxInclusive,
+          timezone: updated.timezone,
+        },
       })
 
       revalidatePath('/dashboard/settings')

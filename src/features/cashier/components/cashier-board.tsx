@@ -49,6 +49,7 @@ import { downloadReceipt, printReceipt } from '@/features/printing/print'
 import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { presentBill, collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
+import { recordPrint } from '@/features/printing/actions'
 import {
   holdBillAction,
   mergeBillsAction,
@@ -780,14 +781,16 @@ function BillingDetailPanel({
     let invoiceNumber: string | null = null
     const presented = await callAction(() => presentBill({ orderId: bill.id }))
     if (presented.ok) invoiceNumber = presented.data.invoiceNumber
+    const receipt = buildReceipt({ ...bill, invoiceNumber }, restaurant)
+    let ok = true
     try {
-      printReceipt(
-        buildReceipt({ ...bill, invoiceNumber }, restaurant),
-        restaurant.paper.receipt,
-      )
+      printReceipt(receipt, restaurant.paper.receipt)
     } catch {
+      ok = false
       toast.error('Unable to print receipt')
     }
+    // On the record either way (§80) — and never in the way of the paper.
+    void callAction(() => recordPrint({ orderId: bill.id, kind: 'BILL', ok, payload: receipt }))
   }
 
   const download = () => {
@@ -1029,7 +1032,14 @@ function BillPanel({
   }
 
   const print = () => {
-    printReceipt(buildReceipt(bill, restaurant, { paymentMethod: method }), restaurant.paper.receipt)
+    const receipt = buildReceipt(bill, restaurant, { paymentMethod: method })
+    let ok = true
+    try {
+      printReceipt(receipt, restaurant.paper.receipt)
+    } catch {
+      ok = false
+    }
+    void callAction(() => recordPrint({ orderId: bill.id, kind: 'RECEIPT', ok, payload: receipt }))
   }
 
   return (

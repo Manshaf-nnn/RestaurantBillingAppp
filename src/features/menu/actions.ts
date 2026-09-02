@@ -245,6 +245,18 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
 
       const slug = await uniqueSlug('food', user.restaurantId, data.name, data.id)
 
+      /*
+       * What the dish looked like before, for the audit trail. A price change
+       * with no before-value is an assertion, not a record — and prices are
+       * the field an owner most wants to see the history of.
+       */
+      const previous = data.id
+        ? await prisma.food.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            select: { name: true, price: true, discountPrice: true, costPrice: true, isAvailable: true },
+          })
+        : null
+
       const base = {
         categoryId: category.id,
         name: data.name,
@@ -418,8 +430,25 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
         action: data.id ? AUDIT_ACTIONS.UPDATE : AUDIT_ACTIONS.CREATE,
         entity: 'Food',
         entityId: id,
+        before: previous ?? undefined,
         after: base,
       })
+
+      // A price change gets its own trail entry: it is the edit owners ask
+      // "who did that, and from what" about, and burying it inside a generic
+      // update made that question a diff exercise.
+      if (previous && (previous.price !== data.price || previous.discountPrice !== (data.discountPrice ?? null))) {
+        await audit({
+          restaurantId: user.restaurantId,
+          userId: user.id,
+          actorName: user.name,
+          action: AUDIT_ACTIONS.PRICE_CHANGED,
+          entity: 'Food',
+          entityId: id,
+          before: { price: previous.price, discountPrice: previous.discountPrice },
+          after: { price: data.price, discountPrice: data.discountPrice ?? null },
+        })
+      }
 
       await syncRestaurantMenuSnapshot({
         restaurantId: user.restaurantId,

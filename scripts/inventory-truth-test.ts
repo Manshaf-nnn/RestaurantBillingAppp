@@ -89,26 +89,26 @@ async function main() {
 
     // 750g leaves at the running average of 4: value drops by exactly 3000.
     await prisma.$transaction((tx) => postMovement(tx, {
-      restaurantId: restaurant.id, itemId: flour.id, type: 'SALE',
+      restaurantId: restaurant.id, itemId: flour.id, type: 'WASTAGE',
       quantity: 750, branchId: main.id, userId: user.id,
     }))
     row = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: flour.id } })
     check('an issue takes value at the average', Number(row.stockValue) === 3000, `${row.stockValue}`)
 
     const saleRow = await prisma.stockMovement.findFirst({
-      where: { itemId: flour.id, type: 'SALE' },
+      where: { itemId: flour.id, type: 'WASTAGE' },
     })
-    check('the SALE row is stamped with the average', saleRow?.unitCost === 4, `${saleRow?.unitCost}`)
+    check('the outbound row is stamped with the average', saleRow?.unitCost === 4, `${saleRow?.unitCost}`)
 
     // A reversal brings the value BACK — these rows used to come back at zero.
     await prisma.$transaction((tx) => postMovement(tx, {
-      restaurantId: restaurant.id, itemId: flour.id, type: 'SALE_REVERSAL',
+      restaurantId: restaurant.id, itemId: flour.id, type: 'ADJUSTMENT_IN',
       quantity: 250, branchId: main.id, userId: user.id,
     }))
     row = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: flour.id } })
-    check('a reversal returns value, not zero', Number(row.stockValue) === 4000, `${row.stockValue}`)
+    check('stock coming back carries value, not zero', Number(row.stockValue) === 4000, `${row.stockValue}`)
     const reversalRow = await prisma.stockMovement.findFirst({
-      where: { itemId: flour.id, type: 'SALE_REVERSAL' },
+      where: { itemId: flour.id, type: 'ADJUSTMENT_IN' },
     })
     check('…and its row carries the cost it came back at', reversalRow?.unitCost === 4, `${reversalRow?.unitCost}`)
   }
@@ -125,13 +125,13 @@ async function main() {
     await refuses(
       'a sale at the empty branch is refused even though Main holds plenty',
       () => prisma.$transaction((tx) => postMovement(tx, {
-        restaurantId: restaurant.id, itemId: rice.id, type: 'SALE',
+        restaurantId: restaurant.id, itemId: rice.id, type: 'WASTAGE',
         quantity: 2, branchId: second.id, userId: user.id,
       })),
       /at this location/,
     )
     await prisma.$transaction((tx) => postMovement(tx, {
-      restaurantId: restaurant.id, itemId: rice.id, type: 'SALE',
+      restaurantId: restaurant.id, itemId: rice.id, type: 'WASTAGE',
       quantity: 2, branchId: main.id, userId: user.id,
     }))
     check('the branch that holds it can still sell it', true)
