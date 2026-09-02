@@ -56,6 +56,8 @@ const SERVICE = [
   'payment-model-test',
   // AUDIT.md Slice 3 — option consumption, value-carrying WAC, branch guards.
   'inventory-truth-test',
+  // AUDIT.md Slice 4 / §102 — every screen answers with the same number.
+  'report-agreement-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',

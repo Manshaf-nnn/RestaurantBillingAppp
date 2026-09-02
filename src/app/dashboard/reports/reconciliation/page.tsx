@@ -107,7 +107,16 @@ export default async function ReconciliationPage({
 
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
         <StatCard label="Items with movement" value={String(report.totals.items)} />
-        <StatCard label="Closing stock value" value={money(report.totals.valueAtCost)} tone="primary" />
+        <StatCard
+          label="Closing stock value"
+          value={money(report.totals.valueAtCost)}
+          tone="primary"
+          hint={`exact value on hand ${money(report.totals.stockValueNow)}`}
+        />
+        {/* The §75 value ladder, summarised: what the window's movements were
+            worth, at the cost each one was stamped with. */}
+        <StatCard label="Value in" value={money(report.totals.valueIn)} hint="purchases, production, returns" />
+        <StatCard label="Value out" value={money(report.totals.valueOut)} hint="sales at cost, wastage, transfers" />
         <StatCard
           label="Items that do not balance"
           value={String(report.totals.drifting)}

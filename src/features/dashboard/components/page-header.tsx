@@ -1,4 +1,5 @@
 import * as React from 'react'
+import Link from 'next/link'
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -42,6 +43,7 @@ export function StatCard({
   hint,
   icon,
   tone = 'default',
+  href,
 }: {
   label: string
   value: string | number
@@ -50,11 +52,17 @@ export function StatCard({
   hint?: string
   icon?: React.ReactNode
   tone?: 'default' | 'primary' | 'success' | 'warning' | 'destructive'
+  /**
+   * Where the number comes from (§57). A summary figure that cannot be
+   * clicked into is a claim, not an explanation — every card that has a
+   * report behind it should link there.
+   */
+  href?: string
 }) {
   const positive = change !== undefined && change > 0.5
   const negative = change !== undefined && change < -0.5
 
-  return (
+  const card = (
     <div className="rounded-xl border bg-card p-5 shadow-soft transition-shadow hover:shadow-elevated">
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>
@@ -100,6 +108,15 @@ export function StatCard({
       </div>
     </div>
   )
+
+  if (href) {
+    return (
+      <Link href={href} className="block rounded-xl focus-visible:outline-none focus-visible:ring-2">
+        {card}
+      </Link>
+    )
+  }
+  return card
 }
 
 export function SectionCard({

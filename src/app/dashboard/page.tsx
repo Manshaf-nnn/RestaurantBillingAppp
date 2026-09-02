@@ -251,12 +251,13 @@ export default async function DashboardPage({
       {/* ── headline stats ──────────────────────────────────────── */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label={range.preset === 'TODAY' ? 'Revenue today' : 'Revenue'}
+          label={range.preset === 'TODAY' ? 'Net sales today' : 'Net sales'}
           value={money(stats.revenue)}
           change={stats.revenueChange}
-          hint={versus}
+          hint={`collected ${money(stats.collected)} · ${versus}`}
           icon={<Wallet />}
           tone="primary"
+          href="/dashboard/reports/sales"
         />
         <StatCard
           label={range.preset === 'TODAY' ? 'Orders today' : 'Orders'}
@@ -265,6 +266,7 @@ export default async function DashboardPage({
           hint={versus}
           icon={<ShoppingBag />}
           tone="success"
+          href="/dashboard/orders"
         />
         <StatCard
           label="Average order"
@@ -272,6 +274,7 @@ export default async function DashboardPage({
           change={stats.aovChange}
           hint={versus}
           icon={<TrendingUp />}
+          href="/dashboard/reports/sales"
         />
         {/*
           Live, not periodic. `tablesOccupied` is a count of a status column,
@@ -393,6 +396,9 @@ export default async function DashboardPage({
             <Row label="Orders in progress" value={String(stats.pendingOrders)} />
             <Row label="Unique guests (period)" value={String(stats.customers)} />
             <Row label="New guests (period)" value={String(stats.newCustomers)} />
+            {/* Earned, landed, and still out — three different numbers, shown
+                as three rows precisely so nobody averages them into one (§46). */}
+            <Row label="Collected in period" value={money(stats.collected)} />
             <Row label="Outstanding bills" value={money(stats.unpaidTotal)} />
             <Row
               label="Low stock items"

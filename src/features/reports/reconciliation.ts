@@ -1,4 +1,5 @@
 import 'server-only'
+import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import type { DateRange } from './range'
@@ -51,9 +52,13 @@ export interface ReconciliationLine {
   name: string
   unit: string
   opening: number
-  movements: Array<{ label: string; group: string; quantity: number }>
+  movements: Array<{ label: string; group: string; quantity: number; value: number }>
   totalIn: number
   totalOut: number
+  /** Money in and out over the window, valued at each movement's own cost —
+   *  the §75 value ladder beside the quantity one. */
+  valueIn: number
+  valueOut: number
   /** opening + in − out, what the ledger says the balance should be. */
   expected: number
   /** What `InventoryItem.quantity` actually holds. */
@@ -67,7 +72,15 @@ export interface ReconciliationReport {
   range: { from: string; to: string; label: string }
   branchId: string | null
   lines: ReconciliationLine[]
-  totals: { items: number; drifting: number; valueAtCost: number }
+  totals: {
+    items: number
+    drifting: number
+    valueAtCost: number
+    valueIn: number
+    valueOut: number
+    /** The exact worth on hand right now, from the value-carrying WAC. */
+    stockValueNow: number
+  }
   /** The whole point: true when every item's books balance. */
   balanced: boolean
 }
@@ -87,7 +100,7 @@ export async function getReconciliationReport(params: {
    * would be a second source of truth that could disagree with the ledger, which
    * is the failure this report exists to detect.
    */
-  const [before, within, items, shelfBalances] = await Promise.all([
+  const [before, within, items, values, shelfBalances] = await Promise.all([
     prisma.stockMovement.groupBy({
       by: ['itemId'],
       where: { ...scope, createdAt: { lt: params.range.from } },
@@ -100,9 +113,22 @@ export async function getReconciliationReport(params: {
     }),
     prisma.inventoryItem.findMany({
       where: { restaurantId: params.restaurantId, isActive: true },
-      select: { id: true, name: true, unit: true, quantity: true, costPerUnit: true },
+      select: { id: true, name: true, unit: true, quantity: true, costPerUnit: true, stockValue: true },
       orderBy: { name: 'asc' },
     }),
+    /*
+     * The value beside every quantity (§75). Each movement row is stamped
+     * with the cost in force when it happened, so quantity × unitCost per row
+     * IS the money that moved — grouped here the same way the quantities are.
+     */
+    prisma.$queryRaw<Array<{ itemId: string; type: string; value: bigint | null }>>`
+      SELECT "itemId", type::text AS type, SUM(quantity * "unitCost")::bigint AS value
+      FROM stock_movements
+      WHERE "restaurantId" = ${params.restaurantId}
+        ${params.branchId ? Prisma.sql`AND "branchId" = ${params.branchId}` : Prisma.empty}
+        AND "createdAt" >= ${params.range.from} AND "createdAt" <= ${params.range.to}
+      GROUP BY 1, 2
+    `,
     /*
      * The stored balance for ONE branch, summed across its shelves.
      *
@@ -127,6 +153,7 @@ export async function getReconciliationReport(params: {
   ])
 
   const openingByItem = new Map(before.map((r) => [r.itemId, r._sum.quantity ?? 0]))
+  const valueByItemType = new Map(values.map((r) => [`${r.itemId}:${r.type}`, Number(r.value ?? 0)]))
   const shelfByItem = new Map(shelfBalances.map((r) => [r.itemId, r._sum.available ?? 0]))
   const byItem = new Map<string, Array<{ type: string; quantity: number }>>()
   for (const row of within) {
@@ -151,21 +178,30 @@ export async function getReconciliationReport(params: {
     const storedHere = params.branchId ? (shelfByItem.get(item.id) ?? 0) : item.quantity
     if (rows.length === 0 && opening === 0 && storedHere === 0) continue
 
-    const merged = new Map<string, { label: string; group: string; quantity: number }>()
+    const merged = new Map<string, { label: string; group: string; quantity: number; value: number }>()
     let totalIn = 0
     let totalOut = 0
+    let valueIn = 0
+    let valueOut = 0
 
     for (const row of rows) {
       const bucket = BUCKETS[row.type as keyof typeof BUCKETS] ?? {
         label: row.type.replace(/_/g, ' ').toLowerCase(),
         group: row.quantity >= 0 ? 'in' : 'out',
       }
-      const existing = merged.get(bucket.label) ?? { ...bucket, quantity: 0 }
+      const rowValue = valueByItemType.get(`${item.id}:${row.type}`) ?? 0
+      const existing = merged.get(bucket.label) ?? { ...bucket, quantity: 0, value: 0 }
       existing.quantity = round(existing.quantity + row.quantity)
+      existing.value += rowValue
       merged.set(bucket.label, existing)
 
-      if (row.quantity >= 0) totalIn = round(totalIn + row.quantity)
-      else totalOut = round(totalOut + Math.abs(row.quantity))
+      if (row.quantity >= 0) {
+        totalIn = round(totalIn + row.quantity)
+        valueIn += rowValue
+      } else {
+        totalOut = round(totalOut + Math.abs(row.quantity))
+        valueOut += Math.abs(rowValue)
+      }
     }
 
     const expected = round(opening + totalIn - totalOut)
@@ -190,6 +226,8 @@ export async function getReconciliationReport(params: {
       cached,
       drift: round(cached - expected),
       valueAtCost: Math.round(Math.max(0, expected) * item.costPerUnit),
+      valueIn,
+      valueOut,
     })
   }
 
@@ -207,6 +245,11 @@ export async function getReconciliationReport(params: {
       items: lines.length,
       drifting,
       valueAtCost: lines.reduce((sum, l) => sum + l.valueAtCost, 0),
+      valueIn: lines.reduce((sum, l) => sum + l.valueIn, 0),
+      valueOut: lines.reduce((sum, l) => sum + l.valueOut, 0),
+      stockValueNow: Math.round(
+        items.reduce((sum, item) => sum + Number(item.stockValue), 0),
+      ),
     },
     balanced: drifting === 0,
   }

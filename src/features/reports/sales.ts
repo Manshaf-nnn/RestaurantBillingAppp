@@ -233,7 +233,7 @@ export async function getPaymentsReport(params: {
   range: DateRange
   branchIds?: string[] | null
 }): Promise<PaymentsReport> {
-  const [payments, drawers] = await Promise.all([
+  const [payments, refunds, drawers] = await Promise.all([
     prisma.payment.groupBy({
       by: ['method', 'status'],
       where: {
@@ -248,6 +248,20 @@ export async function getPaymentsReport(params: {
       _sum: { amount: true },
       _count: true,
     }),
+    /*
+     * From the refunds ledger, dated when the money went back. Reading the
+     * REFUNDED status flip missed every partial refund — a payment half
+     * returned still reads PAID — so "collected" overstated by exactly the
+     * partials. report-agreement-test caught this the day it was written.
+     */
+    prisma.refund.aggregate({
+      where: {
+        restaurantId: params.restaurantId,
+        createdAt: { gte: params.range.from, lte: params.range.to },
+        ...(params.branchIds ? { order: { branchId: { in: params.branchIds } } } : {}),
+      },
+      _sum: { amount: true },
+    }),
     prisma.cashDrawerSession.findMany({
       where: {
         restaurantId: params.restaurantId,
@@ -259,27 +273,36 @@ export async function getPaymentsReport(params: {
     }),
   ])
 
-  const paid = payments.filter((p) => p.status === 'PAID')
-  const total = paid.reduce((s, p) => s + (p._sum?.amount ?? 0), 0)
-  const refunded = payments
-    .filter((p) => p.status === 'REFUNDED')
-    .reduce((s, p) => s + (p._sum?.amount ?? 0), 0)
+  // PAID and REFUNDED alike arrived as money once; what went back is the
+  // refunds ledger's business, subtracted as `refunded` below.
+  const total = payments.reduce((s, p) => s + (p._sum?.amount ?? 0), 0)
+  const refunded = refunds._sum.amount ?? 0
+  const paid = payments
 
   const LABELS: Record<string, string> = {
     CASH: 'Cash', CARD: 'Card', QR: 'QR', ONLINE: 'Online',
-    WALLET: 'Wallet', BANK_TRANSFER: 'Bank transfer',
+    WALLET: 'Wallet', BANK_TRANSFER: 'Bank transfer', OTHER: 'Other',
   }
 
   return {
     total,
     refunded,
-    byMethod: paid
+    byMethod: [...paid
+      .reduce((map, p) => {
+        // PAID and REFUNDED rows of one method are the same money arriving —
+        // merged, or the mix would list Cash twice.
+        const row = map.get(p.method) ?? { method: p.method, amount: 0, count: 0 }
+        row.amount += p._sum?.amount ?? 0
+        row.count += p._count
+        return map.set(p.method, row)
+      }, new Map<string, { method: string; amount: number; count: number }>())
+      .values()]
       .map((p) => ({
         method: p.method,
         label: LABELS[p.method] ?? p.method,
-        amount: p._sum?.amount ?? 0,
-        count: p._count,
-        share: total > 0 ? Math.round(((p._sum?.amount ?? 0) / total) * 10000) / 100 : 0,
+        amount: p.amount,
+        count: p.count,
+        share: total > 0 ? Math.round((p.amount / total) * 10000) / 100 : 0,
       }))
       .sort((a, b) => b.amount - a.amount),
     cashDiscrepancy: drawers.reduce((s, d) => s + (d.variance ?? 0), 0),

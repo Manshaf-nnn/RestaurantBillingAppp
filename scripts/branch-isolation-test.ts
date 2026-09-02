@@ -505,7 +505,14 @@ async function main() {
 
   console.log('\n── 16. the reports screen answers for one branch ──')
 
-  const window = { from: new Date(Date.now() - 86_400_000), to: new Date(Date.now() + 86_400_000) }
+  const window = {
+    from: new Date(Date.now() - 86_400_000),
+    to: new Date(Date.now() + 86_400_000),
+    preset: 'CUSTOM' as const,
+    label: 'Custom range',
+    timeZone: 'UTC',
+    granularity: 'day' as const,
+  }
   const groupReport = await getReportSummary(restaurant.id, window)
   const b01Report = await getReportSummary(restaurant.id, window, [b01.id])
   const b02Report = await getReportSummary(restaurant.id, window, [b02.id])

@@ -95,7 +95,8 @@ export async function GET() {
         (await import('@/features/transfers/queries')).listSwitchableLocations(rid)],
       ['reports: summary (index page)', async () => {
         const m = await import('@/features/analytics/queries')
-        return m.getReportSummary(rid, m.resolveRange('week'))
+        const r = await import('@/features/reports/range')
+        return m.getReportSummary(rid, r.resolveRange({ preset: 'LAST_7' }))
       }],
       ['reports: online payments', async () =>
         (await import('@/features/payments/queries')).getOnlinePayments(rid)],

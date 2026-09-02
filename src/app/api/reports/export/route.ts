@@ -5,7 +5,7 @@ import { requirePermission } from '@/server/auth/guard'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AppError, toAppError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
-import { getReportSummary, resolveRange } from '@/features/analytics/queries'
+import { getReportSummary } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { buildReportWorkbook, toCsv, toExcel } from '@/features/reports/export'
@@ -48,18 +48,24 @@ export async function GET(request: NextRequest) {
     const params = request.nextUrl.searchParams
     const type = params.get('type') ?? 'summary'
     const format = params.get('format') ?? 'csv'
-    const range = resolveRange(
-      params.get('range') ?? 'week',
-      params.get('from') ?? undefined,
-      params.get('to') ?? undefined,
-    )
-    const preset = params.get('preset')
+    /*
+     * Both vocabularies land on the ONE canonical resolver, in the
+     * restaurant's timezone. The lowercase `?range=` words map onto presets;
+     * `?preset=` wins where both are sent.
+     */
+    const LOWER_TO_PRESET: Record<string, string> = {
+      today: 'TODAY', yesterday: 'YESTERDAY', week: 'LAST_7',
+      month: 'LAST_30', quarter: 'LAST_90', year: 'THIS_YEAR',
+    }
+    const preset =
+      params.get('preset') ?? LOWER_TO_PRESET[params.get('range') ?? 'week'] ?? 'LAST_7'
     const canonicalRange = canonicalResolveRange({
-      preset: preset || 'TODAY',
+      preset,
       from: params.get('from'),
       to: params.get('to'),
       timeZone: restaurant.timezone,
     })
+    const range = canonicalRange
 
     const stamp = new Date().toISOString().slice(0, 10)
     const money = (value: number) => formatMoney(value, restaurant.currency)
@@ -204,15 +210,21 @@ export async function GET(request: NextRequest) {
       { header: 'Metric', key: 'metric' },
       { header: 'Value', key: 'value' },
     ]
+    // The same vocabulary the screens use (§92): every label names exactly
+    // what its number is, and nothing is called revenue that is not.
     const rows = [
       { metric: 'Orders', value: summary.orderCount },
-      { metric: 'Gross revenue', value: money(summary.revenue) },
-      { metric: 'Net sales', value: money(summary.netSales) },
-      { metric: 'Tax', value: money(summary.tax) },
+      { metric: 'Gross sales (before discounts)', value: money(summary.grossSales) },
       { metric: 'Discounts', value: money(summary.discounts) },
-      { metric: 'Food cost', value: money(summary.foodCost) },
+      { metric: 'Refunds', value: money(summary.refunds) },
+      { metric: 'Net sales', value: money(summary.netSales) },
+      { metric: 'Tax collected (not revenue)', value: money(summary.tax) },
+      { metric: 'Service charge (not revenue)', value: money(summary.serviceCharge) },
+      { metric: 'Tips (staff money)', value: money(summary.tips) },
+      { metric: 'Collected (payments in − refunds out)', value: money(summary.collected) },
+      { metric: 'Food cost (COGS)', value: money(summary.foodCost) },
       { metric: 'Gross profit', value: money(summary.grossProfit) },
-      { metric: 'Average order', value: money(summary.averageOrderValue) },
+      { metric: 'Average order (net)', value: money(summary.averageOrderValue) },
       { metric: 'Unique customers', value: summary.uniqueCustomers },
     ]
     return fileResponse(Buffer.from(toCsv(columns, rows)), `report-${stamp}.csv`, 'text/csv')

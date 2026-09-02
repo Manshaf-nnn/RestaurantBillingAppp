@@ -84,10 +84,10 @@ export function ReportsView({
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Gross revenue" value={money(summary.revenue)} tone="primary" hint={`${summary.orderCount} orders`} />
-        <StatCard label="Net sales" value={money(summary.netSales)} hint="before tax & charges" />
-        <StatCard label="Gross profit" value={money(summary.grossProfit)} tone="success" hint={`cost ${money(summary.foodCost)}`} />
-        <StatCard label="Average order" value={money(summary.averageOrderValue)} hint={`${summary.uniqueCustomers} customers`} />
+        <StatCard label="Net sales" value={money(summary.netSales)} tone="primary" hint={`${summary.orderCount} orders · after discounts & refunds`} href="/dashboard/reports/sales" />
+        <StatCard label="Collected" value={money(summary.collected)} hint="payments in, refunds out" href="/dashboard/reports/sales" />
+        <StatCard label="Gross profit" value={money(summary.grossProfit)} tone="success" hint={`cost ${money(summary.foodCost)}`} href="/dashboard/reports/profit" />
+        <StatCard label="Average order" value={money(summary.averageOrderValue)} hint={`${summary.uniqueCustomers} customers`} href="/dashboard/reports/sales" />
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -96,6 +96,7 @@ export function ReportsView({
             <Row label="Tax collected" value={money(summary.tax)} />
             <Row label="Service charge" value={money(summary.serviceCharge)} />
             <Row label="Discounts given" value={`− ${money(summary.discounts)}`} />
+            <Row label="Refunds" value={`− ${money(summary.refunds)}`} />
             <Row label="Tips" value={money(summary.tips)} />
             <Row label="Cancelled orders" value={String(summary.cancelledCount)} />
           </div>

@@ -4,6 +4,8 @@ import { unstable_cache } from 'next/cache'
 import { Prisma } from '@prisma/client'
 
 import { previousRange, type DateRange } from '@/features/reports/range'
+import { getPaymentsReport, getSalesReport } from '@/features/reports/sales'
+import { getProfitReport } from '@/features/reports/profit'
 
 import { prisma } from '@/server/db/prisma'
 import { localBucket, utc } from '@/server/db/sql-time'
@@ -35,6 +37,8 @@ export interface DashboardStats {
   tablesTotal: number
   pendingOrders: number
   unpaidTotal: number
+  /** What actually landed over the period: payments in, refunds out (§46). */
+  collected: number
   lowStockCount: number
 }
 
@@ -88,6 +92,7 @@ export async function getDashboardStats(params: {
   const ids = params.branchIds
   const atBranch = branchScope(ids)
   const atBranchT = branchScope(ids, 't')
+  const atBranchO2 = branchScope(ids, 'o2')
 
   // The low-stock subquery needs one id or none; a multi-branch selection is
   // only ever "all locations" on this dashboard, which is the null case.
@@ -106,19 +111,30 @@ export async function getDashboardStats(params: {
       new_customers: bigint
       pending_orders: bigint
       unpaid_total: bigint
+      collected: bigint
       low_stock: bigint
     }>
   >`
     SELECT
-      (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
+      -- §110 revenue: goods sold net of discounts and refunds. It used to be
+      -- SUM(grandTotal) — tax, service charge and (before slice 2) tips all
+      -- counted as this restaurant's earnings, and the number never agreed
+      -- with the sales report one click away.
+      ((SELECT COALESCE(SUM("subtotal" - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
-          AND "placedAt" >= ${utc(range.from)} AND "placedAt" <= ${utc(range.to)})::bigint       AS revenue,
+          AND "placedAt" >= ${utc(range.from)} AND "placedAt" <= ${utc(range.to)})
+       - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r JOIN orders o2 ON o2.id = r."orderId"
+        WHERE o2."restaurantId" = ${restaurantId} AND o2.status <> 'CANCELLED' ${atBranchO2}
+          AND o2."placedAt" >= ${utc(range.from)} AND o2."placedAt" <= ${utc(range.to)}))::bigint AS revenue,
       (SELECT COUNT(*) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(range.from)} AND "placedAt" <= ${utc(range.to)})::bigint       AS orders,
-      (SELECT COALESCE(SUM("grandTotal"), 0) FROM orders
+      ((SELECT COALESCE(SUM("subtotal" - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
-          AND "placedAt" >= ${utc(prior.from)} AND "placedAt" <= ${utc(prior.to)})::bigint       AS revenue_prior,
+          AND "placedAt" >= ${utc(prior.from)} AND "placedAt" <= ${utc(prior.to)})
+       - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r JOIN orders o2 ON o2.id = r."orderId"
+        WHERE o2."restaurantId" = ${restaurantId} AND o2.status <> 'CANCELLED' ${atBranchO2}
+          AND o2."placedAt" >= ${utc(prior.from)} AND o2."placedAt" <= ${utc(prior.to)}))::bigint AS revenue_prior,
       (SELECT COUNT(*) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(prior.from)} AND "placedAt" <= ${utc(prior.to)})::bigint       AS orders_prior,
@@ -136,9 +152,18 @@ export async function getDashboardStats(params: {
       (SELECT COUNT(*) FROM orders
         WHERE "restaurantId" = ${restaurantId} ${atBranch}
           AND status IN ('PENDING', 'ACCEPTED', 'PREPARING'))::bigint                  AS pending_orders,
-      (SELECT COALESCE(SUM("grandTotal" - "paidTotal"), 0) FROM orders
+      -- What guests still owe: the charge plus the tip they promised (§46).
+      (SELECT COALESCE(SUM("grandTotal" + "tipAmount" - "paidTotal"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "paymentStatus" IN ('UNPAID', 'PARTIAL'))::bigint                        AS unpaid_total,
+      -- What actually landed in the period, from the payments ledger, less
+      -- what went back out — shown beside revenue, never merged into it (§46).
+      ((SELECT COALESCE(SUM(p.amount), 0) FROM payments p JOIN orders o2 ON o2.id = p."orderId"
+        WHERE p."restaurantId" = ${restaurantId} AND p.status IN ('PAID', 'REFUNDED') ${atBranchO2}
+          AND p."paidAt" >= ${utc(range.from)} AND p."paidAt" <= ${utc(range.to)})
+       - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r JOIN orders o2 ON o2.id = r."orderId"
+        WHERE r."restaurantId" = ${restaurantId} ${atBranchO2}
+          AND r."createdAt" >= ${utc(range.from)} AND r."createdAt" <= ${utc(range.to)}))::bigint AS collected,
       (SELECT COUNT(*) FROM inventory_items i
         WHERE i."restaurantId" = ${restaurantId} AND i."isActive" = true
           AND ${noBranch} = false
@@ -170,6 +195,7 @@ export async function getDashboardStats(params: {
     tablesTotal: Number(row?.tables_total ?? 0),
     pendingOrders: Number(row?.pending_orders ?? 0),
     unpaidTotal: Number(row?.unpaid_total ?? 0),
+    collected: Number(row?.collected ?? 0),
     lowStockCount: Number(row?.low_stock ?? 0),
   }
 }
@@ -230,9 +256,12 @@ export async function getRevenueSeries(params: {
 
   const rows = await prisma.$queryRaw<Array<{ bucket: Date; revenue: bigint | null; orders: bigint }>>`
     SELECT ${localBucket(unit, '"placedAt"', tz)} AS bucket,
-           SUM("grandTotal")::bigint      AS revenue,
+           SUM("subtotal" - "discountTotal" - "loyaltyDiscount" - COALESCE(r.refunded, 0))::bigint AS revenue,
            COUNT(*)::bigint               AS orders
     FROM orders
+    LEFT JOIN (
+      SELECT "orderId", SUM(amount) AS refunded FROM refunds GROUP BY "orderId"
+    ) r ON r."orderId" = orders.id
     WHERE "restaurantId" = ${restaurantId}
       AND "placedAt" >= ${utc(range.from)}
       AND "placedAt" <= ${utc(range.to)}
@@ -346,7 +375,7 @@ export async function getPeakHours(
   const rows = await prisma.$queryRaw<Array<{ hour: number; orders: bigint; revenue: bigint | null }>>`
     SELECT EXTRACT(HOUR FROM ("placedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone})::int AS hour,
            COUNT(*)::bigint                   AS orders,
-           SUM("grandTotal")::bigint          AS revenue
+           SUM("subtotal" - "discountTotal" - "loyaltyDiscount")::bigint AS revenue
     FROM orders
     WHERE "restaurantId" = ${restaurantId}
       AND "placedAt" >= ${utc(start)}
@@ -484,95 +513,30 @@ export async function getPaymentMix(params: {
 }
 
 
-export interface ReportRange {
-  from: Date
-  to: Date
-}
-
-export function resolveRange(preset: string, from?: string, to?: string): ReportRange {
-  const end = new Date()
-  end.setHours(23, 59, 59, 999)
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-
-  switch (preset) {
-    case 'today':
-      return { from: start, to: end }
-    case 'yesterday': {
-      start.setDate(start.getDate() - 1)
-      const yEnd = new Date(start)
-      yEnd.setHours(23, 59, 59, 999)
-      return { from: start, to: yEnd }
-    }
-    case 'week':
-      start.setDate(start.getDate() - 6)
-      return { from: start, to: end }
-    case 'month':
-      start.setDate(start.getDate() - 29)
-      return { from: start, to: end }
-    case 'quarter':
-      start.setDate(start.getDate() - 89)
-      return { from: start, to: end }
-    case 'year':
-      start.setFullYear(start.getFullYear() - 1)
-      return { from: start, to: end }
-    case 'custom':
-      return {
-        from: from ? new Date(from) : start,
-        to: to ? new Date(`${to}T23:59:59.999`) : end,
-      }
-    default:
-      start.setDate(start.getDate() - 6)
-      return { from: start, to: end }
-  }
-}
-
-/**
- * Aggregate figures for the reports screen and its exports.
- *
- * `branchIds` was not a parameter at all, so `/dashboard/reports` — and the
- * CSV/XLSX export behind it — showed a branch manager the whole group's
- * revenue, cost of goods, gross profit, payment mix and top-selling items.
- * Every other report on the site was already scoped; this was the one that had
- * never been given the argument.
- *
- * The raw-SQL halves take a Prisma fragment rather than string interpolation,
- * the same way `getDashboardStats` does above.
+/*
+ * The second range resolver that used to live here is gone. It ran on the
+ * server's clock — so "today" rolled over at the wrong midnight for every
+ * restaurant east or west of the host — while `features/reports/range` did it
+ * correctly in the restaurant's timezone. One resolver now (§102).
  */
 export async function getReportSummary(
   restaurantId: string,
-  range: ReportRange,
+  range: DateRange,
   branchIds?: string[] | null,
 ) {
-  const where: Prisma.OrderWhereInput = {
-    restaurantId,
-    placedAt: { gte: range.from, lte: range.to },
-    status: { notIn: ['CANCELLED'] },
-    ...(branchIds ? { branchId: { in: branchIds } } : {}),
-  }
-
-  // `IN ()` is a syntax error in Postgres, so an empty allow-list — a confined
-  // user with no location — becomes a predicate that is simply false.
-  const atBranch = branchIds
-    ? branchIds.length
-      ? Prisma.sql`AND o."branchId" IN (${Prisma.join(branchIds)})`
-      : Prisma.sql`AND false`
-    : Prisma.empty
-
-  const [orders, cancelled, cost, payments, customers, topItems] = await Promise.all([
-    prisma.order.aggregate({
-      where,
-      _sum: {
-        grandTotal: true,
-        subtotal: true,
-        taxTotal: true,
-        serviceCharge: true,
-        discountTotal: true,
-        tipAmount: true,
-      },
-      _count: true,
-      _avg: { grandTotal: true },
-    }),
+  /*
+   * Composed from the sales, profit and payments modules — it computes NOTHING
+   * of its own any more. This function used to be the third revenue definition
+   * in the product (sum of grandTotal: tax, service and, until recently, tips
+   * counted as income) while the sales report said net-of-discounts and the
+   * profit report said net-of-refunds. Three screens, three answers, one
+   * question (§102/§110). Now every figure here IS the figure the dedicated
+   * report shows, by construction.
+   */
+  const [sales, profit, payments, cancelled, customers] = await Promise.all([
+    getSalesReport({ restaurantId, range, branchIds }),
+    getProfitReport({ restaurantId, range, branchIds }),
+    getPaymentsReport({ restaurantId, range, branchIds }),
     prisma.order.count({
       where: {
         restaurantId,
@@ -581,76 +545,50 @@ export async function getReportSummary(
         ...(branchIds ? { branchId: { in: branchIds } } : {}),
       },
     }),
-    prisma.$queryRaw<Array<{ cost: bigint | null }>>`
-      SELECT SUM(oi."costPrice" * oi.quantity)::bigint AS cost
-      FROM order_items oi
-      JOIN orders o ON o.id = oi."orderId"
-      WHERE o."restaurantId" = ${restaurantId}
-        AND o."placedAt" BETWEEN ${utc(range.from)} AND ${utc(range.to)}
-        AND o.status <> 'CANCELLED'
-        ${atBranch}
-    `,
-    prisma.payment.groupBy({
-      by: ['method'],
-      where: {
-        restaurantId,
-        status: 'PAID',
-        paidAt: { gte: range.from, lte: range.to },
-        // Payments reach a location through their order.
-        ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
-      },
-      _sum: { amount: true },
-      _count: true,
-    }),
     prisma.order
       .findMany({
-        where: { ...where, customerId: { not: null } },
+        where: {
+          restaurantId,
+          placedAt: { gte: range.from, lte: range.to },
+          status: { not: 'CANCELLED' },
+          customerId: { not: null },
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+        },
         select: { customerId: true },
         distinct: ['customerId'],
       })
       .then((rows) => rows.length),
-    prisma.$queryRaw<Array<{ name: string; quantity: bigint; revenue: bigint | null }>>`
-      SELECT oi.name AS name,
-             SUM(oi.quantity)::bigint    AS quantity,
-             SUM(oi."lineTotal")::bigint AS revenue
-      FROM order_items oi
-      JOIN orders o ON o.id = oi."orderId"
-      WHERE o."restaurantId" = ${restaurantId}
-        AND o."placedAt" BETWEEN ${utc(range.from)} AND ${utc(range.to)}
-        AND o.status <> 'CANCELLED'
-        ${atBranch}
-      GROUP BY oi.name
-      ORDER BY revenue DESC NULLS LAST
-      LIMIT 20
-    `,
   ])
-
-  const revenue = orders._sum.grandTotal ?? 0
-  const foodCost = Number(cost[0]?.cost ?? 0)
 
   return {
     range,
-    orderCount: orders._count,
+    orderCount: sales.totals.orders,
     cancelledCount: cancelled,
-    revenue,
-    netSales: orders._sum.subtotal ?? 0,
-    tax: orders._sum.taxTotal ?? 0,
-    serviceCharge: orders._sum.serviceCharge ?? 0,
-    discounts: orders._sum.discountTotal ?? 0,
-    tips: orders._sum.tipAmount ?? 0,
-    averageOrderValue: Math.round(orders._avg.grandTotal ?? 0),
-    foodCost,
-    grossProfit: (orders._sum.subtotal ?? 0) - foodCost,
+    /** §110 revenue: goods sold, net of discounts and refunds. Not tax, not
+     *  service, not tips — none of that is the restaurant's earnings. */
+    revenue: sales.totals.netSales,
+    grossSales: sales.totals.grossSales,
+    refunds: sales.totals.refunds,
+    netSales: sales.totals.netSales,
+    tax: sales.totals.tax,
+    serviceCharge: sales.totals.serviceCharge,
+    discounts: sales.totals.discounts,
+    tips: sales.totals.tips,
+    /** What actually landed in tills and accounts, from the payments ledger. */
+    collected: payments.total - payments.refunded,
+    averageOrderValue: sales.totals.averageOrderValue,
+    foodCost: profit.totals.cogs,
+    grossProfit: profit.totals.grossProfit,
     uniqueCustomers: customers,
-    payments: payments.map((row) => ({
+    payments: payments.byMethod.map((row) => ({
       method: row.method,
-      amount: row._sum.amount ?? 0,
-      count: row._count,
+      amount: row.amount,
+      count: row.count,
     })),
-    topItems: topItems.map((row) => ({
-      name: row.name,
-      quantity: Number(row.quantity),
-      revenue: Number(row.revenue ?? 0),
+    topItems: sales.byItem.slice(0, 20).map((row) => ({
+      name: row.label,
+      quantity: row.quantity,
+      revenue: row.sales,
     })),
   }
 }

@@ -266,6 +266,7 @@ export default async function ItemHistoryPage({
                   <th className="pb-2 pr-3 font-medium">When</th>
                   <th className="pb-2 pr-3 font-medium">Movement</th>
                   <th className="pb-2 pr-3 text-right font-medium">Change</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Value</th>
                   <th className="pb-2 pr-3 text-right font-medium">Balance</th>
                   <th className="pb-2 pr-3 font-medium">Reason</th>
                   <th className="pb-2 pr-3 font-medium">Source</th>
@@ -287,6 +288,14 @@ export default async function ItemHistoryPage({
                         row.quantityEntered ?? Math.abs(row.quantity),
                         row.enteredUnit ?? item.unit,
                       )}
+                    </td>
+                    {/* What the movement was WORTH, at the cost stamped when
+                        it happened — the ledger answers in money as well as
+                        in quantity (§75). */}
+                    <td className={`py-2.5 pr-3 text-right tabular-nums ${toneFor(row.quantity)}`}>
+                      {row.unitCost
+                        ? money(Math.round(Math.abs(row.quantity) * row.unitCost))
+                        : '—'}
                     </td>
                     <td className="py-2.5 pr-3 text-right tabular-nums text-muted-foreground">
                       {row.balanceAfter === null
