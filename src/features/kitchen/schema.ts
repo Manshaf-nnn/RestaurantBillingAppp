@@ -33,6 +33,11 @@ export const assignAllDishesSchema = z.object({
   onlyUnassigned: z.coerce.boolean().default(true),
 })
 
+export const rejectOrderSchema = z.object({
+  orderId: z.string().cuid(),
+  reason: z.string().trim().max(200).optional().or(z.literal('')),
+})
+
 export const acceptOrderSchema = z.object({
   orderId: z.string().cuid(),
 })

@@ -308,3 +308,25 @@ export async function reconcileOrderDepletionStandalone(params: {
 function round(value: number): number {
   return Math.round(value * 1e6) / 1e6
 }
+
+/**
+ * Reconcile only if this order has ever consumed anything.
+ *
+ * `reconcileOrderDepletion` pays no attention to order status: on a PENDING
+ * bill it would happily compute "want everything, have nothing" and take the
+ * whole order out of stock hours before the kitchen accepted it. Every caller
+ * that runs on a line CHANGE (guest edit, line void, split, merge) wants this
+ * guard; acceptance itself is the one caller that must not have it.
+ *
+ * Extracted from `rebalanceDepletion` in cashier/service.ts so the rule exists
+ * once — the guest-edit and void paths used to reconcile unguarded and were
+ * two of the ways stock left early.
+ */
+export async function reconcileIfDepleted(
+  tx: TxClient,
+  params: { restaurantId: string; orderId: string; userId?: string | null },
+): Promise<ReconcileResult | null> {
+  const applied = await tx.orderStockDepletion.count({ where: { orderId: params.orderId } })
+  if (applied === 0) return null
+  return reconcileOrderDepletion(tx, params)
+}

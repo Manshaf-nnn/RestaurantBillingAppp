@@ -125,7 +125,10 @@ export function MenuManager({
     setFoods((current) =>
       current.map((entry) => (entry.id === food.id ? { ...entry, isAvailable: next } : entry)),
     )
-    const result = await callAction(() => toggleFoodAvailability({ id: food.id, isAvailable: next }))
+    // The branch on screen rides along, so "86 it here" means HERE.
+    const result = await callAction(() =>
+      toggleFoodAvailability({ id: food.id, isAvailable: next, branchId: activeBranchId }),
+    )
     if (!result.ok) {
       setFoods((current) =>
         current.map((entry) => (entry.id === food.id ? { ...entry, isAvailable: !next } : entry)),

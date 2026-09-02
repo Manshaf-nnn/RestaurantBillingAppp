@@ -3,6 +3,7 @@ import 'server-only'
 import type { StockAlertLevel } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
+import { notify } from '@/server/notifications'
 
 /**
  * Stock alerts and the inventory value figure.
@@ -181,5 +182,57 @@ export async function getInventorySummary(params: {
     lowStock,
     overstock,
     inventoryValue: Math.round(inventoryValue),
+  }
+}
+
+/**
+ * Tell the managers an item has hit its reorder level.
+ *
+ * The reorder level has existed on every item since the beginning, and until
+ * now crossing it did nothing anybody could see: both call sites emitted a
+ * websocket event that no client subscribes to and that does not exist at all
+ * on Netlify, where realtime is off. An owner set 200 thresholds and found out
+ * they were out of chicken when the kitchen could not accept the order.
+ *
+ * ── Once a day per item, not once per sale ──────────────────────────────────
+ *
+ * An item BELOW its level stays below it through every subsequent sale, so
+ * without the window a busy evening would put forty entries about the same
+ * chicken in the bell. A rolling 24 hours rather than "today" keeps this
+ * timezone-free — the exact boundary does not matter, only that it does not
+ * nag.
+ *
+ * Never throws: a failed notification must not cost anybody their sale or
+ * their stock adjustment, so callers do not even await error handling.
+ */
+export async function notifyLowStock(params: {
+  restaurantId: string
+  branchId?: string | null
+  item: { id: string; name: string; quantity: number; reorderLevel: number; unit: string }
+}): Promise<void> {
+  try {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const already = await prisma.notification.findFirst({
+      where: {
+        restaurantId: params.restaurantId,
+        type: 'LOW_STOCK',
+        createdAt: { gte: dayAgo },
+        data: { path: ['itemId'], equals: params.item.id },
+      },
+      select: { id: true },
+    })
+    if (already) return
+
+    await notify({
+      restaurantId: params.restaurantId,
+      branchId: params.branchId ?? null,
+      type: 'LOW_STOCK',
+      audience: 'MANAGEMENT',
+      title: `${params.item.name} is running low`,
+      body: `${params.item.quantity} ${params.item.unit.toLowerCase()} left — you asked to be told at ${params.item.reorderLevel}.`,
+      data: { itemId: params.item.id, href: '/dashboard/inventory' },
+    })
+  } catch {
+    // Deliberately swallowed — see the docstring.
   }
 }

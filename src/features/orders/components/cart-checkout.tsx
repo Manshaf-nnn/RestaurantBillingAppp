@@ -232,8 +232,12 @@ export function CartCheckout({
     )
   }
 
-  const canSubmit =
-    state.customer.name.trim().length >= 2 && state.customer.phone.trim().length >= 7 && !placing
+  /*
+   * Nothing about the guest's identity gates the order any more. A phone
+   * number is how loyalty finds them, not a condition of being fed — the field
+   * stays, labelled for what it earns them, and blank is fine.
+   */
+  const canSubmit = !placing
 
   return (
     <div className="flex min-h-dvh flex-col pb-40">
@@ -352,7 +356,7 @@ export function CartCheckout({
         <section className="surface space-y-4 p-4">
           <h2 className="text-sm font-semibold">Your details</h2>
 
-          <Field label="Name" htmlFor="customerName" required error={fieldErrors.customerName}>
+          <Field label="Name (optional)" htmlFor="customerName" error={fieldErrors.customerName}>
             <Input
               id="customerName"
               value={state.customer.name}
@@ -363,10 +367,9 @@ export function CartCheckout({
           </Field>
 
           <Field
-            label="Mobile number"
+            label="Mobile number (optional)"
             htmlFor="customerPhone"
-            required
-            hint="So we can reach you about this order"
+            hint="Add it to collect loyalty points on this order"
             error={fieldErrors.customerPhone}
           >
             <Input

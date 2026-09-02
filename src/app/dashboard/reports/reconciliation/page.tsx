@@ -33,7 +33,7 @@ export default async function ReconciliationPage({
 
   const params = await searchParams
   const preset = typeof params.range === 'string' ? params.range : 'THIS_MONTH'
-  const range = resolveRange({ preset: preset as never })
+  const range = resolveRange({ preset: preset as never, timeZone: restaurant.timezone })
 
   /*
    * Resolved through the shared helper so the top-bar switcher and this page's

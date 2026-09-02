@@ -71,6 +71,8 @@ const SERVICE = [
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // AUDIT.md C1/H10/H11 — a guest edit must hit kitchen, bill and stock alike.
+  'guest-edit-test',
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',

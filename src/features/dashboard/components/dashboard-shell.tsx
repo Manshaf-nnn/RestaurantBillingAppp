@@ -44,7 +44,7 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { logout } from '@/features/auth/actions'
 import { LocalTime } from '@/components/local-time'
-import { markAllRead } from '../actions'
+import { markAllRead, markRead } from '../actions'
 import { GlobalSearch } from '@/features/search/components/global-search'
 import { visibleSections } from '../nav'
 import { callAction } from '@/lib/use-action'
@@ -75,6 +75,8 @@ export interface ShellNotification {
   body: string | null
   createdAt: string
   readAt: string | null
+  /** Where it points, when the producer said. Null renders a plain entry. */
+  href: string | null
 }
 
 export function DashboardShell({
@@ -132,7 +134,8 @@ export function DashboardShell({
 
   useSocketEvent(EVENTS.NOTIFICATION, (payload: NotificationPayload) => {
     setNotifications((current) => [
-      { id: payload.id, title: payload.title, body: payload.body, createdAt: payload.createdAt, readAt: null },
+      // A socket payload carries no destination; the next full load fills it.
+      { id: payload.id, title: payload.title, body: payload.body, createdAt: payload.createdAt, readAt: null, href: null },
       ...current.slice(0, 29),
     ])
     play('alert')
@@ -338,20 +341,69 @@ export function DashboardShell({
                     </p>
                   ) : (
                     <ul className="divide-y">
-                      {notifications.map((notification) => (
-                        <li
-                          key={notification.id}
-                          className={cn('px-4 py-3', !notification.readAt && 'bg-primary/5')}
-                        >
-                          <p className="text-sm font-medium">{notification.title}</p>
-                          {notification.body ? (
-                            <p className="mt-0.5 text-xs text-muted-foreground">{notification.body}</p>
-                          ) : null}
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            <LocalTime value={notification.createdAt} />
-                          </p>
-                        </li>
-                      ))}
+                      {notifications.map((notification) => {
+                        const body = (
+                          <>
+                            <p className="text-sm font-medium">{notification.title}</p>
+                            {notification.body ? (
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {notification.body}
+                              </p>
+                            ) : null}
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              <LocalTime value={notification.createdAt} />
+                            </p>
+                          </>
+                        )
+                        return (
+                          <li
+                            key={notification.id}
+                            className={cn(!notification.readAt && 'bg-primary/5')}
+                          >
+                            {/*
+                              Tapping an entry goes where it points AND marks it
+                              read — acting on a notification IS reading it, and
+                              per-item read is what lets "mark all" stop wiping
+                              the ones nobody has dealt with yet.
+                            */}
+                            {notification.href ? (
+                              <Link
+                                href={notification.href}
+                                className="block px-4 py-3 hover:bg-muted/60"
+                                onClick={() => {
+                                  setNotifications((current) =>
+                                    current.map((entry) =>
+                                      entry.id === notification.id
+                                        ? { ...entry, readAt: entry.readAt ?? new Date().toISOString() }
+                                        : entry,
+                                    ),
+                                  )
+                                  void callAction(() => markRead(notification.id))
+                                }}
+                              >
+                                {body}
+                              </Link>
+                            ) : (
+                              <button
+                                type="button"
+                                className="block w-full px-4 py-3 text-left"
+                                onClick={() => {
+                                  setNotifications((current) =>
+                                    current.map((entry) =>
+                                      entry.id === notification.id
+                                        ? { ...entry, readAt: entry.readAt ?? new Date().toISOString() }
+                                        : entry,
+                                    ),
+                                  )
+                                  void callAction(() => markRead(notification.id))
+                                }}
+                              >
+                                {body}
+                              </button>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </ScrollArea>

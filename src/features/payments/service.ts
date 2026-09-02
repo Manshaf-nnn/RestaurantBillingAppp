@@ -194,11 +194,30 @@ export async function capturePayment(params: {
     const grandTotal = order.grandTotal + tip
     const due = Math.max(0, grandTotal - order.paidTotal)
 
-    if (params.amount > due + 1) {
+    /*
+     * Exactly what is due, no slack. The ceiling used to be `due + 1`, an
+     * off-by-one that let every bill book one extra minor unit of revenue —
+     * invisible on a receipt, a standing discrepancy at reconciliation.
+     */
+    if (params.amount > due) {
       throw new AppError(
         `That is more than the ${formatMoney(due, restaurant.currency)} outstanding on this bill`,
         400,
         'OVERPAYMENT',
+      )
+    }
+
+    /*
+     * Cash handed over must cover what is being booked. A tendered figure
+     * below the amount used to sail through and record negative change as
+     * zero — the drawer showed money it never held. Card and transfer have no
+     * tender, so only cash is checked.
+     */
+    if (params.method === 'CASH' && params.tenderedAmount != null && params.tenderedAmount < params.amount) {
+      throw new AppError(
+        `${formatMoney(params.tenderedAmount, restaurant.currency)} handed over does not cover the ${formatMoney(params.amount, restaurant.currency)} being taken`,
+        400,
+        'SHORT_TENDER',
       )
     }
 
@@ -453,25 +472,64 @@ export async function refundPayment(params: {
   reason: string
   actorId: string
 }) {
-  const payment = await prisma.payment.findFirst({
+  const located = await prisma.payment.findFirst({
     where: { id: params.paymentId, restaurantId: params.restaurantId },
-    include: { order: true },
+    select: { orderId: true },
   })
-  if (!payment) throw new NotFoundError('Payment')
-  if (payment.status !== 'PAID') throw new AppError('Only settled payments can be refunded', 409, 'NOT_PAID')
+  if (!located) throw new NotFoundError('Payment')
 
   return prisma.$transaction(async (tx) => {
+    /*
+     * Same lock, same reason, opposite direction. `capturePayment` locks the
+     * order so two taps on "Settle" cannot both find the bill unpaid; this
+     * used to check-then-act with no lock at all, so two taps on "Refund"
+     * both read the payment as PAID and the drawer handed the cash back
+     * twice. The order is locked first — the same order capture takes it in —
+     * and the payment re-read inside the fence, where the second tap sees
+     * REFUNDED and stops.
+     */
+    await guardLocks(tx)
+    const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM orders
+      WHERE id = ${located.orderId} AND "restaurantId" = ${params.restaurantId}
+      FOR UPDATE
+    `
+    if (lockedOrder.length === 0) throw new NotFoundError('Order')
+
+    const payment = await tx.payment.findFirst({
+      where: { id: params.paymentId, restaurantId: params.restaurantId },
+      include: { order: true },
+    })
+    if (!payment) throw new NotFoundError('Payment')
+    if (payment.status !== 'PAID') {
+      throw new AppError('Only settled payments can be refunded', 409, 'NOT_PAID')
+    }
+
     const refunded = await tx.payment.update({
       where: { id: payment.id },
       data: { status: 'REFUNDED', failureReason: params.reason },
     })
 
-    const paidTotal = Math.max(0, payment.order.paidTotal - payment.amount)
+    /*
+     * What is paid is the sum of the payments that still stand — not the old
+     * figure minus this one. Subtraction preserves whatever drift the column
+     * had already accumulated; the sum is self-correcting every time it runs.
+     */
+    const standing = await tx.payment.aggregate({
+      where: { orderId: payment.orderId, status: 'PAID' },
+      _sum: { amount: true },
+    })
+    const paidTotal = standing._sum.amount ?? 0
     await tx.order.update({
       where: { id: payment.orderId },
       data: {
         paidTotal,
-        paymentStatus: paidTotal === 0 ? 'REFUNDED' : 'PARTIAL',
+        paymentStatus:
+          paidTotal === 0
+            ? 'REFUNDED'
+            : paidTotal >= payment.order.grandTotal
+              ? 'PAID'
+              : 'PARTIAL',
       },
     })
 

@@ -4,12 +4,13 @@ import type { OrderItemStatus, OrderStatus } from '@prisma/client'
 
 import { revalidatePath } from 'next/cache'
 
+import { needsApproval, requestApproval } from '@/features/approvals/service'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
-import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
+import { pinRecipeVersions, reconcileIfDepleted, snapshotLineCosts } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getOrCreateGuestSessionId } from '@/server/auth/session'
@@ -285,8 +286,10 @@ export async function placeGuestOrder(
         tableId: data.tableId,
         type: 'DINE_IN',
         channel: 'QR',
-        customerName: data.customerName,
-        customerPhone: data.customerPhone,
+        // A blank phone means no customer record at all — the name is
+        // snapshotted on the order and nothing pools into a shared identity.
+        customerName: data.customerName?.trim() || 'Guest',
+        customerPhone: data.customerPhone?.trim() || '',
         customerEmail: data.customerEmail || null,
         guestCount: data.guestCount ?? null,
         notes: data.notes || null,
@@ -297,7 +300,6 @@ export async function placeGuestOrder(
           notes: item.notes || undefined,
         })),
         couponCode: data.couponCode || null,
-        redeemPoints: data.redeemPoints,
         guestSessionId,
         idempotencyKey: data.idempotencyKey || null,
       })
@@ -334,31 +336,52 @@ export async function updateGuestOrderItems(
         throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
       }
 
-      const orderItems = new Map(order.items.map((item) => [item.id, item]))
-      const keep: Array<{ id: string; quantity: number; unitPrice: number; optionsTotal: number; prepTimeMinutes: number; lineTotal: number }> = []
-
+      /*
+       * The payload is the whole order, not a patch.
+       *
+       * The tracker used to send only the lines the guest kept, and this loop
+       * walked the payload — so a line missing from it was never touched.
+       * Remove a dish on the phone and it stayed QUEUED on the kitchen board
+       * and kept its ingredients deducted, but the BILL forgot it: free food.
+       * Resolving every line the order has against the payload, with absence
+       * meaning zero, makes the two ends agree by construction.
+       */
+      const payloadQty = new Map<string, number>()
       for (const patch of data.items) {
-        const current = orderItems.get(patch.itemId)
-        if (!current) continue
-        const quantity = Math.max(0, Math.min(50, patch.quantity))
-        if (quantity === 0) continue
-        const lineTotal = (current.unitPrice + current.optionsTotal) * quantity
-        keep.push({
-          id: current.id,
-          quantity,
-          unitPrice: current.unitPrice,
-          optionsTotal: current.optionsTotal,
-          prepTimeMinutes: current.prepTimeMinutes,
-          lineTotal,
-        })
+        payloadQty.set(patch.itemId, Math.max(0, Math.min(50, patch.quantity)))
       }
 
+      const resolved: Array<{ current: (typeof order.items)[number]; quantity: number }> = []
+      for (const current of order.items) {
+        // Voided by staff — a guest edit cannot resurrect it.
+        if (current.status === 'CANCELLED') continue
+        const quantity = payloadQty.get(current.id) ?? 0
+        if (quantity < current.quantity && current.status !== 'QUEUED') {
+          /*
+           * The kitchen already has this line. Taking food back off a card the
+           * section is cooking — or has plated — is a dispute, not an edit: it
+           * needs a person with the void permission and a written reason, so
+           * the cost of the food lands somewhere visible instead of vanishing.
+           * Asking for MORE is still fine; the extra becomes a fresh line below.
+           */
+          throw new AppError(
+            `${current.name} is already being prepared — ask a member of staff to change it.`,
+            409,
+            'ITEM_IN_KITCHEN',
+          )
+        }
+        resolved.push({ current, quantity })
+      }
+
+      const keep = resolved.filter((line) => line.quantity > 0)
       if (keep.length === 0) {
         throw new AppError('Your order must have at least one item.', 400, 'EMPTY_ORDER')
       }
 
       const totals = computeTotals({
-        lines: keep.map((item) => ({ lineTotal: item.lineTotal })),
+        lines: keep.map(({ current, quantity }) => ({
+          lineTotal: (current.unitPrice + current.optionsTotal) * quantity,
+        })),
         taxRateBps: order.taxRateBps || order.restaurant.taxRateBps,
         serviceChargeBps: order.serviceChargeBps || order.restaurant.serviceChargeBps,
         taxInclusive: order.restaurant.taxInclusive,
@@ -369,12 +392,19 @@ export async function updateGuestOrderItems(
       })
 
       await prisma.$transaction(async (tx) => {
-        for (const patch of data.items) {
-          const current = orderItems.get(patch.itemId)
-          if (!current) continue
-          const quantity = Math.max(0, Math.min(50, patch.quantity))
+        const removed: string[] = []
+        for (const { current, quantity } of resolved) {
+          if (quantity === current.quantity) continue
           if (quantity === 0) {
-            await tx.orderItem.delete({ where: { id: current.id } })
+            /*
+             * Only a QUEUED line can get here (the gate above), and it is
+             * cancelled, not deleted — the row IS the record that this dish
+             * was ordered and taken back, the same convention the staff void
+             * uses. Deleting it would leave a bill whose history cannot
+             * explain its own total.
+             */
+            await tx.orderItem.update({ where: { id: current.id }, data: { status: 'CANCELLED' } })
+            removed.push(`${current.quantity} × ${current.name}`)
             continue
           }
 
@@ -392,8 +422,7 @@ export async function updateGuestOrderItems(
            * so routing picks it up as a fresh addition. The live board sums
            * quantities, so the table's totals are unchanged either way.
            */
-          const uncooked = current.status === 'QUEUED' || current.status === 'CANCELLED'
-          if (!uncooked && quantity > current.quantity) {
+          if (current.status !== 'QUEUED' && quantity > current.quantity) {
             const extra = quantity - current.quantity
             await tx.orderItem.create({
               data: {
@@ -423,11 +452,7 @@ export async function updateGuestOrderItems(
           const lineTotal = (current.unitPrice + current.optionsTotal) * quantity
           await tx.orderItem.update({
             where: { id: current.id },
-            data: {
-              quantity,
-              lineTotal,
-              status: current.status === 'CANCELLED' ? 'QUEUED' : current.status,
-            },
+            data: { quantity, lineTotal },
           })
         }
 
@@ -446,7 +471,7 @@ export async function updateGuestOrderItems(
         await pinRecipeVersions(tx, { restaurantId: restaurant.id, orderId: order.id })
         await snapshotLineCosts(tx, { restaurantId: restaurant.id, orderId: order.id })
 
-        await reconcileOrderDepletion(tx, {
+        await reconcileIfDepleted(tx, {
           restaurantId: restaurant.id,
           orderId: order.id,
         })
@@ -462,11 +487,16 @@ export async function updateGuestOrderItems(
             roundingAdj: totals.roundingAdj,
             grandTotal: totals.grandTotal,
             estimatedMinutes: estimatePrepMinutes(
-              keep.map((item) => ({ prepTimeMinutes: item.prepTimeMinutes, quantity: item.quantity })),
+              keep.map(({ current, quantity }) => ({ prepTimeMinutes: current.prepTimeMinutes, quantity })),
               0,
             ),
             events: {
-              create: { status: order.status, note: 'Customer updated the order before it was served' },
+              create: {
+                status: order.status,
+                note: removed.length
+                  ? `Customer updated the order — removed ${removed.join(', ')}`
+                  : 'Customer updated the order before it was served',
+              },
             },
           },
         })
@@ -803,6 +833,38 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
     async (data) => {
       const user = await requirePermission(PERMISSIONS.ORDER_CREATE)
 
+      /*
+       * Ringing up an order and deciding what it costs are different powers.
+       * `manualDiscount` used to ride in on ORDER_CREATE alone, so any waiter
+       * could comp a meal at the till — no DISCOUNT_APPLY, no approval, no
+       * trace beyond a smaller total. The discount permission gates it now,
+       * and anything at or above the restaurant's approval threshold cannot
+       * be typed straight into a new order at all: it goes through
+       * `applyManualDiscount`, where a manager signs it off.
+       */
+      if (data.manualDiscount > 0) {
+        if (!can(user, PERMISSIONS.DISCOUNT_APPLY)) {
+          throw new AppError(
+            'You do not have permission to apply discounts',
+            403,
+            'DISCOUNT_FORBIDDEN',
+          )
+        }
+        if (
+          await needsApproval({
+            restaurantId: user.restaurantId,
+            kind: 'DISCOUNT',
+            amount: data.manualDiscount,
+          })
+        ) {
+          throw new AppError(
+            'A discount this size needs a manager\u2019s sign-off. Place the order first, then apply the discount so it can be approved.',
+            403,
+            'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
       const order = await placeOrderService({
         restaurantId: user.restaurantId,
         tableId: data.tableId || null,
@@ -896,18 +958,77 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
 
       const order = await prisma.order.findFirst({
         where: { id: data.orderId, restaurantId: user.restaurantId },
-        include: { items: true, restaurant: { select: { currency: true, taxInclusive: true } } },
+        include: {
+          items: true,
+          redemptions: { select: { amount: true } },
+          restaurant: { select: { currency: true, taxInclusive: true } },
+        },
       })
       if (!order) throw new NotFoundError('Order')
       if (order.paymentStatus === 'PAID') {
         throw new AppError('This order is already paid', 409, 'ORDER_PAID')
       }
 
+      /*
+       * Past the restaurant's threshold, the discount stops here until a
+       * manager has signed it off. The request is raised once (repeats return
+       * the same open request), the cashier is told, and the retry after
+       * approval finds the signed request and goes through. An approval for a
+       * larger amount covers a smaller one; it never works the other way.
+       */
+      if (
+        await needsApproval({
+          restaurantId: user.restaurantId,
+          kind: 'DISCOUNT',
+          amount: data.amount,
+        })
+      ) {
+        const approved = await prisma.approvalRequest.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            entity: 'Order',
+            entityId: order.id,
+            kind: 'DISCOUNT',
+            status: 'APPROVED',
+            amount: { gte: data.amount },
+          },
+        })
+        if (!approved) {
+          await requestApproval({
+            restaurantId: user.restaurantId,
+            branchId: order.branchId,
+            kind: 'DISCOUNT',
+            entity: 'Order',
+            entityId: order.id,
+            amount: data.amount,
+            reason: data.reason?.trim() || `Discount on ${order.orderNumber}`,
+            userId: user.id,
+          })
+          throw new AppError(
+            'Sent for approval. A discount this size needs a manager to sign off — they can do that from the approvals screen, then apply it again.',
+            403,
+            'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
+      /*
+       * Only what the guest is actually being charged for. This used to price
+       * every line, voided ones included — void a dish, discount the bill, and
+       * the dead line quietly came back into the base. And it overwrote
+       * `discountTotal` with the manual amount alone, erasing any coupon
+       * already on the order; the redemption rows say what the coupon took, so
+       * both discounts survive together until the columns are split.
+       */
+      const couponDiscount = order.redemptions.reduce((total, row) => total + row.amount, 0)
       const totals = computeTotals({
-        lines: order.items.map((item) => ({ lineTotal: item.lineTotal })),
+        lines: order.items
+          .filter((item) => item.status !== 'CANCELLED')
+          .map((item) => ({ lineTotal: item.lineTotal })),
         taxRateBps: order.taxRateBps,
         serviceChargeBps: order.serviceChargeBps,
         taxInclusive: order.restaurant.taxInclusive,
+        couponDiscount,
         manualDiscount: data.amount,
         loyaltyDiscount: order.loyaltyDiscount,
         currency: order.restaurant.currency,
@@ -917,6 +1038,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
       const updated = await prisma.order.update({
         where: { id: order.id },
         data: {
+          subtotal: totals.subtotal,
           discountTotal: totals.discountTotal,
           taxTotal: totals.taxTotal,
           serviceCharge: totals.serviceCharge,

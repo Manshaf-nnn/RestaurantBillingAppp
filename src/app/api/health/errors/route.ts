@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
   try {
-    await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+    const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
 
     // `?digest=` answers the only question that matters when someone is reading
     // a reference code off a screen.
@@ -35,15 +35,24 @@ export async function GET(request: Request) {
      * failed; the in-memory list catches anything recorded before the write
      * could land, and covers a database that is itself the problem.
      */
+    /*
+     * Only this restaurant's failures. The whole endpoint exists because a
+     * stack trace is too revealing to show the public — which is equally true
+     * tenant-to-tenant: before this predicate, any owner could read every
+     * restaurant's errors, complete with the data in their messages. Rows from
+     * anonymous surfaces carry no restaurantId and are visible to nobody here.
+     */
     const persisted = await prisma.errorLog
       .findMany({
-        where: digest ? { digest } : {},
+        where: { restaurantId: user.restaurantId, ...(digest ? { digest } : {}) },
         orderBy: { createdAt: 'desc' },
         take: digest ? 10 : 25,
       })
       .catch(() => [])
 
-    const inMemory = recentErrors().filter((e) => !digest || e.digest === digest)
+    const inMemory = recentErrors().filter(
+      (e) => e.restaurantId === user.restaurantId && (!digest || e.digest === digest),
+    )
 
     const seen = new Set(persisted.map((e) => `${e.digest}:${e.message}`))
     const errors = [

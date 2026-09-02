@@ -7,6 +7,7 @@ import { resolveBranchId } from '@/features/branches/service'
 import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-menu'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { orderIsRouted, routeOrderItems } from '@/features/kitchen/routing'
+import { notifyLowStock } from '@/features/inventory/alerts'
 import {
   prisma,
   isUniqueViolation,
@@ -424,12 +425,25 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
    * here and upserted inside the transaction. A guest ordering for the first
    * time has no points, which is what `null` prices correctly.
    */
-  const existingCustomer = await prisma.customer.findUnique({
-    where: {
-      restaurantId_phone: { restaurantId: params.restaurantId, phone: params.customerPhone },
-    },
-    select: { id: true, isBlocked: true },
-  })
+  /*
+   * No phone number, no customer record.
+   *
+   * Every blank phone used to collapse into ONE Customer row keyed
+   * `phone: ''` — the shared walk-in. Its loyalty points were the pooled
+   * points of every anonymous guest the restaurant ever served, and anyone
+   * ordering without a phone number could spend them. An anonymous order now
+   * carries its name snapshot on the order row and no customer at all;
+   * loyalty needs an identity, and a blank is not one.
+   */
+  const customerPhone = params.customerPhone.trim()
+  const existingCustomer = customerPhone
+    ? await prisma.customer.findUnique({
+        where: {
+          restaurantId_phone: { restaurantId: params.restaurantId, phone: customerPhone },
+        },
+        select: { id: true, isBlocked: true },
+      })
+    : null
 
   if (existingCustomer?.isBlocked) {
     throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
@@ -509,29 +523,32 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
         if (!table) throw new NotFoundError('Table')
       }
 
-      // Customers are keyed by phone within a restaurant.
-      const customer = await tx.customer.upsert({
-        where: {
-          restaurantId_phone: {
-            restaurantId: params.restaurantId,
-            phone: params.customerPhone,
-          },
-        },
-        create: {
-          restaurantId: params.restaurantId,
-          name: params.customerName,
-          phone: params.customerPhone,
-          email: params.customerEmail || null,
-        },
-        update: {
-          name: params.customerName,
-          ...(params.customerEmail ? { email: params.customerEmail } : {}),
-        },
-      })
+      // Customers are keyed by phone within a restaurant — and only exist
+      // when there is a phone to key them by.
+      const customer = customerPhone
+        ? await tx.customer.upsert({
+            where: {
+              restaurantId_phone: {
+                restaurantId: params.restaurantId,
+                phone: customerPhone,
+              },
+            },
+            create: {
+              restaurantId: params.restaurantId,
+              name: params.customerName,
+              phone: customerPhone,
+              email: params.customerEmail || null,
+            },
+            update: {
+              name: params.customerName,
+              ...(params.customerEmail ? { email: params.customerEmail } : {}),
+            },
+          })
+        : null
 
       // Blocked status was checked before the transaction; re-check here only in
       // case the row was created between the two, which the upsert would hide.
-      if (customer.isBlocked) {
+      if (customer?.isBlocked) {
         throw new AppError('This account cannot place orders. Please speak to our staff.', 403, 'BLOCKED')
       }
 
@@ -565,9 +582,9 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               // Snapshotted, not derived. `tableId` is SetNull, so deleting a
               // table used to erase which table every past order had been at.
               tableNumber: table?.number ?? null,
-              customerId: customer.id,
+              customerId: customer?.id ?? null,
               customerName: params.customerName,
-              customerPhone: params.customerPhone,
+              customerPhone: customerPhone,
               customerEmail: params.customerEmail || null,
               guestSessionId: params.guestSessionId ?? null,
               createdById: params.createdById ?? null,
@@ -617,24 +634,26 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
           data: {
             couponId: draft.couponId,
             orderId: created.id,
-            customerId: customer.id,
+            customerId: customer?.id ?? null,
             amount: draft.totals.discountTotal,
           },
         })
       }
 
       // Loyalty spend is debited now; the earn happens at settlement.
-      if (draft.loyaltyPointsUsed > 0) {
+      if (draft.loyaltyPointsUsed > 0 && customer) {
         await tx.customer.update({
           where: { id: customer.id },
           data: { loyaltyPoints: { decrement: draft.loyaltyPointsUsed } },
         })
       }
 
-      await tx.customer.update({
-        where: { id: customer.id },
-        data: { totalOrders: { increment: 1 }, lastOrderAt: new Date() },
-      })
+      if (customer) {
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { totalOrders: { increment: 1 }, lastOrderAt: new Date() },
+        })
+      }
 
       await tx.food.updateMany({
         where: { id: { in: draft.items.map((item) => item.foodId) } },
@@ -892,6 +911,17 @@ export async function updateOrderStatus(params: {
 
   if (order.status === params.status) return order
 
+  /*
+   * Belt to the schema's braces, for direct service callers: cancellation must
+   * go through `cancelOrder`, which alone guards paid money, reverses loyalty
+   * and coupons, records the reason and frees the table. This function used to
+   * accept CANCELLED and quietly did none of that — a PAID order could be
+   * cancelled with the money kept and nothing returned.
+   */
+  if (params.status === 'CANCELLED') {
+    throw new AppError('Use cancelOrder to cancel an order', 400, 'USE_CANCEL_ORDER')
+  }
+
   if (!canTransition(order.status, params.status)) {
     throw new AppError(
       `An order that is ${order.status.toLowerCase()} cannot move to ${params.status.toLowerCase()}`,
@@ -1006,18 +1036,22 @@ export async function updateOrderStatus(params: {
               reorderLevel: item.reorderLevel,
               unit: item.unit,
             })
+            /*
+             * The half that is actually seen. The socket event above reaches
+             * nobody in production — realtime is off on Netlify and no client
+             * subscribes to it anywhere — so for as long as this feature has
+             * existed, "warn the floor" warned no one. Persisted to the bell,
+             * once a day per item, and deliberately not awaited: a stalled
+             * notification must never slow accepting an order.
+             */
+            void notifyLowStock({
+              restaurantId: order.restaurantId,
+              branchId: order.branchId,
+              item,
+            })
           }
         }
       }
-    }
-
-    if (params.status === 'CANCELLED') {
-      await reconcileOrderDepletion(tx, {
-        restaurantId: order.restaurantId,
-        orderId: order.id,
-        userId: params.actorId ?? null,
-        releaseAll: true,
-      })
     }
 
     // Free the table once everything on it is settled.
@@ -1068,8 +1102,15 @@ export async function cancelOrder(params: {
   })
   if (!order) throw new NotFoundError('Order')
   if (order.status === 'CANCELLED') return order
-  if (order.paymentStatus === 'PAID') {
-    throw new AppError('Refund the payment before cancelling this order', 409, 'ORDER_PAID')
+  /*
+   * Any money at all, not just full settlement. The old check was
+   * `paymentStatus === 'PAID'`, so a PARTIAL bill — half paid in cash, the
+   * rest never collected — could be cancelled with the half kept and no
+   * record of it anywhere. Refunds decrement `paidTotal` back to zero, so a
+   * properly refunded order passes this and cancels normally.
+   */
+  if (order.paidTotal > 0) {
+    throw new AppError('Refund what has been paid before cancelling this order', 409, 'ORDER_PAID')
   }
 
   const updated = await prisma.$transaction(async (tx) => {

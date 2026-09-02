@@ -94,7 +94,16 @@ export async function getSalesReport(params: {
     where: {
       restaurantId: params.restaurantId,
       status: 'REFUNDED',
-      order: { placedAt: { gte: params.range.from, lte: params.range.to } },
+      order: {
+        placedAt: { gte: params.range.from, lte: params.range.to },
+        /*
+         * The same branch scope as every other number on this page. Without
+         * it, one branch's report subtracted the whole group's refunds — so a
+         * branch that had never given money back showed net sales below its
+         * gross, and the branch pages never summed to the group total.
+         */
+        ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      },
     },
     _sum: { amount: true },
   })

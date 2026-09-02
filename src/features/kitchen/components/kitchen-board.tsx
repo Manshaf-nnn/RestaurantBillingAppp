@@ -19,6 +19,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { updateOrderStatus } from '@/features/orders/actions'
+import { rejectOrderAction } from '@/features/kitchen/actions'
 import { acceptOrderAction, setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
 import { callAction } from '@/lib/use-action'
@@ -276,7 +277,13 @@ export function KitchenBoard({
 
   const advance = async (ticket: KitchenTicket, status: OrderStatus) => {
     setPendingId(ticket.id)
-    const result = await callAction(() => updateOrderStatus({ orderId: ticket.id, status }))
+    // Rejection is a cancellation, and cancellation has one entry point — the
+    // status action refuses CANCELLED outright now.
+    const result = await callAction(() =>
+      status === 'CANCELLED'
+        ? rejectOrderAction({ orderId: ticket.id })
+        : updateOrderStatus({ orderId: ticket.id, status }),
+    )
     setPendingId(null)
 
     if (!result.ok) {
@@ -285,7 +292,7 @@ export function KitchenBoard({
     }
 
     setTickets((current) =>
-      status === 'SERVED'
+      status === 'SERVED' || status === 'CANCELLED'
         ? current.filter((entry) => entry.id !== ticket.id)
         : current.map((entry) => (entry.id === ticket.id ? { ...entry, status } : entry)),
     )

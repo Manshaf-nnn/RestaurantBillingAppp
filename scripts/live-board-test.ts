@@ -327,10 +327,13 @@ async function main() {
   console.log('\n── 12. A walk-in is not a person ───────────────────────────')
 
   /*
-   * FAILS BEFORE THE CHANGE. `placeOrder` upserts the customer on
-   * `(restaurantId, phone)` unconditionally and the till sends '' for an
-   * anonymous sale, so every walk-in feeds ONE shared row — which would have
-   * been rendered as a VIP with a visit for every cash sale ever rung up.
+   * DELIBERATE behaviour change 2026-09 (AUDIT.md C2). This pin used to assert
+   * the opposite: that `placeOrder` upserts every blank phone into ONE shared
+   * Customer row, with the live board defensively hiding it. That row's
+   * loyalty points were the pooled points of every anonymous guest, spendable
+   * by anyone who ordered without a phone number. A blank phone now creates no
+   * customer at all — the order carries its name snapshot and a null
+   * customerId — so the board no longer has anything to hide.
    */
   for (let i = 0; i < 3; i += 1) {
     await placeOrder({
@@ -340,8 +343,16 @@ async function main() {
     })
   }
   const shared = await prisma.customer.findFirst({ where: { restaurantId: shop.id, phone: '' } })
-  check('the shared walk-in row does exist in the data', shared !== null)
-  check('and has collected every anonymous sale', (shared?.totalOrders ?? 0) >= 3, `${shared?.totalOrders}`)
+  check('a blank phone creates no customer row at all', shared === null)
+  const anonOrders = await prisma.order.findMany({
+    where: { restaurantId: shop.id, customerPhone: '' },
+    select: { customerId: true },
+  })
+  check(
+    'and every anonymous sale carries no customer id',
+    anonOrders.length >= 3 && anonOrders.every((o) => o.customerId === null),
+    `${anonOrders.length} orders`,
+  )
 
   const board3 = await getLiveBoard({ restaurantId: shop.id, branchId: branch.id })
   check(

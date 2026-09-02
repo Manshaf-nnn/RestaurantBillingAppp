@@ -27,6 +27,8 @@ export interface CapturedError {
   kind: string
   message: string
   stack: string | null
+  /** Whose request failed, from the session cookie. Null for anonymous pages. */
+  restaurantId: string | null
 }
 
 const LIMIT = 20
@@ -50,9 +52,35 @@ export function register() {
 
 export async function onRequestError(
   error: unknown,
-  request: { path?: string },
+  request: { path?: string; headers?: Record<string, string | string[] | undefined> },
   context: { routePath?: string },
 ) {
+  /*
+   * Whose error this is. A stack trace names tables, columns and file paths,
+   * so the row must carry a tenant for /api/health/errors to scope by —
+   * without it, every owner reading a reference code was reading every other
+   * restaurant's failures too. The session cookie is verified, not merely
+   * decoded, so a forged cookie cannot file its errors under someone else.
+   * Anonymous surfaces (login, the QR menu before a session) stay null and
+   * are visible to nobody through the endpoint.
+   */
+  let restaurantId: string | null = null
+  try {
+    const rawCookie = request?.headers?.cookie
+    const cookieHeader = Array.isArray(rawCookie) ? rawCookie.join('; ') : rawCookie
+    const token = cookieHeader
+      ?.split(/;\s*/)
+      .find((part) => part.startsWith('ros_at='))
+      ?.slice('ros_at='.length)
+    if (token) {
+      const { verifyAccessToken } = await import('@/server/auth/jwt')
+      const claims = await verifyAccessToken(decodeURIComponent(token))
+      restaurantId = (claims?.rid as string | undefined) ?? null
+    }
+  } catch {
+    // Attribution is best-effort; the capture below must still happen.
+  }
+
   let captured: CapturedError | null = null
   try {
     const err = error as { message?: string; stack?: string; digest?: string; name?: string }
@@ -65,6 +93,7 @@ export async function onRequestError(
       kind: err?.name ?? typeof error,
       message: err?.message ?? String(error),
       stack: err?.stack ?? null,
+      restaurantId,
     }
     store.__recentErrors ??= []
     store.__recentErrors.push(captured)
@@ -91,6 +120,7 @@ export async function onRequestError(
     const { prisma } = await import('@/server/db/prisma')
     await prisma.errorLog.create({
       data: {
+        restaurantId: captured.restaurantId,
         digest: captured.digest,
         route: captured.route,
         kind: captured.kind,

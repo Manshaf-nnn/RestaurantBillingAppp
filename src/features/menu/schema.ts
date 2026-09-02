@@ -113,6 +113,12 @@ export type FoodInput = z.infer<typeof foodSchema>
 export const toggleAvailabilitySchema = z.object({
   id: z.string().cuid(),
   isAvailable: z.coerce.boolean(),
+  /**
+   * The location being worked in. Present, the switch flips the dish THERE and
+   * nowhere else; absent (the "all locations" view), it flips the shared dish
+   * everywhere, which is then what the screen is honestly showing.
+   */
+  branchId: z.string().min(1).nullable().optional(),
 })
 
 export const menuFilterSchema = z.object({

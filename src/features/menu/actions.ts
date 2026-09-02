@@ -8,7 +8,7 @@ import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { defaultBranchId, replaceFoodBranches } from './branch-menu'
 import { realtime } from '@/server/realtime/emitter'
@@ -484,11 +484,39 @@ export async function toggleFoodAvailability(input: unknown): Promise<ActionResu
   return runAction(toggleAvailabilitySchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.MENU_MANAGE)
 
-    const result = await prisma.food.updateMany({
-      where: { id: data.id, restaurantId: user.restaurantId, deletedAt: null },
-      data: { isAvailable: data.isAvailable },
-    })
-    if (result.count === 0) throw new NotFoundError('Menu item')
+    /*
+     * Scoped to the location on screen.
+     *
+     * This used to write `Food.isAvailable` — the shared row — no matter which
+     * branch the page was showing. The header said "N items on Kandy's menu",
+     * the manager flipped prawns off because Kandy ran out at lunch, and
+     * Colombo's menu lost prawns too. "86 this dish" is the single most common
+     * menu action, and it was quietly restaurant-wide.
+     *
+     * With a branch: the FoodBranch row flips, and `applyBranchOverrides` ANDs
+     * it with the shared flag, so this can only narrow. Without one — the "all
+     * locations" view — the old everywhere-toggle is exactly what the screen
+     * claims to do, and stays.
+     */
+    if (data.branchId) {
+      await assertBranchAccess(user, data.branchId)
+      const result = await prisma.foodBranch.updateMany({
+        where: {
+          foodId: data.id,
+          branchId: data.branchId,
+          restaurantId: user.restaurantId,
+          food: { deletedAt: null },
+        },
+        data: { isAvailable: data.isAvailable },
+      })
+      if (result.count === 0) throw new NotFoundError('Menu item at this location')
+    } else {
+      const result = await prisma.food.updateMany({
+        where: { id: data.id, restaurantId: user.restaurantId, deletedAt: null },
+        data: { isAvailable: data.isAvailable },
+      })
+      if (result.count === 0) throw new NotFoundError('Menu item')
+    }
 
     realtime.menuUpdated(user.restaurantId)
     revalidatePath('/dashboard/menu')

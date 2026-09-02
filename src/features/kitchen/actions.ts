@@ -7,11 +7,12 @@ import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
 import { AppError, NotFoundError } from '@/lib/errors'
-import { updateOrderStatus } from '@/features/orders/service'
+import { cancelOrder, updateOrderStatus } from '@/features/orders/service'
 import { prisma } from '@/server/db/prisma'
 import { planRouting } from './routing'
 import {
   acceptOrderSchema,
+  rejectOrderSchema,
   assignAllDishesSchema,
   reassignItemSchema,
   setOrderPrioritySchema,
@@ -260,6 +261,69 @@ export async function acceptOrderAction(input: unknown): Promise<ActionResult<{ 
  * Only before it is cooked. Once a dish is READY it has been made at the
  * section that made it, and rewriting that would put a lie in the reports.
  */
+/**
+ * Turn an order away, before the kitchen has taken it on.
+ *
+ * The reject button used to send `updateOrderStatus(CANCELLED)`, which skipped
+ * everything `cancelOrder` exists for — no reason recorded, coupons and
+ * loyalty never given back, the table never freed. Cancellation has exactly
+ * one entry point now, and this is the kitchen's door to it.
+ *
+ * Gated by KITCHEN_ACCEPT — rejecting is the other half of accepting — and
+ * only while the order is still PENDING. Once taken on, food is being cooked
+ * and money may be moving: taking it off the books becomes a management
+ * cancellation from the orders screen, with their permission and their reason.
+ */
+export async function rejectOrderAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    rejectOrderSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.KITCHEN_ACCEPT)
+
+      const order = await prisma.order.findFirst({
+        where: { id: data.orderId, restaurantId: user.restaurantId },
+        select: { id: true, branchId: true, status: true, orderNumber: true },
+      })
+      if (!order) throw new AppError('That order no longer exists', 404, 'ORDER_NOT_FOUND')
+      await assertBranchAccess(user, order.branchId)
+
+      if (order.status !== 'PENDING') {
+        throw new AppError(
+          `${order.orderNumber} has already been taken on — it can only be cancelled from the orders screen`,
+          409,
+          'ORDER_ALREADY_ACCEPTED',
+        )
+      }
+
+      const reason = data.reason?.trim() || 'Rejected by the kitchen'
+      await cancelOrder({
+        restaurantId: user.restaurantId,
+        orderId: order.id,
+        reason,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_CANCELLED,
+        entity: 'Order',
+        entityId: order.id,
+        after: { number: order.orderNumber, reason },
+      })
+
+      revalidatePath('/kitchen')
+      revalidatePath('/dashboard/orders')
+      return { id: order.id }
+    },
+    'Order rejected.',
+  )
+}
+
 export async function reassignItemAction(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
     reassignItemSchema,

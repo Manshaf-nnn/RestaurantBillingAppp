@@ -4,7 +4,7 @@ import type { Order } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { computeTotals } from '@/features/orders/pricing'
-import { reconcileOrderDepletion } from '@/features/inventory/depletion'
+import { reconcileIfDepleted, reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { prisma, type TxClient } from '@/server/db/prisma'
 
 /**
@@ -520,7 +520,7 @@ export async function voidOrderItem(
      * `resolveOrderConsumption` ignores cancelled lines, so reconciling here
      * computes the new desired total and returns exactly the difference.
      */
-    const stock = await reconcileOrderDepletion(tx, {
+    const stock = await reconcileIfDepleted(tx, {
       restaurantId: order.restaurantId,
       orderId: order.id,
       userId: params.actorId ?? null,

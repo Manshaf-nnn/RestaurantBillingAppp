@@ -11,6 +11,7 @@ import { resolveStockLocation } from '@/features/branches/service'
 import { resolveCategory } from '@/features/catalog/service'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
+import { notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
 import {
@@ -249,6 +250,13 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
           quantity: nextQuantity,
           reorderLevel: item.reorderLevel,
           unit: item.unit,
+        })
+        // The one that is actually seen: the socket event above reaches nobody
+        // in production. Persisted, deduplicated to once a day per item.
+        await notifyLowStock({
+          restaurantId: user.restaurantId,
+          branchId: data.branchId ?? null,
+          item: { id: item.id, name: item.name, quantity: nextQuantity, reorderLevel: item.reorderLevel, unit: item.unit },
         })
       }
 

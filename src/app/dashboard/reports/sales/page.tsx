@@ -26,7 +26,7 @@ export default async function SalesReportPage({
 
   const p = await searchParams
   const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '')
-  const range = resolveRange({ preset: str('preset') || 'TODAY', from: str('from'), to: str('to') })
+  const range = resolveRange({ preset: str('preset') || 'TODAY', from: str('from'), to: str('to'), timeZone: restaurant.timezone })
 
   /*
    * Resolved through the shared helper so the top-bar switcher and this page's

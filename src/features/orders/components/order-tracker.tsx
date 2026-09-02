@@ -92,12 +92,25 @@ export function OrderTracker({
   const router = useRouter()
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
   const [editing, setEditing] = React.useState(false)
-  const [draftItems, setDraftItems] = React.useState(
-    () => initial.items.map((item) => ({ id: item.id, name: item.name, quantity: item.quantity })),
-  )
+  /*
+   * A line the kitchen has started can only grow (the extra becomes a fresh
+   * QUEUED line server-side), so each draft row remembers the quantity the
+   * kitchen already has as its floor. Voided lines are not editable at all.
+   */
+  const toDraft = (items: TrackedOrder['items']) =>
+    items
+      .filter((item) => item.status !== 'CANCELLED')
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        floor: item.status === 'QUEUED' ? 0 : item.quantity,
+      }))
+  const [draftItems, setDraftItems] = React.useState(() => toDraft(initial.items))
 
   React.useEffect(() => {
-    setDraftItems(initial.items.map((item) => ({ id: item.id, name: item.name, quantity: item.quantity })))
+    setDraftItems(toDraft(initial.items))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial.items])
 
   const { play } = useNotificationSound()
@@ -145,11 +158,11 @@ export function OrderTracker({
   const remaining = Math.max(0, initial.estimatedMinutes - elapsedMinutes)
 
   const saveEditChanges = async () => {
-    const items = draftItems
-      .filter((item) => item.quantity > 0)
-      .map((item) => ({ itemId: item.id, quantity: item.quantity }))
+    // Every line goes in the payload, zeros included: the server reads this as
+    // the whole order, and a line it does not see is a line being removed.
+    const items = draftItems.map((item) => ({ itemId: item.id, quantity: item.quantity }))
 
-    if (!items.length) {
+    if (!items.some((item) => item.quantity > 0)) {
       toast.error('Your order needs at least one item.')
       return
     }
@@ -366,16 +379,21 @@ export function OrderTracker({
                 <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border bg-muted/20 p-2.5">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{item.name}</p>
-                    <p className="text-[11px] text-muted-foreground">Tap to adjust</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {item.floor > 0 ? 'Being prepared — you can add more' : 'Tap to adjust'}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="icon-sm"
+                      disabled={item.quantity <= item.floor}
                       onClick={() =>
                         setDraftItems((list) =>
                           list.map((entry) =>
-                            entry.id === item.id ? { ...entry, quantity: Math.max(0, entry.quantity - 1) } : entry,
+                            entry.id === item.id
+                              ? { ...entry, quantity: Math.max(entry.floor, entry.quantity - 1) }
+                              : entry,
                           ),
                         )
                       }

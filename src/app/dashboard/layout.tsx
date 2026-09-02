@@ -88,7 +88,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       },
       orderBy: { createdAt: 'desc' },
       take: 30,
-      select: { id: true, title: true, body: true, createdAt: true, readAt: true },
+      select: { id: true, title: true, body: true, createdAt: true, readAt: true, data: true },
     }),
     countOpenInstructions({ restaurantId: user.restaurantId, user }),
     // In the same batch, not after it. This was awaited on its own line, adding
@@ -151,6 +151,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
         body: notification.body,
         createdAt: notification.createdAt.toISOString(),
         readAt: notification.readAt?.toISOString() ?? null,
+        /*
+         * Where this notification points. Every producer has been writing an
+         * href into `data` since the day it shipped — the bell just never read
+         * it, so "Stock requested: TR-0012" was a sentence with no way to the
+         * transfer it named.
+         */
+        href:
+          typeof (notification.data as { href?: unknown } | null)?.href === 'string'
+            ? ((notification.data as { href: string }).href)
+            : null,
       }))}
     >
       {children}

@@ -3578,5 +3578,6 @@ model ErrorLog {
 
   @@index([digest])
   @@index([createdAt])
+  @@index([restaurantId, createdAt])
   @@map("error_logs")
 }
