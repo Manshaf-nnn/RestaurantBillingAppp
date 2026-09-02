@@ -246,3 +246,62 @@ Why sixth: §118 phases 34–39; everything here either hardens or makes visible
 **Slice 7 — Test lattice and documentation.**
 Contains: scripts/e2e-reconciliation-test.ts implementing spec 101's worked example end to end (PO 100kg@800 → GRN → sale 50kg → waste 5kg → sales/profit/valuation/reconciliation all agree, purchases ≠ COGS); billing-math matrix incl. tax-inclusive, 0%/100% discount, rounding; payment matrix incl. overpayment/void/BANK_TRANSFER/concurrent invoice numbers; runtime tier mandatory in CI (`verify:full`, non-zero on skip); phase11-perf wired with thresholds (H30); ACCOUNTING.md, INVENTORY.md, TESTING.md first, then SECURITY/DATABASE/ARCHITECTURE/REPORTING/API.md; help-page methodology sections (H31).
 Why last as a slice — but not as an activity: each earlier slice ships its own regression tests; this slice adds the cross-cutting matrix that proves the §121 reconciliation identities and the §122–125 accountant tests hold as a system, and writes down the methodology so they stay held. §118 phases 40–41.
+---
+
+## 8. Re-scored scorecard (§120) — after the seven slices, 2026-09-02
+
+Scored against the same rules as the Phase 0 audit: no unearned 5s, every
+score with evidence, every remaining issue named. Evidence cites code and the
+test that pins it; "verified" means it runs green in the three-tier harness
+(1,900+ checks, runtime tier mandatory).
+
+| Area | Score / 5 | Evidence | Remaining issues |
+| --- | ---: | --- | --- |
+| Architecture | **4** | Single engines for every hard problem (computeTotals, postMovement, reconcileOrderDepletion, cancelOrder, ensureInvoice, resolveRange, nextCounterValue — ARCHITECTURE.md); the spec's missing entities all exist (Refund, TableSession, DailyClose, AccountingPeriod, PrintJob, LoyaltyEntry); one revenue definition product-wide (report-agreement-test) | Realtime off in prod by design (polling); no offline capability |
+| Multi-tenancy | **4** | restaurantId from session only; error log tenant-scoped with verified-cookie attribution; all five cashier bill actions branch-pinned; branch guards fail closed; integrity check for tenancy breaks | Plan gating (availablePermissions) coarse-grained |
+| Database | **4** | Migrations-only with hand-curated diffs; first CHECK constraints (money floors, loyalty, refunds); ledgers + recomputable caches verified by runIntegrityChecks; atomic counters; movement/branch indexes; SKU unique | Parked `recipe_items` table awaits removal; quantities are Float-with-rounding, not Decimal |
+| Authentication | **4** | JWT access + rotating refresh, httpOnly; separate admin session; guest session cookies gate order access (guest-edit-test §5) | No 2FA / device management |
+| RBAC | **4** | Saved roles REPLACE presets (deny works); plan intersection; per-user grants; page/feature/permission agreement enforced by static guard; ACCOUNTING_CLOSE withheld from auditors by design | No per-branch role variants |
+| QR Ordering | **4** | Idempotent placement; authoritative guest-edit payload (C1, guest-edit-test over real HTTP); no shared walk-in identity (C2); QUEUED-only guest edits, cancel-not-delete | No guest-side payment (by design, §6) |
+| Orders | **4** | One cancellation entry point with paidTotal guard (C4); period sealing on history; status ladder with truthful timestamps; TableSession lifecycle (structural-test) | Modifiers not editable post-placement by guests (deliberate) |
+| KDS | **4** | Per-section routing, all-or-nothing acceptance with named-dish refusals, derived order status, reject → cancelOrder with reasons | No hardware bump-bar integration |
+| Waiter | **4** | Serve-all walks the ladder from PREPARING (structural-test §3); item-level serving; audience-scoped bell | Floor map basic |
+| POS | **4** | Split/partial settle via amount field; BANK_TRANSFER/OTHER recordable with references; server-priced bills; drawer attribution by branch | Method buttons not yet config-per-restaurant |
+| Billing | **5** | One deterministic integer engine for every path; 96-combination matrix + clamping/rounding/tip rules pinned (billing-math-test); discount split preserved to the DB; recalc after every line change; sum(lines)=subtotal enforced by integrity checker | — |
+| Payments | **4** | Immutable payments + Refund ledger with partials; FOR UPDATE against double-settle and double-refund (payment-model-test races); approval thresholds enforced; paidTotal recomputed-by-sum | Guest transfer claims rely on cashier confirmation flow |
+| Cash reconciliation | **4** | Drawer sessions with tolerance + owner-only variance review; refunds hit the open drawer; daily close freezes variance beside takings; §46 side-by-side | Multi-drawer-per-branch scenarios thin |
+| Inventory | **4** | Sole-writer ledger; branch-level negative guard (recipe-costing-test updated deliberately); unit lock (C8); cost create-only; FEFO per branch | Par-level suggestions basic |
+| Inventory ledger | **5** | postMovement owns every balance; FOR UPDATE + guardLocks; value-carrying WAC with stamped costs on every row including reversals; cross-item ledger screen; integrity replay (balances vs movements, shelves vs totals) green; §101 ladder closes with zero drift | — |
+| Purchasing | **4** | GRN as the PO→stock path; quick purchase through the same ledger with counter numbers and lots; branch-attributed spend | Approval thresholds for POs not wired to ApprovalRequest |
+| Suppliers | **4** | Ledgered balances; accountant may settle, not edit | No supplier statements export |
+| Recipes | **4** | Versioning with pinning at acceptance; sub-recipes, yields, wastage %; variant options consume recipes (C7, inventory-truth-test §4) | No recipe cost trend view |
+| Costing | **4** | Weighted average carried as exact value; snapshots at acceptance; menu-price fallback only for recipe-less dishes | Historical pre-snapshot lines remain uncosted |
+| COGS | **4** | Ledger-derived, option-inclusive, pinned-version; purchases ≠ COGS held end to end (e2e-reconciliation-test) | COGS by daypart not broken out |
+| Waste | **4** | Ledgered with reasons, valued at average, in the value ladder and daily close | Photo evidence not supported |
+| Stock counts | **4** | Maker-checker with self-approval only for owners; stored-variance posting; signed money impact in the audit trail (inventory-truth-test §5) | No blind-count mode |
+| Inventory valuation | **4** | stockValue exact per item; valuation figures on reconciliation screen and ledger; movement rows individually valued | No valuation-by-category report page |
+| Customers | **4** | No shared walk-in row (C2 retired with data fix-up); branch-scoped visibility; live-board tiers honest | Merge-duplicate-customers tool absent |
+| Loyalty | **4** | Full ledger (§72) with conditional decrement beating the double-spend race; balance = Σ entries enforced by integrity checker; public redemption removed | Earn base still includes tax (candidate refinement) |
+| Coupons | **4** | Server-validated limits, per-customer caps, redemption rows recording the coupon's own take; split/merge apportionment | Stacking rules single-coupon only |
+| Reservations | **3** | Feature present and tenant-scoped | Untouched by this remediation; depth unverified |
+| Sales reports | **4** | §110 definition, tz-correct, branch-summing, refund-aware, drillable | Custom range picker basic |
+| Accounting reports | **4** | Daily close (§51 snapshot), sealed periods (§59), integrity statuses (§116) on one screen | No P&L statement layout; close snapshots not yet exportable |
+| Reconciliation | **5** | Quantity AND value ladders vs stored balances; 14-check integrity engine proven by breaking the books on purpose (hardening-test); §101 worked example green end to end with purchases ≠ COGS | — |
+| Printing | **3** | Every print recorded with exact payload, PRINTED/FAILED, reprint-identical (§80); honest 58/80mm widths | Browser printing only — no server print queue/retry to hardware |
+| Realtime | **3** | Honest polling via scoped /api/pulse; sockets clean but disabled in prod | No SSE/streaming alternative on the serverless host |
+| PWA | **3** | Installable; offline page now tells the truth (§81) | No offline order queue (deliberately — but that caps the score) |
+| Security | **4** | See SECURITY.md; static guards enforce page/feature agreement; rate limits real on serverless; audits with before/after | No CSP headers audit; no pen test |
+| Performance | **3** | Indexed hot paths; polling tuned; unbounded reads capped where they feed UI | Report aggregation in JS not SQL for large ranges; no load testing |
+| Testing | **5** | Three tiers, 1,900+ checks, runtime tier mandatory (fails when skipped); races tested as races; proof suites for §101/§102; deliberate-pin-change discipline; the integrity checker caught the suite's own dishonest fixtures | No headless-browser tier (Server Actions covered over HTTP instead) |
+| Deployment | **4** | Netlify auto-deploy from main; migrations via db:deploy:safe; additive-only with backfills; local rehearsal before push | Single environment — no staging |
+| UI/UX | **4** | Drill-down from every headline (§57); calm-by-default drawer close; honest empty/error states; receipts explain their own totals (§92) | Design-system consistency pass pending |
+| Accessibility | **3** | Semantic tables/labels/focus states throughout | Never formally audited |
+| Documentation | **4** | ACCOUNTING/INVENTORY/REPORTING/TESTING methodology docs; ARCHITECTURE/DATABASE/SECURITY/API; README index; in-app methodology help (§9b) | API.md thin (no public API by design) |
+
+**Reading the line:** the money and stock core — billing, ledger,
+reconciliation, testing — now earns its 5s with running proof; nearly
+everything else sits at an honest 4 with its remaining issue named; the 3s
+(reservations, printing hardware, realtime, PWA, performance-at-scale,
+accessibility) are the areas the seven slices deliberately did not reach.
+The Phase 0 verdict — "the write paths are strong, the read side lies, the
+accounting layer does not exist" — no longer describes this system.

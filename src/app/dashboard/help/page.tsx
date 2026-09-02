@@ -819,6 +819,27 @@ export default async function HelpPage() {
           </Note>
         </SectionCard>
 
+        <SectionCard title="9b · How the numbers are computed" description="The definitions every screen shares — so a figure here always matches the same figure anywhere else.">
+          <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+{`Net sales   = goods sold − discounts − refunds
+              (never tax, never service charge, never tips)
+Collected   = payments in − refunds out       ← cash-basis, shown BESIDE net sales
+Owed        = bill total + tip − paid so far
+COGS        = what the sold food's ingredients cost, at the weighted
+              average when the kitchen accepted each order
+Gross profit = net sales − COGS
+Purchases   ≠ COGS: money spent on stock is not money's worth of food sold`}
+          </pre>
+          <Note>
+            The tip is the staff&rsquo;s money riding on top of the bill — it appears on
+            receipts and in what a guest owes, and in <strong>no</strong> revenue figure.
+            Every report runs on the restaurant&rsquo;s own timezone, so &ldquo;today&rdquo;
+            rolls over at your midnight. The daily close freezes a day&rsquo;s figures
+            exactly as signed.{' '}
+            <Guide href="/dashboard/reports/daily-close">Daily close</Guide>
+          </Note>
+        </SectionCard>
+
         <SectionCard title="10 · Setting up, in order">
           <ol className="list-inside list-decimal space-y-1.5 text-sm text-muted-foreground">
             <li><Guide href="/dashboard/settings">Settings</Guide> — name, currency, tax</li>

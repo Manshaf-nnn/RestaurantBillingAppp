@@ -26,6 +26,7 @@ import { execFileSync } from 'node:child_process'
 const BASE_URL = process.env.BASE_URL
 
 const STATIC = [
+  'billing-math-test',
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
   'no-item-branch-filter',
@@ -63,6 +64,9 @@ const SERVICE = [
   'structural-test',
   // AUDIT.md Slice 6 — the integrity checker and shared rate limits.
   'hardening-test',
+  // AUDIT.md Slice 7 — the §101 worked example, end to end, and the billing
+  // engine's own matrix.
+  'e2e-reconciliation-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',
@@ -148,13 +152,28 @@ async function main() {
 
   console.log(`\n${'═'.repeat(62)}`)
   console.log(`  ${passed} passed · ${failed} failed · ${skipped.length} suite(s) skipped`)
-  if (skipped.length > 0 && !BASE_URL) {
+
+  /*
+   * The runtime tier is MANDATORY (§121, AUDIT.md slice 7). It exits green
+   * when skipped for months, and the three stock-corrupting bugs that shipped
+   * under 636 green tests all lived in the seam it covers. A run without it
+   * now FAILS, unless the caller says in so many words that they know:
+   * SKIP_RUNTIME=1 is for quick service-tier iteration, never for sign-off.
+   */
+  const runtimeSkipped = results.some((r) => r.kind === 'runtime' && r.skipped)
+  if (runtimeSkipped && !BASE_URL) {
     console.log(
-      '\n  The runtime checks were skipped. They are the ones that catch a page\n' +
-      '  or action that fails only when actually served, so run them too:\n' +
+      '\n  The runtime checks were SKIPPED — and they are the ones that catch a\n' +
+      '  page or action that fails only when actually served:\n' +
       '    npx next build && npx next start -p 3210 &\n' +
       '    BASE_URL=http://localhost:3210 npx tsx --tsconfig tsconfig.test.json scripts/verify-all.ts',
     )
+    if (process.env.SKIP_RUNTIME === '1') {
+      console.log('\n  SKIP_RUNTIME=1 — treating that as deliberate. Not a sign-off run.\n')
+      process.exit(failed === 0 ? 0 : 1)
+    }
+    console.log('\n  A verify run without the runtime tier is not a pass. (SKIP_RUNTIME=1 to waive, deliberately.)\n')
+    process.exit(1)
   }
   console.log()
   process.exit(failed === 0 ? 0 : 1)
