@@ -78,6 +78,7 @@ export function MenuManager({
   foods: initialFoods,
   categories,
   stations = [],
+  recipes = [],
   currency,
   locale,
   canManage,
@@ -90,6 +91,8 @@ export function MenuManager({
   categories: CategoryOption[]
   /** Kitchen sections across every branch, for the per-branch routing picker. */
   stations?: StationOption[]
+  /** Recipes an add-on option may consume. Empty hides the picker. */
+  recipes?: Array<{ id: string; name: string }>
   currency: string
   locale: string
   canManage: boolean
@@ -372,6 +375,7 @@ export function MenuManager({
           foodId={dialogFood?.id}
           categories={categories}
           stations={stations}
+          recipes={recipes}
           currency={currency}
           branches={branches}
           activeBranchId={activeBranchId}

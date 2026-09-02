@@ -215,6 +215,38 @@ export async function postMovement(
   }
 
   /*
+   * The same refusal PER BRANCH. The check above reads the restaurant-wide
+   * total, so a branch holding nothing could keep selling for as long as some
+   * OTHER branch had stock — its own balance sank below zero while the total
+   * stayed healthy, and the reconciliation report found the hole weeks later.
+   * Same policy switch, same correction escape hatch.
+   */
+  if (signed < 0 && !CORRECTIONS.includes(params.type)) {
+    // Summed across shelves: what the BRANCH holds, wherever it sits.
+    const here = await tx.inventoryStock.aggregate({
+      where: { itemId: item.id, branchId: params.branchId, restaurantId: params.restaurantId },
+      _sum: { available: true },
+    })
+    const atBranch = here._sum.available ?? 0
+    const branchAfter = round(atBranch + signed)
+    if (branchAfter < 0) {
+      const restaurant = await tx.restaurant.findUnique({
+        where: { id: params.restaurantId },
+        select: { allowNegativeStock: true },
+      })
+      if (!restaurant?.allowNegativeStock) {
+        throw new AppError(
+          `Not enough ${item.name} at this location: ${formatQuantity(atBranch, item.unit)} here, ` +
+            `${formatQuantity(magnitude, item.unit)} needed. ` +
+            'Transfer stock in or record the delivery first.',
+          409,
+          'STOCK_INSUFFICIENT_BRANCH',
+        )
+      }
+    }
+  }
+
+  /*
    * What this stock was worth when it moved.
    *
    * Inbound movements bring their own price and it must not be invented — the
@@ -225,7 +257,8 @@ export async function postMovement(
    * makes the ledger the source of truth for cost as well as quantity, and it is
    * a snapshot: later price changes cannot rewrite what last month cost.
    */
-  const unitCost = params.unitCost ?? (signed < 0 ? item.costPerUnit : 0)
+  const valuation = valueUpdate(item, signed, params.unitCost)
+  const unitCost = valuation.movementUnitCost
 
   const movement = await tx.stockMovement.create({
     data: {
@@ -279,16 +312,15 @@ export async function postMovement(
         restaurantId: params.restaurantId,
         itemId: item.id,
         quantity: magnitude,
+        branchId: params.branchId,
       })
       await consumeBatches(tx, allocations)
     }
   }
 
-  const costing = costingUpdate(item, signed, params.unitCost)
-
   const updated = await tx.inventoryItem.update({
     where: { id: item.id },
-    data: { quantity: balanceAfter, ...costing },
+    data: { quantity: balanceAfter, ...valuation.item },
   })
 
   // Mirror the change onto the location that owns it. The item total above is
@@ -313,27 +345,65 @@ export async function postMovement(
 }
 
 /**
- * Weighted average cost, recomputed on receipt.
+ * Value-carrying weighted average cost.
  *
- * Only inbound movements carrying a cost move the average; a sale or a wastage
- * must not, or the cost of what is left would change every time something is
- * sold. When the previous balance was zero or negative there is nothing to
- * average against, so the new cost simply becomes the cost.
+ * The average used to live only as a rounded Int per base unit, recomputed on
+ * receipt — and for an item counted in grams, a real cost of 0.4 cents per
+ * gram rounded to 0, so entire deliveries were worth nothing on the books.
+ * The VALUE on hand is now the tracked figure, exact: receipts add at their
+ * own price, everything leaving subtracts at the running average, and
+ * `costPerUnit` becomes a rounded cache of value ÷ quantity.
+ *
+ * Rules the numbers follow:
+ *   • Outbound never moves the average — selling stock cannot change what the
+ *     rest of it cost.
+ *   • Inbound WITHOUT a price (a sale reversal, a transfer in) comes back at
+ *     the running average, so returned stock carries the value it left with —
+ *     these rows used to be stamped zero and the value ladder could not close.
+ *   • When the balance empties or goes negative the value is written to zero:
+ *     negative stock is a quantity problem, and pretending it holds negative
+ *     value would poison the next receipt's average.
  */
-function costingUpdate(
+function valueUpdate(
   item: InventoryItem,
   signedBase: number,
-  unitCost?: number,
-): { costPerUnit?: number; lastPurchaseCost?: number } {
-  if (signedBase <= 0 || unitCost === undefined || unitCost <= 0) return {}
+  explicitUnitCost?: number,
+): {
+  item: { stockValue: number; costPerUnit?: number; lastPurchaseCost?: number }
+  movementUnitCost: number
+} {
+  const prevQty = Math.max(0, item.quantity)
+  const prevValue = Math.max(0, Number(item.stockValue))
+  const average = prevQty > 0 ? prevValue / prevQty : item.costPerUnit
 
-  const previousQty = Math.max(0, item.quantity)
-  const blended =
-    previousQty > 0
-      ? Math.round((previousQty * item.costPerUnit + signedBase * unitCost) / (previousQty + signedBase))
-      : unitCost
+  if (signedBase > 0) {
+    const priced = explicitUnitCost !== undefined && explicitUnitCost > 0
+    const unitCost = priced ? explicitUnitCost! : average
+    const nextQty = prevQty + signedBase
+    const nextValue = prevValue + signedBase * unitCost
+    return {
+      item: {
+        stockValue: round6(nextValue),
+        costPerUnit: nextQty > 0 ? Math.round(nextValue / nextQty) : item.costPerUnit,
+        ...(priced ? { lastPurchaseCost: explicitUnitCost } : {}),
+      },
+      movementUnitCost: Math.round(unitCost),
+    }
+  }
 
-  return { costPerUnit: blended, lastPurchaseCost: unitCost }
+  const out = Math.min(-signedBase, prevQty)
+  const outValue = prevQty > 0 ? (prevValue * out) / prevQty : 0
+  const nextQty = prevQty + signedBase
+  const nextValue = nextQty <= 0 ? 0 : Math.max(0, prevValue - outValue)
+  return {
+    // The average itself is deliberately not recomputed on the way out.
+    item: { stockValue: round6(nextValue) },
+    movementUnitCost: explicitUnitCost ?? Math.round(average),
+  }
+}
+
+function round6(value: number): number {
+  return Math.round(value * 1e6) / 1e6
 }
 
 /**

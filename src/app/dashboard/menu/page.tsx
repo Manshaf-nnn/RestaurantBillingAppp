@@ -40,7 +40,7 @@ export default async function MenuPage({
     skipDuplicates: true,
   })
 
-  const [restaurant, menu, stations, unmapped, allBranches, branch] = await Promise.all([
+  const [restaurant, menu, stations, recipes, unmapped, allBranches, branch] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getManagedMenu(user.restaurantId, undefined, branchId),
     /*
@@ -52,6 +52,16 @@ export default async function MenuPage({
       where: { restaurantId: user.restaurantId, isActive: true },
       select: { id: true, name: true, branchId: true },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    }),
+    /*
+     * Recipes an add-on can consume (§29). Only active, current versions —
+     * an option pinned to a retired recipe keeps working (SetNull is the
+     * schema's answer), but nobody should be able to CHOOSE a dead one.
+     */
+    prisma.recipe.findMany({
+      where: { restaurantId: user.restaurantId, isActive: true, archivedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
     }),
     /*
      * Dishes this location sells that no section is responsible for. Only
@@ -96,6 +106,7 @@ export default async function MenuPage({
       branchCount={menu.branchCount}
       categories={menu.categories.map((category) => ({ id: category.id, name: category.name }))}
       stations={stations}
+      recipes={recipes.map((recipe) => ({ id: recipe.id, name: recipe.name ?? 'Unnamed recipe' }))}
       foods={menu.foods.map((food) => ({
         id: food.id,
         name: food.name,

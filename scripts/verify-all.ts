@@ -54,6 +54,8 @@ const SERVICE = [
   'pos-billing-test',
   // AUDIT.md Slice 2 — tips, refund rows, discount split, counters, loyalty ledger.
   'payment-model-test',
+  // AUDIT.md Slice 3 — option consumption, value-carrying WAC, branch guards.
+  'inventory-truth-test',
   'variant-order-test',
   'custom-domain-test',
   'cash-drawer-test',

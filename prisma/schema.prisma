@@ -1216,7 +1216,15 @@ model VariantOption {
   isAvailable Boolean @default(true)
   sortOrder   Int     @default(0)
 
+  /// What choosing this option consumes — "extra chicken" is food leaving the
+  /// kitchen, and for as long as this was missing it left silently (§29).
+  /// Null means the option is free of stock (e.g. "no onions"), which is a
+  /// real state, not a default to fear.
+  recipeId String?
+  recipe   Recipe? @relation("OptionConsumption", fields: [recipeId], references: [id], onDelete: SetNull)
+
   @@index([groupId])
+  @@index([recipeId])
   @@map("variant_options")
 }
 
@@ -1832,7 +1840,13 @@ model InventoryItem {
   maxStock     Float?
 
   /// Weighted average cost per base unit, minor units. Recomputed on receipt.
+  /// A CACHE of stockValue / quantity, rounded — display and fallback only.
   costPerUnit      Int  @default(0)
+  /// What the stock on hand is WORTH, minor units, exact. The ledger moves
+  /// this with every movement: receipts add at their price, issues subtract
+  /// at the running average, and the pennies that per-unit rounding used to
+  /// bleed on every movement stay in here (§39 — value-carrying WAC).
+  stockValue       Decimal @default(0) @db.Decimal(18, 6)
   /// What the last purchase actually cost per base unit, minor units.
   lastPurchaseCost Int?
 
@@ -1877,6 +1891,8 @@ model InventoryItem {
   stockCountLines StockCountLine[]
 
   @@unique([restaurantId, name])
+  /// Two items sharing a SKU is how the wrong thing gets scanned out.
+  @@unique([restaurantId, sku])
   @@index([restaurantId, isActive])
   @@index([restaurantId, expiryDate])
   @@index([restaurantId, branchId, isActive])
@@ -1938,6 +1954,7 @@ model StockMovement {
   @@index([restaurantId, type, createdAt])
   @@index([referenceType, referenceId])
   @@index([restaurantId, branchId, createdAt])
+  @@index([itemId, branchId, createdAt])
   @@index([orderId])
   @@index([purchaseId])
   @@map("stock_movements")
@@ -2926,6 +2943,7 @@ model Recipe {
   orderItems       OrderItem[]
   productionOrders ProductionOrder[]
 
+  consumedByOptions VariantOption[] @relation("OptionConsumption")
   @@index([restaurantId, foodId, isActive])
   @@index([restaurantId, producesItemId, isActive])
   @@map("recipes")

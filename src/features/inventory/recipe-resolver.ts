@@ -401,31 +401,67 @@ export async function resolveOrderConsumption(
 ): Promise<{ totals: Map<string, number>; problems: string[] }> {
   const lines = await db.orderItem.findMany({
     where: { orderId: params.orderId, status: { not: 'CANCELLED' } },
-    select: { foodId: true, quantity: true, recipeId: true },
+    select: { foodId: true, quantity: true, recipeId: true, options: true },
   })
+
+  /*
+   * What the chosen options consume (§29). "Extra chicken" is chicken leaving
+   * the kitchen; until options could name a recipe, nothing ever depleted or
+   * costed it — the largest silent margin overstatement in the system. One
+   * query resolves every selected option on the order to its recipe.
+   */
+  const optionIds = [
+    ...new Set(
+      lines.flatMap((line) =>
+        (Array.isArray(line.options) ? (line.options as Array<{ optionId?: string }>) : [])
+          .map((option) => option.optionId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ),
+  ]
+  const optionRecipes = optionIds.length
+    ? new Map(
+        (
+          await db.variantOption.findMany({
+            where: { id: { in: optionIds }, recipeId: { not: null } },
+            select: { id: true, recipeId: true },
+          })
+        ).map((row) => [row.id, row.recipeId!]),
+      )
+    : new Map<string, string>()
 
   const totals = new Map<string, number>()
   const problems: string[] = []
 
-  for (const line of lines) {
-    if (!line.foodId) continue
-
-    // Pinned version first: a line sold in January must keep costing and
-    // depleting against January's recipe even after the recipe changes.
-    const recipeId =
-      line.recipeId ??
-      (await activeRecipeForFood(db, params.restaurantId, line.foodId))?.id ??
-      null
-    if (!recipeId) continue
-
+  const addRecipe = async (recipeId: string, portions: number) => {
     const resolved = await resolveRecipe(db, {
       restaurantId: params.restaurantId,
       recipeId,
-      portions: line.quantity,
+      portions,
     })
     problems.push(...resolved.problems)
     for (const ingredient of resolved.ingredients) {
       totals.set(ingredient.itemId, (totals.get(ingredient.itemId) ?? 0) + ingredient.quantity)
+    }
+  }
+
+  for (const line of lines) {
+    if (line.foodId) {
+      // Pinned version first: a line sold in January must keep costing and
+      // depleting against January's recipe even after the recipe changes.
+      const recipeId =
+        line.recipeId ??
+        (await activeRecipeForFood(db, params.restaurantId, line.foodId))?.id ??
+        null
+      if (recipeId) await addRecipe(recipeId, line.quantity)
+    }
+
+    // Options ride per line: two burgers with extra cheese consume two extras.
+    for (const option of Array.isArray(line.options)
+      ? (line.options as Array<{ optionId?: string }>)
+      : []) {
+      const recipeId = option.optionId ? optionRecipes.get(option.optionId) : undefined
+      if (recipeId) await addRecipe(recipeId, line.quantity)
     }
   }
 

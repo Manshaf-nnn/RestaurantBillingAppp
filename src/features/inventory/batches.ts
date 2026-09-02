@@ -90,10 +90,21 @@ export async function upsertBatch(
  */
 export async function allocateFefo(
   db: TxClient | typeof prisma,
-  params: { restaurantId: string; itemId: string; quantity: number },
+  params: { restaurantId: string; itemId: string; quantity: number; branchId?: string | null },
 ): Promise<{ allocations: BatchAllocation[]; shortfall: number }> {
+  /*
+   * Only lots that are physically WHERE the stock is leaving from. Without
+   * the branch predicate a sale in Colombo drained Kandy's crates on paper:
+   * Kandy's expiry board stopped warning about stock it still held, and
+   * Colombo's kept warning about stock it never had.
+   */
   const batches = await db.stockBatch.findMany({
-    where: { restaurantId: params.restaurantId, itemId: params.itemId, remainingQty: { gt: 0 } },
+    where: {
+      restaurantId: params.restaurantId,
+      itemId: params.itemId,
+      remainingQty: { gt: 0 },
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
     orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }],
   })
 

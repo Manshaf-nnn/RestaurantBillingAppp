@@ -251,9 +251,35 @@ export async function snapshotLineCosts(
    */
   const lines = await tx.orderItem.findMany({
     where: { orderId: params.orderId, costPrice: 0 },
-    select: { id: true, recipeId: true, foodId: true },
+    select: { id: true, recipeId: true, foodId: true, options: true },
   })
   if (lines.length === 0) return 0
+
+  /*
+   * Options cost money too (§29). A line's cost is its dish's recipe PLUS the
+   * recipe of every chosen option — "extra chicken" was depleting nothing and
+   * costing nothing, and of the two the costing half is what quietly
+   * overstated every margin figure.
+   */
+  const optionIds = [
+    ...new Set(
+      lines.flatMap((line) =>
+        (Array.isArray(line.options) ? (line.options as Array<{ optionId?: string }>) : [])
+          .map((option) => option.optionId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ),
+  ]
+  const optionRecipeIds = optionIds.length
+    ? new Map(
+        (
+          await tx.variantOption.findMany({
+            where: { id: { in: optionIds }, recipeId: { not: null } },
+            select: { id: true, recipeId: true },
+          })
+        ).map((row) => [row.id, row.recipeId!]),
+      )
+    : new Map<string, string>()
 
   const costByRecipe = new Map<string, number>()
   let written = 0
@@ -270,21 +296,32 @@ export async function snapshotLineCosts(
       : [],
   )
 
+  const recipeCost = async (recipeId: string): Promise<number> => {
+    if (!costByRecipe.has(recipeId)) {
+      const resolved = await resolveRecipe(tx, {
+        restaurantId: params.restaurantId,
+        recipeId,
+        portions: 1,
+      })
+      costByRecipe.set(recipeId, resolved ? Math.round(resolved.totalCost) : 0)
+    }
+    return costByRecipe.get(recipeId) ?? 0
+  }
+
   for (const line of lines) {
     let cost = 0
 
     if (line.recipeId) {
-      if (!costByRecipe.has(line.recipeId)) {
-        const resolved = await resolveRecipe(tx, {
-          restaurantId: params.restaurantId,
-          recipeId: line.recipeId,
-          portions: 1,
-        })
-        costByRecipe.set(line.recipeId, resolved ? Math.round(resolved.totalCost) : 0)
-      }
-      cost = costByRecipe.get(line.recipeId) ?? 0
+      cost = await recipeCost(line.recipeId)
     } else if (line.foodId) {
       cost = menuCost.get(line.foodId) ?? 0
+    }
+
+    for (const option of Array.isArray(line.options)
+      ? (line.options as Array<{ optionId?: string }>)
+      : []) {
+      const optionRecipe = option.optionId ? optionRecipeIds.get(option.optionId) : undefined
+      if (optionRecipe) cost += await recipeCost(optionRecipe)
     }
 
     if (cost > 0) {

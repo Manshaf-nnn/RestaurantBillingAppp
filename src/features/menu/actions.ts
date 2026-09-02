@@ -380,6 +380,8 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
               priceDelta: option.priceDelta,
               isDefault: option.isDefault,
               isAvailable: option.isAvailable,
+              // Absent leaves whatever is stored; null clears the link.
+              ...(option.recipeId !== undefined ? { recipeId: option.recipeId } : {}),
               // `??`, not `||`: an option that genuinely sorts first has
               // sortOrder 0, and the old falsy check pushed it to its index.
               sortOrder: option.sortOrder ?? index,
@@ -579,6 +581,7 @@ export async function duplicateFood(id: string): Promise<ActionResult<{ id: stri
                   isDefault: option.isDefault,
                   isAvailable: option.isAvailable,
                   sortOrder: option.sortOrder,
+                  recipeId: option.recipeId,
                 })),
               },
             })),

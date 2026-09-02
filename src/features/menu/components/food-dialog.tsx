@@ -51,6 +51,8 @@ interface OptionRow {
   priceDelta: number
   isDefault: boolean
   isAvailable: boolean
+  /** Recipe this option consumes — how "extra chicken" reaches the ledger. */
+  recipeId?: string | null
 }
 
 interface GroupRow {
@@ -156,6 +158,7 @@ export function FoodDialog({
   foodId,
   categories,
   stations = [],
+  recipes = [],
   currency,
   branches = [],
   activeBranchId = null,
@@ -166,6 +169,8 @@ export function FoodDialog({
   categories: CategoryOption[]
   /** Kitchen sections, across every branch. Empty when nobody uses them. */
   stations?: StationOption[]
+  /** Recipes an option may consume. Empty hides the picker entirely. */
+  recipes?: Array<{ id: string; name: string }>
   currency: string
   /** Locations this dish may be sold at. Empty for a single-site restaurant. */
   branches?: BranchOption[]
@@ -271,6 +276,7 @@ export function FoodDialog({
               priceDelta: option.priceDelta,
               isDefault: option.isDefault,
               isAvailable: option.isAvailable,
+              recipeId: option.recipeId ?? null,
             })),
           })),
         })
@@ -334,7 +340,7 @@ export function FoodDialog({
         isRequired: kind === 'VARIANT',
         minSelect: kind === 'VARIANT' ? 1 : 0,
         maxSelect: kind === 'VARIANT' ? 1 : 5,
-        options: [{ name: '', priceDelta: 0, isDefault: kind === 'VARIANT', isAvailable: true }],
+        options: [{ name: '', priceDelta: 0, isDefault: kind === 'VARIANT', isAvailable: true, recipeId: null }],
       },
     ])
 
@@ -445,6 +451,7 @@ export function FoodDialog({
             isDefault: option.isDefault,
             isAvailable: option.isAvailable,
             sortOrder: optionIndex,
+            recipeId: option.recipeId ?? null,
           })),
       })),
       branches: form.branches.map((row) => ({
@@ -832,6 +839,32 @@ export function FoodDialog({
                             className="w-28"
                             title={asPrice ? `What this size costs (${currency})` : `Added to the price (${currency})`}
                           />
+
+                          {/*
+                            What this choice takes from stock. Optional and
+                            usually blank — "no onions" moves nothing — but
+                            "extra chicken" without this consumed and cost
+                            nothing at all, on every plate, silently.
+                          */}
+                          {recipes.length > 0 ? (
+                            <select
+                              className="h-9 w-32 shrink-0 rounded-md border bg-background px-2 text-xs"
+                              value={option.recipeId ?? ''}
+                              title="Recipe this option consumes from stock"
+                              onChange={(e) =>
+                                setOptionField(groupIndex, optionIndex, {
+                                  recipeId: e.target.value || null,
+                                })
+                              }
+                            >
+                              <option value="">No stock used</option>
+                              {recipes.map((recipe) => (
+                                <option key={recipe.id} value={recipe.id}>
+                                  {recipe.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
 
                           {/* 86 a size without deleting it. */}
                           <label className="flex shrink-0 items-center gap-1 text-xs" title="On sale">

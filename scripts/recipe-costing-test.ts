@@ -214,6 +214,25 @@ async function main() {
     burgerCost.ingredients.length === 1 && burgerCost.ingredients[0]?.itemId === sauce.id,
     burgerCost.ingredients.map((i) => i.name).join(', ') || 'nothing')
 
+  /*
+   * DELIBERATE behaviour change 2026-09 (AUDIT.md Slice 3). The sauce was
+   * produced at the production house and this test used to sell it at the
+   * branch with no transfer in between — which the ledger now refuses: a
+   * branch cannot sell stock it does not hold, even while another site does.
+   * The honest step the real workflow performs is the transfer, so the test
+   * performs it too.
+   */
+  await prisma.$transaction(async (tx) => {
+    await postMovement(tx, {
+      restaurantId: restaurant.id, itemId: sauce.id, type: 'TRANSFER_OUT',
+      quantity: 2, branchId: house.id, userId: user.id, reason: 'To the branch',
+    })
+    await postMovement(tx, {
+      restaurantId: restaurant.id, itemId: sauce.id, type: 'TRANSFER_IN',
+      quantity: 2, branchId: branch.id, userId: user.id, reason: 'From the kitchen',
+    })
+  })
+
   const tomatoBefore = await qty(tomato.id)
   const order = await prisma.order.create({
     data: {

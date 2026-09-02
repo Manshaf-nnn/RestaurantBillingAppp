@@ -239,7 +239,7 @@ export async function submitStockCountAction(stockCountId: string): Promise<Acti
  */
 export async function approveStockCountAction(
   input: unknown,
-): Promise<ActionResult<{ adjusted: number; unchanged: number }>> {
+): Promise<ActionResult<{ adjusted: number; unchanged: number; valueDelta: number }>> {
   return runAction(approveCountSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT_APPROVE)
     await assertRecordBranch(
@@ -265,10 +265,17 @@ export async function approveStockCountAction(
     await audit({
       restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_COUNT_APPROVED, entity: 'StockCount', entityId: data.stockCountId,
-      after: { reference: result.count.reference, adjusted: result.adjusted, unchanged: result.unchanged },
+      after: {
+        reference: result.count.reference,
+        adjusted: result.adjusted,
+        unchanged: result.unchanged,
+        // What the signature costs, signed minor units — the audit trail
+        // should read like the ledger it authorised.
+        valueDelta: result.valueDelta,
+      },
     })
     revalidatePath('/dashboard/inventory')
     revalidatePath(`/dashboard/inventory/counts/${data.stockCountId}`)
-    return { adjusted: result.adjusted, unchanged: result.unchanged }
+    return { adjusted: result.adjusted, unchanged: result.unchanged, valueDelta: result.valueDelta }
   }, 'Count approved and stock updated.')
 }

@@ -26,6 +26,9 @@ export const variantOptionSchema = z.object({
   isDefault: z.coerce.boolean().default(false),
   isAvailable: z.coerce.boolean().default(true),
   sortOrder: z.coerce.number().int().min(0).default(0),
+  /// What choosing this consumes — a recipe, so "extra chicken" depletes and
+  /// costs chicken. Null means the option moves no stock ("no onions").
+  recipeId: z.string().cuid().nullable().optional(),
 })
 
 export const variantGroupSchema = z.object({

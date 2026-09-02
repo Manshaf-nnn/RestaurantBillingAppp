@@ -59,6 +59,7 @@ export async function fetchFoodForEdit(foodId: string) {
           id: option.id,
           name: option.name,
           priceDelta: toMajor(option.priceDelta),
+          recipeId: option.recipeId,
           isDefault: option.isDefault,
           isAvailable: option.isAvailable,
         })),

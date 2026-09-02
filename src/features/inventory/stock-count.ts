@@ -252,7 +252,7 @@ export async function approveStockCount(params: {
    * rather than here keeps this function about the count.
    */
   selfApprovalAllowed?: boolean
-}): Promise<{ count: StockCount; adjusted: number; unchanged: number }> {
+}): Promise<{ count: StockCount; adjusted: number; unchanged: number; valueDelta: number }> {
   return prisma.$transaction(async (tx) => {
     /*
      * Read the status INSIDE the lock.
@@ -292,12 +292,21 @@ export async function approveStockCount(params: {
 
     let adjusted = 0
     let unchanged = 0
+    /*
+     * What the count is worth, signed, minor units. A variance is not just a
+     * quantity — 2kg of saffron missing and 2kg of salt missing are different
+     * events — and the person signing should be signing a money figure. Valued
+     * at each item's running average, the same cost the ledger stamps on the
+     * adjustment rows this approval posts.
+     */
+    let valueDelta = 0
 
     for (const line of count.lines) {
       if (Math.abs(line.variance) < 1e-6) {
         unchanged += 1
         continue
       }
+      valueDelta += Math.round(line.variance * line.item.costPerUnit)
 
       /*
        * The stored variance, deliberately — not one recomputed now.
@@ -340,7 +349,7 @@ export async function approveStockCount(params: {
     }
 
     const updated = await tx.stockCount.findUniqueOrThrow({ where: { id: count.id } })
-    return { count: updated, adjusted, unchanged }
+    return { count: updated, adjusted, unchanged, valueDelta }
   })
 }
 

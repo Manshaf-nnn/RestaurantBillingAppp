@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
-import { ConflictError, NotFoundError } from '@/lib/errors'
+import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
@@ -11,6 +11,8 @@ import { resolveStockLocation } from '@/features/branches/service'
 import { resolveCategory } from '@/features/catalog/service'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
+import { upsertBatch } from './batches'
+import { nextCounterValue } from '@/server/db/counters'
 import { notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
@@ -67,9 +69,30 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
       const existing = data.id
         ? await prisma.inventoryItem.findFirst({
             where: { id: data.id, restaurantId: user.restaurantId },
-            select: { trackBatches: true },
+            select: { trackBatches: true, unit: true, costPerUnit: true },
           })
         : null
+
+      /*
+       * The base unit is the denominator of the whole ledger (C8). Every
+       * movement, recipe line and cost for this item is a number OF that unit
+       * — flip KG to GRAM after movements exist and history re-denominates a
+       * thousandfold with no audit trail, which is indistinguishable from
+       * theft on the variance report. Locked the moment the first movement
+       * lands; the honest path to a new unit is a new item and a transfer.
+       */
+      if (data.id && existing && existing.unit !== data.unit) {
+        const moved = await prisma.stockMovement.count({
+          where: { itemId: data.id, restaurantId: user.restaurantId },
+        })
+        if (moved > 0) {
+          throw new AppError(
+            `This item's history is recorded in ${existing.unit}. Changing the base unit would re-denominate every past movement — create a new item in ${data.unit} and transfer the stock instead.`,
+            409,
+            'UNIT_LOCKED',
+          )
+        }
+      }
 
       const payload = {
         name: data.name,
@@ -81,7 +104,13 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
         reorderLevel: data.alertBelow,
         minStock: data.alertBelow,
         maxStock: data.maxStock && data.maxStock > 0 ? data.maxStock : null,
-        costPerUnit: data.costPerUnit,
+        /*
+         * Create-only. After creation the weighted average belongs to the
+         * ledger — receipts move it, nothing else. Typing a number into the
+         * edit form used to overwrite the computed average silently, which
+         * re-valued every unit on the shelf with no movement to show for it.
+         */
+        ...(data.id ? {} : { costPerUnit: data.costPerUnit }),
         supplierId: data.supplierId || null,
         storageArea: data.storageArea || null,
         purchaseUnit: data.purchaseUnit || null,
@@ -382,8 +411,14 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
       const total = lines.reduce((sum, line) => sum + Math.round(line.quantity * line.unitCost), 0)
 
       const purchase = await prisma.$transaction(async (tx) => {
-        const count = await tx.purchase.count({ where: { restaurantId: user.restaurantId } })
-        const number = `PO-${String(count + 1).padStart(5, '0')}`
+        /*
+         * From the named counter, not count()+1 — two quick purchases keyed at
+         * the same moment used to compute the same number and one died on the
+         * unique constraint. Seeded by migration at each restaurant's current
+         * count, so the sequence continues.
+         */
+        const sequence = await nextCounterValue(tx, user.restaurantId, 'purchase')
+        const number = `PO-${String(sequence).padStart(5, '0')}`
 
         const created = await tx.purchase.create({
           data: {
@@ -438,6 +473,29 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
             userId: user.id,
             branchId: destination,
           })
+
+          /*
+           * A batch-tracked item must gain a LOT, or the delivery is invisible
+           * to FEFO and the expiry board and the batches drift behind the
+           * balance for ever. The quick form has no expiry field — that is
+           * what the full goods-receiving flow is for — so the lot lands
+           * dateless and the board treats it as "no expiry recorded", which
+           * is the truth of what was keyed.
+           */
+          const tracked = await tx.inventoryItem.findFirst({
+            where: { id: line.itemId, restaurantId: user.restaurantId, trackBatches: true },
+            select: { id: true },
+          })
+          if (tracked) {
+            await upsertBatch(tx, {
+              restaurantId: user.restaurantId,
+              itemId: line.itemId,
+              batchNo: number,
+              quantity: line.quantity,
+              unitCost: line.unitCost,
+              branchId: destination,
+            })
+          }
         }
 
         return created

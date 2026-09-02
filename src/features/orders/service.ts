@@ -961,6 +961,8 @@ export async function updateOrderStatus(params: {
 
   const timestampField = STATUS_TIMESTAMP[params.status]
 
+  let lowStockCandidates: string[] = []
+
   const updated = await prisma.$transaction(async (tx) => {
     /*
      * Which direction this order's statuses flow.
@@ -1049,38 +1051,10 @@ export async function updateOrderStatus(params: {
         orderId: order.id,
         userId: params.actorId ?? null,
       })
-
-      // Warn the floor about anything this order pushed to its reorder level.
-      if (depleted.affectedItemIds.length > 0) {
-        const low = await tx.inventoryItem.findMany({
-          where: { id: { in: depleted.affectedItemIds }, restaurantId: order.restaurantId },
-          select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
-        })
-        for (const item of low) {
-          if (item.quantity <= item.reorderLevel) {
-            realtime.lowStock(order.restaurantId, {
-              itemId: item.id,
-              name: item.name,
-              quantity: item.quantity,
-              reorderLevel: item.reorderLevel,
-              unit: item.unit,
-            })
-            /*
-             * The half that is actually seen. The socket event above reaches
-             * nobody in production — realtime is off on Netlify and no client
-             * subscribes to it anywhere — so for as long as this feature has
-             * existed, "warn the floor" warned no one. Persisted to the bell,
-             * once a day per item, and deliberately not awaited: a stalled
-             * notification must never slow accepting an order.
-             */
-            void notifyLowStock({
-              restaurantId: order.restaurantId,
-              branchId: order.branchId,
-              item,
-            })
-          }
-        }
-      }
+      // Read AFTER the transaction commits — see below. Alerting from inside
+      // the transaction meant a rolled-back acceptance could still ring the
+      // bell, and a slow notification write held the order row locked.
+      lowStockCandidates = depleted.affectedItemIds
     }
 
     // Free the table once everything on it is settled.
@@ -1103,6 +1077,42 @@ export async function updateOrderStatus(params: {
 
     return next
   })
+
+  // Warn the floor about anything this order pushed to its reorder level —
+  // after commit, so the warning can only ever describe stock that really moved.
+  if (lowStockCandidates.length > 0) {
+    try {
+      const low = await prisma.inventoryItem.findMany({
+        where: { id: { in: lowStockCandidates }, restaurantId: order.restaurantId },
+        select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
+      })
+      for (const item of low) {
+        if (item.quantity <= item.reorderLevel) {
+          realtime.lowStock(order.restaurantId, {
+            itemId: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            reorderLevel: item.reorderLevel,
+            unit: item.unit,
+          })
+          /*
+           * The half that is actually seen. The socket event above reaches
+           * nobody in production — realtime is off on Netlify and no client
+           * subscribes to it anywhere. Persisted to the bell, once a day per
+           * item, and deliberately not awaited: a stalled notification must
+           * never slow accepting an order.
+           */
+          void notifyLowStock({
+            restaurantId: order.restaurantId,
+            branchId: order.branchId,
+            item,
+          })
+        }
+      }
+    } catch {
+      // An alert must never fail the acceptance it rides on.
+    }
+  }
 
   await broadcastOrder(order.id, 'status')
   await notifyStatusChange(updated, order.table?.number ?? null)
