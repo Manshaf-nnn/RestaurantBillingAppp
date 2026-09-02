@@ -66,6 +66,23 @@ export const MOVEMENT_TYPES: Record<CashMovementType, MovementMeta> = {
     direction: -1,
     manual: true,
   },
+  /*
+   * The accounting module's rows. System-written only (`manual: false`), so
+   * the cashier's form never offers them and a hand-keyed "paid out" can
+   * never be confused with — or double-count against — an approved expense.
+   */
+  EXPENSE_PAID: {
+    label: 'Expense paid',
+    hint: 'The cash half of an approved accountant payment, paid from this drawer',
+    direction: -1,
+    manual: false,
+  },
+  EXPENSE_REVERSED: {
+    label: 'Expense reversed',
+    hint: 'Cash returned to the drawer when a paid expense was reversed',
+    direction: 1,
+    manual: false,
+  },
   CASH_DROP: {
     label: 'Cash drop',
     hint: 'Skimmed to the safe so the till is not holding the day’s takings',

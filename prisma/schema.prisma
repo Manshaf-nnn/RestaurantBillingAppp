@@ -162,6 +162,26 @@ enum AccountingPeriodStatus {
   REOPENED
 }
 
+enum OutgoingPaymentKind {
+  /// Settling a supplier's account.
+  SUPPLIER
+  /// A formal business expense — rent, utilities, salaries. Petty cash keeps
+  /// its own lane for small drawer money; this is the accountant's book.
+  EXPENSE
+}
+
+enum OutgoingPaymentStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  PAID
+  /// Terminal state of a PAID payment that was corrected: the linked reversal
+  /// row is the negating transaction — completed money is never edited.
+  REVERSED
+  CANCELLED
+}
+
 enum LoyaltyEntryKind {
   /// Points for a settled order.
   EARNED
@@ -224,6 +244,13 @@ enum CashMovementType {
   /// A correction signed off by a manager.
   ADJUSTMENT_IN
   ADJUSTMENT_OUT
+  /// The cash half of an approved accountant payment, paid from a drawer.
+  /// System-written only — never offered on the cashier's manual form, so a
+  /// hand-keyed CASH_PAID_OUT and an approved expense can never be confused
+  /// or double-counted.
+  EXPENSE_PAID
+  /// Cash returning to a drawer when a paid expense is reversed.
+  EXPENSE_REVERSED
 }
 
 /// Where a petty cash expense was actually paid from.
@@ -625,6 +652,8 @@ model Restaurant {
   counters         RestaurantCounter[]
   tableSessions    TableSession[]
   printJobs        PrintJob[]
+  expenseCategories ExpenseCategory[]
+  outgoingPayments  OutgoingPayment[]
   dailyCloses      DailyClose[]
   accountingPeriods AccountingPeriod[]
   reservations     Reservation[]
@@ -798,6 +827,10 @@ model User {
   servedOrders        Order[]             @relation("OrderServedBy")
   receivedPayments    Payment[]           @relation("PaymentReceivedBy")
   refundsIssued       Refund[]            @relation("RefundIssuedBy")
+  outgoingCreated     OutgoingPayment[]   @relation("OutgoingPaymentCreatedBy")
+  outgoingSubmitted   OutgoingPayment[]   @relation("OutgoingPaymentSubmittedBy")
+  outgoingDecided     OutgoingPayment[]   @relation("OutgoingPaymentDecidedBy")
+  outgoingPaid        OutgoingPayment[]   @relation("OutgoingPaymentPaidBy")
   stockMovements      StockMovement[]
   shifts              StaffShift[]
   shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
@@ -1763,6 +1796,117 @@ model RestaurantCounter {
 }
 
 /**
+ * The accountant's book of formal expense categories — rent, utilities,
+ * salaries. A real model, not a free-text field: reports group by it, and a
+ * typo is not a category. Petty cash deliberately keeps its own small
+ * free-text vocabulary for drawer money; these are the books.
+ */
+model ExpenseCategory {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name      String
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  payments OutgoingPayment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, isActive, sortOrder])
+  @@map("expense_categories")
+}
+
+/**
+ * Money leaving the business, with a life: DRAFT → SUBMITTED → APPROVED or
+ * REJECTED (owner's pen, never the submitter's) → PAID → possibly REVERSED.
+ *
+ * Its own model, deliberately — the codebase has ruled three times that a
+ * request with a life after approval does not fit ApprovalRequest ("has no
+ * vocabulary for it"; see PettyCashRequest). Only the rule worth borrowing is
+ * borrowed: the approver is never the requester.
+ *
+ * A PAID row is immutable. kind SUPPLIER creates the ordinary
+ * SupplierPayment ledger row at payment time (the supplier balance math and
+ * its pinned tests never change); kind EXPENSE IS the expense record.
+ * Corrections are reversal rows linked by `reversalOfId`, never edits.
+ */
+model OutgoingPayment {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  /// OP-<year>-<seq> from the named counter — the reference a supplier or an
+  /// auditor quotes back. Never reused, even for cancelled drafts.
+  number String
+
+  kind   OutgoingPaymentKind
+  status OutgoingPaymentStatus @default(DRAFT)
+
+  supplierId        String?
+  supplier          Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  /// The bill being settled, when the payment answers a specific PO — also
+  /// how the projected SupplierPayment reaches a branch.
+  purchaseId        String?
+  purchase          Purchase?        @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  expenseCategoryId String?
+  expenseCategory   ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id], onDelete: SetNull)
+
+  /// Minor units, immutable once submitted — corrections reverse, never edit.
+  amount      Int
+  method      PaymentMethod @default(CASH)
+  reference   String?
+  description String
+  /// When the money moves. assertPeriodOpen refuses a date inside a sealed
+  /// accounting period.
+  paymentDate DateTime
+
+  createdById   String?
+  createdBy     User?     @relation("OutgoingPaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Denormalised like SupplierPayment.createdByName: a departed user must
+  /// not erase who moved the money.
+  createdByName String
+  submittedById String?
+  submittedBy   User?     @relation("OutgoingPaymentSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedAt   DateTime?
+  decidedById   String?
+  decidedBy     User?     @relation("OutgoingPaymentDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt     DateTime?
+  decisionNote  String?
+  paidById      String?
+  paidBy        User?     @relation("OutgoingPaymentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  paidAt        DateTime?
+
+  /// The SupplierPayment ledger row this projected at payment time (kind
+  /// SUPPLIER). The supplier balance math never changed; this is the trace.
+  supplierPaymentId String?          @unique
+  supplierPayment   SupplierPayment? @relation(fields: [supplierPaymentId], references: [id], onDelete: SetNull)
+
+  /// Set on a reversal row: the PAID payment it negates. Unique — one
+  /// reversal per payment, enforced by the database, not by discipline.
+  reversalOfId String?          @unique
+  reversalOf   OutgoingPayment? @relation("OutgoingPaymentReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversal     OutgoingPayment? @relation("OutgoingPaymentReversal")
+
+  cashMovements CashMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, branchId, status, createdAt])
+  @@index([restaurantId, kind, status, paymentDate])
+  @@index([restaurantId, supplierId, paymentDate])
+  @@index([restaurantId, expenseCategoryId, paymentDate])
+  @@map("outgoing_payments")
+}
+
+/**
  * One sitting at one table (§TableSession). Orders come and go over a meal —
  * a starter round, more drinks, a split for the bill — and until this existed
  * nothing tied them together: "what does table 4 owe" was a query over open
@@ -1960,6 +2104,7 @@ model Supplier {
   payments      SupplierPayment[]
   priceHistory  PurchasePriceHistory[] @relation("PriceHistorySupplier")
 
+  outgoingPayments OutgoingPayment[]
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive])
   @@map("suppliers")
@@ -2165,6 +2310,7 @@ model Purchase {
   returns   PurchaseReturn[]
   payments  SupplierPayment[]
 
+  outgoingPayments OutgoingPayment[]
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, supplierId, createdAt])
@@ -2437,6 +2583,7 @@ model SupplierPayment {
 
   createdAt DateTime @default(now())
 
+  outgoingPayment OutgoingPayment?
   @@index([restaurantId, supplierId, paidAt])
   @@index([restaurantId, paidAt])
   @@map("supplier_payments")
@@ -2692,6 +2839,7 @@ model Branch {
   cashHandovers    CashHandover[]
   reservations     Reservation[]
 
+  outgoingPayments OutgoingPayment[]
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
   @@map("branches")
@@ -2839,6 +2987,10 @@ model CashMovement {
   /// Set when this movement is the cash half of a petty cash payment.
   pettyCashRequestId String?
   pettyCashRequest   PettyCashRequest? @relation(fields: [pettyCashRequestId], references: [id], onDelete: SetNull)
+  /// Set when this movement is the cash half of an approved accountant
+  /// payment (supplier settlement or expense) paid from the drawer.
+  outgoingPaymentId  String?
+  outgoingPayment    OutgoingPayment?  @relation(fields: [outgoingPaymentId], references: [id], onDelete: SetNull)
   /// Set when this movement is a refund, so "which refunds were recorded
   /// against a drawer, and which were not" has an answer. A refund given when
   /// no drawer is open anywhere writes no movement at all, and without this

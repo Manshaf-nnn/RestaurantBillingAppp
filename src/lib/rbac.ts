@@ -170,6 +170,22 @@ export const PERMISSIONS = {
   /// Deliberately NOT held by the accountant role: an auditor who can seal
   /// and unseal the periods they audit is not an audit.
   ACCOUNTING_CLOSE: 'accounting.close',
+  /// Open the Accounting section — the hub, payables, reconciliation.
+  ACCOUNTING_VIEW: 'accounting.view',
+  /// Draft, edit drafts, submit and cancel outgoing payments — supplier
+  /// settlements and formal expenses. Recording is the accountant's job;
+  /// APPROVING is deliberately somebody else's.
+  ACCOUNTING_PAYMENT_CREATE: 'accounting.paymentCreate',
+  /// Execute an APPROVED payment — make the transfer, hand over the cash,
+  /// mark it paid. Split from approval on purpose: the two-person control
+  /// lives entirely at approve, and paying is the accountant's desk again.
+  ACCOUNTING_PAYMENT_PAY: 'accounting.paymentPay',
+  /// Approve, reject, send back or reverse an accountant's payment. The
+  /// owner's pen: excluded from MANAGER below, never held by ACCOUNTANT,
+  /// and the submitter is refused even when they hold it.
+  ACCOUNTING_PAYMENT_APPROVE: 'accounting.paymentApprove',
+  /// Manage the expense category book.
+  ACCOUNTING_EXPENSE_MANAGE: 'accounting.expenseManage',
 
   // petty cash — three permissions because there are three different jobs.
   // Anybody at the till may need to see what the tin has left; raising a
@@ -193,7 +209,10 @@ const MANAGER: Permission[] = ALL.filter(
     p !== PERMISSIONS.PAYMENT_REFUND &&
     // Sign-off on a large cash gap stays with the owner/admin — the manager may
     // BE the person whose shift produced it.
-    p !== PERMISSIONS.CASH_VARIANCE_REVIEW,
+    p !== PERMISSIONS.CASH_VARIANCE_REVIEW &&
+    // Money leaving the business is signed off by the owner/admin — the
+    // manager may be the person who raised it.
+    p !== PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
 )
 
 // A cashier handles money at the till, not the restaurant's buying. They are
@@ -327,6 +346,13 @@ const ACCOUNTANT: Permission[] = [
   PERMISSIONS.AUDIT_VIEW,
   PERMISSIONS.BRANCH_VIEW,
   PERMISSIONS.CUSTOMER_VIEW,
+  // The accountant's own module: record and execute payments, keep the
+  // category book. Approval is deliberately absent — see the permission's
+  // own comment.
+  PERMISSIONS.ACCOUNTING_VIEW,
+  PERMISSIONS.ACCOUNTING_PAYMENT_CREATE,
+  PERMISSIONS.ACCOUNTING_PAYMENT_PAY,
+  PERMISSIONS.ACCOUNTING_EXPENSE_MANAGE,
 ]
 
 /**
@@ -425,7 +451,7 @@ export const ROLE_HOME: Record<UserRole, string> = {
   INVENTORY_MANAGER: '/dashboard/inventory',
   PURCHASING_MANAGER: '/dashboard/purchases',
   WAREHOUSE_STAFF: '/dashboard/locations',
-  ACCOUNTANT: '/dashboard/reports',
+  ACCOUNTANT: '/dashboard/accounting',
   OWNER: '/dashboard',
   MANAGER: '/dashboard',
   KITCHEN: '/kitchen',

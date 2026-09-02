@@ -314,6 +314,48 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    title: 'Accounting',
+    items: [
+      {
+        href: '/dashboard/accounting',
+        label: 'Accounting dashboard',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+        exact: true,
+      },
+      {
+        href: '/dashboard/accounting/payments',
+        label: 'Payments out',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/approvals',
+        label: 'Payment approvals',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
+      },
+      {
+        href: '/dashboard/accounting/expenses',
+        label: 'Expenses',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/payables',
+        label: 'Supplier payables',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/reconciliation',
+        label: 'Financial reconciliation',
+        icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+    ],
+  },
+  {
     title: 'Back office',
     items: [
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, permission: PERMISSIONS.REPORT_VIEW },

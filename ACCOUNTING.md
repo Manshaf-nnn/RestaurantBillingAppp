@@ -128,3 +128,57 @@ real services: buy 100 kg of chicken at 800/kg (80,000), sell 100 curries at
 0.5 kg each (COGS 40,000), waste 5 kg (4,000), and every report explains the
 remainder: 45 kg worth 36,000 on the shelf, the ladder closing with zero
 drift, and **purchases ≠ COGS** held everywhere.
+
+## The accountant module (accountsds.md)
+
+Money going *out* has its own workflow. An `OutgoingPayment` (kind
+`SUPPLIER` or `EXPENSE`) carries the whole lifecycle on its own status
+enum — DRAFT → SUBMITTED → APPROVED/REJECTED → PAID, plus REVERSED and
+CANCELLED — following the petty-cash precedent of a request that has a life
+after approval. Every transition is a CAS `updateMany` on the expected
+status, so a double-click, a race, or two owners deciding at once resolves
+to exactly one winner. The one who submitted (or created) a payment can
+never approve it: `ACCOUNTING_PAYMENT_APPROVE` lives with the owner/admin,
+is excluded from the MANAGER preset, and is never in the ACCOUNTANT preset —
+and `decide` refuses the submitter by id on top of that.
+
+Nothing in the ledgers changed to make this work:
+
+- **Supplier payments are projected, not reimplemented.** `markPaid` on a
+  SUPPLIER payment creates the *existing* `SupplierPayment` row in the same
+  transaction and stores its id (`supplierPaymentId`, unique). The supplier
+  ledger's outstanding = received − paid − returned maths, and the suite
+  that pins it, run unchanged.
+- **Corrections reverse, never edit.** A PAID payment is immutable; `reverse`
+  creates a *negating* SupplierPayment (negative amount) plus a linked
+  reversal OutgoingPayment (1:1, DB-enforced), so both the mistake and the
+  correction stay on the books. A second reversal of the same payment is
+  refused.
+- **Cash expenses reach the drawer** through the refund-helper pattern:
+  method CASH posts an `EXPENSE_PAID` movement (system-only type) against an
+  open session — payer's first, then any open at the branch — and skips
+  silently when none is open, never blocking the money. Reversals post
+  `EXPENSE_REVERSED`. Hand-keyed `CASH_PAID_OUT` therefore never
+  double-counts with the workflow.
+- **Sealed periods refuse backdating**: `submit` runs the payment date
+  through `assertPeriodOpen`, the same guard the rest of the books use.
+
+Expenses are the formal cost record, grouped by `ExpenseCategory` (ten
+defaults seeded per restaurant; retiring a category hides it from new
+expenses and keeps its name in history). Petty cash keeps its separate job:
+small drawer cash, its own vocabulary, deliberately.
+
+The screens live under `/dashboard/accounting`: the hub (§2's summary, every
+card composed from the engines above and drillable), the payment console,
+the owner's approval centre (§7 totals + queue), expenses, the supplier
+payables statement (opening / received / returned / paid / closing per
+supplier, built on the ledger's own predicates, with FIFO aging buckets),
+and the financial reconciliation (§11) — the integrity checker plus the
+money identities, each row linking to the screen that explains it. The
+integrity checker itself gained four workflow checks (PAID-without-ledger-
+row, orphaned projection, unrecorded cash, malformed reversal). Exports:
+`outgoing`, `expenses` and `payables` types on the standard export route.
+
+Pinned by `scripts/accounting-module-test.ts` (workflow guards, races,
+reversal maths, payables statement) and `scripts/e2e-accountant-test.ts`
+(the §16 chain: PO → GRN → payable → approval → paid → reconciled).

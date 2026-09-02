@@ -103,6 +103,7 @@ export const FEATURE_GROUPS = [
   'Menu',
   'Inventory',
   'People',
+  'Accounting',
   'Back office',
 ] as const
 
@@ -611,6 +612,72 @@ export const FEATURES: Feature[] = [
     description: 'Proving the stock ledger adds up.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_RECONCILIATION }],
     routes: ['/dashboard/reports/reconciliation'],
+  },
+  {
+    key: 'accounting',
+    label: 'Accounting dashboard',
+    group: 'Accounting',
+    description: 'The financial summary: sales, collections, payables, expenses, profit — every card drillable.',
+    actions: [{ key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW }],
+    routes: ['/dashboard/accounting'],
+  },
+  {
+    key: 'accountingPayments',
+    label: 'Payments out',
+    group: 'Accounting',
+    description: 'Drafting, submitting and executing supplier settlements and expenses.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW },
+      { key: 'create', permission: PERMISSIONS.ACCOUNTING_PAYMENT_CREATE },
+      {
+        key: 'submit',
+        label: 'Mark paid',
+        permission: PERMISSIONS.ACCOUNTING_PAYMENT_PAY,
+        hint: 'Executing an APPROVED payment. The control lives at approval.',
+      },
+    ],
+    routes: ['/dashboard/accounting/payments'],
+  },
+  {
+    key: 'accountingApprovals',
+    label: 'Payment approvals',
+    group: 'Accounting',
+    description: 'The owner signs off money leaving the business.',
+    actions: [
+      {
+        key: 'approve',
+        permission: PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
+        hint: 'Never the submitter, and deliberately not managers.',
+      },
+    ],
+    routes: ['/dashboard/accounting/approvals'],
+  },
+  {
+    key: 'accountingExpenses',
+    label: 'Expenses',
+    group: 'Accounting',
+    description: 'Formal business costs by category — rent, utilities, salaries.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW },
+      { key: 'edit', label: 'Manage categories', permission: PERMISSIONS.ACCOUNTING_EXPENSE_MANAGE },
+    ],
+    routes: ['/dashboard/accounting/expenses'],
+  },
+  {
+    key: 'accountingPayables',
+    label: 'Supplier payables',
+    group: 'Accounting',
+    description: 'Statements and aging: what is owed, to whom, for how long.',
+    actions: [{ key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW }],
+    routes: ['/dashboard/accounting/payables'],
+  },
+  {
+    key: 'accountingReconciliation',
+    label: 'Financial reconciliation',
+    group: 'Accounting',
+    description: 'The money identities, checked live, each with the record explaining it.',
+    actions: [{ key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW }],
+    routes: ['/dashboard/accounting/reconciliation'],
   },
   {
     key: 'accountingClose',

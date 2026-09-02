@@ -387,6 +387,63 @@ export async function recordRefundAgainstOpenDrawer(params: {
 }
 
 /**
+ * The cash half of an approved accountant payment, against an open drawer.
+ *
+ * Sibling of `recordRefundAgainstOpenDrawer` above, with the same fallback
+ * semantics and the same philosophy: the money moves regardless — an approved
+ * expense paid at the counter must not be blocked by drawer bookkeeping — and
+ * an unrecorded one is a visible absence (`outgoingPaymentId` link missing)
+ * rather than a silence. Writes the system-only EXPENSE_PAID / EXPENSE_REVERSED
+ * types, which the cashier's manual form never offers, so a hand-keyed
+ * "paid out" and an approved expense can never double-count.
+ */
+export async function recordExpenseAgainstOpenDrawer(params: {
+  tx: TxClient
+  restaurantId: string
+  branchId?: string | null
+  userId: string
+  amount: number
+  description: string
+  reference?: string | null
+  outgoingPaymentId: string
+  type?: 'EXPENSE_PAID' | 'EXPENSE_REVERSED'
+}): Promise<boolean> {
+  const open =
+    (await params.tx.cashDrawerSession.findFirst({
+      where: {
+        restaurantId: params.restaurantId,
+        openedById: params.userId,
+        ...(params.branchId ? { branchId: params.branchId } : {}),
+        status: 'OPEN',
+      },
+      orderBy: { openedAt: 'desc' },
+      select: { id: true },
+    })) ??
+    (params.branchId
+      ? await params.tx.cashDrawerSession.findFirst({
+          where: { restaurantId: params.restaurantId, branchId: params.branchId, status: 'OPEN' },
+          orderBy: { openedAt: 'desc' },
+          select: { id: true },
+        })
+      : null)
+
+  if (!open) return false
+
+  await params.tx.cashMovement.create({
+    data: {
+      sessionId: open.id,
+      type: params.type ?? 'EXPENSE_PAID',
+      amount: params.amount,
+      reason: params.description,
+      reference: params.reference ?? null,
+      outgoingPaymentId: params.outgoingPaymentId,
+      createdById: params.userId,
+    },
+  })
+  return true
+}
+
+/**
  * Cash refunds in a period that no drawer ever recorded.
  *
  * The counterpart to `getUnattributedCash`: that one finds money taken outside

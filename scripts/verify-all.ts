@@ -64,6 +64,10 @@ const SERVICE = [
   'structural-test',
   // AUDIT.md Slice 6 — the integrity checker and shared rate limits.
   'hardening-test',
+  // accountsds.md — the accountant's money-out workflow and its guards.
+  'accounting-module-test',
+  // accountsds.md §16 — PO → GRN → payable → approval → paid → reconciled.
+  'e2e-accountant-test',
   // AUDIT.md Slice 7 — the §101 worked example, end to end, and the billing
   // engine's own matrix.
   'e2e-reconciliation-test',

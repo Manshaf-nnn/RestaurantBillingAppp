@@ -117,6 +117,97 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    /*
+     * The accounting module's exports (accountsds.md §13). Behind the
+     * module's own permission, per-type, exactly as the cash reports are —
+     * a download must never be the way around a screen's gate.
+     */
+    if (type === 'outgoing' || type === 'expenses') {
+      await requirePermission(PERMISSIONS.ACCOUNTING_VIEW)
+      const { listOutgoingPayments } = await import('@/features/outgoing-payments/queries')
+      const rows = (
+        await listOutgoingPayments({ restaurantId: user.restaurantId, branchIds })
+      )
+        .filter((row) => (type === 'expenses' ? row.kind === 'EXPENSE' : true))
+        .filter((row) => {
+          const at = new Date(row.paymentDate).getTime()
+          return at >= canonicalRange.from.getTime() && at <= canonicalRange.to.getTime()
+        })
+      const columns = [
+        { header: 'Number', key: 'number' },
+        { header: 'Kind', key: 'kind' },
+        { header: 'Status', key: 'status' },
+        { header: 'Paid to', key: 'target' },
+        { header: 'Category', key: 'category' },
+        { header: 'Branch', key: 'branch' },
+        { header: 'Method', key: 'method' },
+        { header: 'Reference', key: 'reference' },
+        { header: 'Payment date', key: 'date' },
+        { header: 'Amount', key: 'amount' },
+        { header: 'Raised by', key: 'by' },
+        { header: 'Description', key: 'description' },
+      ]
+      const data = rows.map((row) => ({
+        number: row.number,
+        kind: row.kind,
+        status: row.status,
+        target: row.supplierName ?? '',
+        category: row.categoryName ?? '',
+        branch: row.branchName,
+        method: row.method,
+        reference: row.reference ?? '',
+        date: row.paymentDate.slice(0, 10),
+        amount: money(row.amount),
+        by: row.createdByName,
+        description: row.description,
+      }))
+      const name = type === 'expenses' ? 'expenses' : 'outgoing-payments'
+      if (format === 'xlsx') {
+        const buffer = await toExcel('Payments out', columns, data)
+        return fileResponse(buffer, `${name}-${stamp}.xlsx`, XLSX_TYPE)
+      }
+      return fileResponse(Buffer.from(toCsv(columns, data)), `${name}-${stamp}.csv`, 'text/csv')
+    }
+
+    if (type === 'payables') {
+      await requirePermission(PERMISSIONS.ACCOUNTING_VIEW)
+      const { getPayablesStatement } = await import('@/features/suppliers/payables')
+      const statement = await getPayablesStatement({
+        restaurantId: user.restaurantId,
+        range: canonicalRange,
+        branchIds,
+      })
+      const columns = [
+        { header: 'Supplier', key: 'supplier' },
+        { header: 'Opening', key: 'opening' },
+        { header: 'Received', key: 'received' },
+        { header: 'Returned', key: 'returned' },
+        { header: 'Paid', key: 'paid' },
+        { header: 'Closing', key: 'closing' },
+        { header: '0-30 days', key: 'a1' },
+        { header: '31-60 days', key: 'a2' },
+        { header: '61-90 days', key: 'a3' },
+        { header: '90+ days', key: 'a4' },
+      ]
+      const data = statement.rows.map((row) => ({
+        supplier: row.supplierName,
+        opening: money(row.opening),
+        received: money(row.received),
+        returned: money(row.returned),
+        paid: money(row.paid),
+        closing: money(row.closing),
+        a1: money(row.aging.current),
+        a2: money(row.aging.d31to60),
+        a3: money(row.aging.d61to90),
+        a4: money(row.aging.d90plus),
+      }))
+      if (format === 'xlsx') {
+        const buffer = await toExcel('Supplier payables', columns, data)
+        return fileResponse(buffer, `payables-${stamp}.xlsx`, XLSX_TYPE)
+      }
+      return fileResponse(Buffer.from(toCsv(columns, data)), `payables-${stamp}.csv`, 'text/csv')
+    }
+
     if (type === 'orders') {
       /*
        * `listOrders` takes one optional branch, so a reach of two or more

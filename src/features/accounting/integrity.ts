@@ -265,6 +265,74 @@ export async function runIntegrityChecks(restaurantId: string): Promise<Integrit
     `,
   )
 
+  // ── The money-out workflow ─────────────────────────────────────────────────
+
+  add(
+    'outgoing-paid-link',
+    'Paid supplier payments reached the ledger',
+    'ERROR',
+    'A PAID supplier payment must hold the SupplierPayment row it projected — without it the supplier balance and the workflow disagree.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT number AS id FROM outgoing_payments
+      WHERE "restaurantId" = ${restaurantId}
+        AND kind = 'SUPPLIER' AND status = 'PAID'
+        AND "supplierPaymentId" IS NULL
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'outgoing-orphan-projection',
+    'Ledger rows belong to live payments',
+    'ERROR',
+    'A SupplierPayment referenced by a payment that is not PAID or REVERSED means money recorded without its authorisation trail.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT op.number AS id FROM outgoing_payments op
+      WHERE op."restaurantId" = ${restaurantId}
+        AND op."supplierPaymentId" IS NOT NULL
+        AND op.status NOT IN ('PAID', 'REVERSED')
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'outgoing-cash-unrecorded',
+    'Cash payments reached a drawer',
+    'WARNING',
+    'A PAID cash payment with no drawer movement left the safe outside any till count — real, but worth eyes (same rule as unrecorded refunds).',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT op.number AS id FROM outgoing_payments op
+      WHERE op."restaurantId" = ${restaurantId}
+        AND op.method = 'CASH' AND op.status IN ('PAID', 'REVERSED')
+        AND NOT EXISTS (
+          SELECT 1 FROM cash_movements m WHERE m."outgoingPaymentId" = op.id
+        )
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'outgoing-reversal-shape',
+    'Reversals and their originals pair up',
+    'ERROR',
+    'A REVERSED payment must have its reversal row, and every reversal must point at a REVERSED original.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT op.number AS id FROM outgoing_payments op
+      WHERE op."restaurantId" = ${restaurantId}
+        AND (
+          (op.status = 'REVERSED' AND NOT EXISTS (
+            SELECT 1 FROM outgoing_payments r WHERE r."reversalOfId" = op.id
+          ))
+          OR
+          (op."reversalOfId" IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM outgoing_payments o2
+            WHERE o2.id = op."reversalOfId" AND o2.status = 'REVERSED'
+          ))
+        )
+      LIMIT 200
+    `,
+  )
+
   const status: IntegrityStatus = checks.some((check) => check.status === 'ERROR')
     ? 'ERROR'
     : checks.some((check) => check.status === 'WARNING')
