@@ -4,6 +4,7 @@ import type { Purchase, PurchaseStatus, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
+import { nextCounterValue } from '@/server/db/counters'
 import { toBaseUnits } from '@/features/inventory/units'
 
 /**
@@ -60,11 +61,27 @@ export interface PurchaseLineInput {
  * than a clean retry, so the maximum is read under a lock on the restaurant row
  * to serialise issuance.
  */
+/**
+ * Purchase-order numbers come from the named counter, six digits.
+ *
+ * There were TWO generators for a while: this file's max-scan and the quick
+ * purchase's counter, padding to six and five digits respectively — and a
+ * lexicographic `orderBy number desc` over mixed widths reads 'PO-00099' as
+ * later than 'PO-000100', so each generator corrupted the other's idea of
+ * "last". One counter now, one width, both entry points. The counter is
+ * seeded/reseeded by migration at GREATEST(row count, highest issued number)
+ * so it can never re-issue an existing number.
+ */
+export async function nextPurchaseNumber(tx: TxClient, restaurantId: string): Promise<string> {
+  const sequence = await nextCounterValue(tx, restaurantId, 'purchase')
+  return `PO-${String(sequence).padStart(6, '0')}`
+}
+
 async function nextNumber(
   tx: TxClient,
   restaurantId: string,
   prefix: string,
-  table: 'purchase' | 'receipt' | 'return',
+  table: 'receipt' | 'return',
 ): Promise<string> {
   // Serialise number issuance per restaurant. Cheap: held only for the moment
   // between reading the last number and writing the new document.
@@ -91,20 +108,15 @@ async function nextNumber(
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${restaurantId}))`
 
   const rows =
-    table === 'purchase'
-      ? await tx.purchase.findMany({
+    table === 'receipt'
+      ? await tx.goodsReceipt.findMany({
           where: { restaurantId, number: { startsWith: `${prefix}-` } },
           orderBy: { number: 'desc' }, take: 1, select: { number: true },
         })
-      : table === 'receipt'
-        ? await tx.goodsReceipt.findMany({
-            where: { restaurantId, number: { startsWith: `${prefix}-` } },
-            orderBy: { number: 'desc' }, take: 1, select: { number: true },
-          })
-        : await tx.purchaseReturn.findMany({
-            where: { restaurantId, number: { startsWith: `${prefix}-` } },
-            orderBy: { number: 'desc' }, take: 1, select: { number: true },
-          })
+      : await tx.purchaseReturn.findMany({
+          where: { restaurantId, number: { startsWith: `${prefix}-` } },
+          orderBy: { number: 'desc' }, take: 1, select: { number: true },
+        })
 
   const last = Number(rows[0]?.number?.split('-')[1] ?? 0)
   return `${prefix}-${String((Number.isFinite(last) ? last : 0) + 1).padStart(6, '0')}`
@@ -142,7 +154,7 @@ export async function createPurchaseOrder(params: {
   const money = totalsFor(params.lines, params.discount ?? 0, params.taxTotal ?? 0)
 
   return prisma.$transaction(async (tx) => {
-    const number = await nextNumber(tx, params.restaurantId, 'PO', 'purchase')
+    const number = await nextPurchaseNumber(tx, params.restaurantId)
     return tx.purchase.create({
       data: {
         restaurantId: params.restaurantId,

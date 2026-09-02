@@ -1811,6 +1811,10 @@ model DailyClose {
   /// [DailyCloseSnapshot] — the §51 daily report, frozen at sign-off.
   snapshot     Json
 
+  /// NB: NULL branchIds are distinct to this unique, so it cannot by itself
+  /// stop two restaurant-level closes for one date. A PARTIAL unique index
+  /// (20260915120000, WHERE branchId IS NULL) closes that case — invisible
+  /// to Prisma's diff, same precedent as the order idempotency index.
   @@unique([restaurantId, branchId, businessDate])
   @@index([restaurantId, businessDate])
   @@map("daily_closes")

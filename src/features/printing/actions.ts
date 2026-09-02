@@ -40,6 +40,21 @@ export async function recordPrint(input: unknown): Promise<ActionResult<{ id: st
         })
       : null
 
+    // Keep the table from growing without bound: payloads are full receipts,
+    // and nothing else ever deletes them. Ninety days covers any reprint or
+    // dispute window; swept on ~1% of records, never awaited — house rule,
+    // no cron.
+    if (Math.random() < 0.01) {
+      void prisma.printJob
+        .deleteMany({
+          where: {
+            restaurantId: user.restaurantId,
+            createdAt: { lt: new Date(Date.now() - 90 * 86_400_000) },
+          },
+        })
+        .catch(() => null)
+    }
+
     const job = await prisma.printJob.create({
       data: {
         restaurantId: user.restaurantId,

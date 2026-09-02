@@ -11,9 +11,13 @@ CREATE INDEX "variant_options_recipeId_idx" ON "variant_options"("recipeId");
 -- rounding stops bleeding pennies on every movement. Backfilled from the
 -- rounded cache — the best approximation history allows.
 ALTER TABLE "inventory_items" ADD COLUMN "stockValue" DECIMAL(18,6) NOT NULL DEFAULT 0;
+-- LEAST caps the product inside numeric(18,6)'s twelve integer digits, and
+-- the < 'Infinity' guard excludes both Infinity and NaN (Postgres orders NaN
+-- above Infinity, so neither passes) — a poisoned float row must not abort
+-- the whole file.
 UPDATE "inventory_items"
-SET "stockValue" = GREATEST(0, "quantity") * "costPerUnit"
-WHERE "quantity" > 0 AND "costPerUnit" > 0;
+SET "stockValue" = LEAST(GREATEST(0, "quantity") * "costPerUnit", 999999999999.0)
+WHERE "quantity" > 0 AND "costPerUnit" > 0 AND "quantity" < 'Infinity'::float8;
 
 -- The per-branch ledger walk the reconciliation report performs.
 CREATE INDEX "stock_movements_itemId_branchId_createdAt_idx"

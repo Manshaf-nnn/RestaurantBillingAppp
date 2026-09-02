@@ -1,4 +1,5 @@
 import 'server-only'
+import { createHash } from 'node:crypto'
 import { headers } from 'next/headers'
 
 import { RateLimitError } from '@/lib/errors'
@@ -95,7 +96,15 @@ export async function rateLimit(
     return { ok: true, remaining: rule.limit, retryAfterSeconds: 0 }
   }
 
-  const key = `rl:${name}:${id}`
+  /*
+   * Identifiers can be attacker-supplied (a login "email" has no practical
+   * length cap), and a key past btree's ~2.7KB row limit would fail the
+   * shared Postgres tier — quietly demoting that caller to the per-instance
+   * fallback, which on serverless is no limit at all. Long ids become their
+   * hash: same bucket for the same input, bounded key for any input.
+   */
+  const bounded = id.length > 120 ? createHash('sha256').update(id).digest('hex') : id
+  const key = `rl:${name}:${bounded}`
 
   const { count, resetAt } = await incrementCounter(key, rule.windowSeconds)
   const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))

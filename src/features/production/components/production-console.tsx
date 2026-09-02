@@ -108,22 +108,28 @@ export function ProductionConsole({
   // up validating differently.
   const [editingRecipe, setEditingRecipe] = React.useState<string | null>(null)
   const [recipeName, setRecipeName] = React.useState('')
-  const [makesItemId, setMakesItemId] = React.useState('')
+  /*
+   * The "what it makes" PICKER is gone. It asked owners to choose a stock
+   * item that duplicated the name they had just typed, and it was the single
+   * most-asked-about control on this screen. The server now finds or creates
+   * the shelf item from the recipe's name; all the form needs is the unit a
+   * batch is measured in — and when editing, even that is fixed.
+   */
+  const [makesUnit, setMakesUnit] = React.useState('KG')
+  const [editingUnit, setEditingUnit] = React.useState<string | null>(null)
   const [makesQty, setMakesQty] = React.useState('1')
   const [shelfLife, setShelfLife] = React.useState('')
   const [lines, setLines] = React.useState<Array<{ key: string; itemId: string; quantity: string; unit: string }>>([])
 
-  const makesItem = data.items.find((i) => i.id === makesItemId) ?? null
-
   const clearRecipeForm = () => {
     setEditingRecipe(null)
-    setRecipeName(''); setMakesItemId(''); setMakesQty('1'); setShelfLife(''); setLines([])
+    setRecipeName(''); setMakesUnit('KG'); setEditingUnit(null); setMakesQty('1'); setShelfLife(''); setLines([])
   }
 
   const loadRecipe = (recipe: MakeAheadRecipeView) => {
     setEditingRecipe(recipe.id)
     setRecipeName(recipe.name)
-    setMakesItemId(recipe.producesItemId)
+    setEditingUnit(recipe.outputUnit)
     setMakesQty(String(recipe.yieldQty))
     setShelfLife(recipe.shelfLifeDays === null ? '' : String(recipe.shelfLifeDays))
     setLines(
@@ -142,8 +148,8 @@ export function ProductionConsole({
   const saveRecipe = async () => {
     const items = lines.filter((l) => l.itemId && Number(l.quantity) > 0)
       .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity), unit: l.unit }))
-    if (!recipeName.trim() || !makesItemId || !(Number(makesQty) > 0) || items.length === 0) {
-      toast.error('Name it, say what it makes, and add ingredients')
+    if (!recipeName.trim() || !(Number(makesQty) > 0) || items.length === 0) {
+      toast.error('Name it and add at least one ingredient')
       return
     }
     setBusy(true)
@@ -151,7 +157,7 @@ export function ProductionConsole({
       saveMakeAheadRecipeAction({
         recipeId: editingRecipe ?? undefined,
         name: recipeName,
-        producesItemId: makesItemId,
+        yieldUnit: makesUnit,
         yieldQty: Number(makesQty),
         shelfLifeDays: shelfLife ? Number(shelfLife) : undefined,
         items,
@@ -458,30 +464,53 @@ export function ProductionConsole({
         title={editingRecipe ? 'Edit recipe' : 'New make-ahead recipe'}
         description="Something the kitchen makes in advance and puts on the shelf — sauce, stock, patties, dough."
       >
+        {/*
+          The walkthrough, on the form itself. This screen used to open with
+          four unlabelled decisions — including a "what it makes" picker that
+          asked for the name a second time — and owners told us so. The
+          numbered steps ARE the form now, and the shelf item is handled for
+          them: naming the recipe names the stock it produces.
+        */}
+        <ol className="mb-4 space-y-1.5 rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <li><strong className="text-foreground">Step 1 —</strong> Name what you make ahead: “Chicken patties”, “Brown stock”. That name goes on your stock list automatically.</li>
+          <li><strong className="text-foreground">Step 2 —</strong> Say how a batch is measured. Easiest: leave the amount at <strong className="text-foreground">1</strong> and write the ingredients for one.</li>
+          <li><strong className="text-foreground">Step 3 —</strong> Add the ingredients that go <em>into</em> it, with amounts.</li>
+          <li><strong className="text-foreground">Step 4 —</strong> Save. When the kitchen actually cooks a batch, record it under “Make a batch” above — the ingredients leave your stock and the made item goes on the shelf.</li>
+        </ol>
+
         <div className="grid gap-4 sm:grid-cols-4">
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="mr-name">Name</Label>
+            <Label htmlFor="mr-name">Step 1 · Name</Label>
             <Input id="mr-name" placeholder="e.g. Chicken patties" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} />
+            <p className="text-xs text-muted-foreground">
+              {editingRecipe ? 'Renaming the recipe does not rename the shelf item.' : 'No need to pick a stock item — we create one with this name.'}
+            </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="mr-out">What it makes</Label>
-            <select id="mr-out" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-              value={makesItemId} onChange={(e) => setMakesItemId(e.target.value)}>
-              <option value="">Choose…</option>
-              {data.items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mr-qty">How much it makes</Label>
-            <Input id="mr-qty" inputMode="decimal" value={makesQty} onChange={(e) => setMakesQty(e.target.value)} />
+            <Label htmlFor="mr-qty">Step 2 · One batch makes</Label>
+            <div className="flex gap-2">
+              <Input id="mr-qty" inputMode="decimal" className="flex-1" value={makesQty} onChange={(e) => setMakesQty(e.target.value)} />
+              {editingUnit ? (
+                <span className="flex h-10 items-center rounded-lg border border-border px-3 text-sm text-muted-foreground">
+                  {editingUnit.toLowerCase()}
+                </span>
+              ) : (
+                <select
+                  aria-label="Unit a batch is measured in"
+                  className="h-10 rounded-lg border border-input bg-background px-2 text-sm"
+                  value={makesUnit}
+                  onChange={(e) => setMakesUnit(e.target.value)}
+                >
+                  {UNITS.map((u) => <option key={u} value={u}>{u.toLowerCase()}</option>)}
+                </select>
+              )}
+            </div>
             {/*
               Defaulted to 1 on purpose: then "make 100" means 100 and there is
               no batch size for anyone to multiply in their head. Leave it at 1
               and write the ingredients for one.
             */}
-            <p className="text-xs text-muted-foreground">
-              {makesItem ? `${makesItem.unit.toLowerCase()} — leave at 1 and write the ingredients for one` : 'Leave at 1 unless you always make a fixed batch'}
-            </p>
+            <p className="text-xs text-muted-foreground">Leave at 1 unless you always make a fixed batch</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="mr-life">Keeps for (days)</Label>
@@ -490,8 +519,8 @@ export function ProductionConsole({
         </div>
 
         <p className="mt-4 mb-2 text-sm font-medium">
-          Ingredients for {Number(makesQty) > 0 ? Number(makesQty) : 1}{' '}
-          {makesItem ? makesItem.unit.toLowerCase() : ''}
+          Step 3 · Ingredients for {Number(makesQty) > 0 ? Number(makesQty) : 1}{' '}
+          {(editingUnit ?? makesUnit).toLowerCase()}
         </p>
         <ul className="space-y-2">
           {lines.map((l) => (

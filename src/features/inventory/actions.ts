@@ -12,7 +12,7 @@ import { resolveCategory } from '@/features/catalog/service'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
 import { upsertBatch } from './batches'
-import { nextCounterValue } from '@/server/db/counters'
+import { nextPurchaseNumber } from '@/features/purchasing/service'
 import { notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
@@ -411,14 +411,10 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
       const total = lines.reduce((sum, line) => sum + Math.round(line.quantity * line.unitCost), 0)
 
       const purchase = await prisma.$transaction(async (tx) => {
-        /*
-         * From the named counter, not count()+1 — two quick purchases keyed at
-         * the same moment used to compute the same number and one died on the
-         * unique constraint. Seeded by migration at each restaurant's current
-         * count, so the sequence continues.
-         */
-        const sequence = await nextCounterValue(tx, user.restaurantId, 'purchase')
-        const number = `PO-${String(sequence).padStart(5, '0')}`
+        // The one PO number generator, shared with purchasing/service.ts —
+        // same counter, same six-digit width, so no lexicographic max-scan
+        // can ever misread the sequence again.
+        const number = await nextPurchaseNumber(tx, user.restaurantId)
 
         const created = await tx.purchase.create({
           data: {

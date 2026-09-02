@@ -24,7 +24,15 @@ const REASONS = ['PRODUCTION_LOSS', 'DAMAGED', 'INGREDIENT_SHORTAGE', 'QUALITY_I
  */
 const recipeShape = {
   name: z.string().trim().min(2, 'Name the recipe').max(80),
-  producesItemId: z.string().min(1, 'Choose what it makes'),
+  /*
+   * Optional now. The picker this fed asked owners to choose a stock item
+   * that duplicated the name they had just typed — the single most-confusing
+   * control on the screen. Absent, the server finds or creates the shelf
+   * item FROM the name; the picker survives only for API callers.
+   */
+  producesItemId: z.string().min(1).optional(),
+  /** Unit of the made thing, when the server has to create it. */
+  yieldUnit: z.enum(UNITS).optional(),
   yieldQty: z.coerce.number().positive('Say how much one batch makes'),
   shelfLifeDays: z.coerce.number().int().min(0).max(3650).optional(),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
@@ -54,8 +62,47 @@ export async function saveMakeAheadRecipeAction(
     async (data) => {
       const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
 
+      /*
+       * What the batch puts on the shelf, resolved so the owner never has to
+       * say it twice: an explicit id wins (API callers), an edit keeps the
+       * recipe's existing output, and a NEW recipe finds a stock item with
+       * the same name or quietly creates one. "Chicken patties" the recipe
+       * and "Chicken patties" the shelf item are the same thought.
+       */
+      let producesItemId = data.producesItemId ?? null
+      if (!producesItemId && data.recipeId) {
+        const existing = await prisma.recipe.findFirst({
+          where: { id: data.recipeId, restaurantId: user.restaurantId },
+          select: { producesItemId: true },
+        })
+        producesItemId = existing?.producesItemId ?? null
+      }
+      if (!producesItemId) {
+        const byName = await prisma.inventoryItem.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            name: { equals: data.name, mode: 'insensitive' },
+          },
+          select: { id: true },
+        })
+        if (byName) {
+          producesItemId = byName.id
+        } else {
+          const created = await prisma.inventoryItem.create({
+            data: {
+              restaurantId: user.restaurantId,
+              name: data.name,
+              unit: data.yieldUnit ?? 'PIECE',
+              quantity: 0,
+              category: 'Made in-house',
+            },
+          })
+          producesItemId = created.id
+        }
+      }
+
       const produces = await prisma.inventoryItem.findFirst({
-        where: { id: data.producesItemId, restaurantId: user.restaurantId },
+        where: { id: producesItemId, restaurantId: user.restaurantId },
         select: { unit: true },
       })
       if (!produces) throw new Error('That stock item no longer exists')
@@ -63,7 +110,7 @@ export async function saveMakeAheadRecipeAction(
       const recipe = await saveRecipe({
         restaurantId: user.restaurantId,
         userId: user.id,
-        producesItemId: data.producesItemId,
+        producesItemId,
         name: data.name,
         yieldQty: data.yieldQty,
         // A make-ahead recipe is measured in whatever the finished item is

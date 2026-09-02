@@ -21,6 +21,10 @@ floats in base units with 1e-6 rounding at the edges.
 - **Uniqueness is business truth**: order/invoice numbers per restaurant,
   depletion idempotency (`orderId,itemId`), SKU per restaurant, one daily
   close per business date, one counter row per (restaurant, key).
+- **Heavy DDL sets a lock timeout.** A migration touching a hot table
+  (`orders`, `stock_movements`, `inventory_items`) should begin with
+  `SET lock_timeout = '5s'` so a blocked ALTER fails fast and rolls back
+  instead of queueing the whole site behind it.
 - **Locks**: `guardLocks` + `SELECT … FOR UPDATE` on the contended row
   (orders for settlement/refund/reconcile, items for stock, counts for
   approval) before any read-modify-write.
