@@ -31,7 +31,16 @@ export interface AccountingHub {
     refunded: number
     outstanding: number
   }
-  profit: { cogs: number; grossProfit: number; grossMarginPercent: number | null }
+  profit: {
+    /** The profit engine's own revenue base — ties to netSales by §102. */
+    revenue: number
+    cogs: number
+    grossProfit: number
+    grossMarginPercent: number | null
+    /** Best earners and thinnest margins (≥5 sold), straight off byItem. */
+    topItems: Array<{ label: string; grossProfit: number; marginPercent: number | null }>
+    lowMarginItems: Array<{ label: string; grossProfit: number; marginPercent: number | null }>
+  }
   purchasing: {
     /** Goods actually received in the period, at cost — NOT COGS. */
     receivedValue: number
@@ -175,12 +184,23 @@ export async function getAccountingHub(params: {
       ),
     },
     profit: {
+      revenue: profit.totals.revenue,
       cogs: profit.totals.cogs,
       grossProfit: profit.totals.grossProfit,
       grossMarginPercent:
         profit.totals.revenue > 0
           ? Math.round((profit.totals.grossProfit / profit.totals.revenue) * 1000) / 10
           : null,
+      topItems: [...profit.byItem]
+        .filter((row) => row.quantity >= 5)
+        .sort((a, b) => b.grossProfit - a.grossProfit)
+        .slice(0, 5)
+        .map((row) => ({ label: row.label, grossProfit: row.grossProfit, marginPercent: row.grossMarginPercent })),
+      lowMarginItems: [...profit.byItem]
+        .filter((row) => row.quantity >= 5 && row.revenue > 0)
+        .sort((a, b) => (a.grossMarginPercent ?? 0) - (b.grossMarginPercent ?? 0))
+        .slice(0, 5)
+        .map((row) => ({ label: row.label, grossProfit: row.grossProfit, marginPercent: row.grossMarginPercent })),
     },
     purchasing: {
       receivedValue,

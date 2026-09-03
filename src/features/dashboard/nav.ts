@@ -37,6 +37,7 @@ import {
   ListTodo,
   PackageCheck,
   KeyRound,
+  Calculator,
 } from 'lucide-react'
 
 import {
@@ -318,39 +319,64 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         href: '/dashboard/accounting',
-        label: 'Accounting dashboard',
-        icon: Scale,
+        label: 'Overview',
+        icon: LayoutDashboard,
         permission: PERMISSIONS.ACCOUNTING_VIEW,
         exact: true,
       },
       {
         href: '/dashboard/accounting/payments',
-        label: 'Payments out',
-        icon: Scale,
+        label: 'Money out',
+        icon: Wallet,
         permission: PERMISSIONS.ACCOUNTING_VIEW,
       },
       {
         href: '/dashboard/accounting/approvals',
-        label: 'Payment approvals',
-        icon: Scale,
+        label: 'Approvals',
+        icon: ClipboardCheck,
         permission: PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
       },
       {
         href: '/dashboard/accounting/expenses',
         label: 'Expenses',
-        icon: Scale,
+        icon: ScrollText,
         permission: PERMISSIONS.ACCOUNTING_VIEW,
       },
       {
         href: '/dashboard/accounting/payables',
-        label: 'Supplier payables',
-        icon: Scale,
+        label: 'Payables',
+        icon: Landmark,
         permission: PERMISSIONS.ACCOUNTING_VIEW,
       },
       {
         href: '/dashboard/accounting/reconciliation',
-        label: 'Financial reconciliation',
+        label: 'Checks',
         icon: Scale,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/ledger',
+        label: 'Ledger',
+        icon: ScrollText,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/reports',
+        label: 'Reports',
+        icon: BarChart3,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+        exact: true,
+      },
+      {
+        href: '/dashboard/accounting/close',
+        label: 'Close month',
+        icon: CalendarClock,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
+      },
+      {
+        href: '/dashboard/accounting/tools',
+        label: 'Tools',
+        icon: Calculator,
         permission: PERMISSIONS.ACCOUNTING_VIEW,
       },
     ],

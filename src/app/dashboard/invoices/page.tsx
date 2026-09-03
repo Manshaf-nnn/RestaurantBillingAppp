@@ -3,10 +3,11 @@ import Link from 'next/link'
 
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
+import { NoteButton } from '@/features/accounting/components/note-button'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -55,6 +56,23 @@ export default async function InvoicesPage({
     },
   })
 
+  // The accountant's notes on these invoices, one query for the whole page.
+  const canNote = can(user, PERMISSIONS.ACCOUNTING_NOTE)
+  const noteRows = await prisma.accountantNote.findMany({
+    where: {
+      restaurantId: user.restaurantId,
+      entity: 'invoice',
+      entityId: { in: invoices.map((invoice) => invoice.id) },
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+  const notesByInvoice = new Map<string, typeof noteRows>()
+  for (const note of noteRows) {
+    const list = notesByInvoice.get(note.entityId) ?? []
+    list.push(note)
+    notesByInvoice.set(note.entityId, list)
+  }
+
   const outstanding = invoices.filter(
     (invoice) => invoice.order.paymentStatus === 'UNPAID' || invoice.order.paymentStatus === 'PARTIAL',
   )
@@ -91,7 +109,8 @@ export default async function InvoicesPage({
                   <th className="pb-2 pr-3 font-medium">Customer</th>
                   <th className="pb-2 pr-3 font-medium">Issued</th>
                   <th className="pb-2 pr-3 text-right font-medium">Amount</th>
-                  <th className="pb-2 text-right font-medium">Status</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Status</th>
+                  <th className="pb-2 text-right font-medium">Notes</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -120,7 +139,7 @@ export default async function InvoicesPage({
                       <td className="py-2.5 pr-3 text-right tabular-nums">
                         {money(invoice.order.grandTotal + invoice.order.tipAmount)}
                       </td>
-                      <td className="py-2.5 text-right">
+                      <td className="py-2.5 pr-3 text-right">
                         {owed > 0 ? (
                           <Badge variant="destructive">{money(owed)} due</Badge>
                         ) : invoice.order.paymentStatus === 'REFUNDED' ? (
@@ -128,6 +147,20 @@ export default async function InvoicesPage({
                         ) : (
                           <Badge variant="secondary">settled</Badge>
                         )}
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <NoteButton
+                          entity="invoice"
+                          entityId={invoice.id}
+                          compact
+                          canNote={canNote}
+                          notes={(notesByInvoice.get(invoice.id) ?? []).map((note) => ({
+                            id: note.id,
+                            body: note.body,
+                            authorName: note.authorName,
+                            createdAt: note.createdAt.toISOString(),
+                          }))}
+                        />
                       </td>
                     </tr>
                   )

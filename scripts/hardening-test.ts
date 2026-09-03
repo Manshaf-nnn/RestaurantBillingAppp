@@ -85,6 +85,88 @@ async function main() {
       explained.checks.find((c) => c.key === 'loyalty-ledger')?.status === 'OK')
   }
 
+  console.log('\n── 1b. The accountant pattern checks catch what they claim to (acCal §7) ──')
+  {
+    const now = new Date()
+
+    // Duplicate payments: same order, method, amount, 30 seconds apart.
+    const dupOrder = await prisma.order.create({
+      data: {
+        restaurantId: restaurant.id, branchId: branch.id, orderNumber: `DUP-${stamp}`,
+        customerName: 'X', customerPhone: '', status: 'COMPLETED', paymentStatus: 'PAID',
+        subtotal: 20_000, grandTotal: 20_000, paidTotal: 40_000, placedAt: now,
+        payments: {
+          create: [
+            { restaurantId: restaurant.id, amount: 20_000, method: 'CARD', status: 'PAID', paidAt: now },
+            { restaurantId: restaurant.id, amount: 20_000, method: 'CARD', status: 'PAID', paidAt: new Date(now.getTime() + 30_000) },
+          ],
+        },
+      },
+    })
+    // Unusual discount: 60% off with no house pattern to lean on (<20 rows).
+    const bigDiscount = await prisma.order.create({
+      data: {
+        restaurantId: restaurant.id, branchId: branch.id, orderNumber: `DISC-${stamp}`,
+        customerName: 'X', customerPhone: '', status: 'COMPLETED', paymentStatus: 'PAID',
+        subtotal: 10_000, discountTotal: 6_000, manualDiscount: 6_000,
+        grandTotal: 4_000, paidTotal: 4_000, placedAt: now,
+      },
+    })
+    // Unusual refund: 100% of the bill went back.
+    const refundOrder = await prisma.order.create({
+      data: {
+        restaurantId: restaurant.id, branchId: branch.id, orderNumber: `REF-${stamp}`,
+        customerName: 'X', customerPhone: '', status: 'COMPLETED', paymentStatus: 'REFUNDED',
+        subtotal: 8_000, grandTotal: 8_000, paidTotal: 0, placedAt: now,
+        payments: {
+          create: [{ restaurantId: restaurant.id, amount: 8_000, method: 'CASH', status: 'REFUNDED', paidAt: now }],
+        },
+      },
+    })
+    const refundPayment = await prisma.payment.findFirstOrThrow({ where: { orderId: refundOrder.id } })
+    await prisma.refund.create({
+      data: {
+        restaurantId: restaurant.id, orderId: refundOrder.id, paymentId: refundPayment.id,
+        amount: 8_000, method: 'CASH', reason: 'hardening',
+      },
+    })
+    // Backdated: a payment stamped three days before its order existed.
+    const backdated = await prisma.order.create({
+      data: {
+        restaurantId: restaurant.id, branchId: branch.id, orderNumber: `BACK-${stamp}`,
+        customerName: 'X', customerPhone: '', status: 'COMPLETED', paymentStatus: 'PAID',
+        subtotal: 5_000, grandTotal: 5_000, paidTotal: 5_000, placedAt: now,
+        payments: {
+          create: [{
+            restaurantId: restaurant.id, amount: 5_000, method: 'CASH', status: 'PAID',
+            paidAt: new Date(now.getTime() - 3 * 24 * 3600 * 1000),
+          }],
+        },
+      },
+    })
+
+    const suspicious = await runIntegrityChecks(restaurant.id)
+    const get = (key: string) => suspicious.checks.find((c) => c.key === key)
+    check('a double-tap payment turns duplicate-payments WARNING',
+      get('duplicate-payments')?.status === 'WARNING', get('duplicate-payments')?.status)
+    check('a 60% discount with no house pattern turns unusual-discounts WARNING',
+      get('unusual-discounts')?.status === 'WARNING' &&
+        (get('unusual-discounts')?.count ?? 0) >= 1)
+    check('a full refund turns unusual-refunds WARNING',
+      get('unusual-refunds')?.status === 'WARNING')
+    check('a payment three days before its order turns backdated WARNING',
+      get('backdated-transactions')?.status === 'WARNING')
+    check('pattern checks warn — they never block the books as ERROR',
+      ['duplicate-payments', 'unusual-discounts', 'unusual-refunds', 'backdated-transactions']
+        .every((key) => get(key)?.status !== 'ERROR'))
+
+    // Clean up the deliberate mess so section 2 starts from OK books.
+    await prisma.refund.deleteMany({ where: { orderId: refundOrder.id } })
+    await prisma.order.deleteMany({
+      where: { id: { in: [dupOrder.id, bigDiscount.id, refundOrder.id, backdated.id] } },
+    })
+  }
+
   console.log('\n── 2. Rate limits are shared, not per-instance ──')
   {
     const key = `rl:test:${stamp}`

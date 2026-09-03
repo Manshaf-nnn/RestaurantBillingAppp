@@ -55,6 +55,7 @@ export type TenantSummary = Pick<
   | 'taxLabel'
   | 'taxInclusive'
   | 'serviceChargeBps'
+  | 'targetFoodCostBps'
   | 'phone'
   | 'addressLine'
   | 'city'
@@ -84,6 +85,7 @@ const SUMMARY_SELECT = {
   taxLabel: true,
   taxInclusive: true,
   serviceChargeBps: true,
+  targetFoodCostBps: true,
   phone: true,
   addressLine: true,
   city: true,

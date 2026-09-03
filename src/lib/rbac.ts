@@ -186,6 +186,12 @@ export const PERMISSIONS = {
   ACCOUNTING_PAYMENT_APPROVE: 'accounting.paymentApprove',
   /// Manage the expense category book.
   ACCOUNTING_EXPENSE_MANAGE: 'accounting.expenseManage',
+  /// Bank-statement reconciliation: upload statements, accept/reject/undo
+  /// matches. Reconciling is reading plus a match flag — it moves no money.
+  ACCOUNTING_RECONCILE: 'accounting.reconcile',
+  /// Pin a signed, append-only note to a financial record, and acknowledge
+  /// a standing warning on the Issues screen.
+  ACCOUNTING_NOTE: 'accounting.note',
 
   // petty cash — three permissions because there are three different jobs.
   // Anybody at the till may need to see what the tin has left; raising a
@@ -353,6 +359,8 @@ const ACCOUNTANT: Permission[] = [
   PERMISSIONS.ACCOUNTING_PAYMENT_CREATE,
   PERMISSIONS.ACCOUNTING_PAYMENT_PAY,
   PERMISSIONS.ACCOUNTING_EXPENSE_MANAGE,
+  PERMISSIONS.ACCOUNTING_RECONCILE,
+  PERMISSIONS.ACCOUNTING_NOTE,
 ]
 
 /**

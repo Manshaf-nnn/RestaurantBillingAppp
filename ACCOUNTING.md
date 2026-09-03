@@ -182,3 +182,93 @@ row, orphaned projection, unrecorded cash, malformed reversal). Exports:
 Pinned by `scripts/accounting-module-test.ts` (workflow guards, races,
 reversal maths, payables statement) and `scripts/e2e-accountant-test.ts`
 (the §16 chain: PO → GRN → payable → approval → paid → reconciled).
+
+## The Accountant Control Center (acCal.md)
+
+The accountant's own section, built on the engines above rather than beside
+them. Ten screens under `/dashboard/accounting`, and one rule behind all of
+them: **no screen computes a financial figure of its own**. Each one asks the
+module that owns the number, which is why the hub, the ledger, the P&L and
+the exports can never disagree.
+
+### Why is this number?
+
+`explain.ts` builds one explanation per metric — the formula with the real
+figures, a plain sentence, and links to the records. The builders never
+query: they arrange numbers the hub already produced, so a popover cannot
+drift from the card it explains. `explain-test` folds every formula and
+checks it lands on its own value.
+
+The same builders answer **Ask the numbers** — a curated question list
+("Why did profit change?", "Which items have the lowest margin?"). It is
+deliberately **not** an LLM: every answer is computed from real records
+before the page renders, and cites its sources. Nothing in this system can
+invent a financial figure.
+
+### The derived ledger (§9)
+
+`src/features/ledger/` projects proper double-entry from the operating
+records **at read time** — there is no journal table and no posting step, so
+there is no second source of truth to drift. Twenty accounts, sixteen entry
+shapes (sale, settlement, refund, COGS, goods received, supplier payment,
+purchase return, expense, petty cash, wastage, stock adjustment, opening
+stock, cash payout, bank deposit, drawer difference), each balanced by
+construction and each line carrying the record that produced it.
+
+`ledger-test` proves the accounting rather than the code: every entry
+balances, the trial balance balances for any range, and — the checks that
+matter — **ledger revenue IS the sales report's net sales, ledger COGS IS the
+profit report's COGS, ledger payables IS the supplier ledger's outstanding**.
+Cancelled bills contribute nothing.
+
+Two honest omissions, both stated on the page. Cash moving between the till,
+safe and change box is not projected (the business is no richer for carrying
+its own money across the room, and the safe is not modelled), so the cash
+book shows *trading* cash. And the balance-sheet view is called **Financial
+position**, never a balance sheet: it is built only from what TableFlow
+records, closes income and expenses into one clearly-labelled *Retained
+earnings (derived)* line, and says in as many words that it is not accounts
+for filing.
+
+### Checks (§5, §6, §7)
+
+One screen, four tabs. **Overview** is the identity list and integrity
+checker. **Payments** classifies every bill as Paid / Partially paid /
+Unpaid / Overpaid / Mismatch from `billed = grandTotal + tip` against
+`received − refunded`, and says what to do about each problem row in words.
+**Bank** imports a CSV or Excel statement the bank gives you and suggests
+matches — exact amount only, direction-aware, within five days, with the
+reference lifting the score; accepting is CAS-guarded so two clicks resolve
+to one, and one system record can never be claimed by two lines. **Issues**
+groups the checker's 22 checks as critical / worth-a-look / clear, each with
+one sentence on what happened and links to the offending rows.
+
+The four checks added here — duplicate payments, unusual discounts, unusual
+refunds, backdated transactions — are WARNINGs by design: each row is legal
+on its own, and the check exists so a person looks. A standing warning can be
+**acknowledged with a note**; errors never can.
+
+### Notes, close, tools
+
+`AccountantNote` is append-only by construction — the feature ships no update
+and no delete, so a wrong note is answered with another note. The same rows
+carry issue acknowledgements.
+
+**Close month** re-asks the records seven questions (days signed off, drawers
+closed, no critical issues, nothing awaiting a decision, payments reconciled,
+bank matched, journals balanced) and shows a readiness figure. Closing over
+open items is allowed — accountants sometimes must — but demands the word
+CLOSE and a written reason, both stored on the period. It reuses the existing
+`closePeriod`, so a sealed month behaves like any sealed range.
+
+**Tools** carries the calculator (tax inclusive/exclusive, margin vs markup,
+food cost, manual-rate conversion — all in the billing engine's own integer
+minor units, proven by `calc-math-test`) and **What if**, which prices an
+ingredient change against the sales that actually happened. The what-if
+service contains no writes at all, and its test counts every row before and
+after to keep it that way.
+
+Pinned by `scripts/ledger-test.ts`, `bank-rec-test.ts`, `month-close-test.ts`,
+`what-if-test.ts`, `explain-test.ts` and `calc-math-test.ts`, plus the
+payment-reconciliation and pattern-check sections added to
+`accounting-module-test.ts` and `hardening-test.ts`.

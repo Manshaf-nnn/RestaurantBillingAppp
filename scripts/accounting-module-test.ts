@@ -358,6 +358,94 @@ async function main() {
       workflowChecks.map((entry) => `${entry.key}:${entry.status}`).join(' '))
   }
 
+  console.log('\n── 9. Payment reconciliation: five buckets, no invention (acCal §5) ──')
+  {
+    const { getPaymentReconciliation } = await import('../src/features/payments/reconciliation')
+    const { resolveRange } = await import('../src/features/reports/range')
+    const now = new Date()
+    const mkOrder = (
+      suffix: string,
+      data: {
+        grandTotal: number
+        tipAmount?: number
+        paidTotal: number
+        paymentStatus: 'PAID' | 'PARTIAL' | 'UNPAID' | 'REFUNDED'
+        payments?: Array<{ amount: number; status?: 'PAID' | 'REFUNDED' }>
+        refunds?: number[]
+      },
+    ) =>
+      prisma.order.create({
+        data: {
+          restaurantId: restaurant.id, branchId: branch.id,
+          orderNumber: `recon-${stamp}-${suffix}`,
+          customerName: 'Walk-in', customerPhone: '0770000000',
+          status: 'COMPLETED', paymentStatus: data.paymentStatus,
+          subtotal: data.grandTotal, grandTotal: data.grandTotal,
+          tipAmount: data.tipAmount ?? 0, paidTotal: data.paidTotal, placedAt: now,
+          payments: data.payments
+            ? {
+                create: data.payments.map((p) => ({
+                  restaurantId: restaurant.id, amount: p.amount, method: 'CASH' as const,
+                  status: p.status ?? ('PAID' as const), paidAt: now,
+                })),
+              }
+            : undefined,
+        },
+      })
+
+    const paidOrder = await mkOrder('paid', {
+      grandTotal: 10_000, paidTotal: 10_000, paymentStatus: 'PAID',
+      payments: [{ amount: 10_000 }],
+    })
+    await mkOrder('partial', {
+      grandTotal: 10_000, paidTotal: 4_000, paymentStatus: 'PARTIAL',
+      payments: [{ amount: 4_000 }],
+    })
+    await mkOrder('unpaid', { grandTotal: 10_000, paidTotal: 0, paymentStatus: 'UNPAID' })
+    // Overpaid: settled at 10,000, then the bill was edited down to 8,000 —
+    // paidTotal still equals the payment ledger; only the bill shrank.
+    await mkOrder('overpaid', {
+      grandTotal: 8_000, paidTotal: 10_000, paymentStatus: 'PAID',
+      payments: [{ amount: 10_000 }],
+    })
+    // Mismatch: the cached paidTotal drifted from the payment ledger.
+    await mkOrder('mismatch', {
+      grandTotal: 10_000, paidTotal: 10_000, paymentStatus: 'PAID',
+      payments: [{ amount: 6_000 }],
+    })
+    // Fully refunded on purpose: payment in, refund row out, status REFUNDED.
+    const refunded = await mkOrder('refunded', {
+      grandTotal: 5_000, paidTotal: 0, paymentStatus: 'REFUNDED',
+      payments: [{ amount: 5_000, status: 'REFUNDED' }],
+    })
+    const refundedPayment = await prisma.payment.findFirstOrThrow({ where: { orderId: refunded.id } })
+    await prisma.refund.create({
+      data: {
+        restaurantId: restaurant.id, orderId: refunded.id, paymentId: refundedPayment.id,
+        amount: 5_000, method: 'CASH', reason: 'Test refund',
+      },
+    })
+
+    const recon = await getPaymentReconciliation({
+      restaurantId: restaurant.id,
+      range: resolveRange({ preset: 'TODAY', timeZone: restaurant.timezone }),
+      money: (minor: number) => String(minor),
+    })
+    check('one bill lands in each bucket, and the refunded one counts as settled',
+      recon.counts.PARTIAL === 1 && recon.counts.UNPAID === 1 &&
+        recon.counts.OVERPAID === 1 && recon.counts.MISMATCH === 1 && recon.counts.PAID >= 2,
+      JSON.stringify(recon.counts))
+    check('problem rows carry the fix in words, worst first',
+      recon.problems.length === 3 &&
+        recon.problems[0].bucket === 'MISMATCH' &&
+        recon.problems.every((row) => row.action.length > 0))
+    const overpaidRow = recon.problems.find((row) => row.bucket === 'OVERPAID')
+    check('the overpaid row asks for exactly the excess back',
+      overpaidRow !== undefined && overpaidRow.gap === -2_000, `${overpaidRow?.gap}`)
+    check('the cleanly paid bill raised no problem row',
+      !recon.problems.some((row) => row.orderId === paidOrder.id))
+  }
+
   // purchase_items → inventory_items is Restrict, so the purchases go first.
   await prisma.goodsReceipt.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.purchase.deleteMany({ where: { restaurantId: restaurant.id } })

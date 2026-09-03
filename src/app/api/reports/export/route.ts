@@ -208,6 +208,134 @@ export async function GET(request: NextRequest) {
       return fileResponse(Buffer.from(toCsv(columns, data)), `payables-${stamp}.csv`, 'text/csv')
     }
 
+    if (type === 'profit') {
+      await requirePermission(PERMISSIONS.ACCOUNTING_VIEW)
+      const { getProfitReport } = await import('@/features/reports/profit')
+      const report = await getProfitReport({
+        restaurantId: user.restaurantId,
+        range: canonicalRange,
+        branchIds,
+      })
+      const columns = [
+        { header: 'Item', key: 'item' },
+        { header: 'Sold', key: 'quantity' },
+        { header: 'Revenue', key: 'revenue' },
+        { header: 'Ingredient cost', key: 'cogs' },
+        { header: 'Gross profit', key: 'grossProfit' },
+        { header: 'Food cost %', key: 'foodCost' },
+        { header: 'Margin %', key: 'margin' },
+      ]
+      const data = report.byItem.map((row) => ({
+        item: row.label,
+        quantity: row.quantity,
+        revenue: money(row.revenue),
+        cogs: money(row.cogs),
+        grossProfit: money(row.grossProfit),
+        foodCost: row.foodCostPercent === null ? '—' : `${row.foodCostPercent}%`,
+        margin: row.grossMarginPercent === null ? '—' : `${row.grossMarginPercent}%`,
+      }))
+      if (format === 'xlsx') {
+        const buffer = await toExcel('Menu profitability', columns, data)
+        return fileResponse(buffer, `profit-${stamp}.xlsx`, XLSX_TYPE)
+      }
+      return fileResponse(Buffer.from(toCsv(columns, data)), `profit-${stamp}.csv`, 'text/csv')
+    }
+
+    if (type === 'pnl' || type === 'trial-balance' || type === 'journal') {
+      await requirePermission(PERMISSIONS.ACCOUNTING_VIEW)
+      const { getLedger } = await import('@/features/ledger/queries')
+      const ledger = await getLedger({
+        restaurantId: user.restaurantId,
+        range: canonicalRange,
+        branchIds,
+      })
+
+      if (type === 'pnl') {
+        const pnl = ledger.profitAndLoss
+        const columns = [
+          { header: 'Line', key: 'line' },
+          { header: 'Amount', key: 'amount' },
+        ]
+        const data = [
+          { line: 'Sales', amount: money(pnl.revenue.grossSales) },
+          { line: 'Discounts given', amount: money(-pnl.revenue.discounts) },
+          { line: 'Refunds', amount: money(-pnl.revenue.refunds) },
+          { line: 'Net sales', amount: money(pnl.revenue.netSales) },
+          { line: 'Ingredient cost (COGS)', amount: money(-pnl.cogs) },
+          { line: 'Gross profit', amount: money(pnl.grossProfit) },
+          ...(pnl.revenue.serviceCharge !== 0
+            ? [{ line: 'Service charge', amount: money(pnl.revenue.serviceCharge) }]
+            : []),
+          ...pnl.expenses.map((expense) => ({ line: expense.label, amount: money(-expense.amount) })),
+          { line: 'Operating profit', amount: money(pnl.operatingProfit) },
+        ]
+        if (format === 'xlsx') {
+          const buffer = await toExcel('Profit and loss', columns, data)
+          return fileResponse(buffer, `pnl-${stamp}.xlsx`, XLSX_TYPE)
+        }
+        return fileResponse(Buffer.from(toCsv(columns, data)), `pnl-${stamp}.csv`, 'text/csv')
+      }
+
+      if (type === 'trial-balance') {
+        const columns = [
+          { header: 'Code', key: 'code' },
+          { header: 'Account', key: 'account' },
+          { header: 'Debits', key: 'debits' },
+          { header: 'Credits', key: 'credits' },
+          { header: 'Balance', key: 'balance' },
+        ]
+        const data = [
+          ...ledger.trialBalance.rows.map((row) => ({
+            code: row.code,
+            account: row.name,
+            debits: money(row.debits),
+            credits: money(row.credits),
+            balance: money(row.balance),
+          })),
+          {
+            code: '',
+            account: 'TOTAL',
+            debits: money(ledger.trialBalance.totalDebits),
+            credits: money(ledger.trialBalance.totalCredits),
+            balance: ledger.trialBalance.balanced ? 'balanced' : 'NOT BALANCED',
+          },
+        ]
+        if (format === 'xlsx') {
+          const buffer = await toExcel('Trial balance', columns, data)
+          return fileResponse(buffer, `trial-balance-${stamp}.xlsx`, XLSX_TYPE)
+        }
+        return fileResponse(Buffer.from(toCsv(columns, data)), `trial-balance-${stamp}.csv`, 'text/csv')
+      }
+
+      const columns = [
+        { header: 'Date', key: 'date' },
+        { header: 'Source', key: 'source' },
+        { header: 'Reference', key: 'reference' },
+        { header: 'Narrative', key: 'narrative' },
+        { header: 'Account', key: 'account' },
+        { header: 'Account name', key: 'accountName' },
+        { header: 'Debit', key: 'debit' },
+        { header: 'Credit', key: 'credit' },
+      ]
+      const data = ledger.entries.flatMap((entry) =>
+        entry.lines.map((line) => ({
+          date: entry.date.toISOString().slice(0, 10),
+          source: entry.sourceType,
+          reference: entry.sourceId,
+          narrative: entry.narrative,
+          account: line.account,
+          accountName: line.accountName,
+          debit: line.debit > 0 ? money(line.debit) : '',
+          credit: line.credit > 0 ? money(line.credit) : '',
+        })),
+      )
+      if (format === 'xlsx') {
+        const buffer = await toExcel('Journal', columns, data)
+        return fileResponse(buffer, `journal-${stamp}.xlsx`, XLSX_TYPE)
+      }
+      return fileResponse(Buffer.from(toCsv(columns, data)), `journal-${stamp}.csv`, 'text/csv')
+    }
+
     if (type === 'orders') {
       /*
        * `listOrders` takes one optional branch, so a reach of two or more

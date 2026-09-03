@@ -582,6 +582,10 @@ model Restaurant {
   taxLabel         String  @default("GST")
   taxInclusive     Boolean @default(false)
   serviceChargeBps Int     @default(0)
+  /// The owner's expected food-cost share of sales, in basis points
+  /// (3000 = 30%). Null means no target set; the variance screen compares
+  /// against it when present. acCal.md §8.
+  targetFoodCostBps Int?
 
   plan        SubscriptionPlan @default(TRIAL)
   trialEndsAt DateTime?
@@ -654,6 +658,9 @@ model Restaurant {
   printJobs        PrintJob[]
   expenseCategories ExpenseCategory[]
   outgoingPayments  OutgoingPayment[]
+  accountantNotes   AccountantNote[]
+  bankStatements    BankStatement[]
+  bankStatementLines BankStatementLine[]
   dailyCloses      DailyClose[]
   accountingPeriods AccountingPeriod[]
   reservations     Reservation[]
@@ -831,6 +838,9 @@ model User {
   outgoingSubmitted   OutgoingPayment[]   @relation("OutgoingPaymentSubmittedBy")
   outgoingDecided     OutgoingPayment[]   @relation("OutgoingPaymentDecidedBy")
   outgoingPaid        OutgoingPayment[]   @relation("OutgoingPaymentPaidBy")
+  accountantNotes     AccountantNote[]    @relation("AccountantNoteAuthor")
+  bankStatementsUploaded BankStatement[]  @relation("BankStatementUploadedBy")
+  bankLinesMatched    BankStatementLine[] @relation("BankLineMatchedBy")
   stockMovements      StockMovement[]
   shifts              StaffShift[]
   shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
@@ -4018,4 +4028,99 @@ model ErrorLog {
   @@index([createdAt])
   @@index([restaurantId, createdAt])
   @@map("error_logs")
+}
+
+/// A short, signed remark on a financial record (acCal.md §17). Append-only
+/// by construction: the feature ships no update or delete — a wrong note is
+/// answered with another note, the way a paper daybook works.
+model AccountantNote {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Scoping tag only — no FK on purpose; a note outlives branch reshuffles.
+  branchId     String?
+
+  /// What the note is pinned to: 'invoice' | 'order' | 'payment' |
+  /// 'outgoingPayment' | 'issue' | 'bankLine'.
+  entity   String
+  entityId String
+  body     String
+
+  authorId   String?
+  author     User?   @relation("AccountantNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  /// Denormalised, so the signature survives the author's account.
+  authorName String
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, entity, entityId, createdAt])
+  @@map("accountant_notes")
+}
+
+enum BankLineStatus {
+  UNMATCHED
+  MATCHED
+  /// The same line already arrived in an earlier statement.
+  DUPLICATE
+  /// Deliberately set aside — bank fees, someone else's money.
+  IGNORED
+}
+
+/// One uploaded bank statement (acCal.md §6). The file itself is not kept —
+/// only its parsed lines and a hash that refuses the same file twice.
+model BankStatement {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+
+  fileName   String
+  /// sha256 of the normalised file content — the re-upload guard.
+  importHash String
+  lineCount  Int
+
+  uploadedById   String?
+  uploadedBy     User?   @relation("BankStatementUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedByName String
+
+  createdAt DateTime @default(now())
+
+  lines BankStatementLine[]
+
+  @@unique([restaurantId, importHash])
+  @@map("bank_statements")
+}
+
+/// One line of a bank statement, matched (or not) to a system record.
+model BankStatementLine {
+  id           String        @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  statementId  String
+  statement    BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  lineDate    DateTime
+  description String
+  reference   String?
+  /// Signed minor units: positive = money in (credit), negative = money out.
+  amount      Int
+  /// sha256(restaurantId|date|amount|normalised description) — how a line
+  /// re-imported in a later statement is recognised as DUPLICATE.
+  lineHash    String
+
+  status      BankLineStatus @default(UNMATCHED)
+  /// 'PAYMENT' | 'SUPPLIER_PAYMENT' | 'OUTGOING_PAYMENT' — which ledger the
+  /// accepted match lives in.
+  matchedType String?
+  matchedId   String?
+  matchedById String?
+  matchedBy   User?          @relation("BankLineMatchedBy", fields: [matchedById], references: [id], onDelete: SetNull)
+  matchedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, status, lineDate])
+  @@index([restaurantId, lineHash])
+  @@index([statementId])
+  @@map("bank_statement_lines")
 }

@@ -333,6 +333,102 @@ export async function runIntegrityChecks(restaurantId: string): Promise<Integrit
     `,
   )
 
+  // ── The accountant's pattern checks (acCal.md §7) ─────────────────────────
+  //
+  // WARNINGS, deliberately: each row here is legal on its own — the checks
+  // exist so a human looks. Thresholds live in the SQL where they can be
+  // read next to the question they ask.
+
+  add(
+    'duplicate-payments',
+    'No suspicious double payments',
+    'WARNING',
+    'Two settled payments on one order, same method and amount, within 120 seconds — a double-tap or a double-key.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT DISTINCT p2.id FROM payments p1
+      JOIN payments p2 ON p2."orderId" = p1."orderId"
+        AND p2.method = p1.method
+        AND p2.amount = p1.amount
+        AND p2.id > p1.id
+        AND p2."paidAt" IS NOT NULL AND p1."paidAt" IS NOT NULL
+        AND ABS(EXTRACT(EPOCH FROM (p2."paidAt" - p1."paidAt"))) <= 120
+      WHERE p1."restaurantId" = ${restaurantId}
+        AND p1.status IN ('PAID','REFUNDED') AND p2.status IN ('PAID','REFUNDED')
+        AND p1.amount > 0
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'unusual-discounts',
+    'No discounts far outside the house pattern',
+    'WARNING',
+    'Last 30 days: a discount above 25% of the bill AND 3× the median discounted order — or above 50% when too few discounted orders exist to set a pattern.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      WITH recent AS (
+        SELECT id, "discountTotal" + "loyaltyDiscount" AS disc, subtotal
+        FROM orders
+        WHERE "restaurantId" = ${restaurantId}
+          AND status <> 'CANCELLED'
+          AND subtotal > 0
+          AND "placedAt" >= NOW() - INTERVAL '30 days'
+      ),
+      pattern AS (
+        SELECT COUNT(*) AS n,
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY disc) AS median
+        FROM recent WHERE disc > 0
+      )
+      SELECT r.id FROM recent r, pattern p
+      WHERE (p.n >= 20 AND r.disc * 4 > r.subtotal AND r.disc > 3 * p.median)
+         OR (p.n < 20 AND r.disc * 2 > r.subtotal)
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'unusual-refunds',
+    'No refunds far outside the house pattern',
+    'WARNING',
+    'Last 30 days: a refund of 75%+ of its bill, or three or more refunds against one order.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT DISTINCT o.id FROM orders o
+      WHERE o."restaurantId" = ${restaurantId}
+        AND o."placedAt" >= NOW() - INTERVAL '30 days'
+        AND o."grandTotal" > 0
+        AND (
+          EXISTS (SELECT 1 FROM refunds r
+            WHERE r."orderId" = o.id AND r.amount * 4 >= o."grandTotal" * 3)
+          OR (SELECT COUNT(*) FROM refunds r WHERE r."orderId" = o.id) >= 3
+        )
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'backdated-transactions',
+    'No transactions dated into the past',
+    'WARNING',
+    'A payment taken before its order existed or 48h+ after it, or money-out dated inside a period that was already sealed when the record was created.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT p.id FROM payments p
+      JOIN orders o ON o.id = p."orderId"
+      WHERE p."restaurantId" = ${restaurantId}
+        AND p.status IN ('PAID','REFUNDED')
+        AND p."paidAt" IS NOT NULL
+        AND (p."paidAt" < o."placedAt" - INTERVAL '5 minutes'
+             OR p."paidAt" > o."placedAt" + INTERVAL '48 hours')
+      UNION ALL
+      SELECT op.number AS id FROM outgoing_payments op
+      JOIN accounting_periods ap ON ap."restaurantId" = op."restaurantId"
+        AND ap.status = 'CLOSED'
+        AND op."paymentDate" BETWEEN ap."periodStart" AND ap."periodEnd"
+      WHERE op."restaurantId" = ${restaurantId}
+        AND op.status IN ('PAID','APPROVED','SUBMITTED')
+        AND op."createdAt" > COALESCE(ap."closedAt", op."createdAt" - INTERVAL '1 second')
+      LIMIT 200
+    `,
+  )
+
   const status: IntegrityStatus = checks.some((check) => check.status === 'ERROR')
     ? 'ERROR'
     : checks.some((check) => check.status === 'WARNING')

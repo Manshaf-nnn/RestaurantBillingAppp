@@ -27,6 +27,8 @@ const BASE_URL = process.env.BASE_URL
 
 const STATIC = [
   'billing-math-test',
+  // acCal.md §2 — the calculator's math: tax round trip, margin vs markup.
+  'calc-math-test',
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
   'no-item-branch-filter',
@@ -68,6 +70,16 @@ const SERVICE = [
   'accounting-module-test',
   // accountsds.md §16 — PO → GRN → payable → approval → paid → reconciled.
   'e2e-accountant-test',
+  // acCal.md §3/§18 — every explanation folds to its value; no invented numbers.
+  'explain-test',
+  // acCal.md §9 — the derived journal balances and ties to every engine.
+  'ledger-test',
+  // acCal.md §6 — statement import, matching rules, duplicates, races.
+  'bank-rec-test',
+  // acCal.md §13 — the month-end checklist answers from the records.
+  'month-close-test',
+  // acCal.md §12 — the price simulator's maths, and that it writes nothing.
+  'what-if-test',
   // AUDIT.md Slice 7 — the §101 worked example, end to end, and the billing
   // engine's own matrix.
   'e2e-reconciliation-test',

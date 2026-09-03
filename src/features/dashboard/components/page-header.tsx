@@ -42,6 +42,8 @@ export function StatCard({
   change,
   hint,
   icon,
+  info,
+  explain,
   tone = 'default',
   href,
 }: {
@@ -51,6 +53,10 @@ export function StatCard({
   change?: number
   hint?: string
   icon?: React.ReactNode
+  /** A ⓘ beside the label — an InfoTip explaining the term in one sentence. */
+  info?: React.ReactNode
+  /** "Why is this number?" — an ExplainPopover under the value (acCal.md §3). */
+  explain?: React.ReactNode
   tone?: 'default' | 'primary' | 'success' | 'warning' | 'destructive'
   /**
    * Where the number comes from (§57). A summary figure that cannot be
@@ -65,7 +71,10 @@ export function StatCard({
   const card = (
     <div className="rounded-xl border bg-card p-5 shadow-soft transition-shadow hover:shadow-elevated">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-muted-foreground">{label}</p>
+        <p className="flex items-center gap-1 text-sm font-medium text-muted-foreground">
+          {label}
+          {info}
+        </p>
         {icon ? (
           <span
             className={cn(
@@ -106,6 +115,7 @@ export function StatCard({
         ) : null}
         {hint ? <span className="text-muted-foreground">{hint}</span> : null}
       </div>
+      {explain}
     </div>
   )
 
