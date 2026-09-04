@@ -6,6 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { guardLocks, prisma } from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { toBaseUnits } from './units'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Physical stock counts.
@@ -150,7 +151,7 @@ export async function recordCountLines(params: {
       }
 
       const countedBase = toBaseUnits(line.countedQty, line.unit ?? item.unit, item)
-      const systemQty = snapshotted.get(item.id) ?? round(onHand.get(item.id) ?? 0)
+      const systemQty = snapshotted.get(item.id) ?? roundQty(onHand.get(item.id) ?? 0)
 
       await tx.stockCountLine.upsert({
         where: { stockCountId_itemId: { stockCountId: count.id, itemId: item.id } },
@@ -159,13 +160,13 @@ export async function recordCountLines(params: {
           itemId: item.id,
           systemQty,
           countedQty: countedBase,
-          variance: round(countedBase - systemQty),
+          variance: roundQty(countedBase - systemQty),
           enteredUnit: line.unit ?? item.unit,
           notes: line.notes?.trim() || null,
         },
         update: {
           countedQty: countedBase,
-          variance: round(countedBase - systemQty),
+          variance: roundQty(countedBase - systemQty),
           enteredUnit: line.unit ?? item.unit,
           notes: line.notes?.trim() || null,
         },
@@ -208,7 +209,7 @@ export async function branchOnHand(params: {
   for (const row of rows) {
     total.set(row.itemId, (total.get(row.itemId) ?? 0) + row.available)
   }
-  for (const [itemId, value] of total) total.set(itemId, round(value))
+  for (const [itemId, value] of total) total.set(itemId, roundQty(value))
   return total
 }
 
@@ -378,6 +379,3 @@ async function requireDraft(restaurantId: string, stockCountId: string): Promise
   return count
 }
 
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
-}

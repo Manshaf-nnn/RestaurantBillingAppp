@@ -3,6 +3,10 @@ import 'server-only'
 import type { InventoryItem, StockMovement, StockMovementType, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
+import { assertPeriodOpen } from '@/features/accounting/service'
+import { roundQty, sameQty } from '@/lib/quantity'
+import { emitOutbox } from '@/server/realtime/outbox'
+import { EVENTS } from '@/lib/realtime/events'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
 import { applyLocationDelta } from './location-stock'
@@ -154,6 +158,29 @@ export async function postMovement(
     throw new AppError('Quantity must be a number other than zero', 400, 'STOCK_BAD_QUANTITY')
   }
 
+  /*
+   * Sealed books refuse deliberate stock operations (§59, production.md §2).
+   *
+   * Every movement is dated `now()` — nothing here accepts a caller-supplied
+   * date, which is what already makes the ledger's history immutable. So the
+   * only way stock can land in a signed-off range is if the period covering
+   * TODAY has been closed, and this is where that gets refused. Guarding here
+   * rather than at the six calling features is deliberate: `postMovement` is
+   * the sole balance writer, so a future caller cannot forget the check.
+   *
+   * The order-driven types are exempt, and that is a considered trade rather
+   * than an oversight. A SALE deduction refused mid-transaction rolls back the
+   * order that caused it, so sealing the current period would stop the kitchen
+   * serving food — a far worse failure than a movement landing in a sealed
+   * range, and one an owner would experience as the system breaking. Trading
+   * keeps working; what stops is anyone reaching back to revalue the range by
+   * receiving, wasting, adjusting, transferring or approving a count into it.
+   */
+  const TRADING: StockMovementType[] = ['SALE', 'SALE_REVERSAL', 'CONSUMPTION']
+  if (!TRADING.includes(params.type)) {
+    await assertPeriodOpen(tx, params.restaurantId, new Date(), 'This stock movement')
+  }
+
   const direction = directionOf(params.type)
   if (direction !== 0 && params.quantity < 0) {
     throw new AppError(
@@ -182,7 +209,7 @@ export async function postMovement(
   const signed = direction === 0 ? toBaseUnits(params.quantity, enteredUnit, item) : magnitude * direction
 
   const balanceBefore = item.quantity
-  const balanceAfter = round(balanceBefore + signed)
+  const balanceAfter = roundQty(balanceBefore + signed)
 
   /*
    * Refuse to go negative unless this restaurant has said otherwise.
@@ -228,7 +255,7 @@ export async function postMovement(
       _sum: { available: true },
     })
     const atBranch = here._sum.available ?? 0
-    const branchAfter = round(atBranch + signed)
+    const branchAfter = roundQty(atBranch + signed)
     if (branchAfter < 0) {
       const restaurant = await tx.restaurant.findUnique({
         where: { id: params.restaurantId },
@@ -335,6 +362,33 @@ export async function postMovement(
     available: signed,
   })
 
+  /*
+   * The movement and the news of it commit together (production.md §5).
+   *
+   * Emitted here rather than at the six calling features for the same reason
+   * the period guard is here: this is the sole balance writer, so every stock
+   * change is covered by construction and a new caller cannot forget.
+   *
+   * The payload deliberately carries the resulting balance. That is what a
+   * stock screen actually needs in order to react, and including it means a
+   * screen can update without a round trip back for the item.
+   */
+  await emitOutbox(tx, {
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
+    type: EVENTS.LOW_STOCK,
+    entity: 'StockMovement',
+    entityId: movement.id,
+    payload: {
+      itemId: item.id,
+      itemName: item.name,
+      type: params.type,
+      quantity: signed,
+      balanceAfter,
+      belowReorder: item.reorderLevel != null && balanceAfter <= item.reorderLevel,
+    },
+  })
+
   return {
     movement,
     item: updated,
@@ -383,7 +437,12 @@ function valueUpdate(
     const nextValue = prevValue + signedBase * unitCost
     return {
       item: {
-        stockValue: round6(nextValue),
+        // stockValue is value, not quantity, but it is carried at the same six
+        // places and for the same reason: quantity × unitCost is Float, so the
+        // running value drifts unless it is cut off at each step. Rounding it
+        // coarser than the quantity that produced it would make the value
+        // ladder disagree with the balance ladder.
+        stockValue: roundQty(nextValue),
         costPerUnit: nextQty > 0 ? Math.round(nextValue / nextQty) : item.costPerUnit,
         ...(priced ? { lastPurchaseCost: explicitUnitCost } : {}),
       },
@@ -397,13 +456,9 @@ function valueUpdate(
   const nextValue = nextQty <= 0 ? 0 : Math.max(0, prevValue - outValue)
   return {
     // The average itself is deliberately not recomputed on the way out.
-    item: { stockValue: round6(nextValue) },
+    item: { stockValue: roundQty(nextValue) },
     movementUnitCost: explicitUnitCost ?? Math.round(average),
   }
-}
-
-function round6(value: number): number {
-  return Math.round(value * 1e6) / 1e6
 }
 
 /**
@@ -427,10 +482,12 @@ export async function recomputeBalance(
     where: { itemId, restaurantId },
     _sum: { quantity: true },
   })
-  const ledger = round(sum._sum?.quantity ?? 0)
-  const cached = round(item.quantity)
+  const ledger = roundQty(sum._sum?.quantity ?? 0)
+  const cached = roundQty(item.quantity)
 
-  return { cached, ledger, matches: Math.abs(cached - ledger) < 1e-6 }
+  // The tolerance is roundQty's own precision — see `sameQty` for why the two
+  // have to be the same number, or the replay reports drift that is not there.
+  return { cached, ledger, matches: sameQty(cached, ledger) }
 }
 
 /** Convenience wrapper for callers that are not already in a transaction. */
@@ -449,8 +506,4 @@ export function describeMovement(
   const magnitude = movement.quantityEntered ?? Math.abs(movement.quantity)
   const sign = movement.quantity >= 0 ? '+' : '−'
   return `${sign}${formatQuantity(magnitude, unit)} ${movement.type.replace(/_/g, ' ').toLowerCase()}`
-}
-
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
 }

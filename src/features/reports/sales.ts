@@ -1,6 +1,9 @@
 import 'server-only'
 
+import { Prisma } from '@prisma/client'
+
 import { prisma } from '@/server/db/prisma'
+import { localBucket, utc } from '@/server/db/sql-time'
 import type { DateRange } from './range'
 
 /**
@@ -61,120 +64,192 @@ export async function getSalesReport(params: {
   range: DateRange
   branchIds?: string[] | null
 }): Promise<SalesReport> {
-  const where = {
-    restaurantId: params.restaurantId,
-    status: { not: 'CANCELLED' as const },
-    placedAt: { gte: params.range.from, lte: params.range.to },
-    ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
-  }
-
-  const orders = await prisma.order.findMany({
-    where,
-    select: {
-      id: true, subtotal: true, discountTotal: true, loyaltyDiscount: true,
-      taxTotal: true, serviceCharge: true, tipAmount: true, grandTotal: true,
-      paymentStatus: true, paidTotal: true, guestCount: true, type: true,
-      placedAt: true,
-      branch: { select: { id: true, name: true } },
-      createdBy: { select: { id: true, name: true } },
-      servedBy: { select: { id: true, name: true } },
-      items: {
-        where: { status: { not: 'CANCELLED' } },
-        select: {
-          name: true, quantity: true, lineTotal: true,
-          food: { select: { category: { select: { id: true, name: true } } } },
-        },
-      },
-    },
-  })
-
-  // Refunds are attributed to the order they belong to, not the day they were
-  // given, so a report always reconciles against the bill it describes.
   /*
-   * From the refunds ledger, not from payment rows flipped to REFUNDED —
-   * partial refunds only exist there, and the backfill carried history over.
+   * ── Aggregated in SQL, and bucketed in the restaurant's own timezone ───────
+   *
+   * This used to load every order in the range — with its items, food,
+   * category, branch and two user relations — and fold them into JS Maps. Two
+   * separate problems with that, and the second is the one that was actually
+   * showing people wrong numbers:
+   *
+   * 1. It was unbounded. A year's range on a busy restaurant pulled every row
+   *    and every line into memory before summing anything (production.md §4:
+   *    no unbounded queries, use SQL aggregation).
+   *
+   * 2. The hour and day buckets were in the WRONG TIMEZONE. `placedAt` is a
+   *    naive-UTC column; the old code called `.getHours()` on it, which reads
+   *    the SERVER's clock, and `.toISOString().slice(0,10)`, which is UTC. The
+   *    range was resolved correctly in the restaurant's timezone and then
+   *    bucketed in a different one. On Netlify — a UTC host — an Asia/Colombo
+   *    restaurant's "sales by hour" chart was shifted five and a half hours,
+   *    and "by day" cut the day at 05:30 local, so an evening's trade was
+   *    reported against the following morning. The existing test only checked
+   *    that the hours came back sorted, which they faithfully did.
+   *
+   * `localBucket()` from sql-time.ts builds the double `AT TIME ZONE` that a
+   * naive-UTC column needs, and `utc()` pins the range bounds so the session
+   * timezone cannot move them. Read its header before touching any of this:
+   * both mistakes are the kind that look right and are off by an offset.
    */
-  const refunded = await prisma.refund.aggregate({
-    where: {
-      restaurantId: params.restaurantId,
-      order: {
-        placedAt: { gte: params.range.from, lte: params.range.to },
-        /*
-         * The same branch scope as every other number on this page. Without
-         * it, one branch's report subtracted the whole group's refunds — so a
-         * branch that had never given money back showed net sales below its
-         * gross, and the branch pages never summed to the group total.
-         */
-        ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
-      },
-    },
-    _sum: { amount: true },
+  const restaurant = await prisma.restaurant.findUniqueOrThrow({
+    where: { id: params.restaurantId },
+    select: { timezone: true },
   })
+  const tz = restaurant.timezone || 'UTC'
 
-  let grossSales = 0, discounts = 0, tax = 0, serviceCharge = 0, tips = 0, guests = 0
-  const hour = new Map<string, { sales: number; orders: number }>()
-  const day = new Map<string, { sales: number; orders: number }>()
-  const category = new Map<string, { label: string; sales: number; orders: number }>()
-  const item = new Map<string, { label: string; sales: number; orders: number; quantity: number }>()
-  const branch = new Map<string, { label: string; sales: number; orders: number }>()
-  const employee = new Map<string, { label: string; sales: number; orders: number }>()
-  const type = new Map<string, { sales: number; orders: number }>()
+  const from = utc(params.range.from)
+  const to = utc(params.range.to)
+  // An empty allow-list means "sees nothing", never "sees everything" — the
+  // same fail-closed rule the branch guards use everywhere else.
+  const branchFilter = params.branchIds
+    ? Prisma.sql`AND o."branchId" IN (${Prisma.join(
+        params.branchIds.length > 0 ? params.branchIds : ['\u0000none'],
+      )})`
+    : Prisma.empty
 
-  const bump = <T extends { sales: number; orders: number }>(
-    map: Map<string, T>, key: string, make: () => T, sales: number,
-  ) => {
-    const row = map.get(key) ?? make()
-    row.sales += sales
-    row.orders += 1
-    map.set(key, row)
-  }
+  const ORDER_SCOPE = Prisma.sql`
+    o."restaurantId" = ${params.restaurantId}
+    AND o.status <> 'CANCELLED'
+    AND o."placedAt" >= ${from} AND o."placedAt" <= ${to}
+    ${branchFilter}
+  `
 
-  for (const o of orders) {
-    const lineValue = o.subtotal
-    grossSales += lineValue
-    discounts += o.discountTotal + o.loyaltyDiscount
-    tax += o.taxTotal
-    serviceCharge += o.serviceCharge
-    tips += o.tipAmount
-    guests += o.guestCount ?? 0
+  type Row = { key: string | null; label: string | null; sales: bigint | null; orders: bigint | null }
+  const num = (value: bigint | number | null | undefined) => Number(value ?? 0)
 
-    const h = String(o.placedAt.getHours()).padStart(2, '0')
-    bump(hour, h, () => ({ sales: 0, orders: 0 }), lineValue)
-    bump(day, o.placedAt.toISOString().slice(0, 10), () => ({ sales: 0, orders: 0 }), lineValue)
-    bump(type, o.type, () => ({ sales: 0, orders: 0 }), lineValue)
-    bump(branch, o.branch?.id ?? 'none',
-      () => ({ label: o.branch?.name ?? 'Unassigned', sales: 0, orders: 0 }), lineValue)
-    // Credit the person serving the table, not whoever keyed it in. A cashier
-    // ringing up a waiter's order should not appear as the top seller.
-    const attributed = o.servedBy ?? o.createdBy
-    if (attributed) {
-      bump(employee, attributed.id,
-        () => ({ label: attributed.name, sales: 0, orders: 0 }), lineValue)
-    }
+  const [totalsRow, refunded, hourRows, dayRows, typeRows, branchRows, employeeRows, categoryRows, itemRows] =
+    await Promise.all([
+      prisma.$queryRaw<Array<{
+        gross: bigint | null; discounts: bigint | null; tax: bigint | null
+        service: bigint | null; tips: bigint | null; guests: bigint | null; orders: bigint | null
+      }>>`
+        SELECT
+          COALESCE(SUM(o.subtotal), 0)::bigint                                  AS gross,
+          COALESCE(SUM(o."discountTotal" + o."loyaltyDiscount"), 0)::bigint     AS discounts,
+          COALESCE(SUM(o."taxTotal"), 0)::bigint                                AS tax,
+          COALESCE(SUM(o."serviceCharge"), 0)::bigint                           AS service,
+          COALESCE(SUM(o."tipAmount"), 0)::bigint                               AS tips,
+          COALESCE(SUM(o."guestCount"), 0)::bigint                              AS guests,
+          COUNT(*)::bigint                                                      AS orders
+        FROM orders o WHERE ${ORDER_SCOPE}
+      `,
 
-    for (const line of o.items) {
-      const catId = line.food?.category?.id ?? 'none'
-      const catRow = category.get(catId) ?? {
-        label: line.food?.category?.name ?? 'Uncategorised', sales: 0, orders: 0,
-      }
-      catRow.sales += line.lineTotal
-      catRow.orders += 1
-      category.set(catId, catRow)
+      /*
+       * Refunds come from the refunds ledger, not from payment rows flipped to
+       * REFUNDED — partial refunds only exist there. Attributed to the order
+       * they belong to rather than the day they were given, so a report always
+       * reconciles against the bill it describes.
+       */
+      prisma.$queryRaw<Array<{ total: bigint | null }>>`
+        SELECT COALESCE(SUM(r.amount), 0)::bigint AS total
+        FROM refunds r
+        JOIN orders o ON o.id = r."orderId"
+        WHERE ${ORDER_SCOPE}
+      `,
 
-      const itemRow = item.get(line.name) ?? { label: line.name, sales: 0, orders: 0, quantity: 0 }
-      itemRow.sales += line.lineTotal
-      itemRow.orders += 1
-      itemRow.quantity += line.quantity
-      item.set(line.name, itemRow)
-    }
-  }
+      prisma.$queryRaw<Row[]>`
+        SELECT to_char(${localBucket('hour', 'o."placedAt"', tz)}, 'HH24') AS key,
+               NULL AS label,
+               COALESCE(SUM(o.subtotal), 0)::bigint AS sales,
+               COUNT(*)::bigint AS orders
+        FROM orders o WHERE ${ORDER_SCOPE}
+        GROUP BY 1 ORDER BY 1
+      `,
 
-  const refunds = refunded._sum?.amount ?? 0
+      prisma.$queryRaw<Row[]>`
+        SELECT to_char(${localBucket('day', 'o."placedAt"', tz)}, 'YYYY-MM-DD') AS key,
+               NULL AS label,
+               COALESCE(SUM(o.subtotal), 0)::bigint AS sales,
+               COUNT(*)::bigint AS orders
+        FROM orders o WHERE ${ORDER_SCOPE}
+        GROUP BY 1 ORDER BY 1
+      `,
+
+      prisma.$queryRaw<Row[]>`
+        SELECT o.type::text AS key, NULL AS label,
+               COALESCE(SUM(o.subtotal), 0)::bigint AS sales, COUNT(*)::bigint AS orders
+        FROM orders o WHERE ${ORDER_SCOPE}
+        GROUP BY 1
+      `,
+
+      prisma.$queryRaw<Row[]>`
+        SELECT COALESCE(o."branchId", 'none') AS key,
+               COALESCE(b.name, 'Unassigned') AS label,
+               COALESCE(SUM(o.subtotal), 0)::bigint AS sales, COUNT(*)::bigint AS orders
+        FROM orders o
+        LEFT JOIN branches b ON b.id = o."branchId"
+        WHERE ${ORDER_SCOPE}
+        GROUP BY 1, 2
+      `,
+
+      /*
+       * Credit the person who SERVED the table, falling back to whoever keyed
+       * the order in. A cashier ringing up a waiter's order must not appear as
+       * the top seller. Orders with neither are simply not attributed, which is
+       * why this filters rather than grouping them under 'none'.
+       */
+      prisma.$queryRaw<Row[]>`
+        SELECT COALESCE(o."servedById", o."createdById") AS key,
+               u.name AS label,
+               COALESCE(SUM(o.subtotal), 0)::bigint AS sales, COUNT(*)::bigint AS orders
+        FROM orders o
+        JOIN users u ON u.id = COALESCE(o."servedById", o."createdById")
+        WHERE ${ORDER_SCOPE}
+        GROUP BY 1, 2
+      `,
+
+      prisma.$queryRaw<Row[]>`
+        SELECT COALESCE(c.id, 'none') AS key,
+               COALESCE(c.name, 'Uncategorised') AS label,
+               COALESCE(SUM(oi."lineTotal"), 0)::bigint AS sales,
+               COUNT(*)::bigint AS orders
+        FROM order_items oi
+        JOIN orders o ON o.id = oi."orderId"
+        LEFT JOIN foods f ON f.id = oi."foodId"
+        LEFT JOIN categories c ON c.id = f."categoryId"
+        WHERE ${ORDER_SCOPE} AND oi.status <> 'CANCELLED'
+        GROUP BY 1, 2
+      `,
+
+      /*
+       * Keyed by the line's snapshotted NAME, not the food id, and deliberately.
+       * The name on the line is what was sold under that name at that moment; a
+       * dish later renamed or deleted still reports as itself, which is the
+       * whole reason the name is snapshotted onto the line.
+       */
+      prisma.$queryRaw<Array<Row & { quantity: bigint | null }>>`
+        SELECT oi.name AS key, oi.name AS label,
+               COALESCE(SUM(oi."lineTotal"), 0)::bigint AS sales,
+               COUNT(*)::bigint AS orders,
+               COALESCE(SUM(oi.quantity), 0)::bigint AS quantity
+        FROM order_items oi
+        JOIN orders o ON o.id = oi."orderId"
+        WHERE ${ORDER_SCOPE} AND oi.status <> 'CANCELLED'
+        GROUP BY 1, 2
+        ORDER BY sales DESC
+        LIMIT 50
+      `,
+    ])
+
+  const totals = totalsRow[0]
+  const grossSales = num(totals?.gross)
+  const discounts = num(totals?.discounts)
+  const refunds = num(refunded[0]?.total)
+  const tax = num(totals?.tax)
+  const serviceCharge = num(totals?.service)
+  const tips = num(totals?.tips)
+  const guests = num(totals?.guests)
+  const orderCount = num(totals?.orders)
   const netSales = grossSales - discounts - refunds
 
-  const toBuckets = (m: Map<string, { label?: string; sales: number; orders: number }>) =>
-    [...m.entries()]
-      .map(([key, v]) => ({ key, label: v.label ?? key, sales: v.sales, orders: v.orders }))
+  const toBuckets = (rows: Row[]): Bucket[] =>
+    rows
+      .map((row) => ({
+        key: row.key ?? 'none',
+        label: row.label ?? row.key ?? 'none',
+        sales: num(row.sales),
+        orders: num(row.orders),
+      }))
       .sort((a, b) => b.sales - a.sales)
 
   return {
@@ -192,22 +267,29 @@ export async function getSalesReport(params: {
       serviceCharge,
       tips,
       collected: netSales + tax + serviceCharge,
-      orders: orders.length,
+      orders: orderCount,
       guests,
-      averageOrderValue: orders.length > 0 ? Math.round(netSales / orders.length) : 0,
+      averageOrderValue: orderCount > 0 ? Math.round(netSales / orderCount) : 0,
     },
     // Hours and days read chronologically; everything else biggest first.
-    byHour: toBuckets(hour).sort((a, b) => a.key.localeCompare(b.key))
-      .map((b) => ({ ...b, label: `${b.key}:00` })),
-    byDay: toBuckets(day).sort((a, b) => a.key.localeCompare(b.key)),
-    byCategory: toBuckets(category),
-    byItem: [...item.entries()]
-      .map(([key, v]) => ({ key, label: v.label, sales: v.sales, orders: v.orders, quantity: v.quantity }))
-      .sort((a, b) => b.sales - a.sales)
-      .slice(0, 50),
-    byBranch: toBuckets(branch),
-    byEmployee: toBuckets(employee),
-    byType: toBuckets(type).map((b) => ({ ...b, label: b.key.replace(/_/g, ' ').toLowerCase() })),
+    byHour: toBuckets(hourRows)
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((bucket) => ({ ...bucket, label: `${bucket.key}:00` })),
+    byDay: toBuckets(dayRows).sort((a, b) => a.key.localeCompare(b.key)),
+    byCategory: toBuckets(categoryRows),
+    byItem: itemRows.map((row) => ({
+      key: row.key ?? 'none',
+      label: row.label ?? row.key ?? 'none',
+      sales: num(row.sales),
+      orders: num(row.orders),
+      quantity: num(row.quantity),
+    })),
+    byBranch: toBuckets(branchRows),
+    byEmployee: toBuckets(employeeRows),
+    byType: toBuckets(typeRows).map((bucket) => ({
+      ...bucket,
+      label: bucket.key.replace(/_/g, ' ').toLowerCase(),
+    })),
   }
 }
 

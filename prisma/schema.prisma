@@ -703,6 +703,9 @@ model Restaurant {
   productionOrders ProductionOrder[]
   productionSpecs  ProductionSpec[]
   approvalRequests ApprovalRequest[]
+  outboxEvents     OutboxEvent[]
+  errorLogs        ErrorLog[]
+  jobs             Job[]
   /// [ApprovalPolicy] — thresholds above which an action needs a second
   /// pair of eyes. Null means the built-in defaults apply.
   approvalPolicy   Json?
@@ -717,6 +720,73 @@ model Restaurant {
 
   @@index([isActive])
   @@map("restaurants")
+}
+
+/**
+ * The transactional outbox (production.md §5).
+ *
+ * ── The problem it solves ───────────────────────────────────────────────────
+ *
+ * Realtime used to be fire-and-forget: `realtime.orderCreated(...)` was called
+ * AFTER the transaction committed, and on the serverless host it is a no-op
+ * because no Socket.IO server exists there. So the event describing an order
+ * had no durable existence anywhere. If it was not delivered, it was gone, and
+ * nothing could say afterwards what had happened or replay it.
+ *
+ * A row here is written INSIDE the same transaction as the order, payment or
+ * stock movement it describes. The two commit together or roll back together,
+ * so an event can never describe something that did not happen, and something
+ * that happened can never lack its event. That is the whole point: realtime
+ * failure must not lose an order.
+ *
+ * ── How it is read ──────────────────────────────────────────────────────────
+ *
+ * `/api/pulse?since=<seq>` returns the rows after a cursor, and the client
+ * dedups on `id`. Note carefully what the cursor is and is not: `seq` orders
+ * events and identifies them, but a Postgres sequence hands out numbers at
+ * INSERT time while visibility arrives at COMMIT time, so a slow transaction
+ * can commit seq 10 after seq 11 is already visible. A reader that trusted the
+ * cursor alone could step over it.
+ *
+ * It does not have to, because the pulse token is still there and is derived
+ * from `MAX(updatedAt)` — it cannot miss a change, only fail to name it. The
+ * two halves have different jobs and cover each other's weakness: the token
+ * guarantees the client learns SOMETHING changed, the outbox tells it WHAT and
+ * lets it dedup. A skipped event still triggers a refresh.
+ *
+ * ── Retention ───────────────────────────────────────────────────────────────
+ *
+ * Trimmed by the `outbox-trim` background job. This is a delivery log, not a
+ * second copy of the business record — the order, payment and movement are the
+ * facts, and they are kept elsewhere for ever.
+ */
+model OutboxEvent {
+  /// Monotonic within a restaurant, and the client's cursor. BigInt because a
+  /// busy multi-tenant platform will exhaust an Int in a way that is very
+  /// awkward to discover in production.
+  seq          BigInt     @id @default(autoincrement())
+  id           String     @unique @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Where it happened, so a branch's screens are not woken by another branch.
+  /// Null means restaurant-wide (a menu change, a settings change).
+  branchId     String?
+
+  /// The event name, from EVENTS in src/lib/realtime/events.ts.
+  type     String
+  /// What kind of record moved: 'Order', 'Payment', 'StockMovement'.
+  entity   String
+  entityId String?
+  /// Just enough for a screen to decide whether it cares. Never a full record:
+  /// this table is read by pollers and must stay cheap.
+  payload  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, seq])
+  @@index([restaurantId, branchId, seq])
+  @@index([createdAt])
+  @@map("outbox_events")
 }
 
 /// Backups of uploaded media for platform-level restore/migration.
@@ -826,6 +896,19 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  /*
+   * MFA for privileged accounts (production.md §14).
+   *
+   * The secret is stored encrypted, not hashed: TOTP verification needs the
+   * original to recompute the code, so it cannot be a one-way digest the way a
+   * password is. `mfaEnabledAt` is the switch — a secret exists from the moment
+   * enrolment starts, and only counts once the user has proved they can read a
+   * code from it, which stops a half-finished enrolment locking someone out.
+   */
+  mfaSecret     String?
+  mfaEnabledAt  DateTime?
+  mfaRecoveryCodes MfaRecoveryCode[]
+  errorLogs           ErrorLog[]
   sessions            Session[]
   tokens              VerificationToken[]
   auditLogs           AuditLog[]
@@ -1663,6 +1746,17 @@ model Payment {
   receivedById String?
   receivedBy   User?   @relation("PaymentReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
 
+  /// Retry safety for money coming in.
+  ///
+  /// The order row is locked while a capture runs, which stops two taps landing
+  /// at the same instant. It does NOT stop the other shape of double-take: the
+  /// request that committed and then lost its response, so the till retries a
+  /// capture that already happened and books the money twice. The client mints
+  /// one id per tender attempt and reuses it across retries, so the replay
+  /// finds the payment it already made instead of making another. Partial so
+  /// the column stays null for the paths that predate it.
+  clientRequestId String?
+
   paidAt              DateTime?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
@@ -1672,6 +1766,7 @@ model Payment {
   cashMovements       CashMovement[]
   refunds             Refund[]
 
+  @@unique([restaurantId, clientRequestId])
   @@index([restaurantId, status, createdAt])
   @@index([orderId])
   @@map("payments")
@@ -1701,8 +1796,14 @@ model Refund {
   refundedById String?
   refundedBy   User?   @relation("RefundIssuedBy", fields: [refundedById], references: [id], onDelete: SetNull)
 
+  /// Retry safety for money going out — the same reasoning as
+  /// `Payment.clientRequestId`, and it matters more here, because the failure
+  /// mode is handing the cash back twice.
+  clientRequestId String?
+
   createdAt DateTime @default(now())
 
+  @@unique([restaurantId, clientRequestId])
   @@index([restaurantId, createdAt])
   @@index([orderId])
   @@index([paymentId])
@@ -2848,6 +2949,7 @@ model Branch {
   pettyCash        PettyCashRequest[]
   cashHandovers    CashHandover[]
   reservations     Reservation[]
+  errorLogs        ErrorLog[]
 
   outgoingPayments OutgoingPayment[]
   @@unique([restaurantId, code])
@@ -4011,23 +4113,193 @@ model ApprovalRequest {
 ///
 /// Capped by the writer, never read on a request path, and best-effort — a
 /// failure to record an error must never turn into a second error.
+/**
+ * What went wrong, and enough context to act on it (production.md §7, §12).
+ *
+ * §7 asks that every important error carry a request id, a timestamp, the
+ * operation, the restaurant, the branch where applicable, the user where
+ * appropriate, and useful information. This row used to carry the restaurant
+ * and the route and nothing else, which made "a page failed for somebody
+ * somewhere" the most an operator could ever learn.
+ *
+ * Worse, almost nothing reached it: only exceptions that escaped to Next's
+ * `onRequestError` were persisted, and Server Actions — the majority of every
+ * mutation in this application — were merely `console.error`'d by `runAction`
+ * and then discarded. The commonest failures were the ones nobody could see.
+ *
+ * Secrets never land here: everything written goes through `redact()` first,
+ * the same filter the audit log uses.
+ */
 model ErrorLog {
-  id           String  @id @default(cuid())
+  id           String      @id @default(cuid())
   restaurantId String?
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Where it happened, when the failing work belonged to one site.
+  branchId     String?
+  branch       Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  /// Who hit it. Null for guest surfaces and background work.
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   /// The number shown to the user; the join key back to this row.
   digest  String?
+  /// Correlates every log line and error from ONE request. Generated at
+  /// ingress so a report of "it broke at 14:32" becomes a single lookup.
+  requestId String?
   route   String?
+  /// The named thing that was being attempted — 'collectPayment',
+  /// 'receiveGoods'. A route says which screen; this says which operation,
+  /// and a Server Action has no route worth the name.
+  operation String?
   kind    String
+  /// ERROR for something that broke, WARNING for something that coped, and
+  /// CRITICAL for the money-and-stock integrity failures §7 singles out.
+  severity  String  @default("ERROR")
   message String
   stack   String?
+  /// The record involved, when there was one — the order that would not settle.
+  entity   String?
+  entityId String?
+
+  /// §12 asks for safe investigation and resolution: an operator marks a row
+  /// dealt with rather than deleting it, so the history of what went wrong and
+  /// what was done about it both survive.
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolution   String?
 
   createdAt DateTime @default(now())
 
   @@index([digest])
   @@index([createdAt])
   @@index([restaurantId, createdAt])
+  @@index([severity, createdAt])
+  @@index([requestId])
   @@map("error_logs")
+}
+
+/**
+ * The one background job queue (production.md §4, §13).
+ *
+ * ── Why this exists at all ──────────────────────────────────────────────────
+ *
+ * ARCHITECTURE.md states, correctly, that this system has no queues, no cron
+ * and no workers by design: every deferred effect is computed lazily on read.
+ * That rule earned its place and most of it still holds.
+ *
+ * It cannot hold for everything §13 asks for. A nightly integrity check across
+ * every tenant, error-log retention, outbox trimming and backup verification
+ * are not things a page render should do on somebody's behalf — they are slow,
+ * they are not tied to any request, and computing them lazily means they
+ * happen when a guest is waiting for a menu.
+ *
+ * So: ONE table, ONE scheduled function draining it, no worker process and no
+ * queue library. Claiming is `FOR UPDATE SKIP LOCKED`, so two overlapping runs
+ * of the scheduler cannot take the same job.
+ */
+model Job {
+  id           String      @id @default(cuid())
+  /// Which handler runs this — see src/server/jobs/handlers.ts.
+  kind         String
+  status       JobStatus   @default(QUEUED)
+  /// Scoped to a tenant when the work is a tenant's; null for platform work.
+  restaurantId String?
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Handler input. Small — this is a job, not a payload store.
+  payload      Json?
+
+  /// Not before this moment. Retries push it out with backoff.
+  runAt       DateTime @default(now())
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(5)
+  lastError   String?
+  /// What the handler had to say when it worked.
+  result      String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  /// Stops a recurring job being queued twice: the scheduler upserts on this.
+  dedupeKey String? @unique
+
+  @@index([status, runAt])
+  @@index([kind, status])
+  @@index([restaurantId, createdAt])
+  @@map("jobs")
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+/**
+ * A recovery code — the way back in when the authenticator is on a lost phone.
+ *
+ * Stored hashed, exactly like a password, and single-use. Without these, MFA on
+ * the platform super-admin is a way to lock the owner out of their own
+ * platform permanently, which is a worse outcome than the one it prevents.
+ */
+model MfaRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 of the code. The plaintext is shown once, at enrolment.
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, usedAt])
+  @@map("mfa_recovery_codes")
+}
+
+/**
+ * Platform-wide switches the operator owns (production.md §8 Maintenance).
+ *
+ * Deliberately a tiny key/value table rather than a settings model with a
+ * column per switch: the alternative is a migration every time the operator
+ * needs a new flag, which in practice means the flag never gets added.
+ */
+model PlatformSetting {
+  key         String   @id
+  value       String
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+/**
+ * A restore test, and what it proved (production.md §10).
+ *
+ * §10 asks the Backups page to show the last restore test and its result, and
+ * is explicit that the application must not pretend to perform backups the
+ * database provider actually performs. Neon owns the backups and the PITR
+ * window; what the application can honestly own is the record of somebody
+ * having checked that a restore works.
+ *
+ * A backup nobody has ever restored is a belief, not a backup.
+ */
+model RestoreTest {
+  id          String   @id @default(cuid())
+  /// What was restored — a Neon branch name, a dump file.
+  target      String
+  /// PASSED, FAILED, or PARTIAL when it restored but something did not verify.
+  outcome     String
+  /// The point in time restored to, when the test was a PITR restore.
+  restoredTo  DateTime?
+  durationSec Int?
+  notes       String?
+  testedById  String?
+  testedByName String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("restore_tests")
 }
 
 /// A short, signed remark on a financial record (acCal.md §17). Append-only

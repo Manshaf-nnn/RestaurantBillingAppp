@@ -261,6 +261,102 @@ async function main() {
       result.valueDelta === -60_000, `${result.valueDelta}`)
   }
 
+  /*
+   * production.md §2 — a sealed period refuses deliberate stock operations.
+   *
+   * Nothing in the ledger accepts a caller-supplied date, so history cannot be
+   * backdated; the exposure is the other direction — a period covering TODAY
+   * being signed off while people carry on receiving and adjusting into it.
+   * Guarded in postMovement, the sole balance writer, so no caller can forget.
+   *
+   * The trading types stay exempt on purpose: refusing a SALE deduction rolls
+   * back the order that caused it, so sealing the current period would stop
+   * the kitchen serving. That is pinned below, because it is a deliberate
+   * trade and a future reader will otherwise "fix" it.
+   */
+  console.log('\n── 6. Sealed books refuse deliberate stock movement ──')
+  {
+    const item = await prisma.inventoryItem.create({
+      data: {
+        restaurantId: restaurant.id, name: `Sealed ${stamp}`, unit: 'KG',
+        quantity: 0, costPerUnit: 100_00, branchId: main.id,
+      },
+    })
+    await prisma.$transaction((tx) =>
+      postMovement(tx, {
+        restaurantId: restaurant.id, itemId: item.id, type: 'PURCHASE',
+        quantity: 10, unitCost: 100_00, branchId: main.id, userId: user.id,
+      }),
+    )
+
+    const period = await prisma.accountingPeriod.create({
+      data: {
+        restaurantId: restaurant.id,
+        periodStart: new Date(Date.now() - 86_400_000),
+        periodEnd: new Date(Date.now() + 86_400_000),
+        status: 'CLOSED', closedById: user.id, closedAt: new Date(),
+      },
+    })
+
+    await refuses(
+      'receiving into a sealed period is refused',
+      () => prisma.$transaction((tx) =>
+        postMovement(tx, {
+          restaurantId: restaurant.id, itemId: item.id, type: 'PURCHASE',
+          quantity: 5, unitCost: 100_00, branchId: main.id, userId: user.id,
+        }),
+      ),
+      /closed accounting period/,
+    )
+    await refuses(
+      'wastage into a sealed period is refused',
+      () => prisma.$transaction((tx) =>
+        postMovement(tx, {
+          restaurantId: restaurant.id, itemId: item.id, type: 'WASTAGE',
+          quantity: 1, branchId: main.id, userId: user.id,
+        }),
+      ),
+      /closed accounting period/,
+    )
+    await refuses(
+      'an adjustment into a sealed period is refused',
+      () => prisma.$transaction((tx) =>
+        postMovement(tx, {
+          restaurantId: restaurant.id, itemId: item.id, type: 'ADJUSTMENT_OUT',
+          quantity: 1, branchId: main.id, userId: user.id,
+        }),
+      ),
+      /closed accounting period/,
+    )
+
+    const held = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })
+    check('and the balance is untouched by the refusals', held.quantity === 10, `${held.quantity}`)
+
+    // DELIBERATE exemption: trading must not wedge when the books are sealed.
+    await prisma.$transaction((tx) =>
+      postMovement(tx, {
+        restaurantId: restaurant.id, itemId: item.id, type: 'SALE',
+        quantity: 2, branchId: main.id, userId: user.id,
+      }),
+    )
+    const sold = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })
+    check('a SALE still deducts, so a sealed period cannot stop service',
+      sold.quantity === 8, `${sold.quantity}`)
+
+    await prisma.accountingPeriod.update({
+      where: { id: period.id }, data: { status: 'REOPENED' },
+    })
+    await prisma.$transaction((tx) =>
+      postMovement(tx, {
+        restaurantId: restaurant.id, itemId: item.id, type: 'PURCHASE',
+        quantity: 5, unitCost: 100_00, branchId: main.id, userId: user.id,
+      }),
+    )
+    const reopened = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })
+    check('reopening the period lets stock move again', reopened.quantity === 13, `${reopened.quantity}`)
+    await prisma.accountingPeriod.delete({ where: { id: period.id } })
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed > 0 ? 1 : 0)

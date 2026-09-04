@@ -219,7 +219,21 @@ export async function collectPayment(
         reference: data.reference || null,
         tipAmount: data.tipAmount,
         receivedById: user.id,
+        clientRequestId: data.clientRequestId ?? null,
       })
+
+      /*
+       * A replay is not a new event, so it does not get a new audit row — the
+       * capture it replays already wrote one. Auditing it again would make one
+       * payment look like two takings to anyone reading the trail.
+       */
+      if (result.replayed) {
+        return {
+          paymentId: result.payment.id,
+          change: result.payment.changeAmount,
+          settled: result.fullySettled,
+        }
+      }
 
       await audit({
         restaurantId: user.restaurantId,
@@ -309,6 +323,7 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
         reason: data.reason,
         actorId: user.id,
         amount: data.amount,
+        clientRequestId: data.clientRequestId ?? null,
       })
 
       await audit({

@@ -4,6 +4,7 @@ import type { PurchaseStatus } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 export interface PurchaseSummary {
   id: string
@@ -234,7 +235,7 @@ export async function getPurchaseDetail(params: {
       quantity: l.quantity,
       receivedQty: l.receivedQty,
       rejectedQty: l.rejectedQty,
-      outstanding: Math.max(0, round(l.quantity - l.receivedQty - l.rejectedQty)),
+      outstanding: Math.max(0, roundQty(l.quantity - l.receivedQty - l.rejectedQty)),
       unitCost: l.unitCost,
       lineTotal: l.lineTotal,
       trackBatches: l.item.trackBatches,
@@ -268,9 +269,6 @@ export async function getPurchaseDetail(params: {
   }
 }
 
-function round(v: number) {
-  return Math.round(v * 1e6) / 1e6
-}
 
 
 export interface PoBuilderData {
@@ -619,9 +617,9 @@ export async function listAwaitingDelivery(params: {
         expectedAt: po.expectedAt?.toISOString() ?? null,
         createdAt: po.createdAt.toISOString(),
         lineCount: po.items.length,
-        orderedQty: round(orderedQty),
-        receivedQty: round(receivedQty),
-        outstandingQty: round(Math.max(0, orderedQty - handled)),
+        orderedQty: roundQty(orderedQty),
+        receivedQty: roundQty(receivedQty),
+        outstandingQty: roundQty(Math.max(0, orderedQty - handled)),
         total: po.total,
       }
     })

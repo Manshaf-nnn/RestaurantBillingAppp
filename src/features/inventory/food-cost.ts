@@ -2,6 +2,7 @@ import 'server-only'
 
 import { prisma } from '@/server/db/prisma'
 import { activeRecipeForFood, resolveRecipe, type ResolvedIngredient } from './recipe-resolver'
+import { roundPercent } from '@/lib/quantity'
 
 /**
  * What a dish costs to make, and what that leaves.
@@ -87,11 +88,11 @@ export async function getFoodCost(params: {
     grossProfit,
     // A dish given away free has no meaningful percentage; null says so rather
     // than dividing by zero and rendering Infinity on a report.
-    foodCostPercent: food.price > 0 ? round2((ingredientCost / food.price) * 100) : null,
-    marginPercent: food.price > 0 ? round2((grossProfit / food.price) * 100) : null,
+    foodCostPercent: food.price > 0 ? roundPercent((ingredientCost / food.price) * 100) : null,
+    marginPercent: food.price > 0 ? roundPercent((grossProfit / food.price) * 100) : null,
     ingredients: priced.map((line) => ({
       ...line,
-      shareOfCost: ingredientCost > 0 ? round2((line.lineCost / ingredientCost) * 100) : 0,
+      shareOfCost: ingredientCost > 0 ? roundPercent((line.lineCost / ingredientCost) * 100) : 0,
     })),
     problems: resolved.problems,
   }
@@ -143,6 +144,3 @@ export async function getMenuCostSummary(params: {
   return results.sort((a, b) => (b.foodCostPercent ?? -1) - (a.foodCostPercent ?? -1))
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatMoney } from '@/lib/money'
+import { newRequestKey } from '@/lib/request-key'
 import { createStaffOrder, type StaffOrderBill } from '@/features/orders/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
@@ -597,14 +598,7 @@ function BillPanel({
   )
 }
 
-/**
- * A key for one cart.
- *
- * `crypto.randomUUID` is not in every browser a counter tablet might be running
- * — it needs a secure context and a recent engine — and the fallback only has
- * to be unique among the handful of orders one till places, not globally.
- */
+/** A key for one cart. See `newRequestKey` for why it must survive a retry. */
 function newKey(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
-  return `pos-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return newRequestKey('pos')
 }

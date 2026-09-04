@@ -18,6 +18,8 @@ import {
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { emitOutbox } from '@/server/realtime/outbox'
+import { EVENTS } from '@/lib/realtime/events'
 import type { OrderSummaryPayload } from '@/lib/realtime/events'
 import {
   computeTotals,
@@ -741,6 +743,31 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
         })
       }
 
+      /*
+       * The order and the news of it commit together (production.md §5).
+       *
+       * This is the case the whole outbox exists for. `realtime.orderCreated`
+       * fires after this transaction returns, and on the serverless host it is
+       * a no-op — so a placed order raised no durable event at all, and a
+       * kitchen screen that missed the moment had nothing to catch up from.
+       * Written here, the ticket cannot exist without its event, and the event
+       * cannot exist without the ticket: a rollback takes both.
+       */
+      await emitOutbox(tx, {
+        restaurantId: params.restaurantId,
+        branchId,
+        type: EVENTS.ORDER_CREATED,
+        entity: 'Order',
+        entityId: created.id,
+        payload: {
+          orderNumber: created.orderNumber,
+          tableId: created.tableId,
+          type: created.type,
+          itemCount: draft.items.length,
+          grandTotal: created.grandTotal,
+        },
+      })
+
       return created
     },
     {
@@ -768,12 +795,36 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
    *
    * Everything else is a real failure and surfaces immediately.
    */
-  // An attempt is now a short write-only transaction (~10 ms), so attempts are
-  // cheap and the ceiling can be generous: with twenty guests checking out in
-  // the same instant, the unluckiest one still needs several tries before it
-  // finds a free number. Five was not enough at that volume; ten is, with room
-  // to spare, and costs nothing when there is no contention.
-  const MAX_ATTEMPTS = 10
+  /*
+   * An attempt is a short write-only transaction (~10 ms), so attempts are
+   * cheap and the ceiling can be generous: with many guests checking out in the
+   * same instant, the unluckiest one needs several tries before it finds a free
+   * number.
+   *
+   * ── Why 24 and not 10 ───────────────────────────────────────────────────
+   *
+   * This said ten, and that ten had "room to spare" at twenty concurrent
+   * checkouts. `scripts/load-test.ts` disagreed the first time it was pointed
+   * at one restaurant: at 24 concurrent placements, 1.68% of orders were
+   * REFUSED outright — 54 in a twenty-second run — every one of them the
+   * unique constraint on (restaurantId, orderNumber) after ten exhausted
+   * tries. A refused order is worse than a slow one, and a guest losing a
+   * basket because two other tables checked out first is exactly what this
+   * loop exists to prevent.
+   *
+   * The backoff is capped rather than left linear, because the point is to
+   * spread the losers out, not to make the last attempt wait half a second.
+   *
+   * This raises the ceiling; it does not remove the limit. Order numbers are
+   * MAX-derived per restaurant per day (AUDIT.md's preserve list, item 15),
+   * so contention is inherent to the scheme, and enough simultaneous
+   * placements in ONE restaurant will still exhaust any finite ceiling. The
+   * structural fix is to draw from the atomic `RestaurantCounter` the way
+   * invoices already do — a real change to a load-bearing behaviour, with an
+   * order-number format to preserve, and it deserves its own slice and its own
+   * measurement rather than being smuggled in here.
+   */
+  const MAX_ATTEMPTS = 24
   const TRANSIENT_CODES = new Set([
     'P2024', // timed out fetching a connection from the pool
     'P2028', // could not start a transaction in the given time
@@ -814,8 +865,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
       if ((!isDuplicateNumber && !isTransient) || attempt === MAX_ATTEMPTS) throw error
 
       // Jittered backoff — a fixed delay would just line the losers up to
-      // collide with each other again on the next attempt.
-      await new Promise((resolve) => setTimeout(resolve, attempt * 20 + Math.random() * 30))
+      // collide with each other again on the next attempt. Capped at 120ms so
+      // the tail stays bounded as the ceiling rises.
+      const delay = Math.min(attempt * 15, 120) + Math.random() * 30
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 
@@ -1359,6 +1412,20 @@ export async function cancelOrder(params: {
         })
       }
     }
+
+    // Commits with the cancellation and its stock reversal (production.md §5).
+    await emitOutbox(tx, {
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      type: EVENTS.ORDER_CANCELLED,
+      entity: 'Order',
+      entityId: order.id,
+      payload: {
+        orderNumber: order.orderNumber,
+        tableId: order.tableId,
+        reason: params.reason,
+      },
+    })
 
     return next
   })

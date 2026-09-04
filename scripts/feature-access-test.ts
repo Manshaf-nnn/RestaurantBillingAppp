@@ -16,7 +16,7 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/feature-access-test.ts
  */
 import { PERMISSIONS, can, permissionsFor } from '../src/lib/rbac'
-import { FEATURES, permissionsForFeatures } from '../src/features/access/features'
+import { FEATURES, permissionsForFeatures, permissionsSoldByFeatures } from '../src/features/access/features'
 import { visibleSections } from '../src/features/dashboard/nav'
 import { prisma } from '../src/server/db/prisma'
 
@@ -172,6 +172,52 @@ async function main() {
   check('a package resolves to the permissions of its features', fromPackage.length > 0)
   check('and contains nothing outside them',
     !fromPackage.includes(PERMISSIONS.INVENTORY_VIEW), 'a package leaked a permission it does not own')
+
+  console.log('\n8. A feature that was bought can actually be USED')
+
+  /*
+   * production.md / superadmin.md — the bug this section exists for.
+   *
+   * `availablePermissions` was built from `permissionsForFeatures`, which adds
+   * only each feature's PRIMARY action. `permissionsFor` then intersects every
+   * role's grants against that set. So a restaurant that had bought Purchasing
+   * got `purchase.view` and nothing else: the owner could open the purchasing
+   * screens and could never grant anybody — themselves included — the ability
+   * to raise, approve or receive a purchase order, whatever the role said. The
+   * feature was sold, paid for, visible and inert, and the same held for every
+   * feature with more than one action.
+   *
+   * The two functions answer different questions and both are still needed:
+   * `permissionsForFeatures` is what a ROLE starts with when an owner switches
+   * a feature on (primary action only, so enabling Payments for a waiter does
+   * not hand them refunds), and `permissionsSoldByFeatures` is what the
+   * RESTAURANT may reach at all.
+   */
+  const soldForPurchasing = permissionsSoldByFeatures(['purchasing'])
+  const roleDefault = permissionsForFeatures(['purchasing'])
+
+  check('buying Purchasing makes its view permission available',
+    soldForPurchasing.includes(PERMISSIONS.PURCHASE_VIEW))
+  check('…and its create permission, which the plan used to withhold for ever',
+    soldForPurchasing.includes(PERMISSIONS.PURCHASE_CREATE),
+    `sold: ${soldForPurchasing.join(', ')}`)
+  check('…and its approve permission',
+    soldForPurchasing.includes(PERMISSIONS.PURCHASE_APPROVE), `sold: ${soldForPurchasing.join(', ')}`)
+  check('the sold set is strictly wider than a role\'s starting set',
+    soldForPurchasing.length > roleDefault.length, `${soldForPurchasing.length} vs ${roleDefault.length}`)
+
+  /*
+   * The half that must NOT change: enabling a feature for a role still grants
+   * only the primary action, so this fix widens what an owner may GRANT and
+   * never what anybody automatically HOLDS.
+   */
+  check('but a role switching Purchasing on still starts at view only',
+    roleDefault.includes(PERMISSIONS.PURCHASE_VIEW) &&
+      !roleDefault.includes(PERMISSIONS.PURCHASE_APPROVE),
+    `role default: ${roleDefault.join(', ')}`)
+
+  check('and a feature nobody bought sells no permissions at all',
+    permissionsSoldByFeatures([]).length === 0)
 
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.restaurant.delete({ where: { id: restaurant.id } })

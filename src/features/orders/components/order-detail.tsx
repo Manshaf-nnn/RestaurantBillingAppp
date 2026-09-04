@@ -22,6 +22,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, ORDER_STATUS_META, PaymentStatusBadge, VegIndicator } from '@/components/ui/status'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
+import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
 import { buildReceipt } from '@/features/printing/receipt'
@@ -455,16 +456,31 @@ function RefundButton({
 
   const amountMinor = amount ? parseMoney(amount, currency as never) : remaining
 
+  /*
+   * One key per refund attempt, surviving failures on purpose — money going
+   * out is the direction where a retried request must not repeat itself. It
+   * also carries the approval round trip: the first press is refused with
+   * "sent for approval", the manager signs off, the same press goes through on
+   * the same key, and there is exactly one refund at the end of it.
+   */
+  const refundKey = React.useRef(newRequestKey('refund'))
+
   const submit = async () => {
     setPending(true)
     const result = await callAction(() =>
-      refundOrderPayment({ paymentId: payment.id, reason, amount: amountMinor }),
+      refundOrderPayment({
+        paymentId: payment.id,
+        reason,
+        amount: amountMinor,
+        clientRequestId: refundKey.current,
+      }),
     )
     setPending(false)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
+    refundKey.current = newRequestKey('refund')
     toast.success('Refund recorded')
     setOpen(false)
     setAmount('')

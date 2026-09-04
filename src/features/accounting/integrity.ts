@@ -429,6 +429,86 @@ export async function runIntegrityChecks(restaurantId: string): Promise<Integrit
     `,
   )
 
+  // ── COGS (production.md §1) ────────────────────────────────────────────────
+  //
+  // The ledger checks above prove stock BALANCES explain themselves. These ask
+  // the next question, which nothing was asking: does the stock that left carry
+  // the VALUE it should, so that cost of sales is not quietly understated.
+  // A sale depleted at zero cost still moves the quantity correctly — every
+  // balance check stays green — while gross profit reads high for ever.
+
+  add(
+    'cogs-uncosted-sale',
+    'Sold stock carries a cost',
+    'WARNING',
+    'A SALE movement with no unitCost contributes nothing to cost of sales, so profit reads high. ' +
+      'Lines depleted before costs were stamped are expected here and are the reason this is a warning, not an error; ' +
+      'a rising count means new sales are being depleted uncosted.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT sm.id FROM stock_movements sm
+      JOIN inventory_items ii ON ii.id = sm."itemId"
+      WHERE sm."restaurantId" = ${restaurantId}
+        AND sm.type IN ('SALE', 'CONSUMPTION')
+        AND COALESCE(sm."unitCost", 0) = 0
+        AND ii."costPerUnit" > 0
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'cogs-above-revenue',
+    'No line costs more than it sold for',
+    'WARNING',
+    'A line whose snapshotted cost exceeds what the guest paid for it. Legitimate for a loss leader or a ' +
+      'mispriced dish, but it is also what a unit-conversion error looks like, so it is worth eyes.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT oi.id FROM order_items oi
+      JOIN orders o ON o.id = oi."orderId"
+      WHERE o."restaurantId" = ${restaurantId}
+        AND o.status <> 'CANCELLED'
+        AND oi.status <> 'CANCELLED'
+        AND oi."costPrice" > 0
+        AND oi."costPrice" * oi.quantity > oi."lineTotal"
+      LIMIT 200
+    `,
+  )
+
+  // ── Bank reconciliation (production.md §1) ────────────────────────────────
+  //
+  // Statement lines were imported and matched with nothing checking the result.
+  // Both of these break the point of reconciling at all: the first explains one
+  // receipt with two bank lines, the second leaves a row that contradicts
+  // itself about whether it was reconciled.
+
+  add(
+    'bank-double-match',
+    'No receipt is reconciled twice',
+    'ERROR',
+    'Two statement lines claim the same payment. The bank balance is then explained twice over and the ' +
+      'reconciliation appears to close while real money is unaccounted for.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT MIN(id) AS id FROM bank_statement_lines
+      WHERE "restaurantId" = ${restaurantId}
+        AND status = 'MATCHED'
+        AND "matchedId" IS NOT NULL
+      GROUP BY "matchedType", "matchedId"
+      HAVING COUNT(*) > 1
+      LIMIT 200
+    `,
+  )
+
+  /*
+   * There is deliberately no "a matched line says what it matched" check here.
+   *
+   * The `bank_statement_lines_match_shape` CHECK constraint (migration
+   * 20260916090000_accountant_control_center) already makes that state
+   * impossible to store: `(status = 'MATCHED') = (matchedType IS NOT NULL AND
+   * matchedId IS NOT NULL)`. A checker entry for it would report OK for ever
+   * without ever being capable of reporting anything else, which is worse than
+   * no entry — it reads as coverage. The double-match above is the failure the
+   * constraint cannot see, because each row is individually well-formed.
+   */
+
   const status: IntegrityStatus = checks.some((check) => check.status === 'ERROR')
     ? 'ERROR'
     : checks.some((check) => check.status === 'WARNING')

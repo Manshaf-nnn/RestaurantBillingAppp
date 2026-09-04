@@ -5,6 +5,7 @@ import type { StockUnit } from '@prisma/client'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { convertUnits, toBaseUnits, UnitConversionError, type ConvertibleItem } from './units'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Turning a recipe into a list of ingredients to remove from stock.
@@ -217,7 +218,7 @@ async function priceTotals(
       problems.push('An ingredient is no longer in inventory and was skipped')
       continue
     }
-    const rounded = round(quantity)
+    const rounded = roundQty(quantity)
     totalCost += Math.round(rounded * item.costPerUnit)
     ingredients.push({
       itemId,
@@ -465,10 +466,7 @@ export async function resolveOrderConsumption(
     }
   }
 
-  for (const [itemId, quantity] of totals) totals.set(itemId, round(quantity))
+  for (const [itemId, quantity] of totals) totals.set(itemId, roundQty(quantity))
   return { totals, problems }
 }
 
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
-}

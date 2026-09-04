@@ -32,6 +32,15 @@ const STATIC = [
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
   'no-item-branch-filter',
+  // production.md §1 — nothing in src may rewrite an append-only record; the
+  // database refuses it too, this just fails in CI instead of in front of a user.
+  'no-audit-mutation',
+  // production.md §6 — offline stays read-only and honest: the service worker
+  // caches nothing private, and the offline page promises no sync.
+  'no-unsafe-sw-cache',
+  // production.md §15/§17 — migrations stay additive and deployable. Reads the
+  // SQL, so it costs nothing and belongs with the other grep-level guards.
+  'migration-safety-test',
 ]
 
 const SERVICE = [
@@ -51,6 +60,21 @@ const SERVICE = [
   'search-test',
   'locations-test',
   'branch-isolation-test',
+  // production.md §5 — the outbox commits with the work it describes, so a
+  // realtime failure cannot lose an order; and a reconnecting screen catches up.
+  'realtime-recovery-test',
+  // production.md §13 — the queue claims without doubling up, backs off, stops,
+  // and never sweeps away a failure.
+  'jobs-test',
+  // production.md §14 — TOTP against the RFC vector, encrypted at rest,
+  // single-use recovery codes.
+  'mfa-test',
+  // production.md §3 — the tenant boundary swept the way branches already are;
+  // cross-restaurant checks used to be four one-line asides in other suites.
+  'tenant-isolation-test',
+  // production.md §1/§17 — the money and stock constraints refuse bad rows at
+  // the database, not just in the service that normally writes them.
+  'db-constraint-test',
   'dashboard-period-test',
   'role-permissions-test',
   'access-links-test',
@@ -98,6 +122,13 @@ const SERVICE = [
   'menu-station-test',
   'cash-drawer-flow-test',
   'feature-access-test',
+  // production.md §4 — cold single-call latency against 20k orders, thresholded.
+  // It existed and was never registered, so `npm run verify` never ran it.
+  'phase11-perf',
+  // production.md §4 — the same paths under concurrent load, reporting
+  // p50/p95/p99, error rate, connections and memory. Small defaults so it fits
+  // in a verify run; LOAD_CONCURRENCY / LOAD_SECONDS turn it up for a real one.
+  'load-test',
 ]
 
 const RUNTIME = [

@@ -6,6 +6,7 @@ import { NotFoundError } from '@/lib/errors'
 import { parseOpeningHours } from '@/lib/opening-hours'
 import { prisma } from '@/server/db/prisma'
 import { levelFor } from '@/features/inventory/alerts'
+import { roundQty } from '@/lib/quantity'
 
 export interface LocationSummary {
   id: string
@@ -360,7 +361,7 @@ export async function getLocationDetail(params: {
       available: s.available,
       reserved: s.reserved,
       inTransit: s.inTransit,
-      free: Math.round((s.available - s.reserved) * 1e6) / 1e6,
+      free: roundQty(s.available - s.reserved),
       value: Math.round(Math.max(0, s.available) * s.item.costPerUnit),
       level: levelFor({
         quantity: s.available,
@@ -502,7 +503,7 @@ export async function getTransferBuilderData(restaurantId: string) {
           itemId: s.item.id,
           name: s.item.name,
           unit: s.item.unit as string,
-          free: Math.round((s.available - s.reserved) * 1e6) / 1e6,
+          free: roundQty(s.available - s.reserved),
         }))
         .filter((i) => i.free > 0)
         .sort((a, b) => a.name.localeCompare(b.name)),

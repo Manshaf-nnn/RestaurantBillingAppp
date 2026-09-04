@@ -242,11 +242,16 @@ export async function reopenPeriod(params: {
  * placedAt, a movement's createdAt. New events dated NOW (a refund given
  * today for January's bill) are deliberately not blocked: they land in
  * today's open period, which is how accounting corrections work.
+ *
+ * `what` names the thing being refused, because this guard now covers money
+ * and stock as well as orders and "This order belongs to…" was the wrong
+ * sentence to show a storekeeper receiving goods.
  */
 export async function assertPeriodOpen(
   db: { accountingPeriod: { findFirst: (args: never) => Promise<unknown> } } | typeof prisma,
   restaurantId: string,
   at: Date,
+  what = 'This order',
 ): Promise<void> {
   const sealed = await (db as typeof prisma).accountingPeriod.findFirst({
     where: {
@@ -259,7 +264,7 @@ export async function assertPeriodOpen(
   })
   if (sealed) {
     throw new AppError(
-      'This order belongs to a closed accounting period. The books for that range were signed off — reopen the period first if it genuinely has to change.',
+      `${what} belongs to a closed accounting period. The books for that range were signed off — reopen the period first if it genuinely has to change.`,
       409,
       'PERIOD_CLOSED',
     )

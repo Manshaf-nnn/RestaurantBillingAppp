@@ -3,6 +3,7 @@ import 'server-only'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { resolveOrderConsumption, resolveRecipe } from './recipe-resolver'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Recipe-driven stock depletion for an order.
@@ -118,9 +119,9 @@ export async function reconcileOrderDepletion(
   const affectedItemIds: string[] = []
 
   for (const itemId of itemIds) {
-    const want = round(desired.totals.get(itemId) ?? 0)
-    const have = round(appliedByItem.get(itemId)?.appliedQty ?? 0)
-    const delta = round(want - have)
+    const want = roundQty(desired.totals.get(itemId) ?? 0)
+    const have = roundQty(appliedByItem.get(itemId)?.appliedQty ?? 0)
+    const delta = roundQty(want - have)
 
     if (Math.abs(delta) < 1e-6) {
       unchanged += 1
@@ -342,9 +343,6 @@ export async function reconcileOrderDepletionStandalone(params: {
   return prisma.$transaction((tx) => reconcileOrderDepletion(tx, params))
 }
 
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
-}
 
 /**
  * Reconcile only if this order has ever consumed anything.

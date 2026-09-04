@@ -43,6 +43,7 @@ import { OpsShell, OpsStats } from '@/components/ops-shell'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/realtime/events'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
+import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { downloadReceipt, printReceipt } from '@/features/printing/print'
@@ -993,6 +994,19 @@ function BillPanel({
   const tenderedMinor = tendered ? parseMoney(tendered, restaurant.currency) : 0
   const change = method === 'CASH' && tenderedMinor > amountDue ? tenderedMinor - amountDue : 0
 
+  /*
+   * One key per tender attempt.
+   *
+   * `disabled={pending}` stops the second tap, but it cannot help across a
+   * dropped connection: the request commits, the response never arrives, the
+   * cashier presses Settle again and the bill is paid twice — right in the
+   * drawer and wrong in the takings. The key deliberately SURVIVES a failed
+   * attempt, so the retry resolves to the payment already taken; it is
+   * regenerated only after a payment lands, because a bill settled in halves
+   * is two genuine payments and each needs its own identity.
+   */
+  const tenderKey = React.useRef(newRequestKey('pay'))
+
   const settle = async () => {
     setPending(true)
     const result = await callAction(() => collectPayment({
@@ -1002,6 +1016,7 @@ function BillPanel({
       tenderedAmount: method === 'CASH' ? tenderedMinor || amountDue : undefined,
       reference: reference || '',
       tipAmount: tipMinor,
+      clientRequestId: tenderKey.current,
     }))
     setPending(false)
 
@@ -1010,6 +1025,7 @@ function BillPanel({
       return
     }
 
+    tenderKey.current = newRequestKey('pay')
     toast.success(
       result.data.change > 0
         ? `Paid. Change due ${formatMoney(result.data.change, restaurant.currency, restaurant.locale)}`

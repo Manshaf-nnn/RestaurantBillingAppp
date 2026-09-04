@@ -8,7 +8,7 @@ import {
   needsApproval, requestApproval, decideApproval, withdrawApproval,
   assertApproved, getApprovalPolicy, listApprovals,
 } from '../src/features/approvals/service'
-import { AUDIT_ACTIONS, assertAuditImmutable } from '../src/server/audit'
+import { AUDIT_ACTIONS } from '../src/server/audit'
 
 let pass = 0, fail = 0
 const shops: string[] = []
@@ -174,10 +174,6 @@ async function main() {
   ok('refunds are auditable', Boolean(AUDIT_ACTIONS.PAYMENT_REFUNDED))
   ok('approvals are auditable', Boolean(AUDIT_ACTIONS.APPROVAL_DECIDED))
 
-  let blocked = false
-  try { assertAuditImmutable('delete') } catch { blocked = true }
-  ok('the audit log refuses deletion from application code', blocked)
-
   const audit = await prisma.auditLog.create({
     data: { restaurantId: shop.id, branchId: colombo.id, userId: bob.id,
       action: AUDIT_ACTIONS.ROLE_CHANGED, entity: 'User', entityId: alice.id,
@@ -185,6 +181,28 @@ async function main() {
   })
   ok('an audit row records the branch', audit.branchId === colombo.id)
   ok('it keeps the old and new value', JSON.stringify(audit.before) === '{"role":"CASHIER"}')
+
+  /*
+   * DELIBERATE test change 2026-09-03 — this asserted immutability by calling
+   * `assertAuditImmutable('delete')` and observing that it threw. That function's
+   * entire body was `throw`, and nothing in the application ever called it, so
+   * the check could not fail and proved nothing about the audit log: it tested
+   * that a function which always throws, throws.
+   *
+   * The real property is that an audit row's CONTENT cannot change, and it is
+   * now enforced by a database trigger (migration
+   * 20260917093000_append_only_guards). So the test goes around the application
+   * with raw SQL, the way a stray script would, and requires the database to
+   * refuse. Deletion is deliberately NOT refused — deleting a restaurant
+   * cascades to its audit rows and these suites clean up after themselves.
+   */
+  let blocked = false
+  try {
+    await prisma.$executeRaw`UPDATE audit_logs SET action = 'tampered' WHERE id = ${audit.id}`
+  } catch { blocked = true }
+  ok('the database refuses to let an audit row be edited', blocked)
+  const reread = await prisma.auditLog.findUniqueOrThrow({ where: { id: audit.id } })
+  ok('…so it still says what it said', reread.action === AUDIT_ACTIONS.ROLE_CHANGED)
 
   console.log('\n── 7. Tenant isolation ──────────────────────────────────')
   const shopB = await prisma.restaurant.create({

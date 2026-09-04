@@ -7,6 +7,7 @@ import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, type CurrencyCode } from '@/lib/money'
+import { roundPercent } from '@/lib/quantity'
 
 /**
  * How a column is displayed. A NAME, not a function.
@@ -46,7 +47,6 @@ export interface Column {
   falseLabel?: string
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100
 
 function render(
   column: Column,
@@ -70,7 +70,7 @@ function render(
       return `${Number(value) > 0 ? '+' : ''}${value}%`
     case 'quantity': {
       const unit = column.unitKey ? String(row[column.unitKey] ?? '').toLowerCase() : ''
-      return `${round2(Number(value))}${unit ? ` ${unit}` : ''}`
+      return `${roundPercent(Number(value))}${unit ? ` ${unit}` : ''}`
     }
     case 'label':
       return String(value).replace(/_/g, ' ').toLowerCase()

@@ -40,6 +40,7 @@ import { saveFood } from '../actions'
 import { fetchFoodForEdit } from '../actions-fetch'
 import type { CategoryOption } from './menu-manager'
 import { callAction } from '@/lib/use-action'
+import { roundPercent } from '@/lib/quantity'
 
 export interface FoodFormData {
   id?: string
@@ -828,11 +829,11 @@ export function FoodDialog({
                           */}
                           <Input
                             type="number"
-                            value={asPrice ? round2(basePrice + option.priceDelta) : option.priceDelta}
+                            value={asPrice ? roundPercent(basePrice + option.priceDelta) : option.priceDelta}
                             onChange={(e) =>
                               setOptionField(groupIndex, optionIndex, {
                                 priceDelta: asPrice
-                                  ? round2(Number(e.target.value) - basePrice)
+                                  ? roundPercent(Number(e.target.value) - basePrice)
                                   : Number(e.target.value),
                               })
                             }
@@ -1223,6 +1224,3 @@ function swap<T>(rows: T[], from: number, to: number): T[] {
  * box. The value is major units at this point; `parseMoney` turns it into
  * minor units on save.
  */
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
