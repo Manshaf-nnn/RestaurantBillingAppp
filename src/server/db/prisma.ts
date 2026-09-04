@@ -137,11 +137,31 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 export { Prisma }
 export type { PrismaClient }
 
-/** Prisma transaction client — accepted anywhere a repository takes a `tx`. */
+/**
+ * Prisma transaction client — accepted anywhere a repository takes a `tx`.
+ *
+ * ── Why `$transaction?: never` ──────────────────────────────────────────────
+ *
+ * This was a plain `Omit<PrismaClient, …>`, and TypeScript's structural typing
+ * meant the full `PrismaClient` satisfied it: a client with MORE members is
+ * assignable to a type with fewer. So `postMovement(prisma, params)` — posting
+ * a stock movement outside any transaction, with no row lock and no rollback
+ * if the work after it fails — compiled perfectly. The rule that it must run
+ * inside a transaction was carried by a doc comment and nothing else.
+ *
+ * Declaring a member the real transaction client does NOT have, and the full
+ * client DOES, inverts that. Prisma's interactive-transaction client has no
+ * `$transaction` (you cannot nest one), so it satisfies `$transaction?: never`
+ * by simply not having the property; the full client's `$transaction` is a
+ * function, which is not assignable to `never`, so passing it is now a
+ * compile error at the call site rather than a lock quietly not being taken.
+ */
 export type TxClient = Omit<
   PrismaClient,
   '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
->
+> & {
+  readonly $transaction?: never
+}
 
 export type DbClient = PrismaClient | TxClient
 

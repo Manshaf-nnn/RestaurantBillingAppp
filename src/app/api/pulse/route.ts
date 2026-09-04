@@ -1,9 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
-import { Prisma } from '@prisma/client'
+import { Prisma, type UserRole } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import { getCurrentUser, getGuestSessionId } from '@/server/auth/session'
+import { latestOutboxSeq, readOutbox } from '@/server/realtime/outbox'
+import { visibleBranchIds } from '@/lib/rbac'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,7 +79,58 @@ export async function GET(request: NextRequest) {
     }
 
     const scope = scopeOf(request.nextUrl.searchParams.get('scope'))
-    return json(await staffToken(user.restaurantId, scope))
+    const token = await staffToken(user.restaurantId, scope)
+
+    /*
+     * ── The event stream (production.md §5) ─────────────────────────────────
+     *
+     * Opt-in, via `?since=`. A caller that does not ask pays nothing: the
+     * token query above is unchanged and no extra statement runs. That matters
+     * because every screen polls this route all day on a host billed per
+     * invocation, and the token alone is enough for a screen that only wants
+     * to know whether to refresh.
+     *
+     * `?since=0` means "I have just started, tell me where the stream is" and
+     * returns the cursor without a backlog — a screen opening at 3pm has no
+     * business replaying the lunch rush.
+     *
+     * Branch scoping is applied here and NOT to the token. The token is a
+     * restaurant-wide `MAX(updatedAt)`, and narrowing it per branch would mean
+     * a per-branch index scan on every poll from every screen; the events are
+     * where a Colombo till learns that the change it just saw was Kandy's, and
+     * can decide to ignore it.
+     */
+    const sinceRaw = request.nextUrl.searchParams.get('since')
+    if (sinceRaw === null) return json(token)
+
+    const branchId = request.nextUrl.searchParams.get('branchId')
+    if (branchId && !(await callerMaySeeBranch(user, branchId))) {
+      // Asking about somebody else's branch gets the token and nothing more —
+      // never an error, which would confirm the branch exists.
+      return json(token)
+    }
+
+    if (sinceRaw === '0' || sinceRaw === '') {
+      return json(token, {
+        seq: await latestOutboxSeq(user.restaurantId),
+        events: [],
+        truncated: false,
+      })
+    }
+
+    let since: bigint | null = null
+    try {
+      since = BigInt(sinceRaw)
+    } catch {
+      since = null
+    }
+
+    const stream = await readOutbox({
+      restaurantId: user.restaurantId,
+      branchId,
+      since,
+    })
+    return json(token, stream)
   } catch {
     // Never fail loudly: a failed pulse should leave the screen on its previous
     // token and try again, not surface an error to someone working a service.
@@ -85,9 +138,29 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function json(token: string | null) {
+/**
+ * May this caller watch this branch?
+ *
+ * The events carry order numbers and amounts, so the same branch rule the rest
+ * of the application enforces applies here. `visibleBranchIds` returns null for
+ * someone unrestricted and an explicit list otherwise — and an EMPTY list means
+ * sees-nothing, never sees-everything, which is the fail-closed semantic the
+ * guards rely on everywhere else.
+ */
+async function callerMaySeeBranch(
+  user: { role: UserRole; branchId?: string | null },
+  branchId: string,
+): Promise<boolean> {
+  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId ?? null })
+  return allowed === null || allowed.includes(branchId)
+}
+
+function json(
+  token: string | null,
+  stream?: { seq: string | null; events: unknown[]; truncated: boolean },
+) {
   return NextResponse.json(
-    { v: token },
+    stream ? { v: token, ...stream } : { v: token },
     // Must never be cached — a stale token would mean a screen that never updates.
     { headers: { 'Cache-Control': 'no-store, max-age=0' } },
   )

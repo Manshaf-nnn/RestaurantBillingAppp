@@ -3,7 +3,7 @@ import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
 import type { UserRole } from '@prisma/client'
 
-import { permissionsForFeatures } from '@/features/access/features'
+import { permissionsSoldByFeatures } from '@/features/access/features'
 import { prisma } from '@/server/db/prisma'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
@@ -237,7 +237,7 @@ export async function rotateSession(
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
     rolePermissions: activeRolePermissions(user.staffRole),
-    availablePermissions: permissionsForFeatures(user.restaurant?.enabledFeatures ?? []),
+    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
     sessionId: updated.id,
   }
 }
@@ -375,7 +375,7 @@ async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | nu
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
     rolePermissions: activeRolePermissions(user.staffRole),
-    availablePermissions: permissionsForFeatures(user.restaurant?.enabledFeatures ?? []),
+    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
     sessionId: session.id,
   }
 }
@@ -470,7 +470,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
      * Empty stays empty: `permissionsFor` reads that as "unrestricted", which
      * is what every restaurant that has never been scoped should get.
      */
-    availablePermissions: permissionsForFeatures(
+    availablePermissions: permissionsSoldByFeatures(
       session.user.restaurant?.enabledFeatures ?? [],
     ),
     sessionId: session.id,

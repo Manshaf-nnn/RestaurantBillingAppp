@@ -207,22 +207,52 @@ export const AUDIT_ACTIONS = {
   RECIPE_CHANGED: 'recipe.changed',
   APPROVAL_REQUESTED: 'approval.requested',
   APPROVAL_DECIDED: 'approval.decided',
+
+  /*
+   * Platform-operator actions (production.md §8–§14).
+   *
+   * An operator acts across every tenant, which makes them the actor whose
+   * actions most need a trail — including the ones that only change what a
+   * screen reads afterwards.
+   */
+  PLATFORM_PLAN_CHANGED: 'platform.plan_changed',
+  USER_REACTIVATED: 'user.reactivated',
+  JOB_RETRIED: 'job.retried',
+  JOBS_RUN: 'job.run',
+  ERROR_RESOLVED: 'error.resolved',
+  MAINTENANCE_TOGGLED: 'platform.maintenance_toggled',
+  RESTORE_TESTED: 'platform.restore_tested',
+  MFA_ENABLED: 'user.mfa_enabled',
+  MFA_DISABLED: 'user.mfa_disabled',
+  // SESSIONS_REVOKED already exists above under auth.*; the platform console
+  // reuses it rather than minting a second name for the same event.
 } as const
 
 
 /**
- * Audit logs are append-only for everyone below platform level.
+ * Audit logs are append-only, and that is now enforced rather than asserted.
  *
- * There is no update or delete path through the application: nothing in the
- * codebase calls `auditLog.update` or `auditLog.delete`, and this guard exists
- * so that stays true. A log an ordinary user can edit is not an audit trail,
- * it is a diary.
+ * This used to be a function — `assertAuditImmutable` — that threw if it was
+ * ever called, and nothing ever called it. Its own doc comment explained that
+ * immutability held because "nothing in the codebase calls `auditLog.update`",
+ * which is a description of the current source, not a guarantee: the next
+ * person to write that line would have met no resistance at all, and the
+ * function's existence made it look like they would.
  *
- * Retention pruning, if it is ever needed, belongs in a platform-level job that
- * runs outside a user session — not behind a button.
+ * It is enforced in two places that cannot be bypassed by writing code:
+ *
+ *  1. A `BEFORE UPDATE` trigger on `audit_logs` (migration
+ *     20260917093000_append_only_guards) raises rather than letting a row
+ *     change — against application code, a script, or a psql session alike.
+ *     `refunds` are frozen the same way; `stock_movements` have their ledger
+ *     facts frozen while their link columns stay writable; a settled
+ *     `payment`'s amount cannot move.
+ *  2. `scripts/no-audit-mutation.ts` fails the build if application code
+ *     acquires an `auditLog.update`/`delete`/`upsert` call site, so the
+ *     failure arrives in CI rather than at runtime in front of a user.
+ *
+ * DELETE is deliberately still permitted: deleting a restaurant cascades to
+ * its audit rows, and removing a tenant's data on request is legitimate. The
+ * property protected here is that a row's content cannot change, not that
+ * tenants are permanent.
  */
-export function assertAuditImmutable(operation: 'update' | 'delete'): never {
-  throw new Error(
-    `Audit logs are append-only; ${operation} is not permitted from application code`,
-  )
-}

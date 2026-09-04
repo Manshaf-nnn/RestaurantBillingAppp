@@ -9,6 +9,7 @@ import { assertSufficient } from '@/features/inventory/location-stock'
 import { upsertBatch } from '@/features/inventory/batches'
 import { resolveRecipe } from '@/features/inventory/recipe-resolver'
 import { setRecipeActive } from '@/features/recipes/service'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Kitchen jobs: making something ahead, so it is on the shelf when you need it.
@@ -253,7 +254,7 @@ export async function completeProduction(params: {
     const recipe = order.recipe
     const producesItem = recipe.producesItem!
 
-    const producedQty = round(params.actualQty ?? order.plannedQty)
+    const producedQty = roundQty(params.actualQty ?? order.plannedQty)
     /*
      * Zero is refused, not treated as "all of it".
      *
@@ -270,7 +271,7 @@ export async function completeProduction(params: {
       )
     }
 
-    const variance = round(producedQty - order.plannedQty)
+    const variance = roundQty(producedQty - order.plannedQty)
     if (variance < 0 && !params.varianceReason) {
       throw new AppError(
         `${Math.abs(variance)} short of plan — give a reason`,
@@ -301,7 +302,7 @@ export async function completeProduction(params: {
     let totalCost = 0
 
     for (const ingredient of resolved.ingredients) {
-      const needed = round(ingredient.quantity)
+      const needed = roundQty(ingredient.quantity)
       if (needed <= 0) continue
 
       await assertSufficient(tx, {
@@ -486,6 +487,3 @@ export async function setMakeAheadRecipeActive(params: {
   return setRecipeActive(params)
 }
 
-function round(v: number): number {
-  return Math.round(v * 1e6) / 1e6
-}

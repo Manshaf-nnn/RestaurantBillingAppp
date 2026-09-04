@@ -327,6 +327,202 @@ async function main() {
       captured.payment.id === claim!.id && captured.order.paymentStatus === 'PAID')
   }
 
+  /*
+   * production.md §2 — idempotent payments and refunds.
+   *
+   * The order lock already defeats two simultaneous taps (§7 above races
+   * loyalty the same way). It does NOT defeat the retry: a request that
+   * commits and then loses its response leaves the till believing nothing
+   * happened. Before Payment.clientRequestId existed, pressing Settle again
+   * booked the money twice — right in the drawer, wrong in every report.
+   */
+  console.log('\n── 9. A retried settle takes the money once ──')
+  {
+    const o = await order()
+    const key = `tender-${stamp}-a`
+
+    const first = await capturePayment({
+      restaurantId: restaurant.id, orderId: o.id, method: 'CASH',
+      amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+      clientRequestId: key,
+    })
+    check('the first attempt takes the money', first.payment.amount === 100_000 && !first.replayed)
+
+    // The retry the cashier makes when the response never came back.
+    const retry = await capturePayment({
+      restaurantId: restaurant.id, orderId: o.id, method: 'CASH',
+      amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+      clientRequestId: key,
+    })
+    check('the retry returns the same payment, not a second one',
+      retry.payment.id === first.payment.id, `${retry.payment.id} vs ${first.payment.id}`)
+    check('the retry reports itself as a replay', retry.replayed === true)
+
+    const rows = await prisma.payment.count({ where: { orderId: o.id } })
+    check('one payment row exists for the bill', rows === 1, `${rows}`)
+    const settled = await prisma.order.findUniqueOrThrow({ where: { id: o.id } })
+    check('the bill is paid exactly once', settled.paidTotal === 100_000, `${settled.paidTotal}`)
+
+    /*
+     * The case the overpayment ceiling does NOT catch, and the reason the key
+     * is necessary rather than merely tidy.
+     *
+     * Retrying a settle for the WHOLE bill happens to be refused already:
+     * nothing is outstanding the second time, so the ceiling rejects it. A
+     * retried PARTIAL settle has room left on the bill, passes the ceiling,
+     * and books the money a second time — a bill paid 40 + 40 that the guest
+     * paid 40 for once. This is the silent one.
+     */
+    const partial = await order()
+    const partialKey = `tender-${stamp}-p`
+    await capturePayment({
+      restaurantId: restaurant.id, orderId: partial.id, method: 'CASH',
+      amount: 40_000, tenderedAmount: 40_000, receivedById: cashier.id,
+      clientRequestId: partialKey,
+    })
+    await capturePayment({
+      restaurantId: restaurant.id, orderId: partial.id, method: 'CASH',
+      amount: 40_000, tenderedAmount: 40_000, receivedById: cashier.id,
+      clientRequestId: partialKey,
+    })
+    const partialRows = await prisma.payment.count({ where: { orderId: partial.id } })
+    const partialOrder = await prisma.order.findUniqueOrThrow({ where: { id: partial.id } })
+    check('a retried PARTIAL settle does not book twice',
+      partialRows === 1 && partialOrder.paidTotal === 40_000,
+      `${partialRows} rows, paid ${partialOrder.paidTotal}`)
+
+    /*
+     * Concurrent same-key requests, not sequential ones — the shape a flaky
+     * connection actually produces when the browser retries before the first
+     * response lands. The order lock serialises them and the loser must find
+     * the winner's row rather than racing past it to the insert.
+     */
+    const o2 = await order()
+    const key2 = `tender-${stamp}-b`
+    const both = await Promise.all([
+      capturePayment({
+        restaurantId: restaurant.id, orderId: o2.id, method: 'CARD',
+        amount: 100_000, receivedById: cashier.id, clientRequestId: key2,
+      }),
+      capturePayment({
+        restaurantId: restaurant.id, orderId: o2.id, method: 'CARD',
+        amount: 100_000, receivedById: cashier.id, clientRequestId: key2,
+      }),
+    ])
+    check('two concurrent same-key captures agree on one payment',
+      both[0].payment.id === both[1].payment.id)
+    const raceRows = await prisma.payment.count({ where: { orderId: o2.id } })
+    check('and wrote one row between them', raceRows === 1, `${raceRows}`)
+
+    // A different key on the same bill is a genuine second payment, not a replay.
+    const o3 = await order()
+    await capturePayment({
+      restaurantId: restaurant.id, orderId: o3.id, method: 'CASH',
+      amount: 40_000, tenderedAmount: 40_000, receivedById: cashier.id,
+      clientRequestId: `tender-${stamp}-c1`,
+    })
+    await capturePayment({
+      restaurantId: restaurant.id, orderId: o3.id, method: 'CARD',
+      amount: 60_000, receivedById: cashier.id,
+      clientRequestId: `tender-${stamp}-c2`,
+    })
+    const splitRows = await prisma.payment.count({ where: { orderId: o3.id } })
+    const splitOrder = await prisma.order.findUniqueOrThrow({ where: { id: o3.id } })
+    check('a split settle under two keys is still two payments',
+      splitRows === 2 && splitOrder.paidTotal === 100_000, `${splitRows} rows, ${splitOrder.paidTotal}`)
+  }
+
+  console.log('\n── 10. A retried refund hands the money back once ──')
+  {
+    const o = await order()
+    const captured = await capturePayment({
+      restaurantId: restaurant.id, orderId: o.id, method: 'CASH',
+      amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+    })
+    const paymentId = captured.payment.id
+    const key = `refund-${stamp}-a`
+
+    const first = await refundPayment({
+      restaurantId: restaurant.id, paymentId, reason: 'Wrong dish',
+      actorId: cashier.id, amount: 30_000, clientRequestId: key,
+    })
+    const retry = await refundPayment({
+      restaurantId: restaurant.id, paymentId, reason: 'Wrong dish',
+      actorId: cashier.id, amount: 30_000, clientRequestId: key,
+    })
+    check('the retry returns the same refund row', retry.id === first.id, `${retry.id} vs ${first.id}`)
+
+    const rows = await prisma.refund.count({ where: { paymentId } })
+    check('one refund row exists', rows === 1, `${rows}`)
+    const order3 = await prisma.order.findUniqueOrThrow({ where: { id: o.id } })
+    check('the money went back once', order3.paidTotal === 70_000, `${order3.paidTotal}`)
+
+    // Concurrent retries of the same refund — the dangerous direction.
+    const o2 = await order()
+    const cap2 = await capturePayment({
+      restaurantId: restaurant.id, orderId: o2.id, method: 'CASH',
+      amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+    })
+    const key2 = `refund-${stamp}-b`
+    const both = await Promise.all([
+      refundPayment({
+        restaurantId: restaurant.id, paymentId: cap2.payment.id, reason: 'Race',
+        actorId: cashier.id, amount: 50_000, clientRequestId: key2,
+      }),
+      refundPayment({
+        restaurantId: restaurant.id, paymentId: cap2.payment.id, reason: 'Race',
+        actorId: cashier.id, amount: 50_000, clientRequestId: key2,
+      }),
+    ])
+    check('two concurrent same-key refunds agree on one row', both[0].id === both[1].id)
+    const raceRows = await prisma.refund.count({ where: { paymentId: cap2.payment.id } })
+    check('and gave the money back once', raceRows === 1, `${raceRows}`)
+  }
+
+  console.log('\n── 11. Sealed books refuse money ──')
+  {
+    const o = await order()
+    /*
+     * A period covering the order is closed after the bill was raised. The
+     * order is dated inside it, so settling it now would book today's cash
+     * into a range an accountant has already signed. Stock and orders were
+     * already guarded; payments were not.
+     */
+    const period = await prisma.accountingPeriod.create({
+      data: {
+        restaurantId: restaurant.id,
+        periodStart: new Date(Date.now() - 86_400_000),
+        periodEnd: new Date(Date.now() + 86_400_000),
+        status: 'CLOSED',
+        closedById: cashier.id,
+        closedAt: new Date(),
+      },
+    })
+
+    await refuses(
+      'a payment against a sealed period is refused',
+      () => capturePayment({
+        restaurantId: restaurant.id, orderId: o.id, method: 'CASH',
+        amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+      }),
+      /closed accounting period/,
+    )
+    const none = await prisma.payment.count({ where: { orderId: o.id } })
+    check('and nothing was written', none === 0, `${none}`)
+
+    // Reopened, the same settlement goes through — the guard seals, not bricks.
+    await prisma.accountingPeriod.update({
+      where: { id: period.id }, data: { status: 'REOPENED' },
+    })
+    await capturePayment({
+      restaurantId: restaurant.id, orderId: o.id, method: 'CASH',
+      amount: 100_000, tenderedAmount: 100_000, receivedById: cashier.id,
+    })
+    const paid = await prisma.order.findUniqueOrThrow({ where: { id: o.id } })
+    check('reopening the period lets it settle', paid.paymentStatus === 'PAID', paid.paymentStatus)
+    await prisma.accountingPeriod.delete({ where: { id: period.id } })
+  }
+
   // Tidy up.
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
 

@@ -4,6 +4,7 @@ import type { StockMovementType, StockUnit } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * One item's stock history.
@@ -204,7 +205,7 @@ export async function getItemHistory(params: {
       updatedAt: item.updatedAt.toISOString(),
       locationName: item.location?.name ?? null,
     },
-    ledgerTotal: Math.round((sum._sum?.quantity ?? 0) * 1e6) / 1e6,
+    ledgerTotal: roundQty(sum._sum?.quantity ?? 0),
     stockByLocation: locationStock
       .map((row) => ({
         branchId: row.branch.id,

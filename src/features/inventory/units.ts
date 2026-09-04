@@ -1,4 +1,5 @@
 import type { StockUnit } from '@prisma/client'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Stock unit conversion.
@@ -60,7 +61,7 @@ export const UNIT_LABELS: Record<StockUnit, string> = {
 
 export function formatQuantity(quantity: number, unit: StockUnit): string {
   // Trim float noise without forcing decimals onto whole numbers.
-  const rounded = Math.round(quantity * 1e6) / 1e6
+  const rounded = roundQty(quantity)
   return `${rounded} ${UNIT_LABELS[unit]}`
 }
 
@@ -97,12 +98,12 @@ export function toBaseUnits(
   item: ConvertibleItem,
 ): number {
   const base = item.unit
-  if (from === base) return round(quantity)
+  if (from === base) return roundQty(quantity)
 
   if (sameFamily(from, base)) {
     const fromFactor = familyFactor(from)!
     const baseFactor = familyFactor(base)!
-    return round((quantity * fromFactor) / baseFactor)
+    return roundQty((quantity * fromFactor) / baseFactor)
   }
 
   // Packaging: only the item's own declared pack size can resolve it.
@@ -114,7 +115,7 @@ export function toBaseUnits(
           `Set the purchase unit to ${UNIT_LABELS[from]} and how many ${UNIT_LABELS[base]} are in one.`,
       )
     }
-    return round(quantity * perPack)
+    return roundQty(quantity * perPack)
   }
 
   throw new UnitConversionError(
@@ -129,12 +130,12 @@ export function fromBaseUnits(
   item: ConvertibleItem,
 ): number {
   const base = item.unit
-  if (to === base) return round(quantityInBase)
+  if (to === base) return roundQty(quantityInBase)
 
   if (sameFamily(to, base)) {
     const toFactor = familyFactor(to)!
     const baseFactor = familyFactor(base)!
-    return round((quantityInBase * baseFactor) / toFactor)
+    return roundQty((quantityInBase * baseFactor) / toFactor)
   }
 
   if (isPackagingUnit(to)) {
@@ -144,7 +145,7 @@ export function fromBaseUnits(
         `${item.name}: no pack size set for ${UNIT_LABELS[to]}.`,
       )
     }
-    return round(quantityInBase / perPack)
+    return roundQty(quantityInBase / perPack)
   }
 
   throw new UnitConversionError(
@@ -182,16 +183,12 @@ export function acceptableUnits(item: ConvertibleItem): StockUnit[] {
  * refused here — they need an item to say how big a box is.
  */
 export function convertUnits(quantity: number, from: StockUnit, to: StockUnit): number {
-  if (from === to) return round(quantity)
+  if (from === to) return roundQty(quantity)
   if (!sameFamily(from, to)) {
     throw new UnitConversionError(
       `Cannot convert ${UNIT_LABELS[from]} to ${UNIT_LABELS[to]} without knowing the pack size.`,
     )
   }
-  return round((quantity * familyFactor(from)!) / familyFactor(to)!)
+  return roundQty((quantity * familyFactor(from)!) / familyFactor(to)!)
 }
 
-/** Float quantities drift; six places is far finer than any kitchen scale. */
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
-}

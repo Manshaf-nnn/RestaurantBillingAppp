@@ -219,10 +219,21 @@ async function main() {
       where: { id: old.id },
       data: { placedAt: new Date(yesterday.getTime() + 12 * 3_600_000) },
     })
+    /*
+     * The period ends at the earlier of "yesterday + 24h" and now.
+     *
+     * `yesterday` is derived from the restaurant's BUSINESS date, so for a
+     * timezone ahead of UTC there is a window each evening — after the local
+     * date rolls over but before UTC does — in which `yesterday + 24h` is still
+     * in the future. `closePeriod` rightly refuses to seal a period that has
+     * not finished, so this suite failed for a few hours a day and passed for
+     * the rest, which is the worst kind of test. Clamping keeps the backdated
+     * order (yesterday + 12h) comfortably inside the sealed range either way.
+     */
     const period = await closePeriod({
       restaurantId: restaurant.id,
       from: yesterday,
-      to: new Date(yesterday.getTime() + 86_400_000),
+      to: new Date(Math.min(yesterday.getTime() + 86_400_000, Date.now() - 1_000)),
       userId: cashier.id,
     })
     await refuses(

@@ -3,6 +3,7 @@ import type { PaymentMethod, Prisma } from '@prisma/client'
 import QRCode from 'qrcode'
 
 import { AppError, NotFoundError } from '@/lib/errors'
+import { assertPeriodOpen } from '@/features/accounting/service'
 import { outstandingOn } from '@/features/orders/pricing'
 import { nextCounterValue, yearIn } from '@/server/db/counters'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
@@ -11,6 +12,8 @@ import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { emitOutbox } from '@/server/realtime/outbox'
+import { EVENTS } from '@/lib/realtime/events'
 import { settleLoyalty } from '@/features/orders/service'
 import { readOptions } from '@/features/orders/queries'
 
@@ -161,6 +164,12 @@ export async function capturePayment(params: {
   tipAmount?: number
   receivedById?: string | null
   paymentId?: string
+  /**
+   * One id per tender attempt, reused across retries. Given one, this function
+   * is safe to call twice: the second call returns the first call's payment
+   * instead of taking the money again.
+   */
+  clientRequestId?: string | null
 }) {
   const restaurant = await requireRestaurant(params.restaurantId)
 
@@ -183,6 +192,39 @@ export async function capturePayment(params: {
     `
     if (locked.length === 0) throw new NotFoundError('Order')
 
+    /*
+     * A retry of a capture that already succeeded.
+     *
+     * Read inside the fence, so a genuinely concurrent pair of same-key
+     * requests serialises on the order lock above and the loser sees the
+     * winner's row rather than racing it. The unique index on
+     * (restaurantId, clientRequestId) is the backstop if anything ever reaches
+     * the insert without passing here.
+     *
+     * The replay returns the payment that was taken and reports the order as
+     * it now stands; it deliberately does NOT re-run settlement, so loyalty is
+     * not accrued twice and the cashier is not told twice that money arrived.
+     */
+    if (params.clientRequestId) {
+      const already = await tx.payment.findFirst({
+        where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+      })
+      if (already) {
+        const current = await tx.order.findFirstOrThrow({
+          where: { id: already.orderId, restaurantId: params.restaurantId },
+          include: { table: true, invoice: { select: { number: true } } },
+        })
+        return {
+          payment: already,
+          order: current,
+          fullySettled: current.paymentStatus === 'PAID',
+          invoiceNumber: current.invoice?.number ?? null,
+          tableNumber: current.tableNumber ?? current.table?.number ?? null,
+          replayed: true as const,
+        }
+      }
+    }
+
     const order = await tx.order.findFirst({
       where: { id: params.orderId, restaurantId: params.restaurantId },
       include: { items: true, table: true },
@@ -191,6 +233,15 @@ export async function capturePayment(params: {
     if (order.status === 'CANCELLED') {
       throw new AppError('This order was cancelled', 409, 'ORDER_CANCELLED')
     }
+
+    /*
+     * Money may not land in a period the books have signed off (§59, §2).
+     * Dated by the order it settles, so a bill from a sealed January cannot be
+     * quietly settled today into January's numbers; a refund or correction
+     * dated now still lands in today's open period, which is how accounting
+     * corrections are supposed to work.
+     */
+    await assertPeriodOpen(tx, params.restaurantId, order.placedAt, 'This payment')
 
     /*
      * The tip rides on TOP of the bill, it does not become the bill.
@@ -279,6 +330,7 @@ export async function capturePayment(params: {
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
             cashDrawerSessionId: drawer?.id ?? null,
+            clientRequestId: params.clientRequestId ?? null,
           },
         })
       : await tx.payment.create({
@@ -294,6 +346,7 @@ export async function capturePayment(params: {
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
             cashDrawerSessionId: drawer?.id ?? null,
+            clientRequestId: params.clientRequestId ?? null,
           },
         })
 
@@ -344,8 +397,47 @@ export async function capturePayment(params: {
       }
     }
 
-    return { payment, order: updatedOrder, fullySettled, invoiceNumber, tableNumber: order.tableNumber ?? order.table?.number ?? null }
+    /*
+     * The event commits with the money (production.md §5).
+     *
+     * This used to be raised only after the transaction returned, by a
+     * `realtime.paymentReceived(...)` call that is a no-op on the serverless
+     * host — so a settled bill produced no durable record that anything had
+     * happened, and a till that missed the moment had no way to find out.
+     * Written here, the payment row and the event describing it commit or roll
+     * back together.
+     */
+    await emitOutbox(tx, {
+      restaurantId: params.restaurantId,
+      branchId: order.branchId,
+      type: EVENTS.PAYMENT_RECEIVED,
+      entity: 'Payment',
+      entityId: payment.id,
+      payload: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        amount: payment.amount,
+        method: payment.method,
+        fullySettled,
+      },
+    })
+
+    return {
+      payment,
+      order: updatedOrder,
+      fullySettled,
+      invoiceNumber,
+      tableNumber: order.tableNumber ?? order.table?.number ?? null,
+      replayed: false as const,
+    }
   })
+
+  /*
+   * A replay has no news. The money arrived once, the loyalty was accrued
+   * once, and the cashier was told once — repeating any of that is exactly the
+   * double-count the idempotency key exists to prevent.
+   */
+  if (result.replayed) return result
 
   if (result.fullySettled) {
     await settleLoyalty(params.orderId).catch((error) =>
@@ -528,6 +620,11 @@ export async function refundPayment(params: {
   actorId: string
   /** Minor units. Absent means everything this payment has left to refund. */
   amount?: number
+  /**
+   * One id per refund attempt, reused across retries — so a retried refund
+   * returns the refund already given instead of handing the money back twice.
+   */
+  clientRequestId?: string | null
 }) {
   const located = await prisma.payment.findFirst({
     where: { id: params.paymentId, restaurantId: params.restaurantId },
@@ -552,6 +649,18 @@ export async function refundPayment(params: {
       FOR UPDATE
     `
     if (lockedOrder.length === 0) throw new NotFoundError('Order')
+
+    /*
+     * A retry of a refund that already went out. Read inside the fence for the
+     * same reason capture does, and the unique index on
+     * (restaurantId, clientRequestId) is the backstop.
+     */
+    if (params.clientRequestId) {
+      const already = await tx.refund.findFirst({
+        where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+      })
+      if (already) return already
+    }
 
     const payment = await tx.payment.findFirst({
       where: { id: params.paymentId, restaurantId: params.restaurantId },
@@ -595,6 +704,7 @@ export async function refundPayment(params: {
         method: payment.method,
         reason: params.reason,
         refundedById: params.actorId,
+        clientRequestId: params.clientRequestId ?? null,
       },
     })
 
@@ -650,6 +760,22 @@ export async function refundPayment(params: {
         paymentId: payment.id,
       })
     }
+
+    // Money going back is an event too, and for the same reason.
+    await emitOutbox(tx, {
+      restaurantId: params.restaurantId,
+      branchId: payment.order.branchId,
+      type: EVENTS.PAYMENT_RECEIVED,
+      entity: 'Refund',
+      entityId: refund.id,
+      payload: {
+        orderId: payment.orderId,
+        orderNumber: payment.order.orderNumber,
+        paymentId: payment.id,
+        amount: -amount,
+        method: payment.method,
+      },
+    })
 
     return refund
   })

@@ -19,6 +19,12 @@ export const collectPaymentSchema = z.object({
   tenderedAmount: z.coerce.number().int().min(0).optional(),
   reference: z.string().trim().max(80).optional().or(z.literal('')),
   tipAmount: z.coerce.number().int().min(0).default(0),
+  /*
+   * One id per tender attempt, so a retry after a lost response settles the
+   * bill once. Optional because the guest-side and legacy paths do not mint
+   * one; where it is absent the order lock is still the only protection.
+   */
+  clientRequestId: z.string().trim().min(8).max(64).optional(),
 })
 export type CollectPaymentInput = z.infer<typeof collectPaymentSchema>
 
@@ -27,6 +33,8 @@ export const refundPaymentSchema = z.object({
   reason: z.string().trim().min(3, 'Give a reason for the refund').max(200),
   /** Minor units. Absent refunds everything the payment has left. */
   amount: z.coerce.number().int().min(1).optional(),
+  /** One id per refund attempt — see `collectPaymentSchema.clientRequestId`. */
+  clientRequestId: z.string().trim().min(8).max(64).optional(),
 })
 
 export const guestPaidSchema = z.object({

@@ -3,6 +3,7 @@ import 'server-only'
 import { costRecipes } from '@/features/inventory/recipe-resolver'
 import { prisma } from '@/server/db/prisma'
 import type { DateRange } from './range'
+import { roundPercent } from '@/lib/quantity'
 
 /**
  * Profitability.
@@ -192,8 +193,8 @@ export async function getProfitReport(params: {
       .map((r) => ({
         ...r,
         grossProfit: r.revenue - r.cogs,
-        foodCostPercent: r.revenue > 0 ? round2((r.cogs / r.revenue) * 100) : null,
-        grossMarginPercent: r.revenue > 0 ? round2(((r.revenue - r.cogs) / r.revenue) * 100) : null,
+        foodCostPercent: r.revenue > 0 ? roundPercent((r.cogs / r.revenue) * 100) : null,
+        grossMarginPercent: r.revenue > 0 ? roundPercent(((r.revenue - r.cogs) / r.revenue) * 100) : null,
       }))
       .sort((a, b) => b.grossProfit - a.grossProfit)
 
@@ -209,14 +210,14 @@ export async function getProfitReport(params: {
       revenue,
       cogs,
       grossProfit: revenue - cogs,
-      foodCostPercent: revenue > 0 ? round2((cogs / revenue) * 100) : null,
-      grossMarginPercent: revenue > 0 ? round2(((revenue - cogs) / revenue) * 100) : null,
+      foodCostPercent: revenue > 0 ? roundPercent((cogs / revenue) * 100) : null,
+      grossMarginPercent: revenue > 0 ? roundPercent(((revenue - cogs) / revenue) * 100) : null,
     },
     coverage: {
       linesWithRecipe: withRecipe,
       linesWithoutRecipe: withoutRecipe,
       revenueWithoutRecipe: revenueWithout,
-      percentCovered: round2((withRecipe / total) * 100),
+      percentCovered: roundPercent((withRecipe / total) * 100),
     },
     byItem: finish(item).slice(0, 50),
     byCategory: finish(category),
@@ -314,6 +315,3 @@ export async function getBranchComparison(params: {
   }
 }
 
-function round2(v: number): number {
-  return Math.round(v * 100) / 100
-}

@@ -4,6 +4,7 @@ import type { StockMovementType } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Where stock came from, and where it went.
@@ -157,7 +158,7 @@ export async function traceBatch(params: {
 
     // Net position per location: in minus out.
     const name = m.branch?.name ?? 'Unassigned'
-    byLocation.set(name, round((byLocation.get(name) ?? 0) + m.quantity))
+    byLocation.set(name, roundQty((byLocation.get(name) ?? 0) + m.quantity))
   }
 
   return {
@@ -172,11 +173,11 @@ export async function traceBatch(params: {
     remainingQty: batch.remainingQty,
     steps,
     outcome: {
-      transferredOut: round(transferredOut),
-      sold: round(sold),
-      wasted: round(wasted),
-      returned: round(returned),
-      remaining: round(batch.remainingQty),
+      transferredOut: roundQty(transferredOut),
+      sold: roundQty(sold),
+      wasted: roundQty(wasted),
+      returned: roundQty(returned),
+      remaining: roundQty(batch.remainingQty),
     },
     destinations: [...byLocation.entries()]
       .filter(([, q]) => Math.abs(q) > 1e-6)
@@ -281,6 +282,3 @@ export async function traceItem(params: {
   }
 }
 
-function round(v: number): number {
-  return Math.round(v * 1e6) / 1e6
-}

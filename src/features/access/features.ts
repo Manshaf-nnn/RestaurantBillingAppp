@@ -838,6 +838,45 @@ export function permissionsForFeatures(featureKeys: string[]): string[] {
 }
 
 /**
+ * Everything a restaurant may do with the features it has bought.
+ *
+ * ── Why this is not `permissionsForFeatures` ────────────────────────────────
+ *
+ * These two functions answer questions that sound identical and are not:
+ *
+ *   permissionsForFeatures  — "an owner switched this feature ON for a ROLE;
+ *                              what should that role start with?"  Primary
+ *                              action only, deliberately: turning Payments on
+ *                              for a waiter must not silently hand them the
+ *                              power to refund.
+ *
+ *   permissionsSoldByFeatures — "the platform sold this restaurant this
+ *                              feature; what is now within their reach?"  All
+ *                              of it, because that is what buying a feature
+ *                              means.
+ *
+ * `availablePermissions` was built from the first one, and `permissionsFor`
+ * INTERSECTS every role's grants against it. So a restaurant that had bought
+ * Purchasing received `purchase.view` and nothing else: the owner could see the
+ * purchasing screens and could never grant anybody — including themselves —
+ * the ability to raise, approve or receive a purchase order, whatever the role
+ * said. The feature was sold, paid for, visible, and inert. The same held for
+ * every feature with more than one action.
+ *
+ * The role layer still decides who actually gets each permission; widening this
+ * set widens only what an owner is ALLOWED to grant, never what anyone holds.
+ */
+export function permissionsSoldByFeatures(featureKeys: string[]): string[] {
+  const out = new Set<string>()
+  for (const key of featureKeys) {
+    const feature = BY_KEY.get(key)
+    if (!feature) continue
+    for (const action of feature.actions) out.add(action.permission)
+  }
+  return [...out]
+}
+
+/**
  * Which features a permission set can reach, and which of their actions are on.
  *
  * What the role builder renders, and what an owner reads back when they reopen

@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { prisma } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Reorder suggestions and price trends.
@@ -82,7 +83,7 @@ export async function getReorderSuggestions(params: {
     if (floor <= 0 || quantity > floor) continue
 
     const target = item.maxStock && item.maxStock > floor ? item.maxStock : floor * 2
-    let suggested = round(target - quantity)
+    let suggested = roundQty(target - quantity)
     if (suggested <= 0) continue
 
     const source = item.supplierItems[0]
@@ -169,6 +170,3 @@ export async function getPriceTrend(params: {
   }
 }
 
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6
-}

@@ -82,6 +82,16 @@ function describe(error: unknown): { message: string; expired: boolean } {
 export const TRANSPORT_FAILED = 'TRANSPORT_FAILED'
 
 /**
+ * The browser reported no network, so nothing was attempted.
+ *
+ * Distinct from TRANSPORT_FAILED on purpose: that one means "we tried and
+ * something went wrong", which invites a retry. This one means "we did not
+ * try, and nothing was remembered", which is what an operator has to know
+ * before deciding whether to take the money again.
+ */
+export const OFFLINE = 'OFFLINE'
+
+/**
  * Wrap a server action call so it always resolves.
  *
  * For handlers that own their loading state — several screens track two or
@@ -95,6 +105,36 @@ export const TRANSPORT_FAILED = 'TRANSPORT_FAILED'
 export async function callAction<T>(
   call: () => Promise<ActionResult<T>>,
 ): Promise<ActionResult<T>> {
+  /*
+   * Offline: refuse plainly, before trying (production.md §6).
+   *
+   * There is no offline write queue in this application and there deliberately
+   * is not one — §6 warns against allowing dangerous financial operations
+   * offline, and the money core is built on row locks that a queued write
+   * cannot take. `src/app/offline/page.tsx` says so in as many words: nothing
+   * entered while offline is saved.
+   *
+   * What was missing was saying it at the moment somebody tries. Attempting the
+   * action offline produced a generic "Could not reach the server", which reads
+   * like a glitch worth retrying, on a screen where the honest answer is
+   * different in kind: this will not work until you are back, and nothing has
+   * been remembered. A cashier who believes a settle is queued will not take
+   * the money again.
+   *
+   * `navigator.onLine` is only reliable in the negative direction — false means
+   * genuinely no network, true can still mean a captive portal — which is
+   * exactly the direction being used here.
+   */
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      ok: false,
+      error:
+        'You are offline, so this was not saved — nothing has been queued. ' +
+        'Reconnect and do it again.',
+      code: OFFLINE,
+    }
+  }
+
   try {
     return await call()
   } catch (error) {

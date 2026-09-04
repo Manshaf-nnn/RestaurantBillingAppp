@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import type { DateRange } from './range'
+import { roundQty } from '@/lib/quantity'
+import { utc } from '@/server/db/sql-time'
 
 /**
  * The stock reconciliation statement.
@@ -126,7 +128,7 @@ export async function getReconciliationReport(params: {
       FROM stock_movements
       WHERE "restaurantId" = ${params.restaurantId}
         ${params.branchId ? Prisma.sql`AND "branchId" = ${params.branchId}` : Prisma.empty}
-        AND "createdAt" >= ${params.range.from} AND "createdAt" <= ${params.range.to}
+        AND "createdAt" >= ${utc(params.range.from)} AND "createdAt" <= ${utc(params.range.to)}
       GROUP BY 1, 2
     `,
     /*
@@ -166,7 +168,7 @@ export async function getReconciliationReport(params: {
 
   for (const item of items) {
     const rows = byItem.get(item.id) ?? []
-    const opening = round(openingByItem.get(item.id) ?? 0)
+    const opening = roundQty(openingByItem.get(item.id) ?? 0)
 
     /*
      * Nothing to say about an item with no history and no stock — but "no
@@ -191,20 +193,20 @@ export async function getReconciliationReport(params: {
       }
       const rowValue = valueByItemType.get(`${item.id}:${row.type}`) ?? 0
       const existing = merged.get(bucket.label) ?? { ...bucket, quantity: 0, value: 0 }
-      existing.quantity = round(existing.quantity + row.quantity)
+      existing.quantity = roundQty(existing.quantity + row.quantity)
       existing.value += rowValue
       merged.set(bucket.label, existing)
 
       if (row.quantity >= 0) {
-        totalIn = round(totalIn + row.quantity)
+        totalIn = roundQty(totalIn + row.quantity)
         valueIn += rowValue
       } else {
-        totalOut = round(totalOut + Math.abs(row.quantity))
+        totalOut = roundQty(totalOut + Math.abs(row.quantity))
         valueOut += Math.abs(rowValue)
       }
     }
 
-    const expected = round(opening + totalIn - totalOut)
+    const expected = roundQty(opening + totalIn - totalOut)
 
     /*
      * Whichever stored total belongs to what was just replayed: this branch's
@@ -212,7 +214,7 @@ export async function getReconciliationReport(params: {
      * Both are real numbers held somewhere else in the database, which is what
      * a drift check needs — comparing the replay against itself proves nothing.
      */
-    const cached = params.branchId ? round(shelfByItem.get(item.id) ?? 0) : item.quantity
+    const cached = params.branchId ? roundQty(shelfByItem.get(item.id) ?? 0) : item.quantity
 
     lines.push({
       itemId: item.id,
@@ -224,7 +226,7 @@ export async function getReconciliationReport(params: {
       totalOut,
       expected,
       cached,
-      drift: round(cached - expected),
+      drift: roundQty(cached - expected),
       valueAtCost: Math.round(Math.max(0, expected) * item.costPerUnit),
       valueIn,
       valueOut,
@@ -255,4 +257,3 @@ export async function getReconciliationReport(params: {
   }
 }
 
-const round = (n: number) => Math.round(n * 1e6) / 1e6

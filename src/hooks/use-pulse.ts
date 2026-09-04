@@ -14,7 +14,19 @@ import * as React from 'react'
  * check on return, so a station left open overnight costs nothing.
  */
 
-type Listener = (token: string) => void
+/** One event from the transactional outbox. */
+export interface PulseEvent {
+  id: string
+  seq: string
+  type: string
+  entity: string
+  entityId: string | null
+  branchId: string | null
+  at: string
+  payload?: unknown
+}
+
+type Listener = (token: string, events: PulseEvent[]) => void
 
 interface Poller {
   listeners: Set<Listener>
@@ -26,7 +38,31 @@ interface Poller {
   /** consecutive failures, used to back off instead of hammering a sick server */
   failures: number
   onVisibility: () => void
+  /**
+   * The outbox cursor, or null while this poller does not want events.
+   *
+   * `'0'` is the "just started" value: the server answers with the current end
+   * of the stream and no backlog, because a screen opening at 3pm has no
+   * business replaying the lunch rush.
+   */
+  since: string | null
+  /** Which branch's events to ask for; null means the whole restaurant. */
+  branchId: string | null
+  /**
+   * Ids already delivered to listeners, so an event that arrives twice is
+   * applied once.
+   *
+   * Bounded on purpose. A poller can run for a fourteen-hour service and an
+   * unbounded Set would grow all day on a counter tablet; duplicates only ever
+   * arrive close together (a retried request, an overlapping poll), so a
+   * window of recent ids is all that is needed and the memory stays flat.
+   */
+  seen: Set<string>
+  seenOrder: string[]
 }
+
+/** How many recent event ids to remember for de-duplication. */
+const SEEN_LIMIT = 500
 
 const pollers = new Map<string, Poller>()
 
@@ -36,14 +72,33 @@ const pollers = new Map<string, Poller>()
  * watching `catalog` must not be woken by the kitchen, and it is the key here
  * that keeps them apart.
  */
-function urlFor(scope: string): string {
+function urlFor(scope: string, poller: Poller): string {
   if (scope.startsWith('order:')) {
     return `/api/pulse?orderId=${encodeURIComponent(scope.slice('order:'.length))}`
   }
   // `staff` is the historical name for the operational scope; keep it meaning
   // the same thing rather than renaming eleven existing call sites.
-  if (scope === 'staff' || scope === 'ops') return '/api/pulse?scope=ops'
-  return `/api/pulse?scope=${encodeURIComponent(scope)}`
+  const name = scope === 'staff' || scope === 'ops' ? 'ops' : scope
+  let url = `/api/pulse?scope=${encodeURIComponent(name)}`
+
+  // Events are opt-in: a screen that only wants "did anything change" costs the
+  // server exactly what it always did.
+  if (poller.since !== null) {
+    url += `&since=${encodeURIComponent(poller.since)}`
+    if (poller.branchId) url += `&branchId=${encodeURIComponent(poller.branchId)}`
+  }
+  return url
+}
+
+/** Remember an id as delivered, evicting the oldest once the window is full. */
+function remember(poller: Poller, id: string) {
+  if (poller.seen.has(id)) return
+  poller.seen.add(id)
+  poller.seenOrder.push(id)
+  while (poller.seenOrder.length > SEEN_LIMIT) {
+    const oldest = poller.seenOrder.shift()
+    if (oldest) poller.seen.delete(oldest)
+  }
 }
 
 function schedule(scope: string, poller: Poller) {
@@ -66,23 +121,59 @@ async function tick(scope: string, poller: Poller) {
 
   poller.inFlight = true
   try {
-    const response = await fetch(urlFor(scope), {
+    const response = await fetch(urlFor(scope, poller), {
       cache: 'no-store',
       headers: { accept: 'application/json' },
     })
     if (!response.ok) throw new Error(String(response.status))
 
-    const body = (await response.json()) as { v?: string | null }
+    const body = (await response.json()) as {
+      v?: string | null
+      seq?: string | null
+      events?: PulseEvent[]
+      truncated?: boolean
+    }
     poller.failures = 0
+
+    /*
+     * Advance the cursor and drop anything already seen.
+     *
+     * `truncated` means more events were waiting than one page holds — a
+     * screen that was asleep, or a very busy minute. The cursor still advances,
+     * because the token below guarantees the screen refreshes anyway and
+     * replaying a long backlog event by event would be slower and no more
+     * correct than one refresh.
+     */
+    const fresh: PulseEvent[] = []
+    if (poller.since !== null && body.seq) {
+      poller.since = body.seq
+      for (const event of body.events ?? []) {
+        if (poller.seen.has(event.id)) continue
+        remember(poller, event.id)
+        fresh.push(event)
+      }
+    }
 
     const token = body.v ?? null
     if (token !== null) {
       const changed = poller.token !== null && poller.token !== token
       poller.token = token
-      // The first successful poll only establishes a baseline; firing then would
-      // make every screen refresh once for no reason on mount.
+      /*
+       * The token is the safety net, and it is why a skipped event cannot
+       * cause a missed update.
+       *
+       * The outbox cursor can step over an event: Postgres assigns `seq` at
+       * INSERT and publishes at COMMIT, so a slow transaction can commit seq 10
+       * after seq 11 is already visible. The token is derived from
+       * MAX(updatedAt) and cannot miss a change — it just cannot say what
+       * changed. So the refresh fires on the token, and the events only ever
+       * ADD detail to it.
+       *
+       * The first successful poll only establishes a baseline; firing then
+       * would make every screen refresh once for no reason on mount.
+       */
       if (changed) {
-        for (const listener of poller.listeners) listener(token)
+        for (const listener of poller.listeners) listener(token, fresh)
       }
     }
   } catch {
@@ -93,7 +184,12 @@ async function tick(scope: string, poller: Poller) {
   }
 }
 
-function acquire(scope: string, intervalMs: number, listener: Listener): () => void {
+function acquire(
+  scope: string,
+  intervalMs: number,
+  listener: Listener,
+  options: { events?: boolean; branchId?: string | null } = {},
+): () => void {
   let poller = pollers.get(scope)
 
   if (!poller) {
@@ -106,6 +202,10 @@ function acquire(scope: string, intervalMs: number, listener: Listener): () => v
       inFlight: false,
       failures: 0,
       onVisibility: () => {},
+      since: options.events ? '0' : null,
+      branchId: options.branchId ?? null,
+      seen: new Set(),
+      seenOrder: [],
     }
     created.onVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -123,6 +223,8 @@ function acquire(scope: string, intervalMs: number, listener: Listener): () => v
   } else {
     // Several screens can share a scope; honour the most responsive one.
     poller.intervalMs = Math.min(poller.intervalMs, intervalMs)
+    // …and if any of them wants events, the shared poller fetches them.
+    if (options.events && poller.since === null) poller.since = '0'
   }
 
   poller.listeners.add(listener)
@@ -152,16 +254,21 @@ function acquire(scope: string, intervalMs: number, listener: Listener): () => v
 export function usePulse(
   scope: string,
   intervalMs: number,
-  onChange: () => void,
+  onChange: (events: PulseEvent[]) => void,
   enabled = true,
+  options: { events?: boolean; branchId?: string | null } = {},
 ) {
   const saved = React.useRef(onChange)
   React.useEffect(() => {
     saved.current = onChange
   }, [onChange])
 
+  const { events, branchId } = options
   React.useEffect(() => {
     if (!enabled) return
-    return acquire(scope, intervalMs, () => saved.current())
-  }, [scope, intervalMs, enabled])
+    return acquire(scope, intervalMs, (_token, delivered) => saved.current(delivered), {
+      events,
+      branchId,
+    })
+  }, [scope, intervalMs, enabled, events, branchId])
 }

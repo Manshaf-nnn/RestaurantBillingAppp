@@ -182,6 +182,164 @@ async function main() {
     await prisma.rateLimitCounter.deleteMany({ where: { key } })
   }
 
+  /*
+   * production.md §1 — history cannot be silently overwritten.
+   *
+   * These are database triggers, not application checks, so the test has to go
+   * around the application to mean anything: it writes with raw SQL, the way a
+   * stray script or a psql session would. Before migration
+   * 20260917093000_append_only_guards every one of these UPDATEs succeeded and
+   * left no trace that anything had been different.
+   */
+  console.log('\n── 3. Append-only records refuse to be rewritten ──')
+  {
+    const refused = async (name: string, run: () => Promise<unknown>) => {
+      try {
+        await run()
+        check(name, false, 'the write was allowed')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        check(name, /append-only|immutable|is a fact/.test(message), `wrong error: ${message}`)
+      }
+    }
+
+    const log = await prisma.auditLog.create({
+      data: {
+        restaurantId: restaurant.id, action: 'test.frozen', entity: 'Test',
+        before: {}, after: { value: 'original' },
+      },
+    })
+    await refused('an audit row cannot be edited', () =>
+      prisma.$executeRaw`UPDATE audit_logs SET action = 'test.tampered' WHERE id = ${log.id}`)
+    const stillThere = await prisma.auditLog.findUniqueOrThrow({ where: { id: log.id } })
+    check('…and it still says what it said', stillThere.action === 'test.frozen', stillThere.action)
+
+    const item = await prisma.inventoryItem.create({
+      data: {
+        restaurantId: restaurant.id, name: `Frozen ${stamp}`, unit: 'KG',
+        quantity: 0, costPerUnit: 100_00, branchId: branch.id,
+      },
+    })
+    const movement = await prisma.stockMovement.create({
+      data: {
+        restaurantId: restaurant.id, itemId: item.id, branchId: branch.id,
+        type: 'PURCHASE', quantity: 10, unitCost: 100_00, balanceAfter: 10,
+      },
+    })
+    await refused('a ledger quantity cannot be revised', () =>
+      prisma.$executeRaw`UPDATE stock_movements SET quantity = 999 WHERE id = ${movement.id}`)
+    await refused('a ledger cost cannot be revised', () =>
+      prisma.$executeRaw`UPDATE stock_movements SET "unitCost" = 1 WHERE id = ${movement.id}`)
+
+    /*
+     * DELIBERATE exemption, pinned so nobody "tightens" it into a bug: goods
+     * receipt, wastage and production all backfill batchId / referenceId onto
+     * a movement immediately after creating it. Those are links, not ledger
+     * facts, and blocking them would break receiving.
+     */
+    await prisma.stockMovement.update({
+      where: { id: movement.id }, data: { referenceId: 'linked-after-the-fact' },
+    })
+    const linked = await prisma.stockMovement.findUniqueOrThrow({ where: { id: movement.id } })
+    check('but a link column may still be backfilled',
+      linked.referenceId === 'linked-after-the-fact' && linked.quantity === 10)
+
+    await prisma.stockMovement.deleteMany({ where: { itemId: item.id } })
+    await prisma.inventoryItem.delete({ where: { id: item.id } })
+  }
+
+  /*
+   * production.md §1 names seven areas integrity checks must cover. Five were
+   * already covered; COGS and bank reconciliation were not, and both fail in a
+   * way every existing check stays green through — the quantities are right,
+   * so the ledger replays perfectly, while the VALUE is wrong.
+   */
+  console.log('\n── 4. COGS and bank reconciliation are checked too ──')
+  {
+    const item = await prisma.inventoryItem.create({
+      data: {
+        restaurantId: restaurant.id, name: `Costed ${stamp}`, unit: 'KG',
+        quantity: 100, costPerUnit: 500_00, branchId: branch.id,
+      },
+    })
+
+    // A sale that took stock out at no cost: the balance is right, cost of
+    // sales is understated, and gross profit reads high for ever.
+    const uncosted = await prisma.stockMovement.create({
+      data: {
+        restaurantId: restaurant.id, itemId: item.id, branchId: branch.id,
+        type: 'SALE', quantity: -5, balanceAfter: 95, unitCost: 0,
+      },
+    })
+    const cogsDirty = await runIntegrityChecks(restaurant.id)
+    const cogsCheck = cogsDirty.checks.find((c) => c.key === 'cogs-uncosted-sale')
+    check('stock sold at no cost is flagged',
+      cogsCheck?.status === 'WARNING' && cogsCheck.count === 1,
+      `${cogsCheck?.status} (${cogsCheck?.count})`)
+    check('…and the movement is named', cogsCheck?.examples.includes(uncosted.id) ?? false)
+
+    await prisma.stockMovement.deleteMany({ where: { id: uncosted.id } })
+    const cogsClean = await runIntegrityChecks(restaurant.id)
+    check('removing it clears the warning',
+      cogsClean.checks.find((c) => c.key === 'cogs-uncosted-sale')?.status === 'OK')
+
+    // The same receipt reconciled by two bank lines: the statement balances,
+    // and the business believes it was paid twice.
+    const statement = await prisma.bankStatement.create({
+      data: {
+        restaurantId: restaurant.id, fileName: 'march.csv',
+        importHash: `hash-${stamp}`, lineCount: 2, uploadedByName: 'Test',
+      },
+    })
+    await prisma.bankStatementLine.createMany({
+      data: [
+        {
+          restaurantId: restaurant.id, statementId: statement.id, lineDate: new Date(),
+          description: 'Card settlement', amount: 100_000, lineHash: `l1-${stamp}`,
+          status: 'MATCHED', matchedType: 'PAYMENT', matchedId: `pay-${stamp}`,
+        },
+        {
+          restaurantId: restaurant.id, statementId: statement.id, lineDate: new Date(),
+          description: 'Card settlement', amount: 100_000, lineHash: `l2-${stamp}`,
+          status: 'MATCHED', matchedType: 'PAYMENT', matchedId: `pay-${stamp}`,
+        },
+      ],
+    })
+    const bankDirty = await runIntegrityChecks(restaurant.id)
+    const doubleMatch = bankDirty.checks.find((c) => c.key === 'bank-double-match')
+    check('one receipt reconciled by two statement lines turns ERROR',
+      doubleMatch?.status === 'ERROR' && doubleMatch.count === 1,
+      `${doubleMatch?.status} (${doubleMatch?.count})`)
+
+    /*
+     * A line that contradicts itself about whether it was reconciled needs no
+     * integrity check, and this proves why: the database refuses to store one.
+     * `bank_statement_lines_match_shape` has enforced it since the accountant
+     * control centre landed, so a checker entry for it could only ever report
+     * OK — coverage in appearance only. The double-match above is the failure
+     * that constraint cannot see, because each row is well-formed on its own.
+     */
+    let refusedShapeless = false
+    try {
+      await prisma.bankStatementLine.create({
+        data: {
+          restaurantId: restaurant.id, statementId: statement.id, lineDate: new Date(),
+          description: 'Shapeless', amount: 5_000, lineHash: `l3-${stamp}`,
+          status: 'MATCHED', matchedType: null, matchedId: null,
+        },
+      })
+    } catch {
+      refusedShapeless = true
+    }
+    check('the database itself refuses a MATCHED line with nothing matched', refusedShapeless)
+
+    await prisma.bankStatement.delete({ where: { id: statement.id } })
+    await prisma.inventoryItem.delete({ where: { id: item.id } })
+    const bankClean = await runIntegrityChecks(restaurant.id)
+    check('clearing the statement restores OK',
+      bankClean.checks.find((c) => c.key === 'bank-double-match')?.status === 'OK')
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed > 0 ? 1 : 0)

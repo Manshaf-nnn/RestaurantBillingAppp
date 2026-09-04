@@ -4,6 +4,7 @@ import type { StockBatch } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Batch and expiry tracking.
@@ -124,13 +125,13 @@ export async function allocateFefo(
       batchId: batch.id,
       batchNo: batch.batchNo,
       expiryDate: batch.expiryDate,
-      quantity: round(take),
+      quantity: roundQty(take),
       unitCost: batch.unitCost,
     })
-    left = round(left - take)
+    left = roundQty(left - take)
   }
 
-  return { allocations, shortfall: Math.max(0, round(left)) }
+  return { allocations, shortfall: Math.max(0, roundQty(left)) }
 }
 
 /** Draw stock down from specific batches. */
@@ -273,6 +274,3 @@ export function assertBatchNo(batchNo: string): string {
   return trimmed
 }
 
-function round(v: number): number {
-  return Math.round(v * 1e6) / 1e6
-}

@@ -20,8 +20,8 @@
     "db:seed:prod": "tsx prisma/seed-production.ts",
     "db:reset": "prisma migrate reset --force",
     "db:backup": "tsx scripts/backup.ts",
-    "setup": "prisma generate && prisma db push && npm run db:seed",
-    "setup:prod": "prisma generate && prisma db push && npm run db:seed:prod",
+    "setup": "node scripts/guard-local-db.mjs && prisma generate && prisma db push && npm run db:seed",
+    "setup:prod": "node scripts/guard-local-db.mjs && prisma generate && prisma db push && npm run db:seed:prod",
     "netlify:build": "prisma generate && npm run db:deploy:safe && npm run db:seed:prod && next build",
     "verify": "tsx --tsconfig tsconfig.test.json scripts/verify-all.ts"
   },

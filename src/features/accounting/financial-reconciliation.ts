@@ -8,6 +8,7 @@ import { getSupplierBalances } from '@/features/suppliers/ledger'
 import { getPayablesStatement } from '@/features/suppliers/payables'
 import { prisma } from '@/server/db/prisma'
 import { runIntegrityChecks, type IntegrityReport, type IntegrityStatus } from './integrity'
+import { utc } from '@/server/db/sql-time'
 
 /**
  * Financial reconciliation (accountsds.md §11): the money identities, checked
@@ -60,7 +61,7 @@ export async function getFinancialReconciliation(params: {
         FROM stock_movements
         WHERE "restaurantId" = ${restaurantId}
           AND type = 'SALE'
-          AND "createdAt" >= ${range.from} AND "createdAt" <= ${range.to}
+          AND "createdAt" >= ${utc(range.from)} AND "createdAt" <= ${utc(range.to)}
       `,
       prisma.order.aggregate({
         where: {

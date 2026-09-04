@@ -2,6 +2,7 @@ import 'server-only'
 
 import { AppError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Per-location stock.
@@ -139,14 +140,14 @@ export async function getLocationBalance(params: {
     select: { available: true, reserved: true, inTransit: true },
   })
 
-  const available = round(rows.reduce((sum, r) => sum + r.available, 0))
-  const reserved = round(rows.reduce((sum, r) => sum + r.reserved, 0))
+  const available = roundQty(rows.reduce((sum, r) => sum + r.available, 0))
+  const reserved = roundQty(rows.reduce((sum, r) => sum + r.reserved, 0))
 
   return {
     available,
     reserved,
-    inTransit: round(rows.reduce((sum, r) => sum + r.inTransit, 0)),
-    free: round(available - reserved),
+    inTransit: roundQty(rows.reduce((sum, r) => sum + r.inTransit, 0)),
+    free: roundQty(available - reserved),
   }
 }
 
@@ -173,7 +174,7 @@ export async function getShelfBalances(params: {
     available: r.available,
     reserved: r.reserved,
     inTransit: r.inTransit,
-    free: round(r.available - r.reserved),
+    free: roundQty(r.available - r.reserved),
   }))
 }
 
@@ -211,7 +212,7 @@ export async function assertSufficient(
 
   // Summed across shelves when unscoped: a branch that holds 6 on one shelf and
   // 5 on another can cover 10, and refusing that would be wrong.
-  const free = round(rows.reduce((sum, r) => sum + r.available - r.reserved, 0))
+  const free = roundQty(rows.reduce((sum, r) => sum + r.available - r.reserved, 0))
 
   if (free + 1e-6 < params.quantity) {
     throw new AppError(
@@ -248,6 +249,3 @@ export async function getItemAcrossLocations(params: { restaurantId: string; ite
   })
 }
 
-function round(v: number): number {
-  return Math.round(v * 1e6) / 1e6
-}

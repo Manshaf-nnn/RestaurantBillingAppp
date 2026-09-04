@@ -7,6 +7,7 @@ import { canAccessBranch } from '@/lib/rbac'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { applyLocationDelta, assertSufficient } from '@/features/inventory/location-stock'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * Inter-location stock transfers.
@@ -431,7 +432,7 @@ export async function receiveTransfer(params: {
         )
       }
 
-      const variance = round(receivedQty - sentQty)
+      const variance = roundQty(receivedQty - sentQty)
       if (variance < 0 && !input.varianceReason) {
         throw new AppError(
           `${line.item.name}: ${Math.abs(variance)} short — give a reason`,
@@ -692,9 +693,6 @@ function assertTransition(from: TransferStatus, to: TransferStatus) {
   }
 }
 
-function round(v: number): number {
-  return Math.round(v * 1e6) / 1e6
-}
 
 /**
  * Which end of a transfer a person must be standing at to do something to it.

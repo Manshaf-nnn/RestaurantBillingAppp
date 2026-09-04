@@ -9,8 +9,14 @@
 #   DATABASE_URL          (your Neon PostgreSQL connection string)
 #   JWT_ACCESS_SECRET     (openssl rand -base64 48)
 #   JWT_REFRESH_SECRET    (a different one)
-#   SUPER_ADMIN_EMAIL     (your /admin login)
-#   SUPER_ADMIN_PASSWORD  (your /admin password)
+#   SUPER_ADMIN_EMAIL     (your /admin login — REQUIRED, the build refuses without it)
+#   SUPER_ADMIN_PASSWORD  (your /admin password — REQUIRED, see prisma/seed-production.ts)
+#   JOBS_SECRET           (openssl rand -base64 32 — the scheduled job runner's key)
+#
+# Optional, and the pages say plainly when they are absent:
+#   NEON_API_KEY          lets /admin/backups read the real PITR window
+#   NEON_PROJECT_ID       the project those backups belong to
+#   REDIS_URL             rate limits use Postgres counters without it
 # ============================================================================
 
 [build]
@@ -22,6 +28,27 @@
   NEXT_PUBLIC_REALTIME_DISABLED = "true"
   # Keep Prisma's engine download reliable on Netlify build images.
   PRISMA_CLIENT_ENGINE_TYPE = "library"
+
+# ── Staging (production.md §15: Development → Staging → Tests → Production) ──
+#
+# Pushes to the `staging` branch deploy here instead of to production. Point
+# DATABASE_URL for this context at a NEON DATABASE BRANCH, not at the production
+# database — Neon branches are copy-on-write, so a full-size staging database
+# costs almost nothing and a migration rehearsed against it is rehearsed against
+# real data shapes rather than an empty schema.
+#
+# Set the context's own DATABASE_URL in Netlify → Site settings → Environment
+# variables → scope "branch: staging". Everything else inherits.
+[context.staging]
+  command = "npm run netlify:build"
+
+[context.staging.environment]
+  NODE_ENV = "production"
+  NEXT_PUBLIC_REALTIME_DISABLED = "true"
+
+# Deploy previews get the same treatment: never the production database.
+[context.deploy-preview.environment]
+  NEXT_PUBLIC_REALTIME_DISABLED = "true"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

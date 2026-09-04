@@ -41,6 +41,14 @@ export async function runAction<TSchema extends z.ZodTypeAny, TOutput>(
   input: unknown,
   handler: (data: z.output<TSchema>) => Promise<TOutput> | TOutput,
   successMessage?: string,
+  /**
+   * What this action is called, for the error record.
+   *
+   * Optional so no existing call site has to change, and worth passing: a
+   * Server Action has no route to speak of, so without it an error in the
+   * error centre says only that "something in a POST failed".
+   */
+  operation?: string,
 ): Promise<ActionResult<TOutput>> {
   const parsed = schema.safeParse(input)
   if (!parsed.success) return fromZod(parsed.error)
@@ -49,7 +57,7 @@ export async function runAction<TSchema extends z.ZodTypeAny, TOutput>(
     const data = await handler(parsed.data)
     return actionOk(data, successMessage)
   } catch (error) {
-    return handleActionError(error)
+    return handleActionError(error, operation)
   }
 }
 
@@ -57,15 +65,16 @@ export async function runAction<TSchema extends z.ZodTypeAny, TOutput>(
 export async function runSafe<TOutput>(
   handler: () => Promise<TOutput> | TOutput,
   successMessage?: string,
+  operation?: string,
 ): Promise<ActionResult<TOutput>> {
   try {
     return actionOk(await handler(), successMessage)
   } catch (error) {
-    return handleActionError(error)
+    return handleActionError(error, operation)
   }
 }
 
-export function handleActionError(error: unknown): ActionResult<never> {
+export function handleActionError(error: unknown, operation?: string): ActionResult<never> {
   // `redirect()` and `notFound()` signal via a thrown control-flow error which
   // must be allowed to propagate to Next.js.
   if (
@@ -87,9 +96,66 @@ export function handleActionError(error: unknown): ActionResult<never> {
 
   if (error instanceof AppError) return actionFail(error.message, error.code)
 
+  /*
+   * ── Where the majority of this application's failures used to disappear ────
+   *
+   * This was `console.error` and nothing else. Every mutation in the product
+   * goes through a Server Action, every Server Action goes through here, and a
+   * genuine server-side failure — the settle that would not commit, the goods
+   * receipt that refused — was turned into a polite message for the user and
+   * then dropped. `ErrorLog` only ever received exceptions that escaped to
+   * Next's `onRequestError`, which Server Actions do not reach, so the error
+   * centre showed render failures and almost nothing else.
+   *
+   * Recorded, not awaited: an action must not get slower, or fail differently,
+   * because the error store is unavailable. `captureError` swallows its own
+   * failures for the same reason.
+   *
+   * Validation and permission refusals are NOT recorded — they are handled
+   * above and return before reaching here. Only genuine unhandled failures
+   * land in the log, which is what keeps it worth reading.
+   */
   console.error('[action] unhandled error:', error)
   const app = toAppError(error)
+
+  void recordActionFailure(error, app, operation)
+
   return actionFail(app.message, app.code)
+}
+
+/**
+ * Persist an action failure with whatever context can be recovered.
+ *
+ * Imported lazily and inside the try: `action.ts` is imported by client
+ * bundles for its types, and a top-level import of the server-only error store
+ * would pull Prisma across the RSC boundary. The dynamic import keeps the
+ * dependency where it belongs and means a failure to load it costs nothing.
+ */
+async function recordActionFailure(
+  error: unknown,
+  app: { message: string; code: string; status: number },
+  operation?: string,
+): Promise<void> {
+  try {
+    const [{ captureError }, { currentErrorContext }] = await Promise.all([
+      import('@/server/errors'),
+      import('@/server/request-context'),
+    ])
+    const context = await currentErrorContext()
+
+    await captureError({
+      message: `${app.code}: ${app.message}`,
+      kind: 'action',
+      // 5xx means the server broke; a 4xx that reached here is a refusal the
+      // user can act on and does not deserve the same weight.
+      severity: app.status >= 500 ? 'CRITICAL' : 'ERROR',
+      operation: operation ?? null,
+      stack: error instanceof Error ? error.stack : null,
+      ...context,
+    })
+  } catch {
+    // Never let the error store break the error path.
+  }
 }
 
 /** Converts a `FormData` payload into a plain object for schema parsing. */
