@@ -4,10 +4,7 @@ import {
   requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer,
   recallTransfer, canTransition,
 } from '../src/features/transfers/service'
-import {
-  createProductionOrder, setProductionStatus, completeProduction,
-} from '../src/features/production/service'
-import { saveRecipe } from '../src/features/recipes/service'
+import { produceItem } from '../src/features/production/service'
 import { getLocationBalance, getItemAcrossLocations } from '../src/features/inventory/location-stock'
 import { setOpeningBalance } from '../src/features/inventory/operations'
 import { recomputeBalance, directionOf } from '../src/features/inventory/ledger'
@@ -60,7 +57,9 @@ async function main() {
   const chicken = await mkItem('Chicken', 'KG', { branchId: ph.id })
   const spices = await mkItem('Spices', 'KG', { branchId: ph.id })
   const buns = await mkItem('Buns', 'PIECE', { branchId: colombo.id })
-  const patty = await mkItem('Chicken Patty', 'PIECE', { branchId: ph.id, trackBatches: true })
+  // Flagged prepared, as the migration flags every item a run has produced: a
+  // raw item's name can no longer be used for production output.
+  const patty = await mkItem('Chicken Patty', 'PIECE', { branchId: ph.id, trackBatches: true, isPrepared: true })
 
   await setOpeningBalance({ restaurantId: shop.id, itemId: chicken.id, quantity: 100, userId: user.id, branchId: ph.id })
   await setOpeningBalance({ restaurantId: shop.id, itemId: spices.id, quantity: 10, userId: user.id, branchId: ph.id })
@@ -73,70 +72,53 @@ async function main() {
   ok('buns are not at the production house', await avail(buns.id, ph.id) === 0)
 
   console.log('\n── 3. Production: 100 patties ───────────────────────────')
-  // One run of the recipe makes 100 patties from 20kg chicken and 2kg spices.
-  const spec = await saveRecipe({
-    restaurantId: shop.id, producesItemId: patty.id, name: 'Chicken Patty',
-    yieldQty: 100, yieldUnit: 'PIECE', shelfLifeDays: 3,
+  /*
+   * DELIBERATE behaviour change 2026-09-05 (redesignkitchenjob.md).
+   *
+   * The old pins: a recipe was required, production was refused anywhere but a
+   * PRODUCTION_HOUSE (NOT_PRODUCTION_HOUSE), a job was planned first and
+   * consumed nothing until completed, completing twice was refused
+   * (PRODUCTION_DONE), a shelf life set an expiry.
+   *
+   * Production is now one step — name, quantity, the stock used — at ANY
+   * branch, with no recipe and no planning stage; the same request key
+   * submitted twice is a replay of the first run rather than a refusal. The
+   * ledger effects below are the ones that never changed.
+   */
+  const make = (branchId: string, requestKey: string) => produceItem({
+    restaurantId: shop.id, branchId, userId: user.id, clientRequestId: requestKey,
+    output: { itemId: patty.id, name: patty.name, quantity: 100, unit: 'PIECE' },
     ingredients: [
-      { inventoryItemId: chicken.id, quantity: 20, unit: 'KG' },
-      { inventoryItemId: spices.id, quantity: 2, unit: 'KG' },
+      { itemId: chicken.id, quantity: 20, unit: 'KG' },
+      { itemId: spices.id, quantity: 2, unit: 'KG' },
     ],
   })
-  specs.push(spec.id)
 
-  await throws('production at a branch is refused',
-    () => createProductionOrder({ restaurantId: shop.id, branchId: colombo.id, recipeId: spec.id, plannedQty: 100, userId: user.id }),
-    'NOT_PRODUCTION_HOUSE')
+  // Colombo holds no chicken, so a run there is refused for stock, not for
+  // being a branch.
+  await throws('production at a branch with no stock is refused for stock', () => make(colombo.id, `p6-${S}-col`), 'INSUFFICIENT_STOCK')
+  ok('…and moved nothing', await avail(chicken.id, ph.id) === 100)
 
-  const run = await createProductionOrder({
-    restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 100, userId: user.id,
-  })
-  ok('run starts as DRAFT', run.status === 'DRAFT')
-  ok('planning consumes nothing', await avail(chicken.id, ph.id) === 100)
-
-  /*
-   * DELIBERATE behaviour change 2026-09-04 (kitchenjobs.md).
-   *
-   * The old pin: completing a run that had not been APPROVED was refused with
-   * PRODUCTION_NOT_APPROVED, so the flow was create → approve → complete.
-   *
-   * Approval has been removed. It was not the maker-checker mechanism —
-   * `ApprovalKind` has no production value, so there was no threshold and no
-   * self-approval refusal — it was a status field whose permission guarded the
-   * one step that moved NO stock, while completing, which moves all of it,
-   * needed only `production.manage`. The gate stood in front of the wrong door.
-   *
-   * A job is now completable from DRAFT. What is still refused is completing a
-   * job that is finished or cancelled, and those pins are below and unchanged.
-   */
-  const done = await completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id })
+  const done = await make(ph.id, `p6-${S}-run`)
 
   ok('chicken 100 → 80 kg', await avail(chicken.id, ph.id) === 80, `got ${await avail(chicken.id, ph.id)}`)
   ok('spices 10 → 8 kg', await avail(spices.id, ph.id) === 8, `got ${await avail(spices.id, ph.id)}`)
   ok('100 patties produced', await avail(patty.id, ph.id) === 100, `got ${await avail(patty.id, ph.id)}`)
-  ok('total cost = 20×100 + 2×100', done.totalCost === (20 + 2) * 100_00, `got ${done.totalCost}`)
-  ok('unit cost = cost / 100 patties', done.unitCost === Math.round(done.totalCost / 100), `got ${done.unitCost}`)
-  ok('a batch number was assigned', Boolean(done.batchNumber))
-  ok('shelf life set the expiry', done.order.expiryDate !== null)
+  ok('total cost = 20×100 + 2×100', done.totalValue === (20 + 2) * 100_00, `got ${done.totalValue}`)
+  ok('unit cost = cost / 100 patties', done.unitCost === Math.round(done.totalValue / 100), `got ${done.unitCost}`)
+  const record = await prisma.productionOrder.findUniqueOrThrow({ where: { id: done.orderId } })
+  ok('a batch number was assigned (the item tracks batches)', Boolean(record.batchNumber))
+  ok('the run is complete and names what it made', record.status === 'COMPLETED' && record.outputItemId === patty.id)
 
-  const consumption = await prisma.productionConsumption.count({ where: { orderId: run.id } })
+  const consumption = await prisma.productionConsumption.count({ where: { orderId: done.orderId } })
   ok('both raw materials were recorded', consumption === 2)
-  const outMv = await prisma.stockMovement.findFirst({ where: { referenceId: run.id, type: 'PRODUCTION_OUTPUT' } })
-  const inMv = await prisma.stockMovement.count({ where: { referenceId: run.id, type: 'PRODUCTION_CONSUMPTION' } })
+  const outMv = await prisma.stockMovement.findFirst({ where: { referenceId: done.orderId, type: 'PRODUCTION_OUTPUT' } })
+  const inMv = await prisma.stockMovement.count({ where: { referenceId: done.orderId, type: 'PRODUCTION_CONSUMPTION' } })
   ok('ledger has one PRODUCTION_OUTPUT', outMv !== null)
   ok('ledger has two PRODUCTION_CONSUMPTION rows', inMv === 2)
-  await throws('completing twice is refused',
-    () => completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id }), 'PRODUCTION_DONE')
-
-  // …and a cancelled job cannot be completed either — the refusal that replaces
-  // the approval gate as the thing standing between a job and the ledger.
-  const scrapped = await createProductionOrder({
-    restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 5, userId: user.id,
-  })
-  await setProductionStatus({ restaurantId: shop.id, orderId: scrapped.id, status: 'CANCELLED', userId: user.id })
-  await throws('completing a cancelled run is refused',
-    () => completeProduction({ restaurantId: shop.id, orderId: scrapped.id, userId: user.id }),
-    'PRODUCTION_CANCELLED')
+  const again = await make(ph.id, `p6-${S}-run`)
+  ok('the same request twice is one run', again.replayed && again.orderId === done.orderId)
+  ok('…and consumed nothing more', await avail(chicken.id, ph.id) === 80)
 
   console.log('\n── 4. Transfer: production house → Colombo, 40 ───────────')
   const t1 = await requestTransfer({
@@ -355,7 +337,11 @@ async function main() {
     () => requestTransfer({ restaurantId: shopB.id, fromBranchId: bBranch.id, toBranchId: bBranch.id,
       lines: [{ itemId: patty.id, quantity: 1 }], userId: user.id }))
   await throws('restaurant B cannot produce at restaurant A’s house',
-    () => createProductionOrder({ restaurantId: shopB.id, branchId: ph.id, recipeId: spec.id, plannedQty: 100, userId: user.id }))
+    () => produceItem({
+      restaurantId: shopB.id, branchId: ph.id, userId: user.id, clientRequestId: `p6-${S}-xt`,
+      output: { name: 'Their patty', quantity: 1, unit: 'PIECE' },
+      ingredients: [{ itemId: chicken.id, quantity: 1, unit: 'KG' }],
+    }))
   const leak = await prisma.inventoryStock.findFirst({ where: { itemId: patty.id, restaurantId: shopB.id } })
   ok('restaurant B sees none of restaurant A’s stock', leak === null)
   const leakT = await prisma.stockTransfer.findFirst({ where: { id: t1.id, restaurantId: shopB.id } })

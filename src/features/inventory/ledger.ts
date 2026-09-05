@@ -108,6 +108,17 @@ export interface PostMovementParams {
   enteredUnit?: StockUnit | null
   /** Cost per base unit in minor units — only meaningful on inbound receipts. */
   unitCost?: number
+  /**
+   * The EXACT value of this inbound movement, in minor units, unrounded.
+   *
+   * A per-unit cost cannot carry an exact total: 650.00 spread over 1,000 g is
+   * 65 minor units a gram, but 6.50 over 1,000 g is 0.65 — which `unitCost`,
+   * an integer, cannot say, and rounding it to 1 would book a run at 54% more
+   * than it consumed. Production passes what its ingredients were actually
+   * worth and this wins over `unitCost` when both are given. Ignored on
+   * outbound movements, which are always valued at the running average.
+   */
+  totalValue?: number
   reason?: string | null
   notes?: string | null
   referenceType?: string | null
@@ -141,6 +152,16 @@ export interface PostedMovement {
   balanceAfter: number
   /** True when this movement drove the balance below zero. */
   wentNegative: boolean
+  /**
+   * The exact value that moved, minor units, unrounded: what an inbound
+   * movement added to `stockValue`, or what an outbound one removed at the
+   * running average. `movement.unitCost` is the rounded per-unit snapshot; a
+   * caller that needs to hand value on exactly — production turning raw stock
+   * into a prepared item — reads this instead of multiplying that back out.
+   * On an outbound movement that drives stock negative it is capped at the
+   * value that was actually on hand.
+   */
+  valueMoved: number
 }
 
 /**
@@ -284,7 +305,7 @@ export async function postMovement(
    * makes the ledger the source of truth for cost as well as quantity, and it is
    * a snapshot: later price changes cannot rewrite what last month cost.
    */
-  const valuation = valueUpdate(item, signed, params.unitCost)
+  const valuation = valueUpdate(item, signed, params.unitCost, params.totalValue)
   const unitCost = valuation.movementUnitCost
 
   const movement = await tx.stockMovement.create({
@@ -395,6 +416,7 @@ export async function postMovement(
     balanceBefore,
     balanceAfter,
     wentNegative: balanceBefore >= 0 && balanceAfter < 0,
+    valueMoved: valuation.valueMoved,
   }
 }
 
@@ -422,19 +444,34 @@ function valueUpdate(
   item: InventoryItem,
   signedBase: number,
   explicitUnitCost?: number,
+  explicitTotalValue?: number,
 ): {
   item: { stockValue: number; costPerUnit?: number; lastPurchaseCost?: number }
   movementUnitCost: number
+  valueMoved: number
 } {
   const prevQty = Math.max(0, item.quantity)
   const prevValue = Math.max(0, Number(item.stockValue))
   const average = prevQty > 0 ? prevValue / prevQty : item.costPerUnit
 
   if (signedBase > 0) {
-    const priced = explicitUnitCost !== undefined && explicitUnitCost > 0
-    const unitCost = priced ? explicitUnitCost! : average
+    /*
+     * Three ways an inbound movement can be valued, in order of authority:
+     * an exact total (production handing on what its ingredients were worth),
+     * a per-unit price (a receipt), or — neither given — the running average
+     * (a reversal, a transfer in). A total is its own "priced" signal: a real
+     * cost below one minor unit per base unit rounds to a per-unit price of 0,
+     * and 0 used to read as "not priced" and fall back to the average — which
+     * for a brand-new item is 0. That is how a batch of sauce could be worth
+     * nothing on the books the moment it was made.
+     */
+    const totalled = explicitTotalValue !== undefined && explicitTotalValue >= 0
+    const priced = !totalled && explicitUnitCost !== undefined && explicitUnitCost > 0
+    const added = totalled
+      ? explicitTotalValue!
+      : signedBase * (priced ? explicitUnitCost! : average)
     const nextQty = prevQty + signedBase
-    const nextValue = prevValue + signedBase * unitCost
+    const nextValue = prevValue + added
     return {
       item: {
         // stockValue is value, not quantity, but it is carried at the same six
@@ -444,9 +481,14 @@ function valueUpdate(
         // ladder disagree with the balance ladder.
         stockValue: roundQty(nextValue),
         costPerUnit: nextQty > 0 ? Math.round(nextValue / nextQty) : item.costPerUnit,
+        // A production output is not a purchase; only a priced receipt sets this.
         ...(priced ? { lastPurchaseCost: explicitUnitCost } : {}),
       },
-      movementUnitCost: Math.round(unitCost),
+      // The per-unit snapshot on the movement row is rounded, so a report that
+      // multiplies it back out can differ from `stockValue` by under half a
+      // minor unit per unit moved. `valueMoved` is the exact figure.
+      movementUnitCost: Math.round(added / signedBase),
+      valueMoved: added,
     }
   }
 
@@ -458,6 +500,7 @@ function valueUpdate(
     // The average itself is deliberately not recomputed on the way out.
     item: { stockValue: roundQty(nextValue) },
     movementUnitCost: explicitUnitCost ?? Math.round(average),
+    valueMoved: outValue,
   }
 }
 

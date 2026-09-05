@@ -56,11 +56,11 @@ const SERVICE = [
   'stock-location-test',
   'branch-scope-test',
   'instructions-test',
-  'production-spec-test',
-  // kitchenjobs.md — the redesigned flow: no approval, the kitchen states what
-  // it actually used, and production stays a stock transformation rather than
-  // becoming a second COGS path.
-  'production-flow-test',
+  // redesignkitchenjob.md — prepared items: one-step Make Item, exact value
+  // carried from raw stock into the prepared item, waste expensed separately,
+  // idempotent completion, and production → recipe → sale → COGS exactly once.
+  // Replaces production-flow-test and production-spec-test (recipe-driven jobs).
+  'prepared-items-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',

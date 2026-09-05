@@ -17,7 +17,7 @@ import { prisma } from '../src/server/db/prisma'
 import { postMovement } from '../src/features/inventory/ledger'
 import { placeOrder, updateOrderStatus } from '../src/features/orders/service'
 import { saveRecipe } from '../src/features/recipes/service'
-import { completeProduction } from '../src/features/production/service'
+import { produceItem } from '../src/features/production/service'
 
 let passed = 0
 let failed = 0
@@ -189,7 +189,7 @@ async function main() {
     data: { restaurantId: restaurant.id, name: 'Flour', unit: 'KG', quantity: 0, costPerUnit: 100 },
   })
   const bread = await prisma.inventoryItem.create({
-    data: { restaurantId: restaurant.id, name: 'Bread', unit: 'PIECE', quantity: 0, costPerUnit: 0 },
+    data: { restaurantId: restaurant.id, name: 'Bread', unit: 'PIECE', quantity: 0, costPerUnit: 0, isPrepared: true },
   })
   await prisma.$transaction((tx) =>
     postMovement(tx, {
@@ -197,28 +197,18 @@ async function main() {
       quantity: 1000, unitCost: 100, branchId: house.id,
     }),
   )
-  // One run of the recipe makes 10 loaves from 10 kg of flour.
-  const spec = await prisma.recipe.create({
-    data: {
-      restaurantId: restaurant.id, name: 'Bread', producesItemId: bread.id,
-      yieldQty: 10, yieldUnit: 'PIECE',
-      ingredients: { create: [{ inventoryItemId: flour.id, quantity: 10, unit: 'KG' }] },
-    },
-  })
-  const run = await prisma.productionOrder.create({
-    data: {
-      restaurantId: restaurant.id, branchId: house.id, recipeId: spec.id,
-      number: `PR-${stamp}`, plannedQty: 100, status: 'APPROVED', unit: 'PIECE',
-    },
-  })
-
-  // Planned 100 loaves, which is 100 kg of flour. Only 80 came out.
-  const done = await completeProduction({
-    restaurantId: restaurant.id,
-    orderId: run.id,
-    actualQty: 80,
-    varianceReason: 'PRODUCTION_LOSS',
-    userId: user.id,
+  /*
+   * The cook used 100 kg of flour — enough for 100 loaves on a good day — and
+   * 80 came out. The whole 100 kg is what the bread cost; the ledger does not
+   * scale the inputs down to flatter the yield. (Under redesignkitchenjob.md
+   * the kitchen states what it used and what came out directly; the yield-loss
+   * rule is the same one the old planned/actual flow enforced.)
+   */
+  const done = await produceItem({
+    restaurantId: restaurant.id, branchId: house.id, userId: user.id,
+    clientRequestId: `ready-${stamp}`,
+    output: { itemId: bread.id, name: 'Bread', quantity: 80, unit: 'PIECE' },
+    ingredients: [{ itemId: flour.id, quantity: 100, unit: 'KG' }],
   })
 
   const perfect = 100 * 100 / 100 // 100 kg at 100 = 10,000 over 100 loaves = 100
@@ -228,7 +218,7 @@ async function main() {
     `unit cost ${done.unitCost}, a perfect run would be ${perfect}`,
   )
   check(
-    'planned inputs were consumed, not scaled down to the output',
+    'everything used was consumed, not scaled down to the output',
     done.consumed.reduce((sum, c) => sum + c.quantity, 0) === 100,
     `${done.consumed.reduce((sum, c) => sum + c.quantity, 0)} kg consumed, expected 100`,
   )

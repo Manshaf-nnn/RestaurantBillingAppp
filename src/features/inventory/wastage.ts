@@ -3,7 +3,7 @@ import 'server-only'
 import type { StockUnit, WastageReason, WastageRecord } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma } from '@/server/db/prisma'
+import { prisma, type TxClient } from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { toBaseUnits } from './units'
 import { allocateFefo, consumeBatches } from './batches'
@@ -38,7 +38,7 @@ export const WASTAGE_REASON_LABELS: Record<WastageReason, string> = {
   OTHER: 'Other',
 }
 
-export async function recordWastage(params: {
+export interface RecordWastageParams {
   restaurantId: string
   itemId: string
   quantity: number
@@ -52,7 +52,31 @@ export async function recordWastage(params: {
   locationId?: string | null
   batchId?: string | null
   userId?: string | null
-}): Promise<WastageRecord> {
+  /**
+   * The production run this waste belongs to, when it was thrown away while
+   * making something (redesignkitchenjob.md). Its value is expensed here and
+   * deliberately NOT carried into the prepared item.
+   */
+  productionOrderId?: string | null
+}
+
+/**
+ * Record wastage inside a transaction somebody else owns.
+ *
+ * Split out so production can throw trimmings away in the SAME transaction
+ * that consumes the rest of the ingredient and creates the prepared item — a
+ * waste row that committed while the run rolled back would be a deduction with
+ * nothing behind it. `recordWastage` below is the same thing with its own
+ * transaction, for the wastage board and everything else that stands alone.
+ *
+ * The movement keeps `referenceType: 'Wastage'` pointing back at this record
+ * even for production waste: the wastage board and the traceability panel
+ * resolve that link, and the run is reachable through `productionOrderId`.
+ */
+export async function recordWastageWithin(
+  tx: TxClient,
+  params: RecordWastageParams,
+): Promise<WastageRecord> {
   if (!(params.quantity > 0)) {
     throw new AppError('Quantity must be more than zero', 400, 'WASTAGE_BAD_QTY')
   }
@@ -61,7 +85,7 @@ export async function recordWastage(params: {
     throw new AppError('Say what happened when the reason is Other', 400, 'WASTAGE_NO_NOTE')
   }
 
-  const item = await prisma.inventoryItem.findFirst({
+  const item = await tx.inventoryItem.findFirst({
     where: { id: params.itemId, restaurantId: params.restaurantId },
   })
   if (!item) throw new NotFoundError('Inventory item')
@@ -69,54 +93,64 @@ export async function recordWastage(params: {
   const enteredUnit = params.unit ?? item.unit
   const base = toBaseUnits(params.quantity, enteredUnit, item)
 
-  return prisma.$transaction(async (tx) => {
-    const posted = await postMovement(tx, {
+  const posted = await postMovement(tx, {
+    restaurantId: params.restaurantId,
+    itemId: item.id,
+    type: 'WASTAGE',
+    quantity: params.quantity,
+    enteredUnit,
+    reason: WASTAGE_REASON_LABELS[params.reason],
+    notes: params.reasonNote?.trim() || params.notes?.trim() || null,
+    referenceType: 'Wastage',
+    branchId: params.branchId,
+    locationId: params.locationId,
+    batchId: params.batchId ?? null,
+    userId: params.userId,
+  })
+
+  // Batches are drawn down by postMovement above, for every outward movement
+  // rather than only this one. Repeating it here would consume each lot twice.
+
+  const record = await tx.wastageRecord.create({
+    data: {
       restaurantId: params.restaurantId,
       itemId: item.id,
-      type: 'WASTAGE',
-      quantity: params.quantity,
+      quantity: base,
+      quantityEntered: params.quantity,
       enteredUnit,
-      reason: WASTAGE_REASON_LABELS[params.reason],
-      notes: params.reasonNote?.trim() || params.notes?.trim() || null,
-      referenceType: 'Wastage',
+      /*
+       * Snapshotted: what was wasted cost that day's price, not today's. The
+       * exact value the ledger removed, when it had stock to remove it from;
+       * the rounded per-unit cache otherwise (waste recorded against an empty
+       * shelf, allowed under negative stock, still has to say what it cost).
+       */
+      costValue: posted.valueMoved > 0
+        ? Math.round(posted.valueMoved)
+        : Math.round(base * item.costPerUnit),
+      reason: params.reason,
+      reasonNote: params.reasonNote?.trim() || null,
+      notes: params.notes?.trim() || null,
+      photoUrl: params.photoUrl?.trim() || null,
       branchId: params.branchId,
-      locationId: params.locationId,
+      locationId: params.locationId ?? null,
       batchId: params.batchId ?? null,
-      userId: params.userId,
-    })
-
-    // Batches are drawn down by postMovement above, for every outward movement
-    // rather than only this one. Repeating it here would consume each lot twice.
-
-    const record = await tx.wastageRecord.create({
-      data: {
-        restaurantId: params.restaurantId,
-        itemId: item.id,
-        quantity: base,
-        quantityEntered: params.quantity,
-        enteredUnit,
-        // Snapshotted: what was wasted cost that day's price, not today's.
-        costValue: Math.round(base * item.costPerUnit),
-        reason: params.reason,
-        reasonNote: params.reasonNote?.trim() || null,
-        notes: params.notes?.trim() || null,
-        photoUrl: params.photoUrl?.trim() || null,
-        branchId: params.branchId,
-        locationId: params.locationId ?? null,
-        batchId: params.batchId ?? null,
-        createdById: params.userId ?? null,
-        movementId: posted.movement.id,
-        status: 'RECORDED',
-      },
-    })
-
-    await tx.stockMovement.update({
-      where: { id: posted.movement.id },
-      data: { referenceId: record.id },
-    })
-
-    return record
+      createdById: params.userId ?? null,
+      movementId: posted.movement.id,
+      productionOrderId: params.productionOrderId ?? null,
+      status: 'RECORDED',
+    },
   })
+
+  await tx.stockMovement.update({
+    where: { id: posted.movement.id },
+    data: { referenceId: record.id },
+  })
+
+  return record
+}
+
+export async function recordWastage(params: RecordWastageParams): Promise<WastageRecord> {
+  return prisma.$transaction((tx) => recordWastageWithin(tx, params))
 }
 
 /** A manager's review of wastage that has already happened. */

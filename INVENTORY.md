@@ -44,6 +44,35 @@ movement row is stamped with the unit cost in force when it happened, so the
 ledger answers in money as well as in quantity — the per-item history and
 the cross-item ledger screen (`/dashboard/inventory/ledger`) both show it.
 
+## Prepared items — kitchen production (redesignkitchenjob.md)
+
+A prepared item (mayonnaise, curry paste, dough, prepped chicken) is an
+ordinary `InventoryItem` with `isPrepared` set. It is made on
+`/dashboard/production` → **Make Item**: name what you made, how much, in what
+unit, and which stock items you used. One transaction (`produceItem`):
+
+1. every ingredient leaves through `postMovement` as `PRODUCTION_CONSUMPTION`,
+   refused if the branch does not hold enough — whatever `allowNegativeStock`
+   says, production never plans against stock that is not there;
+2. the **exact** value the ledger removed (`PostedMovement.valueMoved`, not
+   quantity × the rounded `costPerUnit` cache) is summed;
+3. the prepared item receives that value through a `PRODUCTION_OUTPUT`
+   movement carrying `totalValue`, so raw value out equals prepared value in to
+   the minor unit, and its average cost is value ÷ quantity;
+4. optional waste rows are posted as `WASTAGE` (reason *Preparation*) in the
+   same transaction, linked to the run by `WastageRecord.productionOrderId`, and
+   **expensed** — never carried into the item's cost;
+5. a `ProductionOrder` (status `COMPLETED`, `outputItemId`, `clientRequestId`)
+   with `ProductionConsumption`/`ProductionOutput` snapshots is the record.
+
+The form's request key makes the run idempotent: the same key twice is one run.
+Production is an inventory **transformation** — nothing is expensed until a dish
+that uses the prepared item is sold, when `reconcileOrderDepletion` consumes it
+like any other ingredient and its value reaches COGS exactly once. Prepared items
+appear in every ingredient picker automatically, and a prepared item can itself
+be an ingredient of another. Any branch may produce. Pinned by
+`scripts/prepared-items-test.ts`.
+
 ## COGS methodology
 
 COGS comes from the ledger, not from a typed-in field:

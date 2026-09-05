@@ -15,34 +15,15 @@ import { requireRestaurant } from '@/server/db/tenant'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Production run' }
 
-const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' | 'success' | 'destructive' }> = {
-  DRAFT: { label: 'Draft', variant: 'secondary' },
-  PLANNED: { label: 'Planned', variant: 'secondary' },
-  APPROVED: { label: 'Approved', variant: 'warning' },
-  IN_PROGRESS: { label: 'In progress', variant: 'warning' },
-  COMPLETED: { label: 'Completed', variant: 'success' },
-  PARTIALLY_COMPLETED: { label: 'Partly completed', variant: 'warning' },
-  CANCELLED: { label: 'Cancelled', variant: 'destructive' },
-}
-
-const VARIANCE_REASON: Record<string, string> = {
-  PRODUCTION_LOSS: 'Production loss',
-  DAMAGED: 'Damaged',
-  INGREDIENT_SHORTAGE: 'Ingredient shortage',
-  QUALITY_ISSUE: 'Quality issue',
-  OTHER: 'Other',
-}
-
 /**
  * One production run, in full.
  *
- * This route was linked to from the traceability panel and did not exist, so
- * every "where did this stock come from" trail that ended at a production run
- * ended at a 404 instead. The link was right all along.
+ * The traceability panel links here for every "where did this stock come
+ * from" trail that ends at a production run, so the route outlives the flow
+ * above it. It reads runs from the recipe era as well as Make Item runs.
  *
- * The page is arranged around the one thing a run has to explain: materials
- * were issued against the PLAN, output is what actually came off the line, and
- * the gap between them is what each finished unit really cost.
+ * Arranged around the one thing a run has to explain: what left stock, what
+ * was thrown away, and what arrived — carrying exactly the value that left.
  */
 export default async function ProductionRunPage({
   params,
@@ -58,22 +39,14 @@ export default async function ProductionRunPage({
   const run = await getProductionRun({ restaurantId: user.restaurantId, orderId })
   if (!run) notFound()
 
-  // A run at a production house this person has nothing to do with is not
-  // theirs to read, id in the address bar or not.
+  // A run at a branch this person has nothing to do with is not theirs to
+  // read, id in the address bar or not.
   if (!canAccessBranch(user, run.branchId)) notFound()
 
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
-  const status = STATUS[run.status] ?? { label: run.status, variant: 'secondary' as const }
-
-  const finished = run.status === 'COMPLETED' || run.status === 'PARTIALLY_COMPLETED'
-  /*
-   * Both are already in the finished item's own unit. They used to count
-   * batches, so every figure on this page had to be multiplied by the recipe's
-   * yield before it meant anything.
-   */
-  const plannedOutput = run.plannedQty
-  const actualOutput = run.actualQty
+  const unit = (run.unit ?? '').toLowerCase()
+  const cancelled = run.status === 'CANCELLED'
 
   return (
     <>
@@ -82,41 +55,40 @@ export default async function ProductionRunPage({
         className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" />
-        Production
+        Kitchen Production
       </Link>
 
       <PageHeader
-        title={run.number}
-        description={`${run.recipeName ?? 'No recipe'} · ${run.branchName}`}
-        actions={<Badge variant={status.variant}>{status.label}</Badge>}
+        title={run.itemName}
+        description={`${run.producedQty ?? run.plannedQty} ${unit} · ${run.branchName}${run.madeBy ? ` · ${run.madeBy}` : ''}`}
+        actions={
+          <span className="flex items-center gap-2">
+            {cancelled ? <Badge variant="destructive">Cancelled</Badge> : null}
+            <span className="font-mono text-xs text-muted-foreground">{run.number}</span>
+          </span>
+        }
       />
 
-      {finished ? (
+      {!cancelled ? (
         <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Produced" value={`${run.producedQty ?? 0} ${unit}`.trim()} />
+          <StatCard label="Ingredients" value={money(run.materialCost)} />
+          <StatCard label={`Cost per ${unit || 'unit'}`} value={money(run.unitCost)} tone="primary" />
           <StatCard
-            label="Produced"
-            value={
-              actualOutput !== null
-                ? `${actualOutput} ${run.outputUnit ?? ''}`.trim()
-                : `${run.actualQty ?? 0}`
-            }
+            label="Waste"
+            value={money(run.wasteCost)}
+            tone={run.wasteCost > 0 ? 'warning' : 'default'}
+            hint={run.wasteCost > 0 ? 'Expensed — not in the item’s cost' : 'None recorded'}
           />
-          <StatCard label="Materials" value={money(run.materialCost)} />
-          <StatCard label="Overheads" value={money(run.overheadCost)} />
-          <StatCard label="Cost each" value={money(run.unitCost)} tone="primary" />
         </div>
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-5">
-          <SectionCard
-            title="What went in"
-            description="Issued against the plan, not against what came out. That is deliberate — see below."
-          >
+        <div className="space-y-5 lg:col-span-2">
+          <SectionCard title="What went in" description="Left stock at its average cost at the time. The exact value moved into the prepared item.">
             {run.consumption.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Nothing has been consumed yet. Materials leave the shelves when the run is
-                completed, not when it is planned or approved.
+                {cancelled ? 'Nothing — this run was cancelled before anything moved.' : 'Nothing was consumed.'}
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -126,50 +98,31 @@ export default async function ProductionRunPage({
                       <th className="pb-2 font-medium">Item</th>
                       <th className="pb-2 text-right font-medium">Quantity</th>
                       <th className="pb-2 text-right font-medium">Unit cost</th>
-                      <th className="pb-2 text-right font-medium">Cost</th>
+                      <th className="pb-2 text-right font-medium">Value</th>
                     </tr>
                   </thead>
                   <tbody>
                     {run.consumption.map((line) => (
                       <tr key={line.id} className="border-b border-border/50 last:border-0">
                         <td className="py-2">
-                          <Link
-                            href={`/dashboard/inventory/${line.itemId}`}
-                            className="hover:underline"
-                          >
+                          <Link href={`/dashboard/inventory/${line.itemId}`} className="hover:underline">
                             {line.name}
                           </Link>
                         </td>
-                        <td className="py-2 text-right tabular-nums">
-                          {line.quantity} {line.unit}
-                        </td>
-                        <td className="py-2 text-right tabular-nums text-muted-foreground">
-                          {money(line.unitCost)}
-                        </td>
+                        <td className="py-2 text-right tabular-nums">{line.quantity} {line.unit.toLowerCase()}</td>
+                        <td className="py-2 text-right tabular-nums text-muted-foreground">{money(line.unitCost)}</td>
                         <td className="py-2 text-right tabular-nums">{money(line.lineCost)}</td>
                       </tr>
                     ))}
                     <tr className="font-medium">
-                      <td className="pt-2" colSpan={3}>
-                        Materials
-                      </td>
+                      <td className="pt-2" colSpan={3}>Moved into the prepared item</td>
                       <td className="pt-2 text-right tabular-nums">{money(run.materialCost)}</td>
                     </tr>
                     {run.overheadCost > 0 ? (
-                      <>
-                        <tr className="text-muted-foreground">
-                          <td colSpan={3}>Overheads — labour, power, anything not an ingredient</td>
-                          <td className="text-right tabular-nums">{money(run.overheadCost)}</td>
-                        </tr>
-                        <tr className="font-medium">
-                          <td className="pt-1" colSpan={3}>
-                            Run total
-                          </td>
-                          <td className="pt-1 text-right tabular-nums">
-                            {money(run.materialCost + run.overheadCost)}
-                          </td>
-                        </tr>
-                      </>
+                      <tr className="text-muted-foreground">
+                        <td colSpan={3}>Overheads (recorded under the previous flow)</td>
+                        <td className="text-right tabular-nums">{money(run.overheadCost)}</td>
+                      </tr>
                     ) : null}
                   </tbody>
                 </table>
@@ -177,42 +130,46 @@ export default async function ProductionRunPage({
             )}
           </SectionCard>
 
+          {run.wastage.length > 0 ? (
+            <SectionCard title="Thrown away" description="Recorded as waste in the same transaction. Expensed, and kept out of the item’s cost.">
+              <ul className="divide-y divide-border">
+                {run.wastage.map((record) => (
+                  <li key={record.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <span>
+                      <Link href={`/dashboard/inventory/${record.itemId}`} className="hover:underline">{record.name}</Link>
+                      {record.note ? <span className="text-muted-foreground"> — {record.note}</span> : null}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {record.quantity} {record.unit.toLowerCase()} · {money(record.costValue)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </SectionCard>
+          ) : null}
+
           <SectionCard title="What came out">
             {run.outputs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nothing yet. Finished goods appear when the run is completed.
-              </p>
+              <p className="text-sm text-muted-foreground">Nothing was produced.</p>
             ) : (
               <ul className="divide-y divide-border">
                 {run.outputs.map((out) => (
                   <li key={out.id} className="flex items-center justify-between py-2 text-sm">
-                    <Link href={`/dashboard/inventory/${out.itemId}`} className="hover:underline">
+                    <Link href={`/dashboard/inventory/${out.itemId}`} className="font-medium hover:underline">
                       {out.name}
                     </Link>
                     <span className="tabular-nums">
-                      {out.quantity} {out.unit}
+                      {out.quantity} {out.unit.toLowerCase()} · {money(out.unitCost)} each
                     </span>
                   </li>
                 ))}
               </ul>
             )}
-
-            {finished && run.variance !== null && run.variance < 0 ? (
-              <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-                <p className="font-medium">
-                  {Math.abs(run.variance)} {(run.outputUnit ?? '').toLowerCase()} short of plan
-                </p>
-                <p className="mt-1 text-muted-foreground">
-                  {run.varianceReason ? VARIANCE_REASON[run.varianceReason] ?? run.varianceReason : 'No reason given'}
-                  {run.varianceNote ? ` — ${run.varianceNote}` : ''}
-                </p>
-                <p className="mt-2 text-muted-foreground">
-                  The materials for all {run.plannedQty} were consumed, because they were — the
-                  cost is spread over the {run.actualQty ?? 0} that came out, so each one cost more
-                  than it would on a good day. A system that consumed only what it produced would
-                  report this run as perfectly efficient.
-                </p>
-              </div>
+            {run.variance !== null && run.variance < 0 ? (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Recorded under the previous flow: {Math.abs(run.variance)} {unit} short of the {run.plannedQty} planned
+                {run.varianceReason ? ` (${run.varianceReason.replace(/_/g, ' ').toLowerCase()})` : ''}.
+              </p>
             ) : null}
           </SectionCard>
         </div>
@@ -220,53 +177,14 @@ export default async function ProductionRunPage({
         <div className="space-y-5">
           <SectionCard title="The run">
             <dl className="space-y-2.5 text-sm">
-              <Row label="Plan">
-                {run.plannedQty} {(run.outputUnit ?? '').toLowerCase()}
-                {run.outputName ? (
-                  <span className="text-muted-foreground"> of {run.outputName}</span>
-                ) : null}
+              <Row label="Reference">{run.number}</Row>
+              <Row label="Where">{run.branchName}</Row>
+              <Row label="Made by">{run.madeBy ?? 'Someone'}</Row>
+              <Row label="When">
+                <LocalDateTime value={run.completedAt ?? run.createdAt} />
               </Row>
-              {run.actualQty !== null ? (
-                <Row label="Actual">
-                  {run.actualQty} {(run.outputUnit ?? '').toLowerCase()}
-                  {actualOutput !== null && actualOutput !== run.actualQty ? (
-                    <span className="text-muted-foreground">
-                      {' '}
-                      = {actualOutput} {run.outputUnit ?? ''}
-                    </span>
-                  ) : null}
-                </Row>
-              ) : null}
               {run.batchNumber ? <Row label="Batch">{run.batchNumber}</Row> : null}
-              {run.expiryDate ? (
-                <Row label="Expires">
-                  <LocalDateTime value={run.expiryDate} />
-                </Row>
-              ) : null}
               {run.notes ? <Row label="Notes">{run.notes}</Row> : null}
-            </dl>
-          </SectionCard>
-
-          <SectionCard title="Who and when">
-            <dl className="space-y-2.5 text-sm">
-              <Row label="Planned">
-                {run.requestedByName ?? 'Someone'} · <LocalDateTime value={run.createdAt} />
-              </Row>
-              {run.approvedAt ? (
-                <Row label="Approved">
-                  {run.approvedByName ?? 'Someone'} · <LocalDateTime value={run.approvedAt} />
-                </Row>
-              ) : null}
-              {run.startedAt ? (
-                <Row label="Started">
-                  <LocalDateTime value={run.startedAt} />
-                </Row>
-              ) : null}
-              {run.completedAt ? (
-                <Row label="Completed">
-                  <LocalDateTime value={run.completedAt} />
-                </Row>
-              ) : null}
             </dl>
           </SectionCard>
         </div>

@@ -215,7 +215,7 @@ export const FEATURES: Feature[] = [
     key: 'production',
     label: 'Production',
     group: 'Overview',
-    description: 'Making finished goods from raw materials.',
+    description: 'Making prepared items — sauces, pastes, dough — out of stock.',
     actions: [
       { key: 'view', permission: PERMISSIONS.PRODUCTION_VIEW },
       { key: 'create', label: 'Manage', permission: PERMISSIONS.PRODUCTION_MANAGE },
@@ -232,9 +232,9 @@ export const FEATURES: Feature[] = [
        */
       { key: 'approve', permission: PERMISSIONS.PRODUCTION_APPROVE },
     ],
-    // The run-detail and recipe screens are part of this feature, so a
+    // Prefix-matched, so the run-detail pages under it are covered too and a
     // restaurant that has not bought Production cannot reach them by URL.
-    routes: ['/dashboard/production', '/dashboard/production/recipes'],
+    routes: ['/dashboard/production'],
   },
   {
     key: 'handover',

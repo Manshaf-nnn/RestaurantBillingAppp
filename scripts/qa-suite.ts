@@ -13,10 +13,7 @@ import { ensureDefaultBranch } from '../src/features/branches/service'
 import {
   requestTransfer, approveTransfer, dispatchTransfer, receiveTransfer, closeTransfer,
 } from '../src/features/transfers/service'
-import {
-  createProductionOrder, setProductionStatus, completeProduction,
-} from '../src/features/production/service'
-import { saveRecipe } from '../src/features/recipes/service'
+import { produceItem } from '../src/features/production/service'
 
 let pass = 0, fail = 0
 const failures: Array<{ id: string; expected: string; actual: string; severity: string }> = []
@@ -143,36 +140,37 @@ async function main() {
   const season = await item('Seasoning', 'KG', ph.id, 800_00)
   const oil = await item('Oil', 'LITRE', ph.id, 600_00)
   const phPatty = await item('PH Patty', 'PIECE', ph.id, 0)
+  // A prepared item, as the migration flags anything production has made.
+  await prisma.inventoryItem.update({ where: { id: phPatty.id }, data: { isPrepared: true } })
   for (const [i, q] of [[meat, 20], [season, 2], [oil, 1]] as const) {
     await setOpeningBalance({ restaurantId: shop.id, itemId: i.id, quantity: q, userId: user.id, branchId: ph.id, unitCost: i.costPerUnit })
   }
   // One run makes 50 patties; the job below asks for 50 of them, not "1 batch".
-  const spec = await saveRecipe({
-    restaurantId: shop.id, producesItemId: phPatty.id, name: 'Chicken Patty',
-    yieldQty: 50, yieldUnit: 'PIECE',
+  /*
+   * DELIBERATE behaviour change 2026-09-05 (redesignkitchenjob.md): no recipe,
+   * no planning stage. The kitchen names what it made and what it used, in one
+   * step, and the ledger effects are the same as they always were.
+   */
+  const makePatties = (plannedQty: number, requestKey: string) => produceItem({
+    restaurantId: shop.id, branchId: ph.id, userId: user.id, clientRequestId: requestKey,
+    output: { itemId: phPatty.id, name: phPatty.name, quantity: plannedQty, unit: 'PIECE' },
     ingredients: [
-      { inventoryItemId: meat.id, quantity: 10, unit: 'KG' },
-      { inventoryItemId: season.id, quantity: 1, unit: 'KG' },
-      { inventoryItemId: oil.id, quantity: 0.5, unit: 'LITRE' },
+      { itemId: meat.id, quantity: 10 * (plannedQty / 50), unit: 'KG' },
+      { itemId: season.id, quantity: 1 * (plannedQty / 50), unit: 'KG' },
+      { itemId: oil.id, quantity: 0.5 * (plannedQty / 50), unit: 'LITRE' },
     ],
   })
-  /*
-   * No approve step: kitchenjobs.md removed it on 2026-09-04. A job is
-   * completed straight from DRAFT — see production/service.ts for why the gate
-   * was standing in front of the wrong door.
-   */
-  const run = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 50, userId: user.id })
-  ok('T5.1', 'planning consumes nothing', await avail(meat.id, ph.id) === 20, '20', String(await avail(meat.id, ph.id)), 'CRITICAL')
-  const done = await completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id })
+  ok('T5.1', 'the output is a prepared item', (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: phPatty.id } })).isPrepared, 'true', '', 'CRITICAL')
+  const done = await makePatties(50, `qa-${S}-patties`)
   ok('T5.2', 'meat 20 → 10 kg', await avail(meat.id, ph.id) === 10, '10', String(await avail(meat.id, ph.id)), 'CRITICAL')
   ok('T5.3', 'seasoning 2 → 1 kg', await avail(season.id, ph.id) === 1, '1', String(await avail(season.id, ph.id)))
   ok('T5.4', 'oil 1 → 0.5 L', await avail(oil.id, ph.id) === 0.5, '0.5', String(await avail(oil.id, ph.id)))
   ok('T5.5', '50 patties produced', await avail(phPatty.id, ph.id) === 50, '50', String(await avail(phPatty.id, ph.id)), 'CRITICAL')
   ok('T5.6', 'PRODUCTION_CONSUMPTION rows for each raw material',
-    (await prisma.stockMovement.count({ where: { referenceId: run.id, type: 'PRODUCTION_CONSUMPTION' } })) === 3)
+    (await prisma.stockMovement.count({ where: { referenceId: done.orderId, type: 'PRODUCTION_CONSUMPTION' } })) === 3)
   ok('T5.7', 'one PRODUCTION_OUTPUT row',
-    (await prisma.stockMovement.count({ where: { referenceId: run.id, type: 'PRODUCTION_OUTPUT' } })) === 1)
-  ok('T5.8', 'production cost computed', done.totalCost > 0 && done.unitCost > 0)
+    (await prisma.stockMovement.count({ where: { referenceId: done.orderId, type: 'PRODUCTION_OUTPUT' } })) === 1)
+  ok('T5.8', 'production cost computed', done.totalValue > 0 && done.unitCost > 0)
 
   console.log('\n══ TEST 6 — PRODUCTION → BRANCH ═══════════════════════')
   const t1 = await requestTransfer({ restaurantId: shop.id, fromBranchId: ph.id, toBranchId: colombo.id, lines: [{ itemId: phPatty.id, quantity: 20 }], userId: user.id })
@@ -225,7 +223,7 @@ async function main() {
   await throws('T10.1', 'transferring more than held is refused',
     async () => { const t = await requestTransfer({ restaurantId: shop.id, fromBranchId: kandy.id, toBranchId: colombo.id, lines: [{ itemId: patty.id, quantity: 9999 }], userId: user.id }); await approveTransfer({ restaurantId: shop.id, transferId: t.id, userId: user.id }) })
   await throws('T10.2', 'producing without raw materials is refused',
-    async () => { const r = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 4950, userId: user.id }); await completeProduction({ restaurantId: shop.id, orderId: r.id, userId: user.id }) })
+    () => makePatties(4950, `qa-${S}-toomany`))
 
   console.log('\n══ TEST 11 — ATOMICITY ════════════════════════════════')
   const atomicBefore = await avail(bun.id, colombo.id)
@@ -271,7 +269,11 @@ async function main() {
   await throws('T16.2', 'cross-tenant transfer refused',
     () => requestTransfer({ restaurantId: other.id, fromBranchId: colombo.id, toBranchId: kandy.id, lines: [{ itemId: patty.id, quantity: 1 }], userId: user.id }))
   await throws('T16.3', 'cross-tenant production refused',
-    () => createProductionOrder({ restaurantId: other.id, branchId: ph.id, recipeId: spec.id, plannedQty: 50, userId: user.id }))
+    () => produceItem({
+      restaurantId: other.id, branchId: ph.id, userId: user.id, clientRequestId: `qa-${S}-xt`,
+      output: { name: 'Their patty', quantity: 1, unit: 'PIECE' },
+      ingredients: [{ itemId: meat.id, quantity: 1, unit: 'KG' }],
+    }))
   await throws('T16.4', 'cross-tenant purchase refused',
     () => createPurchaseOrder({ restaurantId: other.id, branchId: otherBranch, lines: [{ itemId: patty.id, quantity: 1, unitCost: 1 }] }))
   ok('T16.5', 'other tenant sees no stock rows',

@@ -770,8 +770,9 @@ export default async function HelpPage() {
             under you.
           </Note>
           <Note>
-            Finished items sit at the production house. Send them out with a normal transfer.{' '}
-            <Guide href="/dashboard/production">Kitchen jobs</Guide>
+            Prepared items — sauces, pastes, dough — are made from stock at any branch and become stock
+            themselves, usable in any recipe. Send them elsewhere with a normal transfer.{' '}
+            <Guide href="/dashboard/production">Kitchen Production</Guide>
           </Note>
         </SectionCard>
 

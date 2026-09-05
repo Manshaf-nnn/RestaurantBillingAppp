@@ -5,7 +5,7 @@ import { getCustomerAnalytics } from '../src/features/customers/analytics'
 import { getInventorySummary, listStockAlerts } from '../src/features/inventory/alerts'
 import { getReorderSuggestions } from '../src/features/purchasing/suggestions'
 import { listPurchaseOrders } from '../src/features/purchasing/queries'
-import { getProductionDashboard } from '../src/features/production/queries'
+import { getProductionWorkspace } from '../src/features/production/queries'
 import { listApprovals } from '../src/features/approvals/service'
 import { getVarianceReport } from '../src/features/inventory/variance-report'
 import { getWastageReport } from '../src/features/inventory/wastage'
@@ -25,7 +25,7 @@ async function main() {
     ['stock alerts', () => listStockAlerts({ restaurantId: r.id })],
     ['reorder suggestions', () => getReorderSuggestions({ restaurantId: r.id })],
     ['purchase orders', () => listPurchaseOrders({ restaurantId: r.id })],
-    ['production dashboard', () => getProductionDashboard({ restaurantId: r.id })],
+    ['production workspace', () => getProductionWorkspace({ restaurantId: r.id, branchId: null })],
     ['approvals', () => listApprovals({ restaurantId: r.id })],
     ['variance report', () => getVarianceReport({ restaurantId: r.id, days: 30 })],
     ['wastage report', () => getWastageReport({ restaurantId: r.id, period: 'MONTH' })],

@@ -161,6 +161,8 @@ export const AUDIT_ACTIONS = {
   STOCK_COUNT_APPROVED: 'inventory.count_approved',
   STOCK_COUNT_CANCELLED: 'inventory.count_cancelled',
   STOCK_COST_EDITED: 'inventory.cost_edited',
+  /** A prepared item came into being because someone made it (redesignkitchenjob.md). */
+  INVENTORY_PREPARED_ITEM_CREATED: 'inventory.prepared_item_created',
 
   PO_CREATED: 'purchase.created',
   PO_APPROVED: 'purchase.approved',

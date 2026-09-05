@@ -115,7 +115,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         href: '/dashboard/production',
-        label: 'Kitchen jobs',
+        label: 'Kitchen Production',
         icon: Factory,
         permission: PERMISSIONS.PRODUCTION_VIEW,
       },

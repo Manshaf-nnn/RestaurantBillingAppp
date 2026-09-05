@@ -2314,6 +2314,12 @@ model InventoryItem {
   transferLines      StockTransferLine[]
   productionConsumed ProductionConsumption[]
   productionOutputs  ProductionOutput[]
+  /// Runs that produced this item (redesignkitchenjob.md).
+  producedRuns       ProductionOrder[]       @relation("ProducedItem")
+  /// Made here rather than bought. Set the first time a production run outputs
+  /// this item and never cleared; the Prepared Items tab is this flag. Backfilled
+  /// from production_outputs and prep recipes in 20260918090000_prepared_items.
+  isPrepared         Boolean                 @default(false)
   producedBySpec     ProductionSpec[]        @relation("ProductionSpecOutput")
   specIngredients    ProductionSpecItem[]
   purchaseItems      PurchaseItem[]
@@ -3743,6 +3749,12 @@ model WastageRecord {
 
   movementId String?
 
+  /// Set when the waste was thrown away while making something — the run's
+  /// page lists it, and its value is expensed rather than carried into the
+  /// prepared item.
+  productionOrderId String?
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3751,6 +3763,7 @@ model WastageRecord {
   @@index([restaurantId, status])
   @@index([restaurantId, branchId, createdAt])
   @@index([itemId, createdAt])
+  @@index([productionOrderId])
   @@map("wastage_records")
 }
 
@@ -3977,6 +3990,13 @@ model ProductionOrder {
   /// Deprecated: replaced by `recipeId`. Kept so the backfill stays repairable.
   specId       String?
   spec         ProductionSpec? @relation(fields: [specId], references: [id], onDelete: SetNull)
+  /// What this run produced (redesignkitchenjob.md). Written on every run since
+  /// the Make Item flow and backfilled from production_outputs; a legacy run
+  /// that never completed has none.
+  outputItemId String?
+  outputItem   InventoryItem?  @relation("ProducedItem", fields: [outputItemId], references: [id], onDelete: SetNull)
+  /// The form's request key: the same batch submitted twice is recorded once.
+  clientRequestId String?
 
   number      String
   batchNumber String?
@@ -4014,13 +4034,18 @@ model ProductionOrder {
 
   consumption ProductionConsumption[]
   outputs     ProductionOutput[]
+  /// Production waste recorded with this run — expensed, never part of the
+  /// prepared item's value.
+  wastage     WastageRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([restaurantId, number])
+  @@unique([restaurantId, clientRequestId])
   @@index([restaurantId, status])
   @@index([restaurantId, branchId, createdAt])
+  @@index([restaurantId, outputItemId, completedAt])
   @@index([recipeId])
   @@map("production_orders")
 }

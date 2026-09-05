@@ -21,18 +21,13 @@
  *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/recipe-costing-test.ts
  */
-import { PrismaClient } from '@prisma/client'
 
 import { prisma } from '../src/server/db/prisma'
 import { postMovement } from '../src/features/inventory/ledger'
 import { costDraftLines, resolveRecipe } from '../src/features/inventory/recipe-resolver'
 import { reconcileOrderDepletion } from '../src/features/inventory/depletion'
 import { saveRecipe } from '../src/features/recipes/service'
-import {
-  completeProduction,
-  createProductionOrder,
-  setProductionStatus,
-} from '../src/features/production/service'
+import { produceItem } from '../src/features/production/service'
 import { splitBill, mergeBills } from '../src/features/cashier/service'
 import { getProfitReport } from '../src/features/reports/profit'
 import { customRange } from '../src/features/reports/range'
@@ -159,7 +154,7 @@ async function main() {
     data: { restaurantId: restaurant.id, name: 'Tomato', unit: 'KG', quantity: 0, costPerUnit: 10_000 },
   })
   const sauce = await prisma.inventoryItem.create({
-    data: { restaurantId: restaurant.id, name: 'Sauce', unit: 'KG', quantity: 0, costPerUnit: 0 },
+    data: { restaurantId: restaurant.id, name: 'Sauce', unit: 'KG', quantity: 0, costPerUnit: 0, isPrepared: true },
   })
   await stock(tomato.id, 50, 10_000, house.id)
 
@@ -173,16 +168,12 @@ async function main() {
     ingredients: [{ inventoryItemId: tomato.id, quantity: 1, unit: 'KG' }],
   })
 
-  /*
-   * No approve step: kitchenjobs.md removed it on 2026-09-04. A job is
-   * completed straight from DRAFT — see production/service.ts for why the gate
-   * was standing in front of the wrong door.
-   */
-  const job = await createProductionOrder({
-    restaurantId: restaurant.id, branchId: house.id, recipeId: sauceRecipe.id,
-    plannedQty: 2, userId: user.id,
+  // Made in one step (redesignkitchenjob.md): what came out, what went in.
+  await produceItem({
+    restaurantId: restaurant.id, branchId: house.id, userId: user.id, clientRequestId: `rc-${stamp}-sauce`,
+    output: { itemId: sauce.id, name: 'Sauce', quantity: 2, unit: 'KG' },
+    ingredients: [{ itemId: tomato.id, quantity: 1, unit: 'KG' }],
   })
-  await completeProduction({ restaurantId: restaurant.id, orderId: job.id, userId: user.id })
 
   check('making 2 kg of sauce used 1 kg of tomatoes', await qty(tomato.id) === 49,
     `tomato at ${await qty(tomato.id)}, expected 49`)
@@ -310,63 +301,57 @@ async function main() {
     data: { restaurantId: restaurant.id, name: 'Flour', unit: 'KG', quantity: 0, costPerUnit: 20_000 },
   })
   const bread = await prisma.inventoryItem.create({
-    data: { restaurantId: restaurant.id, name: 'Bread', unit: 'PIECE', quantity: 0, costPerUnit: 0 },
+    data: { restaurantId: restaurant.id, name: 'Bread', unit: 'PIECE', quantity: 0, costPerUnit: 0, isPrepared: true },
   })
   await stock(flour.id, 1_000, 20_000, house.id)
 
-  const breadRecipe = await saveRecipe({
+  // A prep recipe for bread still exists for the recipe editor; production no
+  // longer needs it.
+  await saveRecipe({
     restaurantId: restaurant.id, producesItemId: bread.id, name: 'Bread',
     yieldQty: 10, yieldUnit: 'PIECE',
     ingredients: [{ inventoryItemId: flour.id, quantity: 10, unit: 'KG' }],
   })
 
-  const breadJob = await createProductionOrder({
-    restaurantId: restaurant.id, branchId: house.id, recipeId: breadRecipe.id,
-    plannedQty: 100, userId: user.id,
-  })
-
   const flourBefore = await qty(flour.id)
 
   /*
-   * Two separate clients, because a single connection may serialise the two
-   * calls and let the test pass for a reason that has nothing to do with the
-   * lock. Same harness reconciliation-test uses.
+   * DELIBERATE behaviour change 2026-09-05 (redesignkitchenjob.md). There is no
+   * job to finish twice any more; what can be sent twice is the same request,
+   * and the request key makes the second a replay of the first rather than a
+   * refusal. The ledger pin — 100 kg once, not 200 — is unchanged.
    */
-  const clientA = new PrismaClient()
-  const clientB = new PrismaClient()
-  const settled = await Promise.allSettled([
-    completeProduction({ restaurantId: restaurant.id, orderId: breadJob.id, userId: user.id }),
-    completeProduction({ restaurantId: restaurant.id, orderId: breadJob.id, userId: user.id }),
-  ])
-  await clientA.$disconnect()
-  await clientB.$disconnect()
-
-  const won = settled.filter((s) => s.status === 'fulfilled').length
-  check('exactly one of two simultaneous finishes wins', won === 1, `${won} succeeded`)
+  const bake = () => produceItem({
+    restaurantId: restaurant.id, branchId: house.id, userId: user.id, clientRequestId: `rc-${stamp}-bread`,
+    output: { itemId: bread.id, name: 'Bread', quantity: 100, unit: 'PIECE' },
+    ingredients: [{ itemId: flour.id, quantity: 100, unit: 'KG' }],
+  })
+  const settled = await Promise.allSettled([bake(), bake()])
+  const won = settled.filter((s): s is PromiseFulfilledResult<Awaited<ReturnType<typeof produceItem>>> => s.status === 'fulfilled')
+  check('both simultaneous submissions are answered', won.length === 2, `${won.length} succeeded`)
+  check('…with the same run', won.length === 2 && won[0].value.orderId === won[1].value.orderId)
+  const breadRunId = won[0]?.value.orderId ?? ''
   check('100 kg of flour was consumed, not 200',
     flourBefore - (await qty(flour.id)) === 100,
     `${flourBefore - (await qty(flour.id))} kg went`)
   check('one consumption row, not two',
-    (await prisma.productionConsumption.count({ where: { orderId: breadJob.id } })) === 1)
+    (await prisma.productionConsumption.count({ where: { orderId: breadRunId } })) === 1)
   check('and one output row, not two',
-    (await prisma.productionOutput.count({ where: { orderId: breadJob.id } })) === 1)
+    (await prisma.productionOutput.count({ where: { orderId: breadRunId } })) === 1)
 
   // ── 5 · zero is a cancellation, not "all of it" ─────────────────────────
 
   console.log('\n5. "None came out" is refused rather than silently costing nothing')
 
-  const zeroJob = await createProductionOrder({
-    restaurantId: restaurant.id, branchId: house.id, recipeId: breadRecipe.id,
-    plannedQty: 10, userId: user.id,
-  })
-
   const flourBeforeZero = await qty(flour.id)
   await refuses(
-    'a blank "how many came out" is refused',
-    () => completeProduction({
-      restaurantId: restaurant.id, orderId: zeroJob.id, actualQty: 0, userId: user.id,
+    'a blank "how much came out" is refused',
+    () => produceItem({
+      restaurantId: restaurant.id, branchId: house.id, userId: user.id, clientRequestId: `rc-${stamp}-zero`,
+      output: { itemId: bread.id, name: 'Bread', quantity: 0, unit: 'PIECE' },
+      ingredients: [{ itemId: flour.id, quantity: 10, unit: 'KG' }],
     }),
-    /how many came out|cancel the job/i,
+    /how much came out/i,
   )
   check('and nothing was consumed by the attempt', await qty(flour.id) === flourBeforeZero,
     `flour moved from ${flourBeforeZero} to ${await qty(flour.id)}`)

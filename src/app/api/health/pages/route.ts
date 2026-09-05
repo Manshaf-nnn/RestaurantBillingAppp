@@ -140,10 +140,8 @@ export async function GET() {
         (await import('@/features/transfers/queries')).listTransfers({ restaurantId: rid })],
       ['transfers: builder', async () =>
         (await import('@/features/transfers/queries')).getTransferBuilderData(rid)],
-      ['production: dashboard', async () =>
-        (await import('@/features/production/queries')).getProductionDashboard({ restaurantId: rid })],
-      ['production: console', async () =>
-        (await import('@/features/production/queries')).getProductionConsoleData({ restaurantId: rid, currency })],
+      ['production: workspace', async () =>
+        (await import('@/features/production/queries')).getProductionWorkspace({ restaurantId: rid, branchId: null })],
       ['recipes: list', async () =>
         (await import('@/features/recipes/queries')).listRecipeRows(rid)],
       ['approvals: list', async () =>
