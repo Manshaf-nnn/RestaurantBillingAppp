@@ -169,6 +169,38 @@ export async function costDraftLines(
 }
 
 /**
+ * What one portion of each of these recipes costs, in minor units — and, when
+ * a recipe could not be costed, why.
+ *
+ * `costRecipes` below answers 0 for a recipe that failed to resolve, so one
+ * broken dish never fails a whole report. Right for a total, wrong for a
+ * per-dish screen, where a zero reads as "free" and a 100% margin. This
+ * variant keeps the problem beside the zero so the screen can say "cost
+ * unknown" instead (smart.md — Profit Intelligence).
+ */
+export async function costRecipesDetailed(
+  db: Client,
+  restaurantId: string,
+  recipeIds: string[],
+): Promise<Map<string, { cost: number; problems: string[] }>> {
+  const out = new Map<string, { cost: number; problems: string[] }>()
+  for (const recipeId of [...new Set(recipeIds)]) {
+    try {
+      const resolved = await resolveRecipe(db, { restaurantId, recipeId, portions: 1 })
+      out.set(recipeId, { cost: resolved.totalCost, problems: resolved.problems })
+    } catch (error) {
+      // A cycle, a missing recipe or a bad nesting depth costs nothing rather
+      // than failing a whole report over one dish — but the reason is kept.
+      out.set(recipeId, {
+        cost: 0,
+        problems: [error instanceof Error ? error.message : 'This recipe could not be costed.'],
+      })
+    }
+  }
+  return out
+}
+
+/**
  * What one portion of each of these recipes costs, in minor units.
  *
  * For reports that price thousands of sold lines across a few dozen recipes:
@@ -179,18 +211,8 @@ export async function costRecipes(
   restaurantId: string,
   recipeIds: string[],
 ): Promise<Map<string, number>> {
-  const out = new Map<string, number>()
-  for (const recipeId of [...new Set(recipeIds)]) {
-    try {
-      const resolved = await resolveRecipe(db, { restaurantId, recipeId, portions: 1 })
-      out.set(recipeId, resolved.totalCost)
-    } catch {
-      // A cycle, a missing recipe or a bad nesting depth costs nothing rather
-      // than failing a whole report over one dish.
-      out.set(recipeId, 0)
-    }
-  }
-  return out
+  const detailed = await costRecipesDetailed(db, restaurantId, recipeIds)
+  return new Map([...detailed].map(([recipeId, row]) => [recipeId, row.cost]))
 }
 
 /** Turn accumulated base-unit totals into priced ingredient rows. */

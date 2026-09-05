@@ -630,9 +630,11 @@ export const FEATURES: Feature[] = [
     key: 'accounting',
     label: 'Accounting dashboard',
     group: 'Accounting',
-    description: 'The financial summary: sales, collections, payables, expenses, profit — every card drillable.',
+    description:
+      'The financial summary: sales, collections, payables, expenses, profit — every card drillable. ' +
+      'Also the owner’s Command Center: health score, alerts, menu, stock outlook and waste.',
     actions: [{ key: 'view', permission: PERMISSIONS.ACCOUNTING_VIEW }],
-    routes: ['/dashboard/accounting'],
+    routes: ['/dashboard/accounting', '/dashboard/insights'],
   },
   {
     key: 'accountingPayments',

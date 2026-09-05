@@ -115,6 +115,9 @@ const SERVICE = [
   'month-close-test',
   // acCal.md §12 — the price simulator's maths, and that it writes nothing.
   'what-if-test',
+  // smart.md — usage/days-remaining/reorder maths, menu matrix, health score,
+  // per-dish profit rows, waste by category, the anomaly checks; writes nothing.
+  'insights-test',
   // AUDIT.md Slice 7 — the §101 worked example, end to end, and the billing
   // engine's own matrix.
   'e2e-reconciliation-test',

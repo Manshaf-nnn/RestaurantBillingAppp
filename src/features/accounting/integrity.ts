@@ -1,5 +1,9 @@
 import 'server-only'
 
+import { Prisma } from '@prisma/client'
+
+import { getApprovalPolicy } from '@/features/approvals/service'
+import { DAY_KEYS, parseOpeningHours } from '@/lib/opening-hours'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -39,6 +43,14 @@ const EXAMPLE_LIMIT = 5
 
 export async function runIntegrityChecks(restaurantId: string): Promise<IntegrityReport> {
   const checks: IntegrityCheck[] = []
+
+  // The tenant's own thresholds for what counts as "big" — the same numbers
+  // that decide when an adjustment or a drawer difference needs a signature.
+  // A threshold of zero means "not configured", never "flag everything".
+  const policy = await getApprovalPolicy(restaurantId)
+  const NEVER = 2 ** 53
+  const adjustmentFloor = policy.adjustmentValueAbove > 0 ? policy.adjustmentValueAbove : NEVER
+  const cashFloor = policy.cashVarianceAbove > 0 ? policy.cashVarianceAbove : NEVER
 
   const add = (
     key: string,
@@ -427,6 +439,222 @@ export async function runIntegrityChecks(restaurantId: string): Promise<Integrit
         AND op."createdAt" > COALESCE(ap."closedAt", op."createdAt" - INTERVAL '1 second')
       LIMIT 200
     `,
+  )
+
+  // ── Anomaly alerts (smart.md §7) ───────────────────────────────────────────
+  //
+  // Still WARNINGS, still "a human looks": cancellations, voids, hand
+  // adjustments, waste, drawer differences and after-hours trade are all
+  // legitimate on their own. Each check names the rows so a reviewer can start
+  // somewhere; nothing here changes a financial record.
+
+  add(
+    'unusual-cancellations',
+    'No cancellations outside the house pattern',
+    'WARNING',
+    'Last 30 days: a bill cancelled with money still on it (paid, never refunded), or three or more ' +
+      'cancellations this week when that is more than double the weekly run-rate of the three weeks before.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      WITH weekly AS (
+        SELECT COUNT(*) FILTER (WHERE "cancelledAt" >= NOW() - INTERVAL '7 days') AS c7,
+               COUNT(*) FILTER (WHERE "cancelledAt" <  NOW() - INTERVAL '7 days'
+                                  AND "cancelledAt" >= NOW() - INTERVAL '28 days') / 3.0 AS weekly_avg
+        FROM orders
+        WHERE "restaurantId" = ${restaurantId} AND status = 'CANCELLED'
+      )
+      SELECT o.id FROM orders o, weekly w
+      WHERE o."restaurantId" = ${restaurantId}
+        AND o.status = 'CANCELLED'
+        AND o."cancelledAt" >= NOW() - INTERVAL '30 days'
+        AND ( o."paidTotal" > 0
+           OR (o."cancelledAt" >= NOW() - INTERVAL '7 days' AND w.c7 >= 3 AND w.c7 > 2 * w.weekly_avg) )
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'void-concentration',
+    'No one person voids far more than everyone else',
+    'WARNING',
+    'Last 7 days: one person with ten or more voids or cancellations, and more than three times the ' +
+      'average of everyone else who did any. Examples are audit-log entries.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      WITH per_actor AS (
+        SELECT "userId", COUNT(*) AS n FROM audit_logs
+        WHERE "restaurantId" = ${restaurantId}
+          AND action IN ('order.cancelled', 'order.item_voided')
+          AND "createdAt" >= NOW() - INTERVAL '7 days'
+          AND "userId" IS NOT NULL
+        GROUP BY "userId"
+      ),
+      everyone AS (SELECT SUM(n) AS total, COUNT(*) AS actors FROM per_actor)
+      SELECT al.id FROM audit_logs al
+      JOIN per_actor pa ON pa."userId" = al."userId"
+      CROSS JOIN everyone e
+      WHERE al."restaurantId" = ${restaurantId}
+        AND al.action IN ('order.cancelled', 'order.item_voided')
+        AND al."createdAt" >= NOW() - INTERVAL '7 days'
+        AND pa.n >= 10
+        AND (e.actors = 1 OR pa.n > 3.0 * (e.total - pa.n) / (e.actors - 1))
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'unusual-stock-adjustments',
+    'No hand adjustment moved an unusual amount of stock',
+    'WARNING',
+    'Last 30 days: a manual adjustment worth at least the approval threshold, or one that moved a quarter ' +
+      'or more of what was on the shelf. Examples are items.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT DISTINCT sm."itemId" AS id FROM stock_movements sm
+      WHERE sm."restaurantId" = ${restaurantId}
+        AND sm.type IN ('ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'ADJUSTMENT')
+        AND sm."createdAt" >= NOW() - INTERVAL '30 days'
+        AND ( ABS(sm.quantity) * sm."unitCost" >= ${adjustmentFloor}
+           OR ( sm."balanceAfter" IS NOT NULL
+                AND (sm."balanceAfter" - sm.quantity) > 0
+                AND ABS(sm.quantity) >= 0.25 * (sm."balanceAfter" - sm.quantity) ) )
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'unusual-wastage',
+    'No item is being wasted far outside its pattern',
+    'WARNING',
+    'Items wasted three or more times in 30 days where a fifth or more of everything that left stock went ' +
+      'in the bin, or where this week’s waste value is more than double the weekly average of the three weeks before.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      WITH w AS (
+        SELECT "itemId",
+               SUM(quantity) AS waste30,
+               COUNT(*) AS n30,
+               COALESCE(SUM("costValue") FILTER (WHERE "createdAt" >= NOW() - INTERVAL '7 days'), 0) AS v7,
+               COALESCE(SUM("costValue") FILTER (WHERE "createdAt" <  NOW() - INTERVAL '7 days'
+                                                   AND "createdAt" >= NOW() - INTERVAL '28 days'), 0) / 3.0 AS v_weekly
+        FROM wastage_records
+        WHERE "restaurantId" = ${restaurantId}
+          AND status <> 'REJECTED'
+          AND "createdAt" >= NOW() - INTERVAL '30 days'
+        GROUP BY "itemId"
+      ),
+      u AS (
+        SELECT "itemId", -SUM(quantity) AS used30 FROM stock_movements
+        WHERE "restaurantId" = ${restaurantId}
+          AND type IN ('SALE', 'CONSUMPTION', 'PRODUCTION_CONSUMPTION', 'SALE_REVERSAL')
+          AND "createdAt" >= NOW() - INTERVAL '30 days'
+        GROUP BY "itemId"
+      )
+      SELECT w."itemId" AS id FROM w LEFT JOIN u ON u."itemId" = w."itemId"
+      WHERE w.n30 >= 3
+        AND ( w.waste30 >= 0.2 * (GREATEST(COALESCE(u.used30, 0), 0) + w.waste30)
+           OR (w.v7 > 0 AND w.v_weekly > 0 AND w.v7 > 2 * w.v_weekly) )
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'unusual-cash-variance',
+    'No drawer closed with an unusual difference',
+    'WARNING',
+    'Last 30 days: a counted difference at or above the review threshold, or the same cashier short ' +
+      'three or more times. Examples are drawer sessions.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      WITH short_runs AS (
+        SELECT "closedById", COUNT(*) AS shorts FROM cash_drawer_sessions
+        WHERE "restaurantId" = ${restaurantId}
+          AND status IN ('CLOSED', 'PENDING_REVIEW')
+          AND variance < 0
+          AND "closedAt" >= NOW() - INTERVAL '30 days'
+          AND "closedById" IS NOT NULL
+        GROUP BY "closedById"
+      )
+      SELECT s.id FROM cash_drawer_sessions s
+      LEFT JOIN short_runs r ON r."closedById" = s."closedById"
+      WHERE s."restaurantId" = ${restaurantId}
+        AND s.status IN ('CLOSED', 'PENDING_REVIEW')
+        AND s."closedAt" >= NOW() - INTERVAL '30 days'
+        AND s.variance IS NOT NULL AND s.variance <> 0
+        AND ( ABS(s.variance) >= ${cashFloor}
+           OR (s.variance < 0 AND COALESCE(r.shorts, 0) >= 3) )
+      LIMIT 200
+    `,
+  )
+
+  /*
+   * After-hours trade needs opening hours to compare against, and only hours
+   * somebody actually entered count: `parseOpeningHours` substitutes a default
+   * week for an empty column, and judging a restaurant against hours it never
+   * set would flag every late-night place on earth. No hours → the check runs,
+   * finds nothing, and says why.
+   */
+  const hoursOwner = await prisma.restaurant.findUnique({
+    where: { id: restaurantId },
+    select: { timezone: true, openingHours: true, branches: { select: { id: true, openingHours: true } } },
+  })
+  const windows: Array<{ branchId: string; dow: number; open: number; close: number }> = []
+  for (const branch of hoursOwner?.branches ?? []) {
+    const raw = branch.openingHours ?? hoursOwner?.openingHours ?? null
+    if (!raw) continue
+    const hours = parseOpeningHours(raw)
+    DAY_KEYS.forEach((day, dow) => {
+      const entry = hours[day]
+      if (!entry || entry.closed) return
+      const [oh, om] = entry.open.split(':').map(Number)
+      const [ch, cm] = entry.close.split(':').map(Number)
+      windows.push({ branchId: branch.id, dow, open: (oh || 0) * 60 + (om || 0), close: (ch || 0) * 60 + (cm || 0) })
+    })
+  }
+  let zone = hoursOwner?.timezone || 'UTC'
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone })
+  } catch {
+    zone = 'UTC'
+  }
+
+  add(
+    'after-hours-activity',
+    'No payments taken outside opening hours',
+    'WARNING',
+    windows.length === 0
+      ? 'Opening hours are not set for any location, so there is nothing to compare against. Set them under Locations to enable this check.'
+      : 'Last 30 days: a payment taken more than an hour outside the location’s opening hours, in the restaurant’s own time. Examples are payments.',
+    windows.length === 0
+      ? []
+      : await prisma.$queryRaw<Array<{ id: string }>>`
+          WITH w(branch_id, dow, open_min, close_min) AS (
+            VALUES ${Prisma.join(
+              windows.map(
+                (w) => Prisma.sql`(${w.branchId}::text, ${w.dow}::int, ${w.open}::int, ${w.close}::int)`,
+              ),
+            )}
+          ),
+          p AS (
+            SELECT p.id, o."branchId" AS branch_id,
+                   EXTRACT(DOW FROM ((p."paidAt" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}))::int AS dow,
+                   (EXTRACT(HOUR FROM ((p."paidAt" AT TIME ZONE 'UTC') AT TIME ZONE ${zone})) * 60
+                    + EXTRACT(MINUTE FROM ((p."paidAt" AT TIME ZONE 'UTC') AT TIME ZONE ${zone})))::int AS m
+            FROM payments p
+            JOIN orders o ON o.id = p."orderId"
+            WHERE p."restaurantId" = ${restaurantId}
+              AND p.status IN ('PAID', 'REFUNDED')
+              AND p."paidAt" IS NOT NULL
+              AND p."paidAt" >= NOW() - INTERVAL '30 days'
+              AND o."branchId" IN (${Prisma.join([...new Set(windows.map((w) => w.branchId))])})
+          )
+          SELECT p.id FROM p
+          WHERE NOT EXISTS (
+                  SELECT 1 FROM w
+                  WHERE w.branch_id = p.branch_id AND w.dow = p.dow
+                    AND ( (w.open_min <= w.close_min AND p.m >= w.open_min - 60 AND p.m < w.close_min + 60)
+                       OR (w.open_min >  w.close_min AND p.m >= w.open_min - 60) ) )
+            AND NOT EXISTS (
+                  SELECT 1 FROM w
+                  WHERE w.branch_id = p.branch_id AND w.dow = (p.dow + 6) % 7
+                    AND w.open_min > w.close_min AND p.m < w.close_min + 60 )
+          LIMIT 200
+        `,
   )
 
   // ── COGS (production.md §1) ────────────────────────────────────────────────

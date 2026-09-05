@@ -2,6 +2,7 @@ import 'server-only'
 
 import type { StockUnit, WastageReason, WastageRecord } from '@prisma/client'
 
+import type { DateRange } from '@/features/reports/range'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { postMovement } from './ledger'
@@ -193,6 +194,8 @@ export interface WastageReport {
   totalValue: number
   totalRecords: number
   byReason: Array<{ reason: WastageReason; label: string; count: number; value: number; share: number }>
+  /** The item's managed category, falling back to the legacy free-text one. */
+  byCategory: Array<{ key: string; name: string; count: number; value: number; share: number }>
   topItems: Array<{ itemId: string; name: string; unit: string; quantity: number; value: number }>
   byBranch: Array<{ branchId: string | null; name: string; value: number; count: number }>
   byEmployee: Array<{ userId: string | null; name: string; value: number; count: number }>
@@ -204,30 +207,61 @@ export interface WastageReport {
  * Value is the sum of the snapshotted cost on each record, not a recomputation
  * at today's prices — otherwise last month's waste would silently change every
  * time a supplier put their prices up.
+ *
+ * Two ways to say which period: the original rolling `period` (day / week /
+ * month back from `now`, in the server's clock), or a `DateRange` resolved in
+ * the restaurant's own timezone — the same object every other report takes,
+ * so the Waste figure on the Command Center and this breakdown are provably
+ * one number. `range` wins when both are given.
  */
 export async function getWastageReport(params: {
   restaurantId: string
-  period: WastagePeriod
+  /** Rolling window ending at `now`. Defaults to MONTH; ignored when `range` is given. */
+  period?: WastagePeriod
+  /** An exact window in the restaurant's own time. Wins over `period`. */
+  range?: DateRange
   /** Defaults to now; passed in so the report is testable. */
   now?: Date
   branchId?: string | null
+  /** `null` is unrestricted, `[]` sees nothing (fail-closed). Wins over `branchId`. */
+  branchIds?: string[] | null
   /** Employee attribution is sensitive; the caller decides whether to include it. */
   includeEmployees?: boolean
 }): Promise<WastageReport> {
   const now = params.now ?? new Date()
-  const from = new Date(now)
-  if (params.period === 'DAY') from.setHours(0, 0, 0, 0)
-  else if (params.period === 'WEEK') from.setDate(from.getDate() - 7)
-  else from.setMonth(from.getMonth() - 1)
+  let from: Date
+  let to: Date
+  if (params.range) {
+    from = params.range.from
+    to = params.range.to
+  } else {
+    const period = params.period ?? 'MONTH'
+    from = new Date(now)
+    if (period === 'DAY') from.setHours(0, 0, 0, 0)
+    else if (period === 'WEEK') from.setDate(from.getDate() - 7)
+    else from.setMonth(from.getMonth() - 1)
+    to = now
+  }
+
+  const atBranch = params.branchIds
+    ? { branchId: { in: params.branchIds.length ? params.branchIds : ['__none__'] } }
+    : params.branchId
+      ? { branchId: params.branchId }
+      : {}
 
   const records = await prisma.wastageRecord.findMany({
     where: {
       restaurantId: params.restaurantId,
-      createdAt: { gte: from, lte: now },
-      ...(params.branchId ? { branchId: params.branchId } : {}),
+      createdAt: { gte: from, lte: to },
+      ...atBranch,
     },
     include: {
-      item: { select: { id: true, name: true, unit: true } },
+      item: {
+        select: {
+          id: true, name: true, unit: true,
+          category: true, categoryId: true, categoryRef: { select: { name: true } },
+        },
+      },
       branch: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
     },
@@ -236,6 +270,7 @@ export async function getWastageReport(params: {
   const totalValue = records.reduce((sum, r) => sum + r.costValue, 0)
 
   const reasons = new Map<WastageReason, { count: number; value: number }>()
+  const categories = new Map<string, { name: string; count: number; value: number }>()
   const itemTotals = new Map<string, { name: string; unit: string; quantity: number; value: number }>()
   const branches = new Map<string, { name: string; value: number; count: number }>()
   const employees = new Map<string, { name: string; value: number; count: number }>()
@@ -243,6 +278,13 @@ export async function getWastageReport(params: {
   for (const r of records) {
     const reason = reasons.get(r.reason) ?? { count: 0, value: 0 }
     reasons.set(r.reason, { count: reason.count + 1, value: reason.value + r.costValue })
+
+    const legacyCategory = r.item.category?.trim() || null
+    const cKey = r.item.categoryId ?? (legacyCategory ? `text:${legacyCategory}` : 'none')
+    const category = categories.get(cKey) ?? {
+      name: r.item.categoryRef?.name ?? legacyCategory ?? 'Uncategorised', count: 0, value: 0,
+    }
+    categories.set(cKey, { ...category, count: category.count + 1, value: category.value + r.costValue })
 
     const item = itemTotals.get(r.itemId) ?? {
       name: r.item.name, unit: r.item.unit, quantity: 0, value: 0,
@@ -262,9 +304,11 @@ export async function getWastageReport(params: {
     }
   }
 
+  const share = (value: number) => (totalValue > 0 ? Math.round((value / totalValue) * 10000) / 100 : 0)
+
   return {
     from: from.toISOString(),
-    to: now.toISOString(),
+    to: to.toISOString(),
     totalValue,
     totalRecords: records.length,
     byReason: [...reasons.entries()]
@@ -273,8 +317,11 @@ export async function getWastageReport(params: {
         label: WASTAGE_REASON_LABELS[reason],
         count: v.count,
         value: v.value,
-        share: totalValue > 0 ? Math.round((v.value / totalValue) * 10000) / 100 : 0,
+        share: share(v.value),
       }))
+      .sort((a, b) => b.value - a.value),
+    byCategory: [...categories.entries()]
+      .map(([key, v]) => ({ key, name: v.name, count: v.count, value: v.value, share: share(v.value) }))
       .sort((a, b) => b.value - a.value),
     topItems: [...itemTotals.entries()]
       .map(([itemId, v]) => ({ itemId, ...v }))

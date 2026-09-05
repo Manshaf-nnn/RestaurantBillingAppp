@@ -29,7 +29,11 @@ export function ExplainPopover({
   const [open, setOpen] = React.useState(false)
   const money = (minor: number) => formatMoney(minor, currency)
   const showValue =
-    explanation.valueKind === 'percent' ? `${explanation.value}%` : money(explanation.value)
+    explanation.valueKind === 'percent'
+      ? `${explanation.value}%`
+      : explanation.valueKind === 'count'
+        ? String(explanation.value)
+        : money(explanation.value)
 
   return (
     <>

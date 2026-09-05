@@ -38,6 +38,7 @@ import {
   PackageCheck,
   KeyRound,
   Calculator,
+  Gauge,
 } from 'lucide-react'
 
 import {
@@ -72,6 +73,17 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: LayoutDashboard,
         permission: PERMISSIONS.DASHBOARD_VIEW,
         exact: true,
+      },
+      {
+        /*
+         * The owner's view (smart.md): health score, what needs review, the
+         * nine numbers with "Why is this number?", and the money trace. Guarded
+         * by the accounting permission on purpose — it shows profit.
+         */
+        href: '/dashboard/insights',
+        label: 'Command Center',
+        icon: Gauge,
+        permission: PERMISSIONS.ACCOUNTING_VIEW,
       },
       {
         /*

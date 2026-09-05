@@ -30,6 +30,16 @@ export const GLOSSARY = {
   wastage: 'Stock thrown away, spilled or spoiled — costed at what it cost you.',
   serviceCharge: 'A percentage added to the bill for service. Kept separate from sales and tax.',
   tips: 'Money guests leave for staff. Held apart — it is never your revenue.',
+  healthScore: 'One number from 0 to 100 built from six signals: sales trend, profit trend, food cost, waste, stock levels and whether the books balance.',
+  daysRemaining: 'How many days the stock on hand will last at the average daily usage of the last 28 days.',
+  averageUsage: 'How much of an item leaves stock per day through sales, kitchen use and production, averaged over the last 28 days. Waste is not counted.',
+  recommendedOrder: 'Enough to cover the supplier’s lead time plus a week, never less than the reorder rule already suggests, rounded up to whole packs.',
+  recipeCost: 'What one portion costs at today’s ingredient prices, from the active recipe. Sold lines carry the cost pinned when they sold, which can differ.',
+  menuClass: 'Stars sell well and earn well; Workhorses sell well but earn little; Hidden gems earn well but sell little; Problems do neither.',
+  anomaly: 'Something legal on its own that sits far outside the usual pattern. Flagged for a person to look at — never changed automatically.',
+  wasteShare: 'Waste value as a share of the ingredient cost of what was sold in the same period.',
+  cashCollected: 'Cash handed over by guests in the period, before refunds. Card and other methods are counted separately.',
+  lowStock: 'Items at or below the higher of their reorder level and minimum stock, plus items out of stock. Live, not period-scoped.',
 } as const
 
 export type GlossaryTerm = keyof typeof GLOSSARY

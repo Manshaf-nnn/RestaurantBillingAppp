@@ -142,6 +142,22 @@ export async function GET() {
         (await import('@/features/transfers/queries')).getTransferBuilderData(rid)],
       ['production: workspace', async () =>
         (await import('@/features/production/queries')).getProductionWorkspace({ restaurantId: rid, branchId: null })],
+      ['insights: command center', async () =>
+        (await import('@/features/insights/queries')).getCommandCenter({
+          restaurantId: rid, range, branchIds, branchId: branchIds?.length === 1 ? branchIds[0] : null,
+          timeZone: row?.timezone ?? 'UTC', targetFoodCostBps: null, money: (m) => String(m),
+          query: { preset: range.preset, from: '', to: '', branch: null },
+        })],
+      ['insights: menu', async () =>
+        (await import('@/features/insights/queries')).getMenuIntelligence({
+          restaurantId: rid, range, branchIds, timeZone: row?.timezone ?? 'UTC',
+        })],
+      ['insights: inventory', async () =>
+        (await import('@/features/insights/queries')).getSmartInventory({
+          restaurantId: rid, branchId: null, timeZone: row?.timezone ?? 'UTC',
+        })],
+      ['insights: waste', async () =>
+        (await import('@/features/insights/queries')).getWasteIntelligence({ restaurantId: rid, range, branchIds })],
       ['recipes: list', async () =>
         (await import('@/features/recipes/queries')).listRecipeRows(rid)],
       ['approvals: list', async () =>

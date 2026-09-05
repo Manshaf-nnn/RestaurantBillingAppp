@@ -40,6 +40,23 @@ export interface GrossProfitRow {
   quantity: number
 }
 
+/**
+ * A dish, keyed on its `foodId` — the rows behind Profit and Menu Intelligence
+ * (smart.md). Same arithmetic as `byItem`, but a dish renamed mid-period stays
+ * one row and the list is never truncated.
+ */
+export interface FoodProfitRow extends GrossProfitRow {
+  /** Null when the dish has since been deleted; such rows are keyed `name:<snapshot name>`. */
+  foodId: string | null
+  /**
+   * `Food.price` right now — the list price, restaurant-wide. What the lines
+   * actually sold at (options, discounts, branch prices) is revenue ÷ quantity.
+   */
+  menuPrice: number | null
+  /** Units sold whose cost was unknown — no snapshot and no costable recipe. */
+  uncostedQuantity: number
+}
+
 export interface ProfitReport {
   range: { from: string; to: string; label: string }
   totals: {
@@ -59,6 +76,8 @@ export interface ProfitReport {
   byItem: GrossProfitRow[]
   byCategory: GrossProfitRow[]
   byBranch: GrossProfitRow[]
+  /** Every dish sold in the period, keyed on foodId, untruncated. */
+  byFood: FoodProfitRow[]
   /** Stated on every response so no caller can present this as net profit. */
   disclaimer: string
 }
@@ -83,7 +102,7 @@ export async function getProfitReport(params: {
     },
     select: {
       name: true, quantity: true, lineTotal: true, costPrice: true, recipeId: true,
-      food: { select: { id: true, category: { select: { id: true, name: true } } } },
+      food: { select: { id: true, price: true, category: { select: { id: true, name: true } } } },
       order: {
         select: {
           id: true,
@@ -139,6 +158,7 @@ export async function getProfitReport(params: {
   const item = new Map<string, GrossProfitRow>()
   const category = new Map<string, GrossProfitRow>()
   const branch = new Map<string, GrossProfitRow>()
+  const food = new Map<string, FoodProfitRow>()
 
   const blank = (key: string, label: string): GrossProfitRow => ({
     key, label, revenue: 0, cogs: 0, grossProfit: 0,
@@ -186,9 +206,23 @@ export async function getProfitReport(params: {
       row.quantity += line.quantity
       map.set(key, row)
     }
+
+    // Per dish — the same netLine and lineCost, so Σ byFood is Σ totals.
+    const foodKey = line.food?.id ?? `name:${line.name}`
+    const dish = food.get(foodKey) ?? {
+      ...blank(foodKey, line.name),
+      foodId: line.food?.id ?? null,
+      menuPrice: line.food?.price ?? null,
+      uncostedQuantity: 0,
+    }
+    dish.revenue += netLine
+    dish.cogs += lineCost
+    dish.quantity += line.quantity
+    if (!known) dish.uncostedQuantity += line.quantity
+    food.set(foodKey, dish)
   }
 
-  const finish = (m: Map<string, GrossProfitRow>) =>
+  const finish = <T extends GrossProfitRow>(m: Map<string, T>): T[] =>
     [...m.values()]
       .map((r) => ({
         ...r,
@@ -222,6 +256,7 @@ export async function getProfitReport(params: {
     byItem: finish(item).slice(0, 50),
     byCategory: finish(category),
     byBranch: finish(branch),
+    byFood: finish(food),
     disclaimer: DISCLAIMER,
   }
 }

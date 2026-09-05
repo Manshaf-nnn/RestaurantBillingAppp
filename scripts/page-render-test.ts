@@ -25,6 +25,10 @@ const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 const PAGES = [
   '/dashboard/live',
   '/dashboard',
+  '/dashboard/insights',
+  '/dashboard/insights/menu',
+  '/dashboard/insights/inventory',
+  '/dashboard/insights/waste',
   '/dashboard/help',
   '/dashboard/tasks',
   '/dashboard/reports',

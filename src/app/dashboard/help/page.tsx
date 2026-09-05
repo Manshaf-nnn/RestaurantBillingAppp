@@ -872,6 +872,47 @@ Purchases   ≠ COGS: money spent on stock is not money's worth of food sold`}
           </ol>
         </SectionCard>
 
+        <SectionCard
+          title="11 · Command Center"
+          description="The owner’s page: one score, what needs review, nine numbers, and where the money went."
+        >
+          <Rows
+            rows={[
+              [
+                'Health score',
+                '0 to 100 from six signals — sales trend, profit trend, food cost against your target, waste as a share of COGS, stock levels, and whether the books balance. “How this is scored” shows the working',
+              ],
+              [
+                'Needs review',
+                'Pattern checks: unusual discounts, refunds, cancellations, voids, hand adjustments, waste, drawer differences and after-hours payments. Flagged for a person to look at — nothing is ever changed automatically',
+              ],
+              [
+                'Why is this number?',
+                'Under every card: the formula with the real figures and links to the records for the same period',
+              ],
+              [
+                'Where the money went',
+                'Profit → revenue and cost → orders and stock → payments, purchases and recipes. Open any line to see its records',
+              ],
+              [
+                'Menu & profit',
+                'Every dish: list price, what it actually sold at, today’s recipe cost, cost as sold, margin — and whether it is a Star, Workhorse, Hidden gem or Problem',
+              ],
+              [
+                'Stock outlook',
+                'Average daily usage over the last 28 days, days remaining, and how much to order to cover the supplier’s lead time plus a week',
+              ],
+              ['Waste', 'By item, category and reason, valued at what it cost when thrown away, as a share of COGS'],
+            ]}
+          />
+          <Note>
+            Every figure on these pages is one the reports already produce — the Command Center arranges and
+            explains, it never computes a number of its own. Managers and accountants see it too; it shows
+            profit, so it sits behind the accounting permission.{' '}
+            <Guide href="/dashboard/insights">Open the Command Center</Guide>.
+          </Note>
+        </SectionCard>
+
         <SectionCard title="Finding things">
           <p className="text-sm leading-relaxed text-muted-foreground">
             The search box at the top finds stock items, suppliers, purchase orders, deliveries,
@@ -919,6 +960,13 @@ Purchases   ≠ COGS: money spent on stock is not money's worth of food sold`}
               ['Out vs Low', 'Out is nothing on the shelf. Low is under the threshold you set'],
               ['COGS', 'What the ingredients cost. Revenue − COGS = gross profit'],
               ['Spec', 'A production recipe'],
+              ['Health score', 'One number, 0–100, from six report figures. Not an estimate — the working is shown'],
+              ['Days remaining', 'Stock on hand ÷ average daily usage over the last 28 days'],
+              [
+                'Star / Workhorse / Hidden gem / Problem',
+                'Sells well and earns well / sells well, earns little / earns well, sells little / neither',
+              ],
+              ['Anomaly', 'Legal on its own, far outside the usual pattern. Flagged for review, never changed'],
             ]}
           />
         </SectionCard>

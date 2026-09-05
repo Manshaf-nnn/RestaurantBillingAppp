@@ -13,16 +13,29 @@ const ORDER_CHECKS = new Set([
   'paid-total',
   'unusual-discounts',
   'unusual-refunds',
+  'unusual-cancellations',
   'consumption-without-order',
   'depletion-without-order',
 ])
 
-const ITEM_CHECKS = new Set(['stock-replay', 'branch-stock-sum', 'negative-stock'])
+const ITEM_CHECKS = new Set([
+  'stock-replay',
+  'branch-stock-sum',
+  'negative-stock',
+  'unusual-stock-adjustments',
+  'unusual-wastage',
+])
 
 export function issueExampleHref(checkKey: string, exampleId: string): string {
   if (ORDER_CHECKS.has(checkKey)) return `/dashboard/orders/${exampleId}`
   if (ITEM_CHECKS.has(checkKey)) return `/dashboard/inventory/${exampleId}`
-  if (checkKey === 'duplicate-payments' || checkKey === 'backdated-transactions') {
+  if (checkKey === 'unusual-cash-variance') return `/dashboard/cash-drawer/${exampleId}`
+  if (checkKey === 'void-concentration') return '/dashboard/audit-logs'
+  if (
+    checkKey === 'duplicate-payments' ||
+    checkKey === 'backdated-transactions' ||
+    checkKey === 'after-hours-activity'
+  ) {
     // Payment ids are not routable; the sales report's payment view is.
     return '/dashboard/reports/sales'
   }
@@ -58,6 +71,12 @@ export function issueAdvice(checkKey: string): string {
     'unusual-discounts': 'These discounts sit far outside the house pattern. If they were authorised, acknowledge with a note; if not, ask who gave them.',
     'unusual-refunds': 'These refunds are unusually large or unusually many. Check the reasons on each.',
     'backdated-transactions': 'Money was dated well before or after the event it belongs to. Verify the dates are honest.',
+    'unusual-cancellations': 'Bills were cancelled with money still on them, or cancellations have jumped this week. Open each one and check the reason and whether a refund was due.',
+    'void-concentration': 'One person has voided or cancelled far more than everyone else this week. Read their audit trail before drawing a conclusion.',
+    'unusual-stock-adjustments': 'A manual stock adjustment was large — in money, or as a share of what was on the shelf. Check the reason on the item’s history.',
+    'unusual-wastage': 'This item is being wasted far more than usual, or a large share of what leaves stock is going in the bin. Look at the wastage board for who, when and why.',
+    'unusual-cash-variance': 'A drawer closed with a large counted difference, or the same cashier has been short repeatedly. Review the session and its variance note.',
+    'after-hours-activity': 'Payments were taken outside the location’s opening hours. Check who was signed in and whether the hours on file are right.',
   }
   return advice[checkKey] ?? 'Open the linked records and verify them.'
 }

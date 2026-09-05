@@ -37,6 +37,11 @@ export interface AccountingHub {
     cogs: number
     grossProfit: number
     grossMarginPercent: number | null
+    /**
+     * Share of sold lines that carried a recipe cost — the margin's blind
+     * spot, straight off the profit report's coverage panel.
+     */
+    coveragePercent: number
     /** Best earners and thinnest margins (≥5 sold), straight off byItem. */
     topItems: Array<{ label: string; grossProfit: number; marginPercent: number | null }>
     lowMarginItems: Array<{ label: string; grossProfit: number; marginPercent: number | null }>
@@ -191,6 +196,7 @@ export async function getAccountingHub(params: {
         profit.totals.revenue > 0
           ? Math.round((profit.totals.grossProfit / profit.totals.revenue) * 1000) / 10
           : null,
+      coveragePercent: profit.coverage.percentCovered,
       topItems: [...profit.byItem]
         .filter((row) => row.quantity >= 5)
         .sort((a, b) => b.grossProfit - a.grossProfit)

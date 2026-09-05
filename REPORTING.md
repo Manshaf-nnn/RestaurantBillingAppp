@@ -18,6 +18,8 @@ headline. See ACCOUNTING.md for the revenue/COGS/tip methodology.
   (opening + in − out vs stored) and its value ladder (§75).
 - `features/analytics/queries.ts` — the dashboard; `getReportSummary`
   composes the report modules and computes nothing of its own.
+- `features/insights/*` — the owner's Command Center, menu matrix, stock
+  outlook and waste breakdown; composes the engines above. See INSIGHTS.md.
 - `features/accounting/` — the daily close snapshot (§51), sealed periods
   (§59), and the §115 integrity checker.
 

@@ -8,7 +8,7 @@
  *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/explain-test.ts
  */
-import { buildExplanations, compareMetric, type Explanation } from '../src/features/accounting/explain'
+import { buildExplanations, compareMetric, explainLowStock, type Explanation } from '../src/features/accounting/explain'
 import { getAccountingHub } from '../src/features/accounting/hub'
 import { runIntegrityChecks } from '../src/features/accounting/integrity'
 import { buildNumbersAnswers } from '../src/features/accounting/questions'
@@ -113,6 +113,12 @@ async function main() {
     check(`${explanation.key} has a sentence and at least one source`,
       explanation.sentence.length > 10 && explanation.sources.length > 0)
   }
+
+  // smart.md — the one Command Center figure that is not on the hub.
+  const low = explainLowStock({ totalItems: 3, outOfStock: 1, lowStock: 2, overstock: 0, inventoryValue: 0 })
+  check('low-stock explanation folds, counts low + out, and is sourced',
+    foldsCorrectly(low).ok && low.valueKind === 'count' && low.value === 3 && low.sources.length > 0,
+    `${low.value}`)
 
   console.log('\n── The explained numbers ARE the engine numbers ──')
   check('net sales explanation = the sales report, to the rupee',
