@@ -12,6 +12,7 @@ import {
   completeProduction, createProductionOrder, setMakeAheadRecipeActive, setProductionStatus,
 } from './service'
 import { prisma } from '@/server/db/prisma'
+import { previewProduction, type ProductionPreview } from './queries'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 const REASONS = ['PRODUCTION_LOSS', 'DAMAGED', 'INGREDIENT_SHORTAGE', 'QUALITY_ISSUE', 'OTHER'] as const
@@ -187,31 +188,56 @@ export async function createProductionOrderAction(
       return { id: order.id, number: order.number }
     },
     'Kitchen job created.',
+    'createProductionOrder',
   )
 }
 
+/**
+ * Move a job along.
+ *
+ * ── What changed, and the audit gap it closes ───────────────────────────────
+ *
+ * This used to accept `DRAFT | APPROVED | CANCELLED` and pick its permission
+ * from the target: `production.approve` to approve, `production.manage` for
+ * everything else. Approval has gone from the flow — it gated the one step that
+ * moved no stock — so the reachable targets are now starting a job and
+ * cancelling one, both of which are ordinary management of work.
+ *
+ * It also wrote NO audit row at all. `AUDIT_ACTIONS.PRODUCTION_APPROVED` was
+ * defined and never emitted, so the only trace of a job being approved or
+ * cancelled was the row changing shape. Both transitions are audited now.
+ */
 export async function setProductionStatusAction(input: unknown): Promise<ActionResult<{ status: string }>> {
   return runAction(
     z.object({
       orderId: z.string().min(1),
-      // Three reachable states: to make, approved, cancelled. PLANNED and
-      // IN_PROGRESS existed in the enum but no screen could ever produce them.
-      status: z.enum(['DRAFT', 'APPROVED', 'CANCELLED']),
+      // Starting and cancelling. Completion is its own action, because it is
+      // the one that moves stock; DRAFT is where a job begins.
+      status: z.enum(['IN_PROGRESS', 'CANCELLED']),
     }),
     input,
     async (data) => {
-      // Approving commits ingredients; a separate permission from planning.
-      const needed = data.status === 'APPROVED' ? PERMISSIONS.PRODUCTION_APPROVE : PERMISSIONS.PRODUCTION_MANAGE
-      const user = await requirePermission(needed)
+      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
       // Whose production house is this? The permission never asked.
       await assertBranchAccess(user, await houseOf(user.restaurantId, data.orderId))
       const order = await setProductionStatus({
         restaurantId: user.restaurantId, orderId: data.orderId, status: data.status, userId: user.id,
       })
+      await audit({
+        restaurantId: user.restaurantId, branchId: order.branchId, userId: user.id, actorName: user.name,
+        action:
+          data.status === 'CANCELLED'
+            ? AUDIT_ACTIONS.PRODUCTION_CANCELLED
+            : AUDIT_ACTIONS.PRODUCTION_STARTED,
+        entity: 'ProductionOrder',
+        entityId: order.id,
+        after: { number: order.number, status: order.status },
+      })
       revalidatePath('/dashboard/production')
       return { status: order.status }
     },
     'Job updated.',
+    'setProductionStatus',
   )
 }
 
@@ -233,6 +259,18 @@ export async function completeProductionAction(
        * item looked cheaper to make than it was.
        */
       overheadCost: z.coerce.number().int().min(0).max(100_000_000).optional(),
+      /*
+       * What actually left the store, per ingredient, in base units.
+       *
+       * Optional: omit it and every ingredient falls back to what the recipe
+       * asked for, which is what happened before this existed. The screen
+       * pre-fills it with exactly those figures, so a run that went to plan
+       * sends the same numbers the fallback would have used.
+       */
+      consumed: z
+        .array(z.object({ itemId: z.string().min(1), quantity: z.coerce.number().min(0) }))
+        .max(100)
+        .optional(),
       varianceReason: z.enum(REASONS).optional(),
       varianceNote: z.string().trim().max(200).optional().or(z.literal('')),
       batchNumber: z.string().trim().max(60).optional().or(z.literal('')),
@@ -250,6 +288,7 @@ export async function completeProductionAction(
        */
       const result = await completeProduction({
         restaurantId: user.restaurantId, orderId: data.orderId, actualQty: data.actualQty,
+        consumed: data.consumed,
         overheadCost: data.overheadCost,
         varianceReason: data.varianceReason ?? null, varianceNote: data.varianceNote || null,
         batchNumber: data.batchNumber || null, userId: user.id,
@@ -260,6 +299,10 @@ export async function completeProductionAction(
         after: {
           produced: result.producedQty, cost: result.totalCost,
           unitCost: result.unitCost, variance: result.variance, batch: result.batchNumber,
+          // What actually left the store, so the trail explains the cost.
+          consumed: result.consumed.map((line) => ({
+            item: line.name, quantity: line.quantity, cost: line.cost,
+          })),
         },
       })
       revalidatePath('/dashboard/production')
@@ -267,6 +310,7 @@ export async function completeProductionAction(
       return { produced: result.producedQty, unitCost: result.unitCost, variance: result.variance }
     },
     'Job finished — stock updated.',
+    'completeProduction',
   )
 }
 
@@ -283,4 +327,40 @@ async function houseOf(restaurantId: string, orderId: string): Promise<string | 
     select: { branchId: true },
   })
   return order?.branchId ?? null
+}
+
+/**
+ * What a job would need, and what the house is holding — before it is created.
+ *
+ * A read behind an action because the screen needs it as the recipe and the
+ * quantity are typed, and the numbers are branch-scoped stock levels: the same
+ * permission and the same branch check the rest of this file uses apply.
+ *
+ * It never posts and never refuses on a shortage. A missing ingredient is
+ * something the kitchen should see and decide about; the hard refusal happens
+ * at completion, where stock actually moves.
+ */
+export async function previewProductionAction(
+  input: unknown,
+): Promise<ActionResult<ProductionPreview | null>> {
+  return runAction(
+    z.object({
+      branchId: z.string().min(1),
+      recipeId: z.string().min(1),
+      plannedQty: z.coerce.number().min(0),
+    }),
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
+      await assertBranchAccess(user, data.branchId)
+      return previewProduction({
+        restaurantId: user.restaurantId,
+        branchId: data.branchId,
+        recipeId: data.recipeId,
+        plannedQty: data.plannedQty,
+      })
+    },
+    undefined,
+    'previewProduction',
+  )
 }

@@ -194,12 +194,16 @@ async function main() {
     // is the point: only the unit the owner types in has changed.
     plannedQty: 100,
   })
-  await setProductionStatus({
-    restaurantId: restaurant.id,
-    orderId: order.id,
-    status: 'APPROVED',
-  })
-
+  /*
+   * DELIBERATE behaviour change 2026-09-04 (kitchenjobs.md): no approve step.
+   *
+   * The old flow was create → approve → complete, and this line approved. The
+   * approval gate required `production.approve` to authorise a step that moved
+   * no stock, while completion — which moves all of it — needed only
+   * `production.manage`. It was also never the maker-checker mechanism, so it
+   * carried no threshold and no self-approval refusal. A job is now completed
+   * straight from DRAFT; every figure asserted below is unchanged.
+   */
   const result = await completeProduction({
     restaurantId: restaurant.id,
     orderId: order.id,

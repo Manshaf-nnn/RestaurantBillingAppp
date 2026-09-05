@@ -43,6 +43,7 @@ import {
   resetPasswordSchema,
   updateProfileSchema,
 } from './schema'
+import { secondFactorGate } from './mfa-gate'
 
 const MAX_FAILED_LOGINS = 8
 const LOCKOUT_MINUTES = 15
@@ -51,8 +52,17 @@ const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 // ── login ────────────────────────────────────────────────────────────────────
 
-export async function login(input: unknown): Promise<ActionResult<{ redirectTo: string }>> {
-  return runAction(loginSchema, input, async (data) => {
+/**
+ * What a sign-in attempt can come back with.
+ *
+ * `mfaRequired` is the half-way state: the password was right, the account has
+ * a second factor, and no code was sent. No session exists yet. The form shows
+ * the code field and resubmits the same credentials with the code filled in.
+ */
+export type LoginResult = { redirectTo: string } | { mfaRequired: true }
+
+export async function login(input: unknown): Promise<ActionResult<LoginResult>> {
+  return runAction(loginSchema, input, async (data): Promise<LoginResult> => {
     // Two-dimensional limiting: per IP and per account. `clientIp` returns
     // null outside a request scope, where `enforceRateLimit` derives it itself
     // and finds the same nothing — so undefined and null mean the same here.
@@ -124,7 +134,71 @@ export async function login(input: unknown): Promise<ActionResult<{ redirectTo: 
       }
     }
 
-    await createSession(user.id)
+    /*
+     * ── The second factor, for accounts that have one ─────────────────────
+     *
+     * Everything above has already been satisfied: the password is right, the
+     * account is not locked, not deactivated, and on the right domain. Only now
+     * is the second factor considered, so a wrong code reveals nothing about
+     * the password and a right code cannot rescue a wrong one.
+     *
+     * No session exists until the code passes. The first submission has no
+     * code and is answered with `mfaRequired`; the form resubmits the same
+     * credentials plus the code. See `mfa-gate.ts` for why that is stateless.
+     */
+    const gate = await secondFactorGate({ userId: user.id, code: data.code })
+
+    if (gate.outcome === 'code-required') {
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        action: AUDIT_ACTIONS.MFA_CHALLENGED,
+        entity: 'User',
+        entityId: user.id,
+      })
+      return { mfaRequired: true as const }
+    }
+
+    if (gate.outcome === 'bad-code') {
+      // Guessing a code is guessing a credential: same limiter shape, same
+      // lockout arithmetic as a wrong password.
+      await enforceRateLimit('mfa', `user:${user.id}`)
+      const failed = user.failedLogins + 1
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLogins: failed,
+          lockedUntil:
+            failed >= MAX_FAILED_LOGINS
+              ? new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000)
+              : user.lockedUntil,
+        },
+      })
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        action: AUDIT_ACTIONS.MFA_FAILED,
+        entity: 'User',
+        entityId: user.id,
+      })
+      throw new AppError('That code is not right — check the clock on your phone', 401, 'MFA_BAD_CODE')
+    }
+
+    if (gate.outcome === 'ok' && gate.usedRecoveryCode) {
+      // Ten exist and each works once; spending one is worth a line of its own.
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.MFA_RECOVERY_USED,
+        entity: 'User',
+        entityId: user.id,
+      })
+    }
+
+    // `remember` is finally read: unticked is a shift-length session whose
+    // refresh cookie dies with the browser.
+    await createSession(user.id, { persistent: data.remember })
     await audit({
       restaurantId: user.restaurantId,
       userId: user.id,
@@ -132,6 +206,7 @@ export async function login(input: unknown): Promise<ActionResult<{ redirectTo: 
       action: AUDIT_ACTIONS.LOGIN,
       entity: 'User',
       entityId: user.id,
+      after: { mfa: gate.outcome === 'ok', persistent: data.remember },
     })
 
     return { redirectTo: await landingAfterLogin(user.role, user.restaurantId) }

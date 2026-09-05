@@ -187,7 +187,16 @@ export const AUDIT_ACTIONS = {
   INSTRUCTION_CANCELLED: 'instruction.cancelled',
 
   PRODUCTION_CREATED: 'production.created',
+  /*
+   * Starting and cancelling a job. `setProductionStatusAction` wrote no audit
+   * row at all before — PRODUCTION_APPROVED was defined and never emitted — so
+   * the only trace of a job moving was the row changing shape.
+   */
+  PRODUCTION_STARTED: 'production.started',
+  PRODUCTION_CANCELLED: 'production.cancelled',
   PRODUCTION_SPEC_UPDATED: 'production.spec_updated',
+  /// Legacy: approval left the production flow. Kept so historic rows written
+  /// under the old flow still resolve to a name.
   PRODUCTION_APPROVED: 'production.approved',
   PRODUCTION_COMPLETED: 'production.completed',
 
@@ -224,6 +233,22 @@ export const AUDIT_ACTIONS = {
   RESTORE_TESTED: 'platform.restore_tested',
   MFA_ENABLED: 'user.mfa_enabled',
   MFA_DISABLED: 'user.mfa_disabled',
+  /*
+   * The second factor at sign-in (athu.md). A challenge is issued when the
+   * password is right and the account is enrolled; a failure is a wrong code;
+   * a recovery code being spent is worth its own line because there are only
+   * ten and each can be used once.
+   */
+  MFA_CHALLENGED: 'auth.mfa_challenged',
+  MFA_FAILED: 'auth.mfa_failed',
+  MFA_RECOVERY_USED: 'auth.mfa_recovery_used',
+  /*
+   * A refresh token presented more than the grace window after it was rotated.
+   * A legitimate client has no reason to do that; recorded for one release so
+   * the real rate is known before it becomes grounds for revoking the lineage.
+   * Written as a literal in session.ts, which audit.ts imports from.
+   */
+  SESSION_REUSE_DETECTED: 'auth.session_reuse_detected',
   // SESSIONS_REVOKED already exists above under auth.*; the platform console
   // reuses it rather than minting a second name for the same event.
 } as const

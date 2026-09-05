@@ -92,6 +92,19 @@ export const TRANSPORT_FAILED = 'TRANSPORT_FAILED'
 export const OFFLINE = 'OFFLINE'
 
 /**
+ * The session is gone and a silent refresh could not bring it back.
+ *
+ * A code, not a regex over an English sentence. The old check was
+ * `/session expired/i.test(result.error)`, fed by a classifier that matched
+ * `/session|sign in|401|unauthor/i` against whatever text an error carried —
+ * in an application with cash-drawer sessions, a `sessions` table and a
+ * `/cashier/session` route. It only ever fired on rejected promises, so it was
+ * latent rather than live, but a control that works by accident of wording is
+ * one wording change from working the other way.
+ */
+export const SESSION_EXPIRED = 'SESSION_EXPIRED'
+
+/**
  * Wrap a server action call so it always resolves.
  *
  * For handlers that own their loading state — several screens track two or
@@ -136,7 +149,38 @@ export async function callAction<T>(
   }
 
   try {
-    return await call()
+    const result = await call()
+
+    /*
+     * ── An unauthorised result gets one silent refresh and one retry ────────
+     *
+     * `UNAUTHORIZED` from an action means `requirePermission` refused BEFORE
+     * the handler ran: nothing was written, nothing was charged, nothing
+     * happened. That is what makes the retry safe by construction — and money
+     * operations carry idempotency keys as a second net regardless. The refresh
+     * itself is deduplicated across the tab, so ten failing buttons make one
+     * request. If the refresh says there is no session to renew, the caller is
+     * told so with a code it can act on, not a sentence it has to parse.
+     *
+     * `TRANSPORT_FAILED` (the catch below) is NEVER retried here: a rejected
+     * promise means the request may have executed and the reply was lost, which
+     * is the one case where "try again" can mean "do it twice".
+     */
+    if (!result.ok && result.code === 'UNAUTHORIZED') {
+      const { requestSessionRefresh } = await import('@/lib/session-refresh')
+      const renewed = await requestSessionRefresh()
+      if (renewed) {
+        const retried = await call()
+        if (retried.ok || retried.code !== 'UNAUTHORIZED') return retried
+      }
+      return {
+        ok: false,
+        error: 'Your session expired. Sign in again to continue.',
+        code: SESSION_EXPIRED,
+      }
+    }
+
+    return result
   } catch (error) {
     // Logged so the digest in the server log can be matched to the click.
     console.error('[action]', error)
@@ -179,13 +223,13 @@ export function useAction() {
         if (!result.ok) {
           if (options.onFail) options.onFail(result)
           else toast.error(result.error)
-          if (result.code === TRANSPORT_FAILED) {
-            // Only the wrapper knows whether this was an expired session, and
-            // only it can send the user somewhere useful.
-            const next = typeof window !== 'undefined' ? window.location.pathname : '/dashboard'
-            if (/session expired/i.test(result.error)) {
-              router.push(`/login?next=${encodeURIComponent(next)}`)
-            }
+          if (result.code === SESSION_EXPIRED) {
+            // `callAction` has already tried a silent refresh and a retry; a
+            // SESSION_EXPIRED here means there is genuinely nothing to renew.
+            // Admin pages sign back in at the admin door.
+            const { loginPathFor } = await import('@/lib/session-refresh')
+            const here = typeof window !== 'undefined' ? window.location.pathname : '/dashboard'
+            router.push(loginPathFor(here))
           }
           return null
         }

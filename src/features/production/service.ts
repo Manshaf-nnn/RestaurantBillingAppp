@@ -35,25 +35,53 @@ import { roundQty } from '@/lib/quantity'
  *
  * ── Nothing moves until the job is finished ─────────────────────────────────
  *
- * Planning and approving change no stock. Ingredients leave and finished goods
- * appear at the moment the job is marked done, in one transaction — a job that
- * consumed its chicken but failed before creating the patties would destroy
- * stock outright.
+ * Creating and starting a job change no stock. Ingredients leave and finished
+ * goods appear at the moment the job is completed, in one transaction — a job
+ * that consumed its chicken but failed before creating the patties would
+ * destroy stock outright.
+ *
+ * ── Three states, and why approval left ─────────────────────────────────────
+ *
+ * The flow was create → approve → complete, and the approval step was the part
+ * everyone found confusing. It was also protecting the wrong thing: approving
+ * moved no stock and required `production.approve`, while completing moved all
+ * of it and required only `production.manage`. The gate stood in front of the
+ * one action that changed nothing.
+ *
+ * It was never the maker-checker mechanism either — `ApprovalKind` has no
+ * production value, so there was no threshold, no second pair of eyes and no
+ * self-approval refusal. It was a status field with a permission attached.
+ *
+ * So a job now reads: **ready to make → in progress → completed**, using
+ * `IN_PROGRESS` and `startedAt`, both of which already existed in the schema
+ * and were written by nothing.
+ *
+ * `APPROVED` is kept in both tables below and is deliberately still
+ * completable. No new job enters it, but jobs approved before this change are
+ * sitting in real databases and must still be finishable — dropping it would
+ * strand them.
  */
 
 const ALLOWED: Record<ProductionStatus, ProductionStatus[]> = {
-  DRAFT: ['APPROVED', 'CANCELLED'],
-  APPROVED: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
+  DRAFT: ['IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
+  IN_PROGRESS: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
   COMPLETED: [],
   PARTIALLY_COMPLETED: [],
   CANCELLED: [],
-  // Reachable only on rows written before the status list was shortened.
-  PLANNED: ['APPROVED', 'DRAFT', 'CANCELLED'],
-  IN_PROGRESS: ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
+  // Legacy, both of them: reachable only on rows written before the flow was
+  // shortened. Kept so jobs already in these states can still be finished.
+  APPROVED: ['IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'],
+  PLANNED: ['IN_PROGRESS', 'DRAFT', 'CANCELLED'],
 }
 
-/** Statuses a job may still be completed from. */
-const COMPLETABLE: ProductionStatus[] = ['APPROVED', 'IN_PROGRESS']
+/**
+ * Statuses a job may still be completed from.
+ *
+ * `DRAFT` is here now, and that is the substance of dropping approval: a job
+ * can be made without anyone first declaring that it may be. `APPROVED` stays
+ * for the jobs that were approved under the old flow.
+ */
+const COMPLETABLE: ProductionStatus[] = ['DRAFT', 'APPROVED', 'IN_PROGRESS']
 
 export function canTransitionProduction(from: ProductionStatus, to: ProductionStatus): boolean {
   return ALLOWED[from]?.includes(to) ?? false
@@ -144,33 +172,55 @@ async function nextJobNumber(
   return `PRD-${String((Number.isFinite(previous) ? previous : 0) + 1).padStart(6, '0')}`
 }
 
+/**
+ * Move a job along: start it, or cancel it.
+ *
+ * Locked and claimed with a compare-and-swap, for the same reason
+ * `completeProduction` is. This used to read the row outside any transaction
+ * and update it unconditionally, so two taps on Cancel both passed the
+ * transition check and both wrote — harmless for cancel, but the same shape
+ * that let a job be completed twice before that was fixed, and there is no
+ * reason to leave the pattern lying around for the next status to copy.
+ */
 export async function setProductionStatus(params: {
   restaurantId: string
   orderId: string
   status: ProductionStatus
   userId?: string | null
 }): Promise<ProductionOrder> {
-  const order = await prisma.productionOrder.findFirst({
-    where: { id: params.orderId, restaurantId: params.restaurantId },
-  })
-  if (!order) throw new NotFoundError('Kitchen job')
+  return prisma.$transaction(async (tx) => {
+    await guardLocks(tx)
+    await tx.$queryRaw`SELECT id FROM production_orders WHERE id = ${params.orderId} FOR UPDATE`
 
-  if (!canTransitionProduction(order.status, params.status)) {
-    throw new AppError(
-      `A ${label(order.status)} job cannot become ${label(params.status)}`,
-      409,
-      'PRODUCTION_BAD_TRANSITION',
-    )
-  }
+    const order = await tx.productionOrder.findFirst({
+      where: { id: params.orderId, restaurantId: params.restaurantId },
+    })
+    if (!order) throw new NotFoundError('Kitchen job')
 
-  return prisma.productionOrder.update({
-    where: { id: order.id },
-    data: {
-      status: params.status,
-      ...(params.status === 'APPROVED'
-        ? { approvedById: params.userId ?? null, approvedAt: new Date() }
-        : {}),
-    },
+    if (order.status === params.status) return order
+
+    if (!canTransitionProduction(order.status, params.status)) {
+      throw new AppError(
+        `A ${label(order.status)} job cannot become ${label(params.status)}`,
+        409,
+        'PRODUCTION_BAD_TRANSITION',
+      )
+    }
+
+    const claimed = await tx.productionOrder.updateMany({
+      where: { id: order.id, status: order.status },
+      data: {
+        status: params.status,
+        // `startedAt` has existed since the table was created and was written by
+        // nothing. Starting a job is now a real step, so it records when.
+        ...(params.status === 'IN_PROGRESS' ? { startedAt: new Date() } : {}),
+      },
+    })
+    if (claimed.count === 0) {
+      throw new AppError('That job just changed — reload and try again', 409, 'PRODUCTION_RACE')
+    }
+
+    return tx.productionOrder.findFirstOrThrow({ where: { id: order.id } })
   })
 }
 
@@ -197,11 +247,26 @@ export interface CompleteProductionResult {
  *
  * ── Why a short job costs more per unit ─────────────────────────────────────
  *
- * Ingredients are consumed for the number PLANNED, because that is what was
- * issued to the line — a batch of sauce that catches and yields 480 instead of
- * 500 still used all of its cream. Output is the actual figure. So unit cost is
- * planned inputs divided by real output, and a poor run raises it, which is the
- * true picture and the whole reason to record what went short.
+ * Ingredients default to the number PLANNED, because that is what was issued to
+ * the line — a batch of sauce that catches and yields 480 instead of 500 still
+ * used all of its cream. Output is the actual figure. So unit cost is inputs
+ * divided by real output, and a poor run raises it, which is the true picture
+ * and the whole reason to record what went short.
+ *
+ * ── `consumed`: what the kitchen actually used ──────────────────────────────
+ *
+ * A caller may state, per ingredient, how much really left the store. Absent,
+ * the recipe's requirement for the planned quantity is used and the behaviour
+ * is exactly what it has always been — which is why the suites that pin
+ * "planning 100 loaves consumes 100 kg of flour even when 80 come out" keep
+ * passing untouched.
+ *
+ * What this is NOT is a licence to scale ingredients down to match the output.
+ * Producing 80 of a planned 100 does not put a fifth of the flour back on the
+ * shelf; the flour was poured. The shortfall is a yield loss, recorded as
+ * `variance` + `varianceReason`, and it belongs in the unit cost rather than in
+ * the stock balance. `consumed` exists for the other case: the kitchen used a
+ * different amount than the recipe said, and somebody knows it.
  *
  * `overheadCost` — labour, power — is added on top before dividing, since
  * materials alone understate what a finished item costs to make. It is passed
@@ -213,6 +278,14 @@ export async function completeProduction(params: {
   orderId: string
   /** How many actually came out. Defaults to what was planned. */
   actualQty?: number
+  /**
+   * What actually left the store, per ingredient, in the item's BASE unit.
+   *
+   * Omit it and every ingredient falls back to the recipe's requirement. Name
+   * only some and the rest fall back individually. `0` is a real answer — it
+   * means the ingredient was not used — and is not the same as omitting it.
+   */
+  consumed?: Array<{ itemId: string; quantity: number }>
   /** Labour, power and the rest, in minor units. */
   overheadCost?: number
   varianceReason?: ProductionVarianceReason | null
@@ -245,7 +318,11 @@ export async function completeProduction(params: {
       throw new AppError('That job was cancelled', 409, 'PRODUCTION_CANCELLED')
     }
     if (!COMPLETABLE.includes(order.status)) {
-      throw new AppError('Approve the job before finishing it', 409, 'PRODUCTION_NOT_APPROVED')
+      throw new AppError(
+        `A ${label(order.status)} job cannot be completed`,
+        409,
+        'PRODUCTION_NOT_COMPLETABLE',
+      )
     }
     if (!order.recipe || !order.recipe.producesItem) {
       throw new AppError('This job has no recipe', 400, 'PRODUCTION_NO_SPEC')
@@ -298,11 +375,47 @@ export async function completeProduction(params: {
       throw new AppError(resolved.problems[0], 400, 'PRODUCTION_RECIPE_PROBLEM')
     }
 
+    /*
+     * What the kitchen says it actually used, keyed by item.
+     *
+     * Only ingredients the recipe resolved to are accepted. An unknown item is
+     * refused rather than posted: this is a completion screen, not a stock
+     * adjustment screen, and quietly deducting something the recipe never
+     * mentioned would be a way to move stock with no adjustment record and no
+     * approval behind it. `recordWastage` and the adjustment path exist for
+     * that, with their own guards.
+     */
+    const stated = new Map<string, number>()
+    if (params.consumed?.length) {
+      const known = new Set(resolved.ingredients.map((ingredient) => ingredient.itemId))
+      for (const line of params.consumed) {
+        if (!known.has(line.itemId)) {
+          throw new AppError(
+            'That ingredient is not in this recipe',
+            400,
+            'PRODUCTION_UNKNOWN_INGREDIENT',
+          )
+        }
+        if (!Number.isFinite(line.quantity) || line.quantity < 0) {
+          throw new AppError(
+            'An ingredient amount cannot be negative',
+            400,
+            'PRODUCTION_BAD_CONSUMPTION',
+          )
+        }
+        stated.set(line.itemId, roundQty(line.quantity))
+      }
+    }
+
     const consumed: CompleteProductionResult['consumed'] = []
     let totalCost = 0
 
     for (const ingredient of resolved.ingredients) {
-      const needed = roundQty(ingredient.quantity)
+      // Stated wins where given — including a stated zero, which is why this
+      // reads the map rather than testing the value for truthiness.
+      const needed = stated.has(ingredient.itemId)
+        ? stated.get(ingredient.itemId)!
+        : roundQty(ingredient.quantity)
       if (needed <= 0) continue
 
       await assertSufficient(tx, {

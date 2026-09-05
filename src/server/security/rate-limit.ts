@@ -24,6 +24,12 @@ export interface RateLimitRule {
  */
 export const RATE_LIMITS = {
   login: { limit: 8, windowSeconds: 300 },
+  /*
+   * Second-factor codes, per account. Six digits is a million possibilities;
+   * five tries in five minutes makes guessing one a non-starter, and a person
+   * who mistypes twice still has three left before they wait.
+   */
+  mfa: { limit: 5, windowSeconds: 300 },
   register: { limit: 5, windowSeconds: 3600 },
   passwordReset: { limit: 5, windowSeconds: 3600 },
   /** per guest device */

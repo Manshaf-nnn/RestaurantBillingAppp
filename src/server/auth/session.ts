@@ -1,10 +1,10 @@
 import 'server-only'
 import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
-import type { UserRole } from '@prisma/client'
+import type { Prisma, Session, UserRole } from '@prisma/client'
 
 import { permissionsSoldByFeatures } from '@/features/access/features'
-import { prisma } from '@/server/db/prisma'
+import { guardLocks, prisma } from '@/server/db/prisma'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
 import { due } from './presence'
@@ -13,14 +13,71 @@ import {
   GUEST_COOKIE,
   GUEST_COOKIE_MAX_AGE,
   REFRESH_COOKIE_MAX_AGE,
+  TRANSIENT_SESSION_TTL_SECONDS,
   accessCookieName,
   cookieOptions,
   refreshCookieName,
-  refreshTokenTtlDays,
+  refreshGraceSeconds,
+  refreshTokenTtlSeconds,
+  rotateAfterSeconds,
   signAccessToken,
   verifyAccessToken,
+  type AccessClaims,
   type SessionScope,
 } from './jwt'
+
+/**
+ * Sessions: how a signed-in person stays signed in, and how they stop.
+ *
+ * ── The shape ───────────────────────────────────────────────────────────────
+ *
+ * A short-lived access JWT (15 min) in one httpOnly cookie, and an opaque
+ * refresh token — random bytes, stored hashed in `Session` — in another. The
+ * access token is verified statelessly at the edge; the refresh token is looked
+ * up in the database, which is what makes revocation immediate.
+ *
+ * ── The race this file used to have ─────────────────────────────────────────
+ *
+ * Every access-token expiry — every fifteen minutes of use — ROTATED the
+ * refresh token: revoke the old row, create a new one. Rotation has one
+ * failure mode and this app hit it constantly. Two tabs (a till and a kitchen
+ * display, the ordinary shape of a restaurant) both saw the dead access token
+ * and both refreshed with the same refresh cookie. The first rotated it and set
+ * the new cookie. The second found the row revoked, could not tell that from a
+ * stolen or logged-out token, deleted the refresh cookie — the winner's new
+ * one, same name — and sent the user to the login screen. A live, unrevoked
+ * session sat in this table while they typed their password again.
+ *
+ * Three things fix it, and all three are in this file:
+ *
+ *   1. LINEAGE. A row revoked by rotation records `replacedById`. A row revoked
+ *      by logout, password reset or suspension does not. So "revoked" now has
+ *      two meanings the code can tell apart.
+ *   2. GRACE. A token rotated within the last thirty seconds resolves to its
+ *      successor instead of failing. The loser of the race gets a working
+ *      access token for the session the winner created; the winner's
+ *      `Set-Cookie` owns the refresh cookie and is never touched.
+ *   3. ROTATE DAILY, NOT EVERY QUARTER HOUR. An expired access token is renewed
+ *      from the refresh token WITHOUT rotating it; the refresh token itself
+ *      rotates once it is a day old. A stolen token's useful life stays bounded
+ *      to a day; the race surface shrinks from ~96 opportunities a day to ~1,
+ *      and the grace window covers that one.
+ *
+ * ── Where cookies can and cannot be written ─────────────────────────────────
+ *
+ * Next refuses cookie writes during a page RENDER and allows them in route
+ * handlers and Server Actions. `renewFromRefreshToken` therefore probes: it
+ * writes the new access cookie first, and only if that succeeded does it
+ * consider rotating — never revoke in the database what you cannot persist to
+ * the browser. A render that cannot write still authenticates the request; the
+ * next route-handler poll (`/api/pulse`) does the persisting.
+ *
+ * The DB logic lives in cookie-free functions (`lookupRefreshSession`,
+ * `rotateSessionRecord`, `refreshSession`) so the race can be tested as a race,
+ * with `Promise.all`, from a script with no request scope. The exported names
+ * callers already use — `createSession`, `rotateSession`,
+ * `renewFromRefreshToken`, `destroySession` — are thin cookie-writing wrappers.
+ */
 
 /**
  * How often a session's "last used" stamp is allowed to move.
@@ -97,18 +154,92 @@ export async function requestContext(): Promise<RequestContext> {
   }
 }
 
+/** Everything about the user a session needs to resolve, in one select. */
+const USER_SELECT = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  restaurantId: true,
+  branchId: true,
+  avatarUrl: true,
+  permissions: true,
+  isActive: true,
+  deletedAt: true,
+  staffRole: { select: { permissions: true, isActive: true } },
+  /*
+   * What the platform operator has sold this restaurant.
+   *
+   * On the query that was already loading the session, so the feature gate
+   * costs no extra round trip on any request.
+   */
+  restaurant: { select: { enabledFeatures: true } },
+} satisfies Prisma.UserSelect
+
+type SessionUser = Prisma.UserGetPayload<{ select: typeof USER_SELECT }>
+type SessionWithUser = Session & { user: SessionUser }
+
+function toAuthUser(user: SessionUser, sessionId: string): AuthUser {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    restaurantId: user.restaurantId,
+    branchId: user.branchId ?? null,
+    avatarUrl: user.avatarUrl,
+    permissions: user.permissions,
+    rolePermissions: activeRolePermissions(user.staffRole),
+    /*
+     * Expanded once, here, rather than wherever a permission is checked.
+     *
+     * Empty stays empty: `permissionsFor` reads that as "unrestricted", which
+     * is what every restaurant that has never been scoped should get.
+     */
+    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
+    sessionId,
+  }
+}
+
+function claimsFor(user: SessionUser, sessionId: string): AccessClaims {
+  return {
+    sub: user.id,
+    rid: user.restaurantId,
+    role: user.role,
+    name: user.name,
+    email: user.email,
+    sid: sessionId,
+  }
+}
+
+const ageSeconds = (since: Date, now: Date) => (now.getTime() - since.getTime()) / 1000
+
+// ── Creating ─────────────────────────────────────────────────────────────────
+
 /**
  * Issues a fresh session: a random opaque refresh token (stored hashed) plus a
  * short-lived access JWT. Both are set as httpOnly cookies.
+ *
+ * `persistent` is the "Remember me" box, which for a long time was parsed by the
+ * schema and read by nothing — a control that did nothing, which is worse than
+ * no control. Unticked now means a twelve-hour session (a shift, not a month)
+ * whose refresh cookie carries no Max-Age, so the browser drops it when it
+ * closes. Ticked means the full scope lifetime, as before.
  */
-export async function createSession(userId: string): Promise<{ accessToken: string }> {
-  const user = await prisma.user.findUnique({ where: { id: userId } })
+export async function createSession(
+  userId: string,
+  options: { persistent?: boolean } = {},
+): Promise<{ accessToken: string }> {
+  const persistent = options.persistent ?? true
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: USER_SELECT })
   if (!user) throw new Error('Cannot create a session for a user that does not exist')
 
   // Platform admins land in the 'admin' cookie namespace; everyone else 'staff'.
   const scope = scopeForRole(user.role)
   const ctx = await requestContext()
   const refreshToken = generateToken()
+  const ttlSeconds = persistent ? refreshTokenTtlSeconds(scope) : TRANSIENT_SESSION_TTL_SECONDS
 
   const session = await prisma.session.create({
     data: {
@@ -116,22 +247,21 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
       refreshTokenHash: hashToken(refreshToken),
       userAgent: ctx.userAgent?.slice(0, 500),
       ipAddress: ctx.ipAddress,
-      expiresAt: new Date(Date.now() + refreshTokenTtlDays() * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + ttlSeconds * 1000),
     },
   })
 
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    rid: user.restaurantId,
-    role: user.role,
-    name: user.name,
-    email: user.email,
-    sid: session.id,
-  })
+  const accessToken = await signAccessToken(claimsFor(user, session.id))
 
   const store = await cookies()
-  store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
-  store.set(refreshCookieName(scope), refreshToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
+  store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE()))
+  store.set(
+    refreshCookieName(scope),
+    refreshToken,
+    // No Max-Age for a transient session: a browser-session cookie, gone when
+    // the browser closes. The twelve-hour row is the real bound either way.
+    cookieOptions(persistent ? REFRESH_COOKIE_MAX_AGE(scope) : undefined),
+  )
 
   await prisma.user.update({
     where: { id: userId },
@@ -159,87 +289,296 @@ export async function createSession(userId: string): Promise<{ accessToken: stri
   return { accessToken }
 }
 
+// ── The cookie-free core ─────────────────────────────────────────────────────
+
+export type RefusalReason =
+  | 'unknown'
+  | 'revoked'
+  | 'reused'
+  | 'successor-gone'
+  | 'expired'
+  | 'inactive'
+  | 'scope'
+
+export type LookupOutcome =
+  /** The token names a live session. */
+  | { kind: 'live'; session: SessionWithUser }
+  /**
+   * The token was rotated within the grace window and its successor is live.
+   * `session` is the successor — the one the caller should mint for.
+   */
+  | { kind: 'superseded'; session: SessionWithUser; predecessorId: string }
+  | { kind: 'refused'; reason: RefusalReason }
+
 /**
- * Rotates a refresh token. The old token is revoked and a brand new one issued,
- * so a stolen token is usable at most once before the legitimate client's next
- * refresh invalidates it.
+ * What a refresh token currently means. The single source of truth for both
+ * the refresh endpoint and the in-request renewal.
+ *
+ * `now` is a parameter so a test can reason about the clock without a mock;
+ * production callers omit it.
+ */
+export async function lookupRefreshSession(
+  rawRefreshToken: string,
+  scope: SessionScope,
+  now: Date = new Date(),
+): Promise<LookupOutcome> {
+  const session = await prisma.session.findUnique({
+    where: { refreshTokenHash: hashToken(rawRefreshToken) },
+    include: { user: { select: USER_SELECT } },
+  })
+  if (!session) return { kind: 'refused', reason: 'unknown' }
+  if (!session.user.isActive || session.user.deletedAt) return { kind: 'refused', reason: 'inactive' }
+  // The refresh token must belong to the scope it's being used for.
+  if (scopeForRole(session.user.role) !== scope) return { kind: 'refused', reason: 'scope' }
+
+  if (session.revokedAt) {
+    /*
+     * Revoked WITHOUT a successor is a real revocation — logout, password
+     * reset, suspension, deactivation. Nothing to follow; refuse.
+     */
+    if (!session.replacedById) return { kind: 'refused', reason: 'revoked' }
+
+    /*
+     * Revoked BY ROTATION. Inside the grace window this is the loser of the
+     * race that used to log people out: a sibling request rotated the token a
+     * moment ago and this one arrived with the old value. Hand it the
+     * successor.
+     *
+     * Outside the window it is a replay of a token that has been dead for a
+     * while — the OAuth working group calls this reuse detection. Refused, and
+     * recorded, because a legitimate client has no reason to present a token
+     * more than thirty seconds after it was rotated. Recorded rather than acted
+     * on (revoking the whole lineage) for one release, so the real rate of
+     * legitimate hits is known before it becomes a reason to sign anyone out.
+     */
+    if (ageSeconds(session.revokedAt, now) > refreshGraceSeconds()) {
+      // Awaited: a refusal is not a hot path, and a record that may or may not
+      // have been written by the time the response leaves is not a record. A
+      // failure to write is logged, not thrown — the refusal stands regardless.
+      await prisma.auditLog
+        .create({
+          data: {
+            restaurantId: session.user.restaurantId,
+            userId: session.userId,
+            // AUDIT_ACTIONS.SESSION_REUSE_DETECTED — written as a literal
+            // because audit.ts imports requestContext from this file.
+            action: 'auth.session_reuse_detected',
+            entity: 'Session',
+            entityId: session.id,
+            after: { replacedById: session.replacedById, revokedAt: session.revokedAt },
+          },
+        })
+        .catch((error: unknown) => {
+          console.error('[auth] could not record session reuse', error)
+        })
+      return { kind: 'refused', reason: 'reused' }
+    }
+
+    /*
+     * One hop, asserted — not a chain. A successor is under a day old by
+     * construction and the grace path never rotates, so a legitimate client can
+     * never be two rotations behind inside thirty seconds. Requiring the
+     * successor to be LIVE is what stops a predecessor token outliving a
+     * logout: rotate, then sign out within the window, and the old token must
+     * still be refused.
+     */
+    const successor = await prisma.session.findUnique({
+      where: { id: session.replacedById },
+      include: { user: { select: USER_SELECT } },
+    })
+    if (!successor || successor.revokedAt || successor.expiresAt <= now) {
+      return { kind: 'refused', reason: 'successor-gone' }
+    }
+    return { kind: 'superseded', session: successor, predecessorId: session.id }
+  }
+
+  if (session.expiresAt <= now) return { kind: 'refused', reason: 'expired' }
+  return { kind: 'live', session }
+}
+
+/** Thrown inside the rotation transaction when the compare-and-swap loses. */
+class RotationLost extends Error {
+  constructor() {
+    super('rotation lost to a concurrent refresh')
+  }
+}
+
+/**
+ * Replace one refresh token with a new one — atomically, or not at all.
+ *
+ * ── Why this is a transaction and a compare-and-swap ────────────────────────
+ *
+ * The old `rotateSession` did `update({ where: { id } })` — keyed by id alone,
+ * with no guard on `revokedAt`. Two concurrent callers could both read the row
+ * as live, both revoke it, both create successors, and race two `Set-Cookie`
+ * headers into one cookie jar. The `updateMany` below matches only a row that
+ * is STILL unrevoked; Postgres serialises the two updates on the row lock and
+ * re-evaluates the predicate against the committed version, so exactly one
+ * caller matches. The other matches zero rows, throws, and the transaction
+ * rolls back the successor it had just created — no orphan, no dangling
+ * `replacedById`.
+ *
+ * The successor is created FIRST so its id can be written onto the predecessor
+ * in the same statement that revokes it. A crash between the two statements
+ * would otherwise leave a revoked row pointing at nothing, and a grace-window
+ * loser with no successor to follow.
+ *
+ * Two statements, milliseconds, well inside Netlify's ten-second budget and
+ * PgBouncer's transaction mode. `guardLocks` per the house pattern.
+ */
+export async function rotateSessionRecord(params: {
+  predecessor: Session
+  scope: SessionScope
+  ctx: RequestContext
+  now?: Date
+}): Promise<{ successor: Session; refreshToken: string } | null> {
+  const now = params.now ?? new Date()
+  const refreshToken = generateToken()
+
+  try {
+    const successor = await prisma.$transaction(async (tx) => {
+      await guardLocks(tx)
+      const created = await tx.session.create({
+        data: {
+          userId: params.predecessor.userId,
+          refreshTokenHash: hashToken(refreshToken),
+          userAgent: params.ctx.userAgent?.slice(0, 500),
+          ipAddress: params.ctx.ipAddress,
+          expiresAt: new Date(now.getTime() + refreshTokenTtlSeconds(params.scope) * 1000),
+        },
+      })
+      const { count } = await tx.session.updateMany({
+        where: { id: params.predecessor.id, revokedAt: null },
+        data: { revokedAt: now, replacedById: created.id },
+      })
+      if (count === 0) throw new RotationLost()
+      return created
+    })
+    return { successor, refreshToken }
+  } catch (error) {
+    if (error instanceof RotationLost) return null
+    throw error
+  }
+}
+
+export type RefreshResult =
+  | { outcome: 'renewed'; sessionId: string; accessToken: string; user: AuthUser }
+  | { outcome: 'rotated'; sessionId: string; accessToken: string; refreshToken: string; user: AuthUser }
+  | { outcome: 'superseded'; sessionId: string; accessToken: string; user: AuthUser }
+  | { outcome: 'refused'; reason: RefusalReason }
+
+/**
+ * Turn a refresh token into a fresh access token, rotating the refresh token
+ * when it is due. Cookie-free: this is the whole decision, and the wrappers
+ * below only persist what it returns.
+ *
+ * `allowRotation: false` is for callers that cannot promise to persist a new
+ * refresh cookie (a page render) — they renew access only and leave rotation to
+ * a later request that can.
+ */
+export async function refreshSession(
+  rawRefreshToken: string,
+  scope: SessionScope,
+  options: { ctx: RequestContext; now?: Date; allowRotation?: boolean },
+): Promise<RefreshResult> {
+  const now = options.now ?? new Date()
+  const found = await lookupRefreshSession(rawRefreshToken, scope, now)
+  if (found.kind === 'refused') return { outcome: 'refused', reason: found.reason }
+
+  if (found.kind === 'superseded') {
+    const accessToken = await signAccessToken(claimsFor(found.session.user, found.session.id))
+    return {
+      outcome: 'superseded',
+      sessionId: found.session.id,
+      accessToken,
+      user: toAuthUser(found.session.user, found.session.id),
+    }
+  }
+
+  const { session } = found
+  const due = (options.allowRotation ?? true) && ageSeconds(session.createdAt, now) >= rotateAfterSeconds()
+
+  if (due) {
+    const rotated = await rotateSessionRecord({ predecessor: session, scope, ctx: options.ctx, now })
+    if (rotated) {
+      const accessToken = await signAccessToken(claimsFor(session.user, rotated.successor.id))
+      return {
+        outcome: 'rotated',
+        sessionId: rotated.successor.id,
+        accessToken,
+        refreshToken: rotated.refreshToken,
+        user: toAuthUser(session.user, rotated.successor.id),
+      }
+    }
+    /*
+     * Lost the compare-and-swap: a sibling rotated this token between our read
+     * and our write. Its `Set-Cookie` owns the refresh cookie now. Look the
+     * token up again — it is revoked-with-successor, milliseconds old — and
+     * take the superseded path, exactly as if we had arrived late.
+     */
+    const again = await lookupRefreshSession(rawRefreshToken, scope, new Date())
+    if (again.kind === 'refused') return { outcome: 'refused', reason: again.reason }
+    // `live` here would mean the sibling's rotation rolled back between our two
+    // reads; minting for whichever row is live is correct in either case.
+    const accessToken = await signAccessToken(claimsFor(again.session.user, again.session.id))
+    return {
+      outcome: 'superseded',
+      sessionId: again.session.id,
+      accessToken,
+      user: toAuthUser(again.session.user, again.session.id),
+    }
+  }
+
+  const accessToken = await signAccessToken(claimsFor(session.user, session.id))
+  return {
+    outcome: 'renewed',
+    sessionId: session.id,
+    accessToken,
+    user: toAuthUser(session.user, session.id),
+  }
+}
+
+// ── The cookie-writing wrappers ──────────────────────────────────────────────
+
+type CookieStore = Awaited<ReturnType<typeof cookies>>
+
+function clearSessionCookies(store: CookieStore, scope: SessionScope) {
+  store.delete(accessCookieName(scope))
+  store.delete(refreshCookieName(scope))
+}
+
+/**
+ * The refresh endpoint's entry point: renew, rotate if due, and persist.
+ *
+ * Name kept for its callers. Returns null ONLY on a real refusal, and clears
+ * the cookies itself in that case — the route used to do that, and used to do
+ * it for the race loser too, which is how a valid session got its cookie
+ * deleted. A `superseded` result is a success: the access cookie is set for the
+ * successor and the refresh cookie is deliberately left alone, because the
+ * winner's response already set it.
  */
 export async function rotateSession(
   rawRefreshToken: string,
   scope: SessionScope = 'staff',
 ): Promise<AuthUser | null> {
-  const session = await prisma.session.findUnique({
-    where: { refreshTokenHash: hashToken(rawRefreshToken) },
-    include: {
-      user: {
-        select: {
-          id: true, email: true, name: true, role: true, restaurantId: true,
-          branchId: true, avatarUrl: true, permissions: true, isActive: true,
-          deletedAt: true,
-          staffRole: { select: { permissions: true, isActive: true } },
-          /*
-           * What the platform operator has sold this restaurant.
-           *
-           * On the query that was already loading the session, so the feature
-           * gate costs no extra round trip on any request.
-           */
-          restaurant: { select: { enabledFeatures: true } },
-        },
-      },
-    },
-  })
-
-  if (!session || session.revokedAt || session.expiresAt < new Date()) return null
-  if (!session.user.isActive || session.user.deletedAt) return null
-  // The refresh token must belong to the scope it's being used for.
-  if (scopeForRole(session.user.role) !== scope) return null
-
-  const ctx = await requestContext()
-  const nextToken = generateToken()
-
-  const [, updated] = await prisma.$transaction([
-    prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
-    }),
-    prisma.session.create({
-      data: {
-        userId: session.userId,
-        refreshTokenHash: hashToken(nextToken),
-        userAgent: ctx.userAgent?.slice(0, 500),
-        ipAddress: ctx.ipAddress,
-        expiresAt: new Date(Date.now() + refreshTokenTtlDays() * 24 * 60 * 60 * 1000),
-      },
-    }),
-  ])
-
-  const user = session.user
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    rid: user.restaurantId,
-    role: user.role,
-    name: user.name,
-    email: user.email,
-    sid: updated.id,
-  })
-
   const store = await cookies()
-  store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
-  store.set(refreshCookieName(scope), nextToken, cookieOptions(REFRESH_COOKIE_MAX_AGE()))
+  const ctx = await requestContext()
+  const result = await refreshSession(rawRefreshToken, scope, { ctx, allowRotation: true })
 
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    restaurantId: user.restaurantId,
-    branchId: user.branchId ?? null,
-    avatarUrl: user.avatarUrl,
-    permissions: user.permissions,
-    rolePermissions: activeRolePermissions(user.staffRole),
-    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
-    sessionId: updated.id,
+  if (result.outcome === 'refused') {
+    clearSessionCookies(store, scope)
+    return null
   }
+
+  store.set(accessCookieName(scope), result.accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE()))
+  if (result.outcome === 'rotated') {
+    // A transient ("remember me" off) session can never be rotated — its
+    // twelve-hour life is shorter than the rotation threshold, asserted at
+    // module load in jwt.ts — so a rotated cookie always carries the full
+    // scope lifetime.
+    store.set(refreshCookieName(scope), result.refreshToken, cookieOptions(REFRESH_COOKIE_MAX_AGE(scope)))
+  }
+  return result.user
 }
 
 export async function destroySession(scope: SessionScope = 'staff'): Promise<void> {
@@ -253,6 +592,11 @@ export async function destroySession(scope: SessionScope = 'staff'): Promise<voi
       })
       .catch(() => null)
 
+    /*
+     * A logout revokes WITHOUT `replacedById`: there is no successor to follow,
+     * so a refresh with this token afterwards is refused outright. That is the
+     * distinction lineage exists to make.
+     */
     await prisma.session
       .updateMany({
         where: { refreshTokenHash: hashToken(raw), revokedAt: null },
@@ -267,8 +611,8 @@ export async function destroySession(scope: SessionScope = 'staff'): Promise<voi
      *
      * Here and not in `revokeAllSessions`: that one fires on a password change
      * and on "sign out everywhere else", neither of which means the person has
-     * gone home. Nor in `rotateSession`, which revokes a row every fifteen
-     * minutes as a matter of routine and would clock everybody out all day.
+     * gone home. Nor in rotation, which is routine — once a day now, and it
+     * would clock everybody out at the moment their token happened to turn over.
      */
     if (live?.userId) {
       await closeShiftForUser(live.userId).catch((error) => {
@@ -276,8 +620,7 @@ export async function destroySession(scope: SessionScope = 'staff'): Promise<voi
       })
     }
   }
-  store.delete(accessCookieName(scope))
-  store.delete(refreshCookieName(scope))
+  clearSessionCookies(store, scope)
 }
 
 export async function revokeAllSessions(userId: string, exceptSessionId?: string): Promise<number> {
@@ -293,91 +636,83 @@ export async function revokeAllSessions(userId: string, exceptSessionId?: string
 }
 
 /**
- * Resolves the signed-in user for the current request.
+ * Renew an expired access token from the refresh cookie, mid-request.
  *
- * Reads the access JWT, then confirms the backing session row is still live —
- * so revoking a session takes effect immediately rather than after the JWT
- * expires.
- */
-/**
- * Mint a replacement access token from a still-valid refresh token.
+ * ── Probe, then rotate ──────────────────────────────────────────────────────
  *
- * Deliberately NOT `rotateSession`. That one revokes the old refresh token and
- * issues a new one, which is correct for the refresh endpoint but unsafe here:
- * this runs during page renders and Server Actions, and Next forbids writing
- * cookies during a render. A rotation whose cookie write is refused would
- * revoke the session in the database while the browser kept the dead token —
- * signing the user out for good.
+ * This runs during page renders and Server Actions, and Next forbids writing
+ * cookies during a render. So the new access cookie is written FIRST, inside a
+ * try. If that throws we are rendering: the request is still authenticated,
+ * nothing is persisted, nothing is rotated, and the next route-handler poll
+ * (`/api/pulse`) will persist for us. If it succeeds we are somewhere cookies
+ * stick — and only then, if the refresh token is a day old, do we rotate it.
  *
- * Issuing only a new access token has no such failure mode. The refresh token
- * is read, never changed, so a refused cookie write costs nothing: the next
- * request simply tries again, and navigations still get full rotation via
- * /api/auth/refresh.
+ * Rotating here matters more than it looks. The polling screens keep the
+ * access cookie alive through this exact path, so a kitchen display that never
+ * navigates would never reach the redirect-driven refresh endpoint — and would
+ * be logged out the instant its thirty-day row expired, at a random moment
+ * mid-service. Rotating wherever a cookie can be written is what makes the
+ * thirty days slide for a station that is used every day.
  *
- * This is what closes the 45-minute window where the 15-minute JWT had expired
- * but its 60-minute cookie had not — the window in which every Server Action
- * failed.
+ * This is also what closes the window where the JWT had expired but its cookie
+ * had not, in which every Server Action used to fail.
  */
 async function renewFromRefreshToken(scope: SessionScope): Promise<AuthUser | null> {
   const store = await cookies()
-  const refreshToken = store.get(refreshCookieName(scope))?.value
-  if (!refreshToken) return null
+  const raw = store.get(refreshCookieName(scope))?.value
+  if (!raw) return null
 
-  const session = await prisma.session.findUnique({
-    where: { refreshTokenHash: hashToken(refreshToken) },
-    include: {
-      user: {
-        select: {
-          id: true, email: true, name: true, role: true, restaurantId: true,
-          branchId: true, avatarUrl: true, permissions: true, isActive: true,
-          deletedAt: true,
-          staffRole: { select: { permissions: true, isActive: true } },
-          /*
-           * What the platform operator has sold this restaurant.
-           *
-           * On the query that was already loading the session, so the feature
-           * gate costs no extra round trip on any request.
-           */
-          restaurant: { select: { enabledFeatures: true } },
-        },
-      },
-    },
-  })
+  const now = new Date()
+  const found = await lookupRefreshSession(raw, scope, now)
+  if (found.kind === 'refused') return null
 
-  if (!session || session.revokedAt || session.expiresAt < new Date()) return null
-  if (!session.user.isActive || session.user.deletedAt) return null
-  if (scopeForRole(session.user.role) !== scope) return null
+  const { session } = found
+  let accessToken = await signAccessToken(claimsFor(session.user, session.id))
 
-  const user = session.user
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    rid: user.restaurantId,
-    role: user.role,
-    name: user.name,
-    email: user.email,
-    sid: session.id,
-  })
-
+  let persisted = true
   try {
-    store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE))
+    store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE()))
   } catch {
     // Rendering a page — Next refuses cookie writes there. The user is still
     // authenticated for this request; only the saving of the new token is lost.
+    persisted = false
   }
 
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    restaurantId: user.restaurantId,
-    branchId: user.branchId ?? null,
-    avatarUrl: user.avatarUrl,
-    permissions: user.permissions,
-    rolePermissions: activeRolePermissions(user.staffRole),
-    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
-    sessionId: session.id,
+  const rotationDue =
+    persisted && found.kind === 'live' && ageSeconds(session.createdAt, now) >= rotateAfterSeconds()
+
+  if (rotationDue) {
+    const ctx = await requestContext().catch(() => ({ ipAddress: null, userAgent: null }))
+    const rotated = await rotateSessionRecord({ predecessor: session, scope, ctx, now })
+    if (rotated) {
+      accessToken = await signAccessToken(claimsFor(session.user, rotated.successor.id))
+      // The first write succeeded, so these cannot throw; the try is belt and braces.
+      try {
+        store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE()))
+        store.set(
+          refreshCookieName(scope),
+          rotated.refreshToken,
+          cookieOptions(REFRESH_COOKIE_MAX_AGE(scope)),
+        )
+      } catch {
+        // Unreachable in practice; documented above.
+      }
+      return toAuthUser(session.user, rotated.successor.id)
+    }
+    // Lost the compare-and-swap to a sibling. Its Set-Cookie owns the refresh
+    // cookie; follow the lineage it just wrote and mint for the successor.
+    const again = await lookupRefreshSession(raw, scope, new Date())
+    if (again.kind !== 'superseded' && again.kind !== 'live') return null
+    accessToken = await signAccessToken(claimsFor(again.session.user, again.session.id))
+    try {
+      store.set(accessCookieName(scope), accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE()))
+    } catch {
+      // As above.
+    }
+    return toAuthUser(again.session.user, again.session.id)
   }
+
+  return toAuthUser(session.user, session.id)
 }
 
 async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
@@ -392,31 +727,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
 
   const session = await prisma.session.findFirst({
     where: { id: claims.sid, revokedAt: null, expiresAt: { gt: new Date() } },
-    select: {
-      id: true,
-      user: {
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          restaurantId: true,
-          branchId: true,
-          avatarUrl: true,
-          permissions: true,
-          isActive: true,
-          deletedAt: true,
-          staffRole: { select: { permissions: true, isActive: true } },
-          /*
-           * What the platform operator has sold this restaurant.
-           *
-           * On the query that was already loading the session, so the feature
-           * gate costs no extra round trip on any request.
-           */
-          restaurant: { select: { enabledFeatures: true } },
-        },
-      },
-    },
+    select: { id: true, user: { select: USER_SELECT } },
   })
 
   // The session the token names is gone — usually because a concurrent refresh
@@ -439,8 +750,8 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
    * whether a session they do not recognise is stale was reading a number that
    * could not tell them.
    *
-   * Here rather than in `rotateSession`: rotation inserts a NEW row and revokes
-   * the old one, so writing it there would leave the row anybody is actually
+   * Here rather than in rotation: rotation inserts a NEW row and revokes the
+   * old one, so writing it there would leave the row anybody is actually
    * looking at frozen for ever.
    *
    * Throttled, and deliberately not awaited. This runs on every guarded render
@@ -454,27 +765,7 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
       .catch(() => {})
   }
 
-  return {
-    id: session.user.id,
-    email: session.user.email,
-    name: session.user.name,
-    role: session.user.role,
-    restaurantId: session.user.restaurantId,
-    branchId: session.user.branchId ?? null,
-    avatarUrl: session.user.avatarUrl,
-    permissions: session.user.permissions,
-    rolePermissions: activeRolePermissions(session.user.staffRole),
-    /*
-     * Expanded once, here, rather than wherever a permission is checked.
-     *
-     * Empty stays empty: `permissionsFor` reads that as "unrestricted", which
-     * is what every restaurant that has never been scoped should get.
-     */
-    availablePermissions: permissionsSoldByFeatures(
-      session.user.restaurant?.enabledFeatures ?? [],
-    ),
-    sessionId: session.id,
-  }
+  return toAuthUser(session.user, session.id)
 }
 
 /**
@@ -489,7 +780,8 @@ async function resolveUser(scope: SessionScope): Promise<AuthUser | null> {
  *
  * Safe to cache: the cache is per-request, and the only thing that changes the
  * answer mid-request is `renewFromRefreshToken` issuing a new access token —
- * which returns the same user either way.
+ * which returns the same user either way. It also means the rotation inside
+ * `renewFromRefreshToken` runs at most once per request.
  */
 export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   return resolveUser('staff')

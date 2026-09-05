@@ -1,0 +1,19 @@
+-- Session lineage (athu.md — the rotation race).
+--
+-- A refresh token used to be rotated on every access-token expiry: the old row
+-- revoked, a new one created. Two tabs refreshing at the same moment — a till and
+-- a kitchen display, the normal shape of a restaurant — both arrived with the same
+-- token. The first rotated it and set the new cookie. The second found the row
+-- revoked, could not tell that from a stolen or logged-out token, DELETED the
+-- refresh cookie (the winner's new one, same name) and redirected to login. A
+-- live session sat orphaned in this table while the user typed their password.
+--
+-- `replacedById` records WHY a row is revoked. Set by rotation, naming the
+-- successor; left null by logout, password reset, suspension and deactivation.
+-- A refresh that finds a recently-rotated token now follows it to its successor
+-- instead of failing.
+--
+-- Additive and nullable. Every existing row keeps meaning what it meant: a row
+-- revoked before this migration has no successor and is refused exactly as it
+-- was before. Nobody is logged out by deploying this.
+ALTER TABLE "sessions" ADD COLUMN "replacedById" TEXT;

@@ -221,6 +221,50 @@ export async function middleware(request: NextRequest) {
 
   if (isServerAction) return NextResponse.next()
 
+  /*
+   * ── Prefetches must not be sent to the refresh endpoint ────────────────────
+   *
+   * Every `<Link>` in the dashboard prefetches, and `staleTimes.dynamic` is 0,
+   * so a sidebar scrolling into view fires several RSC GETs at protected routes
+   * at once. When the access JWT has expired — 15 minutes into any quiet spell —
+   * each of those used to be redirected into `/api/auth/refresh`, which ROTATES
+   * the refresh token. Several concurrent rotations of one token is exactly the
+   * race that logged people out: the losers found the token already rotated and
+   * deleted the winner's new cookie.
+   *
+   * An RSC fetch with a refresh cookie present is let through instead. The
+   * render path (`resolveUser` → `renewFromRefreshToken`) authenticates it
+   * read-only, nothing is persisted, and the page guards remain the authority.
+   * The browser's access cookie is renewed by the next thing that CAN write a
+   * cookie — a `/api/pulse` poll, a Server Action, a full-page load — which is
+   * also where a day-old refresh token rotates. Document navigations still take
+   * the redirect below, so a user arriving by URL gets a fresh cookie at once.
+   *
+   * ── Why Fetch Metadata, and not Next's own markers ──────────────────────
+   *
+   * This check began with Next's prefetch headers (`Next-Router-Prefetch`,
+   * `Next-Router-Segment-Prefetch`) and then with its `?_rsc=` cache-buster.
+   * Middleware sees neither. The adapter that builds this `request` removes
+   * every flight header ("Headers should only be stripped for middleware",
+   * `FLIGHT_HEADERS`) and strips the internal query (`stripInternalSearchParams`)
+   * — `next/dist/server/web/adapter.js`, 15.5.22 — deliberately, so that
+   * middleware treats a page and its RSC payload identically. Both attempts
+   * passed in the test runner and did nothing on the served build; the runtime
+   * test is what caught it, twice. A control that only works in the test is
+   * worse than none.
+   *
+   * What Next cannot touch is what the BROWSER says about the request. A
+   * `fetch()` — every RSC prefetch and soft navigation — carries
+   * `Sec-Fetch-Dest: empty`; a document navigation carries
+   * `Sec-Fetch-Dest: document`. Chrome 76+, Firefox 90+, Safari 16.4+. A browser
+   * without it falls through to the redirect below, which is today's behaviour:
+   * correct, just a round-trip slower. `purpose: prefetch` is kept for the
+   * browser-level speculation hint.
+   */
+  const isPrefetch =
+    request.headers.get('sec-fetch-dest') === 'empty' ||
+    request.headers.get('purpose') === 'prefetch'
+
   // ── 2. admin login page ───────────────────────────────────────────────────
   if (isAdminLogin) {
     if (adminClaims) return NextResponse.redirect(new URL('/admin', request.url))
@@ -230,6 +274,7 @@ export async function middleware(request: NextRequest) {
   // ── 3. admin area (separate admin session) ────────────────────────────────
   if (isAdminArea) {
     if (!adminClaims) {
+      if (isPrefetch && request.cookies.has(ADMIN_REFRESH_COOKIE)) return NextResponse.next()
       if (request.cookies.has(ADMIN_REFRESH_COOKIE)) {
         const refreshUrl = new URL('/api/auth/refresh', request.url)
         refreshUrl.searchParams.set('scope', 'admin')
@@ -257,6 +302,7 @@ export async function middleware(request: NextRequest) {
   // ── 5. staff protected routes ─────────────────────────────────────────────
   // Server Actions already returned above; everything from here is a navigation.
   if (!staffClaims) {
+    if (isPrefetch && request.cookies.has(REFRESH_COOKIE)) return NextResponse.next()
     if (request.cookies.has(REFRESH_COOKIE)) {
       const refreshUrl = new URL('/api/auth/refresh', request.url)
       refreshUrl.searchParams.set('next', `${pathname}${search}`)

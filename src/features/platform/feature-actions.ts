@@ -81,11 +81,21 @@ export async function setRestaurantFeaturesAction(
         packageId: data.packageId ?? null,
       })
 
-      // Same shape `suspendRestaurant` uses.
-      await prisma.session.updateMany({
-        where: { user: { restaurantId: data.restaurantId }, revokedAt: null },
-        data: { revokedAt: new Date() },
-      })
+      /*
+       * DELIBERATE behaviour change 2026-09-05 (athu.md): this no longer signs
+       * anybody out.
+       *
+       * It used to revoke every session in the restaurant — "same shape
+       * suspendRestaurant uses" — so a platform admin ticking one feature box
+       * logged an entire restaurant out mid-service. The revocation was never
+       * needed for the change to take effect: `availablePermissions` is read
+       * from `Restaurant.enabledFeatures` on EVERY request, inside
+       * `resolveUser`, so the new feature set applies on each user's very next
+       * click. Suspending a restaurant still ends its sessions, because there
+       * the point IS to stop people working. A static guard
+       * (`no-collateral-session-revocation`) keeps this file from acquiring
+       * another `revokedAt` write.
+       */
 
       await audit({
         restaurantId: data.restaurantId,

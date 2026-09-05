@@ -173,12 +173,14 @@ async function main() {
     ingredients: [{ inventoryItemId: tomato.id, quantity: 1, unit: 'KG' }],
   })
 
+  /*
+   * No approve step: kitchenjobs.md removed it on 2026-09-04. A job is
+   * completed straight from DRAFT — see production/service.ts for why the gate
+   * was standing in front of the wrong door.
+   */
   const job = await createProductionOrder({
     restaurantId: restaurant.id, branchId: house.id, recipeId: sauceRecipe.id,
     plannedQty: 2, userId: user.id,
-  })
-  await setProductionStatus({
-    restaurantId: restaurant.id, orderId: job.id, status: 'APPROVED', userId: user.id,
   })
   await completeProduction({ restaurantId: restaurant.id, orderId: job.id, userId: user.id })
 
@@ -322,9 +324,6 @@ async function main() {
     restaurantId: restaurant.id, branchId: house.id, recipeId: breadRecipe.id,
     plannedQty: 100, userId: user.id,
   })
-  await setProductionStatus({
-    restaurantId: restaurant.id, orderId: breadJob.id, status: 'APPROVED', userId: user.id,
-  })
 
   const flourBefore = await qty(flour.id)
 
@@ -359,9 +358,6 @@ async function main() {
   const zeroJob = await createProductionOrder({
     restaurantId: restaurant.id, branchId: house.id, recipeId: breadRecipe.id,
     plannedQty: 10, userId: user.id,
-  })
-  await setProductionStatus({
-    restaurantId: restaurant.id, orderId: zeroJob.id, status: 'APPROVED', userId: user.id,
   })
 
   const flourBeforeZero = await qty(flour.id)

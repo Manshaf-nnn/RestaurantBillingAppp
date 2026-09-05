@@ -142,6 +142,21 @@ Fill in **every** value. The critical ones:
   `openssl rand -base64 48` (run it twice, paste two different values)
 - `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` → your login for `/admin`
 
+`NEXT_PUBLIC_APP_URL` **must** start with `https://` in production — the session
+cookies take their `Secure` flag from it. With it missing or `http://`, browsers
+still store the cookies, but they travel unencrypted.
+
+Session lifetimes are optional and have sensible defaults — leave them out
+unless you have a reason:
+
+| Key | Default | What it is |
+| --- | --- | --- |
+| `ACCESS_TOKEN_TTL` | `15m` | How long a signed access token lives; its cookie lives exactly as long |
+| `REFRESH_TOKEN_TTL_DAYS` | `30` | Staff session length. Slides forward each day the person uses the app |
+| `ADMIN_REFRESH_TOKEN_TTL_HOURS` | `12` | Super-admin session length. Absolute — an admin signs in again every day |
+| `REFRESH_ROTATE_AFTER_HOURS` | `24` | How old a refresh token must be before it is swapped for a new one |
+| `REFRESH_GRACE_SECONDS` | `30` | How long a just-swapped token still resolves to its successor (two tabs refreshing at once) |
+
 Save: `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
 ---

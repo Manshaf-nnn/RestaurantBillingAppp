@@ -59,6 +59,12 @@ interface Poller {
    */
   seen: Set<string>
   seenOrder: string[]
+  /**
+   * Consecutive 401s. One triggers a silent refresh; a second while the tab is
+   * visible means the session is genuinely gone and the station is sent to
+   * sign in rather than left showing yesterday's tickets.
+   */
+  unauthorised: number
 }
 
 /** How many recent event ids to remember for de-duplication. */
@@ -120,12 +126,53 @@ async function tick(scope: string, poller: Poller) {
   if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
 
   poller.inFlight = true
+  // Set when a silent refresh succeeded: poll again straight away instead of
+  // waiting out the interval. Done from `finally`, not by recursing here — a
+  // nested `tick` would see `inFlight` still true and return without polling.
+  let pollAgainNow = false
   try {
     const response = await fetch(urlFor(scope, poller), {
       cache: 'no-store',
       headers: { accept: 'application/json' },
     })
+
+    /*
+     * ── A 401 is not a network blip ─────────────────────────────────────────
+     *
+     * It used to be: every non-OK status fell into the same failure counter
+     * and the same back-off, so a station whose session had ended kept polling
+     * more and more slowly, never got a token change, never refreshed, and sat
+     * showing stale tickets with no indication anything was wrong. `/api/pulse`
+     * catches its own database errors and answers 200, so a 401 from it means
+     * one thing only: no session.
+     *
+     * First 401 → one silent refresh (deduplicated across the tab, and at most
+     * once a minute from this poller), then poll again straight away. Second
+     * 401 in a row while the tab is visible → the session is genuinely gone;
+     * send the station to sign in, which is what the spec means by "an
+     * expired session still forces a login". Hidden tabs are left alone: a
+     * screen nobody is looking at should not navigate itself.
+     */
+    if (response.status === 401) {
+      poller.unauthorised += 1
+      if (poller.unauthorised === 1) {
+        const { requestSessionRefresh } = await import('@/lib/session-refresh')
+        if (await requestSessionRefresh(60_000)) {
+          poller.unauthorised = 0
+          poller.failures = 0
+          pollAgainNow = true
+          return
+        }
+      }
+      if (poller.unauthorised >= 2 && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        const { loginPathFor } = await import('@/lib/session-refresh')
+        window.location.assign(loginPathFor(window.location.pathname))
+        return
+      }
+      throw new Error('401')
+    }
     if (!response.ok) throw new Error(String(response.status))
+    poller.unauthorised = 0
 
     const body = (await response.json()) as {
       v?: string | null
@@ -180,7 +227,8 @@ async function tick(scope: string, poller: Poller) {
     poller.failures += 1
   } finally {
     poller.inFlight = false
-    schedule(scope, poller)
+    if (pollAgainNow) void tick(scope, poller)
+    else schedule(scope, poller)
   }
 }
 
@@ -206,6 +254,7 @@ function acquire(
       branchId: options.branchId ?? null,
       seen: new Set(),
       seenOrder: [],
+      unauthorised: 0,
     }
     created.onVisibility = () => {
       if (document.visibilityState === 'visible') {

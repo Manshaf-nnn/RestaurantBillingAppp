@@ -219,9 +219,22 @@ export const FEATURES: Feature[] = [
     actions: [
       { key: 'view', permission: PERMISSIONS.PRODUCTION_VIEW },
       { key: 'create', label: 'Manage', permission: PERMISSIONS.PRODUCTION_MANAGE },
+      /*
+       * Legacy. Approval left the production flow (kitchenjobs.md): it gated
+       * the one step that moved no stock, while completion — which moves all of
+       * it — required only `production.manage`.
+       *
+       * The permission is deliberately NOT deleted. `availablePermissions` is
+       * an intersection, and saved roles list permissions by name, so removing
+       * one here silently changes what every role holding it resolves to.
+       * Retiring it properly is its own change, with a migration for the saved
+       * roles that name it.
+       */
       { key: 'approve', permission: PERMISSIONS.PRODUCTION_APPROVE },
     ],
-    routes: ['/dashboard/production'],
+    // The run-detail and recipe screens are part of this feature, so a
+    // restaurant that has not bought Production cannot reach them by URL.
+    routes: ['/dashboard/production', '/dashboard/production/recipes'],
   },
   {
     key: 'handover',

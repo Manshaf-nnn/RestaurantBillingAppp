@@ -41,6 +41,9 @@ const STATIC = [
   // production.md §15/§17 — migrations stay additive and deployable. Reads the
   // SQL, so it costs nothing and belongs with the other grep-level guards.
   'migration-safety-test',
+  // athu.md — only a credential or deactivation event may write `revokedAt`.
+  // A feature-flag edit once logged a whole restaurant out by copying six lines.
+  'no-collateral-session-revocation',
 ]
 
 const SERVICE = [
@@ -54,6 +57,10 @@ const SERVICE = [
   'branch-scope-test',
   'instructions-test',
   'production-spec-test',
+  // kitchenjobs.md — the redesigned flow: no approval, the kitchen states what
+  // it actually used, and production stays a stock transformation rather than
+  // becoming a second COGS path.
+  'production-flow-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',
@@ -69,6 +76,10 @@ const SERVICE = [
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',
+  // athu.md — the refresh-token rotation race, run AS a race: two tabs
+  // refreshing one token must both keep a session. Plus grace, lineage,
+  // daily rotation, scope lifetimes and the second-factor gate.
+  'session-lifecycle-test',
   // production.md §3 — the tenant boundary swept the way branches already are;
   // cross-restaurant checks used to be four one-line asides in other suites.
   'tenant-isolation-test',
@@ -138,6 +149,10 @@ const RUNTIME = [
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
+  // athu.md — the refresh race over real HTTP with a cookie jar: two tabs on
+  // one day-old token both stay signed in; Set-Cookie attributes; prefetch
+  // exclusion; /logout fetch-metadata; sign-in with the second factor.
+  'session-runtime-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
 ]

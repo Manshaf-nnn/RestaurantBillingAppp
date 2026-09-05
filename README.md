@@ -32,7 +32,7 @@ The methodology docs are the contract every screen obeys:
 | [INVENTORY.md](INVENTORY.md) | The stock ledger, value-carrying WAC, COGS methodology, counts, reconciliation |
 | [REPORTING.md](REPORTING.md) | One definition per number; which module owns which report |
 | [TESTING.md](TESTING.md) | The three-tier harness and its house rules; the proof suites |
-| [ARCHITECTURE.md](ARCHITECTURE.md) · [DATABASE.md](DATABASE.md) · [SECURITY.md](SECURITY.md) · [API.md](API.md) · [DEPLOYMENT.md](DEPLOYMENT.md) | The rest of the platform |
+| [ARCHITECTURE.md](ARCHITECTURE.md) · [DATABASE.md](DATABASE.md) · [SECURITY.md](SECURITY.md) · [AUTH-SESSIONS.md](AUTH-SESSIONS.md) · [API.md](API.md) · [DEPLOYMENT.md](DEPLOYMENT.md) | The rest of the platform |
 | [AUDIT.md](AUDIT.md) | The Phase 0 audit this work started from, and the re-scored scorecard |
 
 ---

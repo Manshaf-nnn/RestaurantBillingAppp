@@ -993,6 +993,21 @@ model Session {
   ipAddress        String?
   expiresAt        DateTime
   revokedAt        DateTime?
+  /**
+   * Lineage. Set ONLY when this row was revoked by rotation, naming the row
+   * that replaced it.
+   *
+   * This is what lets a refresh tell "just rotated by a sibling request" from
+   * "revoked because the user logged out": the first has a successor, the
+   * second does not. Without it, two tabs refreshing at once made the loser
+   * delete the winner's brand-new cookie and send the user to the login screen
+   * with a live session still in this table.
+   *
+   * No relation and no index on purpose: a successor is fetched by primary
+   * key, and a future purge must be free to delete old rows without nulling
+   * anything.
+   */
+  replacedById     String?
   lastUsedAt       DateTime  @default(now())
   createdAt        DateTime  @default(now())
 

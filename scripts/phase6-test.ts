@@ -94,11 +94,21 @@ async function main() {
   ok('run starts as DRAFT', run.status === 'DRAFT')
   ok('planning consumes nothing', await avail(chicken.id, ph.id) === 100)
 
-  await throws('completing an unapproved run is refused',
-    () => completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id }),
-    'PRODUCTION_NOT_APPROVED')
-
-  await setProductionStatus({ restaurantId: shop.id, orderId: run.id, status: 'APPROVED', userId: user.id })
+  /*
+   * DELIBERATE behaviour change 2026-09-04 (kitchenjobs.md).
+   *
+   * The old pin: completing a run that had not been APPROVED was refused with
+   * PRODUCTION_NOT_APPROVED, so the flow was create → approve → complete.
+   *
+   * Approval has been removed. It was not the maker-checker mechanism —
+   * `ApprovalKind` has no production value, so there was no threshold and no
+   * self-approval refusal — it was a status field whose permission guarded the
+   * one step that moved NO stock, while completing, which moves all of it,
+   * needed only `production.manage`. The gate stood in front of the wrong door.
+   *
+   * A job is now completable from DRAFT. What is still refused is completing a
+   * job that is finished or cancelled, and those pins are below and unchanged.
+   */
   const done = await completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id })
 
   ok('chicken 100 → 80 kg', await avail(chicken.id, ph.id) === 80, `got ${await avail(chicken.id, ph.id)}`)
@@ -117,6 +127,16 @@ async function main() {
   ok('ledger has two PRODUCTION_CONSUMPTION rows', inMv === 2)
   await throws('completing twice is refused',
     () => completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id }), 'PRODUCTION_DONE')
+
+  // …and a cancelled job cannot be completed either — the refusal that replaces
+  // the approval gate as the thing standing between a job and the ledger.
+  const scrapped = await createProductionOrder({
+    restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 5, userId: user.id,
+  })
+  await setProductionStatus({ restaurantId: shop.id, orderId: scrapped.id, status: 'CANCELLED', userId: user.id })
+  await throws('completing a cancelled run is refused',
+    () => completeProduction({ restaurantId: shop.id, orderId: scrapped.id, userId: user.id }),
+    'PRODUCTION_CANCELLED')
 
   console.log('\n── 4. Transfer: production house → Colombo, 40 ───────────')
   const t1 = await requestTransfer({

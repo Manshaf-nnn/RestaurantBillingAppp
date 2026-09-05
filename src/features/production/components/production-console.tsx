@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, ChefHat, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChefHat, Play, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -15,10 +15,10 @@ import { formatMoney, parseMoney } from '@/lib/money'
 import { callAction } from '@/lib/use-action'
 import {
   completeProductionAction, createProductionOrderAction,
-  saveMakeAheadRecipeAction, setMakeAheadRecipeActiveAction, setProductionStatusAction,
+  previewProductionAction, setProductionStatusAction,
 } from '../actions'
+import type { ProductionPreview } from '../queries'
 
-const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 const REASONS = [
   { value: 'PRODUCTION_LOSS', label: 'Some was lost making it' },
   { value: 'DAMAGED', label: 'Damaged' },
@@ -41,179 +41,158 @@ export interface MakeAheadRecipeView {
   items: Array<{ itemId: string; name: string; quantity: number; unit: string }>
 }
 
+export interface PendingJob {
+  id: string
+  number: string
+  status: string
+  recipeId: string | null
+  branchId: string
+  startedAt: string | null
+  recipeName: string | null
+  plannedQty: number
+  outputName: string | null
+  outputUnit: string | null
+}
+
 export interface ProductionConsoleData {
   houses: Array<{ id: string; name: string }>
   items: Array<{ id: string; name: string; unit: string; quantity: number }>
   recipes: MakeAheadRecipeView[]
-  pending: Array<{
-    id: string
-    number: string
-    status: string
-    recipeName: string | null
-    plannedQty: number
-    outputName: string | null
-    outputUnit: string | null
-  }>
+  pending: PendingJob[]
   currency: string
-}
-
-/** Plain words for a status. The enum has more; only these are reachable. */
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: 'to make',
-  PLANNED: 'to make',
-  APPROVED: 'approved',
-  IN_PROGRESS: 'approved',
-  COMPLETED: 'done',
-  PARTIALLY_COMPLETED: 'done',
-  CANCELLED: 'cancelled',
 }
 
 /**
  * Kitchen jobs — making something ahead so it is on the shelf when you need it.
  *
- * Two things happen here and only one of them touches stock. Writing a recipe
- * and planning a job change nothing; finishing a job takes the ingredients out
- * and puts the finished item in, in a single transaction. The screen says so at
- * each step rather than leaving someone to find out.
+ * ── The flow, in the words the spec uses ────────────────────────────────────
  *
- * ── What this screen used to be ─────────────────────────────────────────────
+ *   New Production → Planned Quantity → what it needs vs what is here
+ *     → Create Production Job → the kitchen makes it
+ *     → Actual Quantity Produced → Complete Production → stock updates
  *
- * It asked for a number of BATCHES against a recipe that made ten of something,
- * so "10" quietly meant a hundred loaves and the screen had to print the
- * multiplication underneath every field. It also called its recipes something
- * different from the Recipes screen while being the same idea, and apologised
- * for it in a caption. Both are gone: a job says how many you want, in the
- * finished item's own unit.
+ * Three buckets, and nothing else: **Ready to Make**, **In Progress**,
+ * **Completed**. Approval used to sit between the first two and it has gone —
+ * it moved no stock, it was not the maker-checker mechanism, and its permission
+ * guarded the one step that changed nothing while completion, which changes
+ * everything, needed a weaker one.
+ *
+ * ── What touches stock ──────────────────────────────────────────────────────
+ *
+ * Only Complete Production. Creating a job and starting it change no balance,
+ * and the screen says so at each step rather than leaving somebody to find out.
+ * Recipes live on their own screen now; this one is about today's work.
  */
-export function ProductionConsole({
-  data,
-  canApprove = true,
-}: {
-  data: ProductionConsoleData
-  /**
-   * Approving commits ingredients, so it is a separate permission from
-   * planning. Showing the button to someone who does not hold it and answering
-   * the click with a refusal teaches people the app is broken; the honest
-   * version is not to offer it.
-   */
-  canApprove?: boolean
-}) {
+export function ProductionConsole({ data }: { data: ProductionConsoleData }) {
   const router = useRouter()
-  const money = (m: number) => formatMoney(m, data.currency)
+  const money = (minor: number) => formatMoney(minor, data.currency)
   const [busy, setBusy] = React.useState(false)
 
-  // ── recipe ────────────────────────────────────────────────────────────────
-  // Non-null while editing an existing recipe; the same form does both jobs,
-  // because "add" and "edit" of the same thing diverging is how two screens end
-  // up validating differently.
-  const [editingRecipe, setEditingRecipe] = React.useState<string | null>(null)
-  const [recipeName, setRecipeName] = React.useState('')
+  // ── New Production ────────────────────────────────────────────────────────
+  const [houseId, setHouseId] = React.useState(data.houses[0]?.id ?? '')
+  const [jobRecipeId, setJobRecipeId] = React.useState('')
+  const [plannedQty, setPlannedQty] = React.useState('')
+  const [preview, setPreview] = React.useState<ProductionPreview | null>(null)
+  const [previewing, setPreviewing] = React.useState(false)
+
+  const chosenRecipe = data.recipes.find((recipe) => recipe.id === jobRecipeId) ?? null
+  const plannedNumber = Number(plannedQty)
+
   /*
-   * The "what it makes" PICKER is gone. It asked owners to choose a stock
-   * item that duplicated the name they had just typed, and it was the single
-   * most-asked-about control on this screen. The server now finds or creates
-   * the shelf item from the recipe's name; all the form needs is the unit a
-   * batch is measured in — and when editing, even that is fixed.
+   * "Show required ingredients + available stock", live.
+   *
+   * Debounced because it runs as the quantity is typed and each call resolves
+   * the recipe and reads the branch's shelves. 350ms is long enough that typing
+   * "100" is one request rather than three, and short enough that the table has
+   * caught up by the time somebody reaches for the button.
    */
-  const [makesUnit, setMakesUnit] = React.useState('KG')
-  const [editingUnit, setEditingUnit] = React.useState<string | null>(null)
-  const [makesQty, setMakesQty] = React.useState('1')
-  const [shelfLife, setShelfLife] = React.useState('')
-  const [lines, setLines] = React.useState<Array<{ key: string; itemId: string; quantity: string; unit: string }>>([])
-
-  const clearRecipeForm = () => {
-    setEditingRecipe(null)
-    setRecipeName(''); setMakesUnit('KG'); setEditingUnit(null); setMakesQty('1'); setShelfLife(''); setLines([])
-  }
-
-  const loadRecipe = (recipe: MakeAheadRecipeView) => {
-    setEditingRecipe(recipe.id)
-    setRecipeName(recipe.name)
-    setEditingUnit(recipe.outputUnit)
-    setMakesQty(String(recipe.yieldQty))
-    setShelfLife(recipe.shelfLifeDays === null ? '' : String(recipe.shelfLifeDays))
-    setLines(
-      recipe.items.map((line, index) => ({
-        key: `${recipe.id}-${index}`,
-        itemId: line.itemId,
-        quantity: String(line.quantity),
-        unit: line.unit,
-      })),
-    )
-    if (typeof window !== 'undefined') {
-      document.getElementById('mr-name')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }
-
-  const saveRecipe = async () => {
-    const items = lines.filter((l) => l.itemId && Number(l.quantity) > 0)
-      .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity), unit: l.unit }))
-    if (!recipeName.trim() || !(Number(makesQty) > 0) || items.length === 0) {
-      toast.error('Name it and add at least one ingredient')
+  React.useEffect(() => {
+    if (!houseId || !jobRecipeId || !(plannedNumber > 0)) {
+      setPreview(null)
       return
     }
+    let cancelled = false
+    setPreviewing(true)
+    const timer = setTimeout(async () => {
+      const result = await callAction(() =>
+        previewProductionAction({ branchId: houseId, recipeId: jobRecipeId, plannedQty: plannedNumber }),
+      )
+      if (cancelled) return
+      setPreviewing(false)
+      setPreview(result.ok ? result.data : null)
+    }, 350)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [houseId, jobRecipeId, plannedNumber])
+
+  const createJob = async () => {
     setBusy(true)
-    const r = await callAction(() =>
-      saveMakeAheadRecipeAction({
-        recipeId: editingRecipe ?? undefined,
-        name: recipeName,
-        yieldUnit: makesUnit,
-        yieldQty: Number(makesQty),
-        shelfLifeDays: shelfLife ? Number(shelfLife) : undefined,
-        items,
+    const result = await callAction(() =>
+      createProductionOrderAction({ branchId: houseId, recipeId: jobRecipeId, plannedQty: plannedNumber }),
+    )
+    setBusy(false)
+    if (!result.ok) { toast.error(result.error); return }
+    toast.success(`${result.data.number} created — nothing taken from stock yet`)
+    setJobRecipeId(''); setPlannedQty(''); setPreview(null)
+    router.refresh()
+  }
+
+  const move = async (orderId: string, status: 'IN_PROGRESS' | 'CANCELLED') => {
+    setBusy(true)
+    const result = await callAction(() => setProductionStatusAction({ orderId, status }))
+    setBusy(false)
+    if (!result.ok) { toast.error(result.error); return }
+    toast.success(status === 'CANCELLED' ? 'Job cancelled' : 'Started')
+    router.refresh()
+  }
+
+  // ── Complete Production ───────────────────────────────────────────────────
+  /*
+   * The job being completed, with the recipe's requirement loaded so each
+   * ingredient can be pre-filled. Held as one object rather than a map keyed by
+   * job id: only one job is being finished at a time, and a map made it
+   * possible to type into one job's boxes while looking at another's.
+   */
+  const [finishing, setFinishing] = React.useState<{
+    job: PendingJob
+    lines: ProductionPreview['ingredients']
+    used: Record<string, string>
+    made: string
+    reason: string
+    overhead: string
+  } | null>(null)
+
+  const openFinish = async (job: PendingJob) => {
+    if (!job.recipeId) { toast.error('This job has no recipe'); return }
+    setBusy(true)
+    const result = await callAction(() =>
+      previewProductionAction({
+        branchId: job.branchId, recipeId: job.recipeId!, plannedQty: job.plannedQty,
       }),
     )
     setBusy(false)
-    if (!r.ok) { toast.error(r.error); return }
-    toast.success(editingRecipe ? 'Recipe updated' : 'Recipe saved')
-    clearRecipeForm()
-    router.refresh()
+    if (!result.ok || !result.data) {
+      toast.error(result.ok ? 'Could not work out this recipe' : result.error)
+      return
+    }
+    setFinishing({
+      job,
+      lines: result.data.ingredients,
+      // Pre-filled with what the recipe asked for, so a run that went to plan
+      // is one tap and a run that did not is one correction.
+      used: Object.fromEntries(result.data.ingredients.map((line) => [line.itemId, String(line.required)])),
+      made: String(job.plannedQty),
+      reason: '',
+      overhead: '',
+    })
   }
 
-  const retireRecipe = async (recipeId: string, isActive: boolean) => {
-    setBusy(true)
-    const r = await callAction(() => setMakeAheadRecipeActiveAction({ recipeId, isActive }))
-    setBusy(false)
-    if (!r.ok) { toast.error(r.error); return }
-    toast.success(isActive ? 'Recipe is back in use' : 'Recipe retired')
-    router.refresh()
-  }
-
-  // ── job ───────────────────────────────────────────────────────────────────
-  const [houseId, setHouseId] = React.useState(data.houses[0]?.id ?? '')
-  const [jobRecipeId, setJobRecipeId] = React.useState('')
-  const [howMany, setHowMany] = React.useState('')
-  const chosenRecipe = data.recipes.find((r) => r.id === jobRecipeId) ?? null
-
-  const startJob = async () => {
-    setBusy(true)
-    const r = await callAction(() => createProductionOrderAction({
-      branchId: houseId, recipeId: jobRecipeId, plannedQty: Number(howMany),
-    }))
-    setBusy(false)
-    if (!r.ok) { toast.error(r.error); return }
-    toast.success(`${r.data.number} added — nothing taken from stock yet`)
-    setJobRecipeId(''); setHowMany('')
-    router.refresh()
-  }
-
-  const move = async (orderId: string, status: string) => {
-    setBusy(true)
-    const r = await callAction(() => setProductionStatusAction({ orderId, status }))
-    setBusy(false)
-    if (!r.ok) { toast.error(r.error); return }
-    toast.success('Updated')
-    router.refresh()
-  }
-
-  // ── finishing ─────────────────────────────────────────────────────────────
-  const [made, setMade] = React.useState<Record<string, string>>({})
-  const [reason, setReason] = React.useState<Record<string, string>>({})
-  const [overhead, setOverhead] = React.useState<Record<string, string>>({})
-
-  const finish = async (orderId: string, planned: number) => {
-    const raw = made[orderId]
-    const actual = raw === undefined || raw === '' ? planned : Number(raw)
+  const finish = async () => {
+    if (!finishing) return
+    const { job } = finishing
+    const actual = Number(finishing.made)
     /*
      * Zero is refused rather than treated as "all of it". A blank box gives
      * `Number('')` === 0, which passes every finite/negative check — and used to
@@ -224,29 +203,45 @@ export function ProductionConsole({
       toast.error('Enter how many came out. If none did, cancel the job instead.')
       return
     }
-    if (actual < planned && !reason[orderId]) {
+    if (actual < job.plannedQty && !finishing.reason) {
       toast.error('Fewer came out than planned — say why')
       return
     }
+
+    const consumed = finishing.lines.map((line) => ({
+      itemId: line.itemId,
+      quantity: Number(finishing.used[line.itemId] ?? line.required),
+    }))
+    if (consumed.some((line) => !Number.isFinite(line.quantity) || line.quantity < 0)) {
+      toast.error('Check the ingredient amounts')
+      return
+    }
+
     /*
      * Overheads are typed in whole currency and stored in minor units, through
      * the same helper every other money field uses. This multiplied by 100 by
      * hand, which is 100× too much in yen, won and dong.
      */
-    const typed = overhead[orderId]
+    const typed = finishing.overhead
     const overheadMinor =
       typed && Number.isFinite(Number(typed)) && Number(typed) >= 0
         ? parseMoney(typed, data.currency)
         : undefined
 
     setBusy(true)
-    const r = await callAction(() => completeProductionAction({
-      orderId, actualQty: actual, overheadCost: overheadMinor,
-      varianceReason: actual < planned ? reason[orderId] : undefined,
-    }))
+    const result = await callAction(() =>
+      completeProductionAction({
+        orderId: job.id,
+        actualQty: actual,
+        consumed,
+        overheadCost: overheadMinor,
+        varianceReason: actual < job.plannedQty ? finishing.reason : undefined,
+      }),
+    )
     setBusy(false)
-    if (!r.ok) { toast.error(r.error); return }
-    toast.success(`${r.data.produced} made, at ${money(r.data.unitCost)} each`)
+    if (!result.ok) { toast.error(result.error); return }
+    toast.success(`${result.data.produced} made, at ${money(result.data.unitCost)} each`)
+    setFinishing(null)
     router.refresh()
   }
 
@@ -260,314 +255,298 @@ export function ProductionConsole({
     )
   }
 
-  const activeRecipes = data.recipes.filter((r) => r.isActive)
+  const activeRecipes = data.recipes.filter((recipe) => recipe.isActive)
+  // DRAFT and the legacy APPROVED both mean "nobody has started it yet".
+  const readyToMake = data.pending.filter((job) => job.status !== 'IN_PROGRESS')
+  const inProgress = data.pending.filter((job) => job.status === 'IN_PROGRESS')
+
+  const jobRow = (job: PendingJob, started: boolean) => (
+    <li key={job.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+      <Link href={`/dashboard/production/${job.id}`} className="font-medium hover:underline">
+        {job.number}
+      </Link>
+      <span className="text-muted-foreground">
+        {job.plannedQty} {(job.outputUnit ?? '').toLowerCase()} of {job.outputName ?? job.recipeName}
+      </span>
+      {started ? <Badge variant="secondary">In progress</Badge> : null}
+      <div className="ml-auto flex gap-1">
+        {!started ? (
+          <Button size="sm" variant="ghost" onClick={() => move(job.id, 'IN_PROGRESS')} disabled={busy}>
+            <Play className="mr-1.5 h-4 w-4" />
+            Start
+          </Button>
+        ) : null}
+        <Button size="sm" onClick={() => openFinish(job)} disabled={busy}>
+          <CheckCircle2 className="mr-1.5 h-4 w-4" />
+          Complete Production
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => move(job.id, 'CANCELLED')} disabled={busy}>
+          <X className="mr-1.5 h-4 w-4" />
+          Cancel
+        </Button>
+      </div>
+    </li>
+  )
 
   return (
-    <div className="space-y-5">
-      {data.pending.length > 0 && (
+    <div className="space-y-6">
+      {/* ── Complete Production ───────────────────────────────────────────── */}
+      {finishing ? (
         <SectionCard
-          title="Jobs to do"
-          description="Nothing here has taken anything from stock. That happens when you mark a job done."
+          title={`Complete Production — ${finishing.job.number}`}
+          description="Check what actually went in, say how much came out, and the stock moves."
         >
-          <ul className="divide-y divide-border">
-            {data.pending.map((p) => {
-              const actual = made[p.id] === undefined ? String(p.plannedQty) : made[p.id]
-              const short = Number(actual) < p.plannedQty
-              const awaitingApproval = p.status === 'DRAFT' || p.status === 'PLANNED'
-              const readyToRun = p.status === 'APPROVED' || p.status === 'IN_PROGRESS'
-              const unit = p.outputUnit?.toLowerCase() ?? ''
-
-              return (
-                <li key={p.id} className="py-3">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <ChefHat className="h-4 w-4 text-muted-foreground" />
-                    <Link href={`/dashboard/production/${p.id}`} className="font-medium tabular-nums hover:underline">
-                      {p.number}
-                    </Link>
-                    {/*
-                      One quantity, in the finished item's own unit. This used to
-                      print "10 batches planned = 100 PIECE of Bread" because the
-                      number on file meant something nobody had asked for.
-                    */}
-                    <span>
-                      Make <strong className="tabular-nums">{p.plannedQty}</strong> {unit}{' '}
-                      {p.outputName ?? p.recipeName ?? ''}
-                    </span>
-                    <Badge variant="secondary">{STATUS_LABEL[p.status] ?? p.status.toLowerCase()}</Badge>
-                  </div>
-
-                  <div className="mt-2 flex flex-wrap items-end gap-2">
-                    {awaitingApproval && canApprove && (
-                      <Button size="sm" onClick={() => move(p.id, 'APPROVED')} disabled={busy}>
-                        <CheckCircle2 className="mr-1.5 h-4 w-4" />
-                        Approve
-                      </Button>
-                    )}
-                    {awaitingApproval && !canApprove && (
-                      <p className="text-xs text-muted-foreground">
-                        Waiting for approval — you do not have permission to approve jobs.
-                      </p>
-                    )}
-                    {readyToRun && (
-                      <>
-                        <div className="space-y-1">
-                          <Label className="text-xs">How many came out</Label>
-                          <Input
-                            className="w-32"
-                            inputMode="decimal"
-                            value={actual}
-                            onChange={(e) => setMade((c) => ({ ...c, [p.id]: e.target.value }))}
-                          />
-                          <p className="text-xs text-muted-foreground">{unit || 'units'}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Other costs (optional)</Label>
-                          <Input
-                            className="w-32"
-                            inputMode="decimal"
-                            placeholder="0"
-                            value={overhead[p.id] ?? ''}
-                            onChange={(e) => setOverhead((c) => ({ ...c, [p.id]: e.target.value }))}
-                          />
-                          <p className="text-xs text-muted-foreground">Labour, power, gas</p>
-                        </div>
-                        {short && (
-                          <div className="space-y-1">
-                            <Label className="text-xs">Why fewer?</Label>
-                            <select
-                              className="h-10 rounded-lg border border-input bg-background px-2 text-sm"
-                              value={reason[p.id] ?? ''}
-                              onChange={(e) => setReason((c) => ({ ...c, [p.id]: e.target.value }))}
-                            >
-                              <option value="">Choose…</option>
-                              {REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-                            </select>
-                          </div>
-                        )}
-                        <Button size="sm" onClick={() => finish(p.id, p.plannedQty)} disabled={busy}>
-                          <Play className="mr-1.5 h-4 w-4" />
-                          Mark done
-                        </Button>
-                      </>
-                    )}
-                    {/*
-                      A job with no way out of it is a row that sits on this list
-                      for ever. Cancelling takes nothing from stock — nothing has
-                      moved yet — so it is always safe before the job is done.
-                    */}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => move(p.id, 'CANCELLED')}
-                      disabled={busy}
-                    >
-                      <X className="mr-1.5 h-4 w-4" />
-                      Cancel
-                    </Button>
-                  </div>
-
-                  {short && readyToRun ? (
-                    <p className="mt-2 border-l-2 border-warning/60 pl-3 text-xs text-muted-foreground">
-                      Ingredients for {p.plannedQty} come out of stock even though only {actual}{' '}
-                      came out of the kitchen — they were used either way. The cost is spread over
-                      the {actual}, so each one costs more than on a good day.
-                    </p>
-                  ) : null}
-                </li>
-              )
-            })}
-          </ul>
-        </SectionCard>
-      )}
-
-      <SectionCard
-        title="Make something"
-        description="Adding a job takes nothing from stock. Approve it, then mark it done when the food is actually made."
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          {data.houses.length > 1 && (
-            <div className="space-y-1.5">
-              <Label htmlFor="house">Kitchen</Label>
-              <select id="house" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-                value={houseId} onChange={(e) => setHouseId(e.target.value)}>
-                {data.houses.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-              </select>
-            </div>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="job-recipe">What are you making?</Label>
-            <select id="job-recipe" className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-              value={jobRecipeId} onChange={(e) => setJobRecipeId(e.target.value)}>
-              <option value="">Choose a recipe…</option>
-              {activeRecipes.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="py-2 font-medium">Ingredient</th>
+                  <th className="py-2 font-medium">Recipe says</th>
+                  <th className="py-2 font-medium">Actually used</th>
+                  <th className="py-2 font-medium">In this kitchen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {finishing.lines.map((line) => {
+                  const typed = Number(finishing.used[line.itemId] ?? line.required)
+                  const short = Number.isFinite(typed) && typed > line.available
+                  return (
+                    <tr key={line.itemId} className="border-b last:border-0">
+                      <td className="py-2">{line.name}</td>
+                      <td className="py-2 tabular-nums text-muted-foreground">
+                        {line.required} {line.unit.toLowerCase()}
+                      </td>
+                      <td className="py-2">
+                        <Input
+                          inputMode="decimal"
+                          aria-label={`How much ${line.name} was used`}
+                          className="h-9 w-28"
+                          value={finishing.used[line.itemId] ?? ''}
+                          onChange={(e) =>
+                            setFinishing((current) =>
+                              current
+                                ? { ...current, used: { ...current.used, [line.itemId]: e.target.value } }
+                                : current,
+                            )
+                          }
+                        />
+                      </td>
+                      <td className={`py-2 tabular-nums ${short ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>
+                        {line.available} {line.unit.toLowerCase()}
+                        {short ? ' — not enough' : ''}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="how-many">How many?</Label>
-            <Input id="how-many" inputMode="decimal" value={howMany} onChange={(e) => setHowMany(e.target.value)} />
-            {chosenRecipe ? (
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-made">Actual Quantity Produced</Label>
+              <Input
+                id="cp-made"
+                inputMode="decimal"
+                value={finishing.made}
+                onChange={(e) => setFinishing((c) => (c ? { ...c, made: e.target.value } : c))}
+              />
               <p className="text-xs text-muted-foreground">
-                {chosenRecipe.outputUnit.toLowerCase()} of {chosenRecipe.outputName}
+                Planned {finishing.job.plannedQty} {(finishing.job.outputUnit ?? '').toLowerCase()}
+              </p>
+            </div>
+            {Number(finishing.made) < finishing.job.plannedQty ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="cp-reason">Why fewer?</Label>
+                <select
+                  id="cp-reason"
+                  className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                  value={finishing.reason}
+                  onChange={(e) => setFinishing((c) => (c ? { ...c, reason: e.target.value } : c))}
+                >
+                  <option value="">Choose a reason…</option>
+                  {REASONS.map((reason) => (
+                    <option key={reason.value} value={reason.value}>{reason.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-overhead">Other costs (optional)</Label>
+              <Input
+                id="cp-overhead"
+                inputMode="decimal"
+                placeholder="Labour, power, gas"
+                value={finishing.overhead}
+                onChange={(e) => setFinishing((c) => (c ? { ...c, overhead: e.target.value } : c))}
+              />
+            </div>
+          </div>
+
+          {/*
+            Inventory Impact, spelled out before the button is pressed. This is
+            the only action on the screen that moves stock, and saying exactly
+            what will move is the difference between a confident tap and a
+            hesitant one.
+          */}
+          <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <p className="mb-1 font-medium">Inventory Impact</p>
+            <p className="text-muted-foreground">
+              Takes out{' '}
+              {finishing.lines
+                .map((line) => `${finishing.used[line.itemId] ?? line.required} ${line.unit.toLowerCase()} ${line.name}`)
+                .join(', ') || 'nothing'}
+              . Puts in {finishing.made || 0} {(finishing.job.outputUnit ?? '').toLowerCase()} of{' '}
+              {finishing.job.outputName ?? finishing.job.recipeName}.
+            </p>
+            {Number(finishing.made) < finishing.job.plannedQty ? (
+              <p className="mt-1 text-muted-foreground">
+                Coming up short does not put ingredients back — they were used. The shortfall is
+                recorded against the job and raises what each one cost to make.
               </p>
             ) : null}
           </div>
-        </div>
-        <Button className="mt-4" onClick={startJob} disabled={busy || !jobRecipeId || !(Number(howMany) > 0)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add job
-        </Button>
-        {activeRecipes.length === 0 && (
-          <p className="mt-2 text-xs text-warning">
-            No make-ahead recipes yet — write one below first.
-          </p>
-        )}
-      </SectionCard>
 
-      {data.recipes.length > 0 ? (
-        <SectionCard
-          title="Make-ahead recipes"
-          description="Edit one and future jobs use the new version. Jobs already done keep the costs they were done with."
-        >
-          <ul className="divide-y divide-border">
-            {data.recipes.map((recipe) => (
-              <li key={recipe.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
-                <span className="font-medium">{recipe.name}</span>
-                <span className="text-muted-foreground">
-                  makes {recipe.yieldQty} {recipe.outputUnit.toLowerCase()} of {recipe.outputName}
-                  {recipe.items.length > 0 ? ` · ${recipe.items.length} ingredient${recipe.items.length === 1 ? '' : 's'}` : ''}
-                  {recipe.shelfLifeDays ? ` · keeps ${recipe.shelfLifeDays} days` : ''}
-                </span>
-                {!recipe.isActive ? <Badge variant="secondary">Retired</Badge> : null}
-                <div className="ml-auto flex gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => loadRecipe(recipe)} disabled={busy}>
-                    <Pencil className="mr-1.5 h-4 w-4" />
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => retireRecipe(recipe.id, !recipe.isActive)}
-                    disabled={busy}
-                  >
-                    {recipe.isActive ? 'Retire' : 'Restore'}
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-4 flex gap-2">
+            <Button onClick={finish} disabled={busy}>Complete Production</Button>
+            <Button variant="ghost" onClick={() => setFinishing(null)} disabled={busy}>Cancel</Button>
+          </div>
         </SectionCard>
       ) : null}
 
+      {/* ── Ready to Make ─────────────────────────────────────────────────── */}
       <SectionCard
-        title={editingRecipe ? 'Edit recipe' : 'New make-ahead recipe'}
-        description="Something the kitchen makes in advance and puts on the shelf — sauce, stock, patties, dough."
+        title="Ready to Make"
+        description="Created, nothing taken from stock yet."
       >
-        {/*
-          The walkthrough, on the form itself. This screen used to open with
-          four unlabelled decisions — including a "what it makes" picker that
-          asked for the name a second time — and owners told us so. The
-          numbered steps ARE the form now, and the shelf item is handled for
-          them: naming the recipe names the stock it produces.
-        */}
-        <ol className="mb-4 space-y-1.5 rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-          <li><strong className="text-foreground">Step 1 —</strong> Name what you make ahead: “Chicken patties”, “Brown stock”. That name goes on your stock list automatically.</li>
-          <li><strong className="text-foreground">Step 2 —</strong> Say how a batch is measured. Easiest: leave the amount at <strong className="text-foreground">1</strong> and write the ingredients for one.</li>
-          <li><strong className="text-foreground">Step 3 —</strong> Add the ingredients that go <em>into</em> it, with amounts.</li>
-          <li><strong className="text-foreground">Step 4 —</strong> Save. When the kitchen actually cooks a batch, record it under “Make a batch” above — the ingredients leave your stock and the made item goes on the shelf.</li>
-        </ol>
+        {readyToMake.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground">Nothing waiting. Create one below.</p>
+        ) : (
+          <ul className="divide-y divide-border">{readyToMake.map((job) => jobRow(job, false))}</ul>
+        )}
+      </SectionCard>
 
-        <div className="grid gap-4 sm:grid-cols-4">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="mr-name">Step 1 · Name</Label>
-            <Input id="mr-name" placeholder="e.g. Chicken patties" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">
-              {editingRecipe ? 'Renaming the recipe does not rename the shelf item.' : 'No need to pick a stock item — we create one with this name.'}
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mr-qty">Step 2 · One batch makes</Label>
-            <div className="flex gap-2">
-              <Input id="mr-qty" inputMode="decimal" className="flex-1" value={makesQty} onChange={(e) => setMakesQty(e.target.value)} />
-              {editingUnit ? (
-                <span className="flex h-10 items-center rounded-lg border border-border px-3 text-sm text-muted-foreground">
-                  {editingUnit.toLowerCase()}
-                </span>
-              ) : (
+      {/* ── In Progress ───────────────────────────────────────────────────── */}
+      {inProgress.length > 0 ? (
+        <SectionCard title="In Progress" description="Being made now.">
+          <ul className="divide-y divide-border">{inProgress.map((job) => jobRow(job, true))}</ul>
+        </SectionCard>
+      ) : null}
+
+      {/* ── New Production ────────────────────────────────────────────────── */}
+      <SectionCard
+        title="New Production"
+        description="Pick what to make and how much. Nothing leaves stock until the job is completed."
+      >
+        {activeRecipes.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground">
+            No make-ahead recipes yet.{' '}
+            <Link href="/dashboard/production/recipes" className="underline">Write one first.</Link>
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {data.houses.length > 1 ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="np-house">Kitchen</Label>
+                  <select
+                    id="np-house"
+                    className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                    value={houseId}
+                    onChange={(e) => setHouseId(e.target.value)}
+                  >
+                    {data.houses.map((house) => (
+                      <option key={house.id} value={house.id}>{house.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              <div className="space-y-1.5">
+                <Label htmlFor="np-recipe">What are you making?</Label>
                 <select
-                  aria-label="Unit a batch is measured in"
-                  className="h-10 rounded-lg border border-input bg-background px-2 text-sm"
-                  value={makesUnit}
-                  onChange={(e) => setMakesUnit(e.target.value)}
+                  id="np-recipe"
+                  className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                  value={jobRecipeId}
+                  onChange={(e) => setJobRecipeId(e.target.value)}
                 >
-                  {UNITS.map((u) => <option key={u} value={u}>{u.toLowerCase()}</option>)}
+                  <option value="">Choose a recipe…</option>
+                  {activeRecipes.map((recipe) => (
+                    <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
+                  ))}
                 </select>
-              )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="np-qty">Planned Quantity</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="np-qty"
+                    inputMode="decimal"
+                    className="flex-1"
+                    value={plannedQty}
+                    onChange={(e) => setPlannedQty(e.target.value)}
+                  />
+                  {chosenRecipe ? (
+                    <span className="flex h-10 items-center rounded-lg border border-border px-3 text-sm text-muted-foreground">
+                      {chosenRecipe.outputUnit.toLowerCase()}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
             </div>
-            {/*
-              Defaulted to 1 on purpose: then "make 100" means 100 and there is
-              no batch size for anyone to multiply in their head. Leave it at 1
-              and write the ingredients for one.
-            */}
-            <p className="text-xs text-muted-foreground">Leave at 1 unless you always make a fixed batch</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mr-life">Keeps for (days)</Label>
-            <Input id="mr-life" inputMode="numeric" placeholder="optional" value={shelfLife} onChange={(e) => setShelfLife(e.target.value)} />
-          </div>
-        </div>
 
-        <p className="mt-4 mb-2 text-sm font-medium">
-          Step 3 · Ingredients for {Number(makesQty) > 0 ? Number(makesQty) : 1}{' '}
-          {(editingUnit ?? makesUnit).toLowerCase()}
-        </p>
-        <ul className="space-y-2">
-          {lines.map((l) => (
-            <li key={l.key} className="grid grid-cols-12 items-end gap-2">
-              <div className="col-span-12 sm:col-span-6">
-                <select className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-                  value={l.itemId}
-                  onChange={(e) => setLines((c) => c.map((x) => x.key === l.key ? { ...x, itemId: e.target.value } : x))}>
-                  <option value="">Choose an ingredient…</option>
-                  {data.items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-                </select>
+            {/* Required ingredients vs what is actually on the shelf. */}
+            {preview && preview.ingredients.length > 0 ? (
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-medium">
+                  To make {preview.plannedQty} {preview.producesUnit.toLowerCase()} of {preview.producesName}
+                  {previewing ? ' …' : ''}
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="py-2 font-medium">Ingredient</th>
+                        <th className="py-2 font-medium">Needs</th>
+                        <th className="py-2 font-medium">In this kitchen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.ingredients.map((line) => (
+                        <tr key={line.itemId} className="border-b last:border-0">
+                          <td className="py-2">{line.name}</td>
+                          <td className="py-2 tabular-nums">{line.required} {line.unit.toLowerCase()}</td>
+                          <td className={`py-2 tabular-nums ${line.short > 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>
+                            {line.available} {line.unit.toLowerCase()}
+                            {line.short > 0 ? ` — ${line.short} short` : ''}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Ingredients cost about {money(preview.totalCost)}.
+                  {preview.canMake
+                    ? ' Everything is here.'
+                    : ' You can still create the job — the shortage is only refused when you complete it.'}
+                </p>
+                {preview.problems.length > 0 ? (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{preview.problems[0]}</p>
+                ) : null}
               </div>
-              <div className="col-span-5 sm:col-span-3">
-                <Input inputMode="decimal" placeholder="How much" value={l.quantity}
-                  onChange={(e) => setLines((c) => c.map((x) => x.key === l.key ? { ...x, quantity: e.target.value } : x))} />
-              </div>
-              <div className="col-span-5 sm:col-span-2">
-                <select className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
-                  value={l.unit}
-                  onChange={(e) => setLines((c) => c.map((x) => x.key === l.key ? { ...x, unit: e.target.value } : x))}>
-                  {UNITS.map((u) => <option key={u} value={u}>{u.toLowerCase()}</option>)}
-                </select>
-              </div>
-              <button type="button" aria-label="Remove"
-                onClick={() => setLines((c) => c.filter((x) => x.key !== l.key))}
-                className="col-span-2 flex h-10 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-muted sm:col-span-1">
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </li>
-          ))}
-        </ul>
+            ) : null}
 
-        <div className="mt-3 flex gap-2">
-          <Button variant="outline" size="sm"
-            onClick={() => setLines((c) => [...c, { key: `${Date.now()}-${c.length}`, itemId: '', quantity: '', unit: 'KG' }])}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add ingredient
-          </Button>
-          <Button size="sm" onClick={saveRecipe} disabled={busy}>
-            {editingRecipe ? 'Save changes' : 'Save recipe'}
-          </Button>
-          {editingRecipe ? (
-            <Button size="sm" variant="ghost" onClick={clearRecipeForm} disabled={busy}>
-              Cancel
-            </Button>
-          ) : null}
-        </div>
+            <div className="mt-4">
+              <Button
+                onClick={createJob}
+                disabled={busy || !jobRecipeId || !(plannedNumber > 0) || !houseId}
+              >
+                <ChefHat className="mr-1.5 h-4 w-4" />
+                Create Production Job
+              </Button>
+            </div>
+          </>
+        )}
       </SectionCard>
     </div>
   )

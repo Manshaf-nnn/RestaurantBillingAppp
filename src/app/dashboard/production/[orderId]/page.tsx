@@ -98,7 +98,7 @@ export default async function ProductionRunPage({
             value={
               actualOutput !== null
                 ? `${actualOutput} ${run.outputUnit ?? ''}`.trim()
-                : `${run.actualQty ?? 0} batches`
+                : `${run.actualQty ?? 0}`
             }
           />
           <StatCard label="Materials" value={money(run.materialCost)} />
@@ -200,18 +200,17 @@ export default async function ProductionRunPage({
             {finished && run.variance !== null && run.variance < 0 ? (
               <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
                 <p className="font-medium">
-                  {Math.abs(run.variance)} batch{Math.abs(run.variance) === 1 ? '' : 'es'} short of
-                  plan
+                  {Math.abs(run.variance)} {(run.outputUnit ?? '').toLowerCase()} short of plan
                 </p>
                 <p className="mt-1 text-muted-foreground">
                   {run.varianceReason ? VARIANCE_REASON[run.varianceReason] ?? run.varianceReason : 'No reason given'}
                   {run.varianceNote ? ` — ${run.varianceNote}` : ''}
                 </p>
                 <p className="mt-2 text-muted-foreground">
-                  All {run.plannedQty} batches&apos; worth of materials was consumed, because it
-                  was — the cost is spread over the {run.actualQty ?? 0} that came out, so each one
-                  cost more than it would on a good day. A system that consumed only what it
-                  produced would report this run as perfectly efficient.
+                  The materials for all {run.plannedQty} were consumed, because they were — the
+                  cost is spread over the {run.actualQty ?? 0} that came out, so each one cost more
+                  than it would on a good day. A system that consumed only what it produced would
+                  report this run as perfectly efficient.
                 </p>
               </div>
             ) : null}
@@ -222,18 +221,15 @@ export default async function ProductionRunPage({
           <SectionCard title="The run">
             <dl className="space-y-2.5 text-sm">
               <Row label="Plan">
-                {run.plannedQty} batch{run.plannedQty === 1 ? '' : 'es'}
-                {plannedOutput !== null ? (
-                  <span className="text-muted-foreground">
-                    {' '}
-                    = {plannedOutput} {run.outputUnit ?? ''} of {run.outputName}
-                  </span>
+                {run.plannedQty} {(run.outputUnit ?? '').toLowerCase()}
+                {run.outputName ? (
+                  <span className="text-muted-foreground"> of {run.outputName}</span>
                 ) : null}
               </Row>
               {run.actualQty !== null ? (
                 <Row label="Actual">
-                  {run.actualQty} batch{run.actualQty === 1 ? '' : 'es'}
-                  {actualOutput !== null ? (
+                  {run.actualQty} {(run.outputUnit ?? '').toLowerCase()}
+                  {actualOutput !== null && actualOutput !== run.actualQty ? (
                     <span className="text-muted-foreground">
                       {' '}
                       = {actualOutput} {run.outputUnit ?? ''}

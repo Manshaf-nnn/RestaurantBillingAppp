@@ -156,9 +156,13 @@ async function main() {
       { inventoryItemId: oil.id, quantity: 0.5, unit: 'LITRE' },
     ],
   })
+  /*
+   * No approve step: kitchenjobs.md removed it on 2026-09-04. A job is
+   * completed straight from DRAFT — see production/service.ts for why the gate
+   * was standing in front of the wrong door.
+   */
   const run = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 50, userId: user.id })
   ok('T5.1', 'planning consumes nothing', await avail(meat.id, ph.id) === 20, '20', String(await avail(meat.id, ph.id)), 'CRITICAL')
-  await setProductionStatus({ restaurantId: shop.id, orderId: run.id, status: 'APPROVED', userId: user.id })
   const done = await completeProduction({ restaurantId: shop.id, orderId: run.id, userId: user.id })
   ok('T5.2', 'meat 20 → 10 kg', await avail(meat.id, ph.id) === 10, '10', String(await avail(meat.id, ph.id)), 'CRITICAL')
   ok('T5.3', 'seasoning 2 → 1 kg', await avail(season.id, ph.id) === 1, '1', String(await avail(season.id, ph.id)))
@@ -221,7 +225,7 @@ async function main() {
   await throws('T10.1', 'transferring more than held is refused',
     async () => { const t = await requestTransfer({ restaurantId: shop.id, fromBranchId: kandy.id, toBranchId: colombo.id, lines: [{ itemId: patty.id, quantity: 9999 }], userId: user.id }); await approveTransfer({ restaurantId: shop.id, transferId: t.id, userId: user.id }) })
   await throws('T10.2', 'producing without raw materials is refused',
-    async () => { const r = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 4950, userId: user.id }); await setProductionStatus({ restaurantId: shop.id, orderId: r.id, status: 'APPROVED', userId: user.id }); await completeProduction({ restaurantId: shop.id, orderId: r.id, userId: user.id }) })
+    async () => { const r = await createProductionOrder({ restaurantId: shop.id, branchId: ph.id, recipeId: spec.id, plannedQty: 4950, userId: user.id }); await completeProduction({ restaurantId: shop.id, orderId: r.id, userId: user.id }) })
 
   console.log('\n══ TEST 11 — ATOMICITY ════════════════════════════════')
   const atomicBefore = await avail(bun.id, colombo.id)
