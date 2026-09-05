@@ -28,7 +28,18 @@ export const phoneSchema = z
 export const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1, 'Password is required').max(128),
+  /**
+   * Now read by `createSession` (athu.md). Unticked means a twelve-hour session
+   * whose refresh cookie dies with the browser; ticked means the full lifetime.
+   * For a long time this was parsed here and read by nothing.
+   */
   remember: z.boolean().optional().default(true),
+  /**
+   * The second factor, when the account has one. A six-digit authenticator
+   * code or an `XXXXX-XXXXX` recovery code — so not digit-restricted. Absent on
+   * the first submission; the server answers `mfaRequired` and the form asks.
+   */
+  code: z.string().trim().max(16).optional(),
 })
 export type LoginInput = z.infer<typeof loginSchema>
 

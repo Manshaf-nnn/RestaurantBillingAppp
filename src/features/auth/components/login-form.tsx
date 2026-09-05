@@ -25,6 +25,14 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
   const staffName = params.get('name')
   const [showPassword, setShowPassword] = React.useState(false)
   const [formError, setFormError] = React.useState<string | null>(null)
+  /*
+   * The second-factor step. The password was right and the account is enrolled,
+   * so the server answered `mfaRequired` instead of a session. The form keeps
+   * the email and password it already has (react-hook-form retains values of
+   * unmounted fields) and resubmits them with the code — the server holds no
+   * half-signed-in state, so nothing can be left dangling if the tab is closed.
+   */
+  const [step, setStep] = React.useState<'credentials' | 'code'>('credentials')
   const isAdmin = variant === 'admin'
 
   const form = useForm<LoginInput>({
@@ -56,12 +64,25 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
     const result = await callAction(() => login(values))
 
     if (!result.ok) {
+      // A wrong code stays on the code step, with the message on the field —
+      // the password is still right and there is no reason to make anyone
+      // retype it.
+      if (result.code === 'MFA_BAD_CODE') {
+        form.setError('code', { message: result.error })
+        return
+      }
       setFormError(result.error)
       if (result.fieldErrors) {
         for (const [field, messages] of Object.entries(result.fieldErrors)) {
           form.setError(field as keyof LoginInput, { message: messages[0] })
         }
       }
+      return
+    }
+
+    if ('mfaRequired' in result.data) {
+      form.setValue('code', '')
+      setStep('code')
       return
     }
 
@@ -82,16 +103,18 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
     <div className="space-y-7">
       <header className="space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">
-          {isAdmin ? 'Platform admin 🛡️' : 'Welcome back 👋'}
+          {step === 'code' ? 'One more step 🔐' : isAdmin ? 'Platform admin 🛡️' : 'Welcome back 👋'}
         </h1>
         <p className="text-sm text-muted-foreground">
-          {isAdmin
-            ? 'Sign in to review and manage restaurants on your platform.'
-            : 'Sign in to continue to your account'}
+          {step === 'code'
+            ? 'Enter the six-digit code from your authenticator app.'
+            : isAdmin
+              ? 'Sign in to review and manage restaurants on your platform.'
+              : 'Sign in to continue to your account'}
         </p>
       </header>
 
-      {staffName || prefillEmail ? (
+      {step === 'credentials' && (staffName || prefillEmail) ? (
         <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
           {staffName ? <>Welcome back, <strong>{staffName}</strong> — </> : null}
           enter your sign-in code to continue.
@@ -100,6 +123,57 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
 
       {formError ? <Alert variant="destructive">{formError}</Alert> : null}
 
+      {step === 'code' ? (
+        <form onSubmit={onSubmit} className="space-y-4" noValidate>
+          {/*
+            Not restricted to digits: a recovery code is XXXXX-XXXXX, and the
+            same box takes either. `one-time-code` lets the OS offer a code it
+            has just seen in a message.
+          */}
+          <Field
+            label="Authentication code"
+            htmlFor="code"
+            required
+            error={form.formState.errors.code?.message}
+          >
+            <Input
+              id="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              placeholder="123 456"
+              startIcon={<Lock />}
+              aria-invalid={Boolean(form.formState.errors.code)}
+              {...form.register('code')}
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            Lost your phone? Enter one of the recovery codes you saved when you turned this on.
+          </p>
+
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full bg-gradient-to-r from-primary to-chart-5 text-primary-foreground shadow-lg shadow-primary/25 hover:opacity-95"
+            loading={form.formState.isSubmitting}
+          >
+            Verify <ArrowRight />
+          </Button>
+
+          <button
+            type="button"
+            onClick={() => {
+              form.clearErrors('code')
+              form.setValue('code', undefined)
+              setStep('credentials')
+            }}
+            className="block w-full text-center text-sm font-medium text-primary hover:underline"
+          >
+            Back to sign in
+          </button>
+        </form>
+      ) : (
       <form onSubmit={onSubmit} className="space-y-4" noValidate>
         <Field label="Email address" htmlFor="email" required error={form.formState.errors.email?.message}>
           <Input
@@ -164,6 +238,7 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
           Sign in <ArrowRight />
         </Button>
       </form>
+      )}
 
       {isAdmin ? (
         <p className="text-center text-sm text-muted-foreground">

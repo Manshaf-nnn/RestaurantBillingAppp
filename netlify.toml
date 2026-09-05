@@ -12,6 +12,13 @@
 #   SUPER_ADMIN_EMAIL     (your /admin login — REQUIRED, the build refuses without it)
 #   SUPER_ADMIN_PASSWORD  (your /admin password — REQUIRED, see prisma/seed-production.ts)
 #   JOBS_SECRET           (openssl rand -base64 32 — the scheduled job runner's key)
+#   NEXT_PUBLIC_APP_URL   (https://tableflow.markui.lk — the Secure cookie flag and
+#                          every absolute link derive from it; set it to the domain
+#                          people actually type, with the https:// scheme)
+#
+# Session lifetimes (all optional — these are the defaults; see src/server/auth/jwt.ts):
+#   ACCESS_TOKEN_TTL="15m"  REFRESH_TOKEN_TTL_DAYS="30"  ADMIN_REFRESH_TOKEN_TTL_HOURS="12"
+#   REFRESH_ROTATE_AFTER_HOURS="24"  REFRESH_GRACE_SECONDS="30"
 #
 # Optional, and the pages say plainly when they are absent:
 #   NEON_API_KEY          lets /admin/backups read the real PITR window

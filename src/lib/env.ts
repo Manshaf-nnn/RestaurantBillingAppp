@@ -20,6 +20,21 @@ const serverSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be >= 32 chars'),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  /*
+   * Session lifetimes beyond the staff defaults (athu.md). All optional; the
+   * readers in src/server/auth/jwt.ts fall back to the same defaults, so these
+   * exist to document the knobs and validate a value somebody does set.
+   *
+   *   ADMIN_REFRESH_TOKEN_TTL_HOURS  platform-admin session, absolute (12)
+   *   REFRESH_ROTATE_AFTER_HOURS     how old a refresh token gets before it
+   *                                  rotates (24) — must exceed 12, the
+   *                                  "remember me: off" lifetime; jwt.ts asserts it
+   *   REFRESH_GRACE_SECONDS          how long a just-rotated token still
+   *                                  resolves to its successor (30)
+   */
+  ADMIN_REFRESH_TOKEN_TTL_HOURS: z.coerce.number().positive().optional(),
+  REFRESH_ROTATE_AFTER_HOURS: z.coerce.number().positive().optional(),
+  REFRESH_GRACE_SECONDS: z.coerce.number().nonnegative().optional(),
 
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().default(3000),

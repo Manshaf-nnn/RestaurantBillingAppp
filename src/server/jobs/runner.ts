@@ -127,6 +127,28 @@ export const HANDLERS: Record<string, JobHandler> = {
     })
     return `${count} completed jobs older than 14 days removed`
   },
+
+  /**
+   * Session retention (athu.md).
+   *
+   * `sessions` had no purge at all — `session.deleteMany` had no callers — and
+   * with a refresh token rotating every fifteen minutes that was ~96 dead rows
+   * per active user per day. Rotation is daily now, so the growth is ~1, but a
+   * table that only ever grows is still a table that only ever grows.
+   *
+   * A week after a row is revoked or expired is far beyond anything the code
+   * still consults: the grace window that resolves a just-rotated token to its
+   * successor is thirty seconds, and `replacedById` carries no foreign key, so a
+   * predecessor's row can go without touching the successor. Live rows are
+   * never touched here — only `revokedAt` and `expiresAt` decide.
+   */
+  'sessions-trim': async () => {
+    const cutoff = new Date(Date.now() - 7 * 86_400_000)
+    const { count } = await prisma.session.deleteMany({
+      where: { OR: [{ revokedAt: { lt: cutoff } }, { expiresAt: { lt: cutoff } }] },
+    })
+    return `${count} sessions revoked or expired more than 7 days ago removed`
+  },
 }
 
 /** Backoff before the next attempt: 1m, 4m, 9m, 16m, 25m. */
@@ -279,7 +301,7 @@ export async function retryJob(id: string): Promise<void> {
  */
 export async function enqueueDailyWork(): Promise<number> {
   const day = new Date().toISOString().slice(0, 10)
-  const kinds = ['integrity-check', 'errorlog-trim', 'outbox-trim', 'job-trim']
+  const kinds = ['integrity-check', 'errorlog-trim', 'outbox-trim', 'job-trim', 'sessions-trim']
   let created = 0
   for (const kind of kinds) {
     const result = await enqueue({ kind, dedupeKey: `${kind}:${day}` })

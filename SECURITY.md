@@ -1,7 +1,10 @@
 # Security
 
-- **AuthN**: JWT access token (1h) + rotating refresh token, httpOnly
-  cookies; separate admin session for the platform operator. Guest surfaces
+- **AuthN**: JWT access token (15 min) + opaque refresh token in httpOnly
+  cookies, rotated once a day with a 30 s grace window so two tabs refreshing
+  at once both stay signed in. Staff sessions 30 days sliding; the platform
+  operator's admin session is separate, 12 h absolute, with optional TOTP at
+  sign-in. Full lifecycle and the bug it replaced: [AUTH-SESSIONS.md](AUTH-SESSIONS.md). Guest surfaces
   use an anonymous session cookie — order access requires it to match.
 - **AuthZ**: `permissionsFor` = role preset (or saved role REPLACING the
   preset) ∪ per-user grants, intersected with what the platform sold the

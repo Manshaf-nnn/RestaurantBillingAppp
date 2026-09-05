@@ -2,8 +2,10 @@ import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { getSecurityOverview } from '@/features/platform/ops-queries'
+import { MfaCard } from '@/features/platform/components/mfa-card'
 import { OpsTable, Stat, StatRow, StatusPill, ago } from '@/features/platform/components/ops-ui'
 import { requirePageSuperAdmin } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Security' }
@@ -16,8 +18,11 @@ export const metadata: Metadata = { title: 'Security' }
  * a stolen password can do. Everything else on this page is a readout.
  */
 export default async function SecurityPage() {
-  await requirePageSuperAdmin('/admin/security')
-  const security = await getSecurityOverview()
+  const admin = await requirePageSuperAdmin('/admin/security')
+  const [security, me] = await Promise.all([
+    getSecurityOverview(),
+    prisma.user.findUniqueOrThrow({ where: { id: admin.id }, select: { mfaEnabledAt: true } }),
+  ])
 
   return (
     <>
@@ -25,6 +30,13 @@ export default async function SecurityPage() {
         title="Security"
         description="Multi-factor coverage, live sessions and the rate limiter."
       />
+
+      {/*
+        The operator's own second factor, first. The coverage number below
+        counts enrolled privileged accounts, and until this card existed there
+        was no way for that number to be anything but zero.
+      */}
+      <MfaCard enabled={me.mfaEnabledAt !== null} enabledAt={me.mfaEnabledAt?.toISOString() ?? null} />
 
       <StatRow>
         <Stat
@@ -38,7 +50,7 @@ export default async function SecurityPage() {
           label="Expired sessions not cleared"
           value={security.expiredSessionsNotCleared}
           tone={security.expiredSessionsNotCleared > 500 ? 'warn' : 'idle'}
-          hint="Harmless — an expired refresh token is refused whether or not the row is gone."
+          hint="Harmless — an expired refresh token is refused whether or not the row is gone. The nightly sessions-trim job removes rows a week after they expire."
         />
         <Stat label="Sign-in events (24h)" value={security.loginEvents} />
       </StatRow>

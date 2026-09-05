@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
 
-import { REFRESH_COOKIE, ADMIN_REFRESH_COOKIE, refreshCookieName, type SessionScope } from '@/server/auth/jwt'
+import { refreshCookieName, type SessionScope } from '@/server/auth/jwt'
 import { rotateSession } from '@/server/auth/session'
 
 export const dynamic = 'force-dynamic'
@@ -10,9 +10,20 @@ export const dynamic = 'force-dynamic'
  * Silent token refresh — scope-aware.
  *
  * Middleware redirects here when an access JWT has expired but a refresh cookie
- * remains. `?scope=admin` rotates the admin session (falls back to staff). The
- * rotated token is set on the matching cookie namespace and the visitor is
- * returned to where they were heading.
+ * remains; the client also POSTs here (no `next`) before retrying a Server
+ * Action that came back unauthorised. `?scope=admin` refreshes the admin
+ * session (falls back to staff). The visitor is returned to where they were
+ * heading.
+ *
+ * ── What this route no longer does ──────────────────────────────────────────
+ *
+ * It used to delete the refresh cookie whenever `rotateSession` returned null.
+ * That looked like hygiene and was the bug: when two tabs refreshed at once,
+ * the loser found its token already rotated, got null, and deleted the cookie
+ * the WINNER had just set — same cookie name, one jar — sending a user with a
+ * perfectly live session to the login screen. Cookie handling now lives in
+ * `rotateSession`, which clears cookies only on a genuine refusal and leaves the
+ * refresh cookie alone when a sibling has just rotated it.
  */
 async function handle(request: NextRequest) {
   const scope: SessionScope = request.nextUrl.searchParams.get('scope') === 'admin' ? 'admin' : 'staff'
@@ -29,7 +40,6 @@ async function handle(request: NextRequest) {
 
   const user = await rotateSession(refreshToken, scope)
   if (!user) {
-    store.delete(scope === 'admin' ? ADMIN_REFRESH_COOKIE : REFRESH_COOKIE)
     return finish(request, safeNext, false, loginPath)
   }
 
