@@ -61,6 +61,16 @@ export default async function ProductionPage({
   return (
     <>
       <PageHeader
+        actions={
+          can(user, PERMISSIONS.PRODUCTION_MANAGE) ? (
+            <Link
+              href="/dashboard/production/recipes"
+              className="text-sm text-muted-foreground transition hover:text-foreground"
+            >
+              Make-ahead recipes
+            </Link>
+          ) : null
+        }
         title="Kitchen jobs"
         description={`${data.house.name} — ingredients in, a finished item out. Every job posts to the same stock ledger.`}
       />
@@ -118,7 +128,13 @@ export default async function ProductionPage({
 
       {can(user, PERMISSIONS.PRODUCTION_MANAGE) && (
         <div className="mb-5">
-          <ProductionConsole data={console_} canApprove={can(user, PERMISSIONS.PRODUCTION_APPROVE)} />
+          {/*
+            No `canApprove` any more: approval left the flow (kitchenjobs.md).
+            It gated the one step that moved no stock, while completion — which
+            moves all of it — needed only `production.manage`, which is the
+            permission guarding this whole block.
+          */}
+          <ProductionConsole data={console_} />
         </div>
       )}
 

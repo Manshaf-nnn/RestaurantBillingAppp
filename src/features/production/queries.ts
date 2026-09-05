@@ -1,6 +1,9 @@
 import 'server-only'
 
 import { prisma } from '@/server/db/prisma'
+import { listLocationStock } from '@/features/inventory/location-stock'
+import { resolveRecipe } from '@/features/inventory/recipe-resolver'
+import { roundQty } from '@/lib/quantity'
 
 /**
  * The production house dashboard.
@@ -241,6 +244,12 @@ export async function getProductionConsoleData(params: {
       id: p.id,
       number: p.number,
       status: p.status,
+      // The board needs both so it can ask for a required-vs-available preview
+      // of this exact job without a second round trip to work out which recipe
+      // and which house it belongs to.
+      recipeId: p.recipeId,
+      branchId: p.branchId,
+      startedAt: p.startedAt?.toISOString() ?? null,
       recipeName: p.recipeName,
       plannedQty: p.plannedQty,
       outputName: p.recipe?.producesItem?.name ?? null,
@@ -346,3 +355,113 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
 }
 
 export type ProductionRun = NonNullable<Awaited<ReturnType<typeof getProductionRun>>>
+
+// ── Before the job exists: what it needs, and what is on the shelf ───────────
+
+export interface ProductionPreviewLine {
+  itemId: string
+  name: string
+  unit: string
+  /** Base units the recipe needs for the planned quantity. */
+  required: number
+  /** Base units the production house is holding right now. */
+  available: number
+  /** How much is missing, or 0. */
+  short: number
+}
+
+export interface ProductionPreview {
+  recipeId: string
+  recipeName: string
+  producesName: string
+  producesUnit: string
+  plannedQty: number
+  ingredients: ProductionPreviewLine[]
+  /** What the ingredients are worth, minor units. */
+  totalCost: number
+  /** Anything the resolver could not work out — a missing item, a bad unit. */
+  problems: string[]
+  /** True when every ingredient is covered by stock at this house. */
+  canMake: boolean
+}
+
+/**
+ * "Show required ingredients + available stock", before anything is created.
+ *
+ * ── Read-only, and deliberately forgiving ───────────────────────────────────
+ *
+ * This never posts and never throws on a shortage. A missing ingredient is
+ * something the screen shows in red so the kitchen can decide — order more,
+ * make less, make it anyway — and turning that into an error would put the
+ * refusal before the information. The hard refusal still exists where it
+ * belongs: `assertSufficient` inside `completeProduction`, at the moment stock
+ * would actually move.
+ *
+ * Availability is summed per item across the house's shelves from
+ * `InventoryStock`, which is the same figure every other branch-scoped screen
+ * reads — not `InventoryItem.quantity`, which is the restaurant-wide total and
+ * would happily promise flour that is sitting at another site.
+ */
+export async function previewProduction(params: {
+  restaurantId: string
+  branchId: string
+  recipeId: string
+  plannedQty: number
+}): Promise<ProductionPreview | null> {
+  const recipe = await prisma.recipe.findFirst({
+    where: { id: params.recipeId, restaurantId: params.restaurantId, archivedAt: null },
+    include: { producesItem: { select: { id: true, name: true, unit: true } } },
+  })
+  if (!recipe?.producesItem) return null
+
+  const planned = params.plannedQty > 0 ? params.plannedQty : 0
+
+  const [resolved, onHand] = await Promise.all([
+    planned > 0
+      ? resolveRecipe(prisma, {
+          restaurantId: params.restaurantId,
+          recipeId: recipe.id,
+          portions: planned,
+        }).catch((error: unknown) => ({
+          // A cycle or an impossible unit is a problem to report, not a crash:
+          // the screen still has to render, with the reason on it.
+          recipeId: recipe.id,
+          ingredients: [],
+          totalCost: 0,
+          problems: [error instanceof Error ? error.message : 'This recipe could not be worked out'],
+        }))
+      : Promise.resolve({ recipeId: recipe.id, ingredients: [], totalCost: 0, problems: [] }),
+    listLocationStock({ restaurantId: params.restaurantId, branchId: params.branchId }),
+  ])
+
+  // One item can sit on several shelves; the job draws from the house as a whole.
+  const availableByItem = new Map<string, number>()
+  for (const row of onHand) {
+    availableByItem.set(row.itemId, (availableByItem.get(row.itemId) ?? 0) + row.available)
+  }
+
+  const ingredients: ProductionPreviewLine[] = resolved.ingredients.map((ingredient) => {
+    const required = roundQty(ingredient.quantity)
+    const available = roundQty(availableByItem.get(ingredient.itemId) ?? 0)
+    return {
+      itemId: ingredient.itemId,
+      name: ingredient.name,
+      unit: ingredient.unit,
+      required,
+      available,
+      short: roundQty(Math.max(0, required - available)),
+    }
+  })
+
+  return {
+    recipeId: recipe.id,
+    recipeName: recipe.name ?? recipe.producesItem.name,
+    producesName: recipe.producesItem.name,
+    producesUnit: recipe.producesItem.unit,
+    plannedQty: planned,
+    ingredients,
+    totalCost: Math.round(resolved.totalCost),
+    problems: resolved.problems,
+    canMake: ingredients.length > 0 && ingredients.every((line) => line.short === 0),
+  }
+}
