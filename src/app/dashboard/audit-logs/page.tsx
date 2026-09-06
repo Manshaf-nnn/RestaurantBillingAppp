@@ -10,6 +10,7 @@ import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Audit log' }
@@ -86,7 +87,7 @@ export default async function AuditLogsPage({
       include: { user: { select: { name: true } } },
     }),
   ])
-  const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
 
   return (
     <>

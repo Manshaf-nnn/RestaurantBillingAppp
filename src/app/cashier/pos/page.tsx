@@ -16,6 +16,7 @@ import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -133,7 +134,7 @@ export default async function PosPage({
         restaurant={{
           name: restaurant.name,
           currency: restaurant.currency,
-          locale: restaurant.locale === 'en' ? 'en-IN' : restaurant.locale,
+          locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
           taxLabel: restaurant.taxLabel,
           paper: readPaperWidths(restaurant.printerConfig),
           addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,

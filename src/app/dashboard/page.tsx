@@ -36,7 +36,7 @@ import { comparisonLabel, describeRange, resolveRange } from '@/features/reports
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { PeriodPicker } from '@/features/dashboard/components/period-picker'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -79,7 +79,7 @@ export default async function DashboardPage({
       timezone: restaurant.timezone,
     }).catch(() => {})
   }
-  const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
 
   /*
    * One period for the whole page, resolved once, in the restaurant's own

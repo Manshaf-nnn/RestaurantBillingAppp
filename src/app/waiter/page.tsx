@@ -13,6 +13,7 @@ import {
 import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,7 +101,7 @@ export default async function WaiterPage({
       branchIds={branchIds}
       restaurantName={restaurant.name}
       currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       exit={<StationExit user={user} current="/waiter" />}
       initialReady={board.ready.map(toWaiterOrder)}

@@ -8,6 +8,7 @@ import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -107,7 +108,7 @@ export default async function InventoryPage({
       canManage={can(user, PERMISSIONS.INVENTORY_MANAGE)}
       branchName={branch?.name ?? null}
       currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       suppliers={suppliers}
       units={units.map((u) => ({ code: u.code, name: u.name, symbol: u.symbol }))}
       categories={categories.map((c) => ({ id: c.id, name: c.name }))}

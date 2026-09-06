@@ -352,6 +352,27 @@ async function main() {
     )
 
     const report = await runIntegrityChecks(restaurant.id)
+
+    /*
+     * Every check must be able to explain itself. Three checks shipped with
+     * no advice text and no example routing — they rendered the generic
+     * "Open the linked records and verify them" and linked back to the page
+     * the reader was already on, which is no help at all when a real one
+     * fires. A check nobody can act on is not a check.
+     */
+    {
+      const { issueAdvice, issueExampleHref } = await import('../src/features/accounting/issue-links')
+      const FALLBACK = 'Open the linked records and verify them.'
+      const unexplained = report.checks.filter((entry) => issueAdvice(entry.key) === FALLBACK)
+      check('every integrity check says what happened and what to do',
+        unexplained.length === 0, unexplained.map((entry) => entry.key).join(', '))
+      const unrouted = report.checks.filter(
+        (entry) => issueExampleHref(entry.key, 'x') === '/dashboard/accounting/reconciliation',
+      )
+      check('every check sends its examples somewhere other than the page it is on',
+        unrouted.length === 0, unrouted.map((entry) => entry.key).join(', '))
+    }
+
     const workflowChecks = report.checks.filter((entry) => entry.key.startsWith('outgoing-'))
     check('all four workflow integrity checks are green',
       workflowChecks.length === 4 && workflowChecks.every((entry) => entry.status === 'OK'),

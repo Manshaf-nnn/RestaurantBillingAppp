@@ -6,7 +6,7 @@ import { PageHeader, SectionCard } from '@/features/dashboard/components/page-he
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { ApprovalCenter } from '@/features/outgoing-payments/components/approval-center'
 import { getApprovalTotals, listOutgoingPayments } from '@/features/outgoing-payments/queries'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -95,7 +95,7 @@ export default async function PaymentApprovalsPage({
         recent={recent}
         totals={totals}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       />
     </>
   )

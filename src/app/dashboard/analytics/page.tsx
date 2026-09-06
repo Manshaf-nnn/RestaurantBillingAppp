@@ -16,7 +16,7 @@ import {
 import { getBranchStaffPerformance } from '@/features/staff/performance'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ROLE_LABELS, PERMISSIONS } from '@/lib/rbac'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -33,7 +33,7 @@ export default async function AnalyticsPage({
 }) {
   const user = await requirePagePermission(PERMISSIONS.ANALYTICS_VIEW, '/dashboard/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
-  const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
   const branchId = scopeToOne(await selectedBranch(user, await searchParams))
 
   // This page keeps its fixed 30-day window; only the dashboard is selectable.

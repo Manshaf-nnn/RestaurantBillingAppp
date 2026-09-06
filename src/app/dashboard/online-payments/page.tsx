@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getOnlinePayments } from '@/features/payments/queries'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -29,7 +29,7 @@ export default async function OnlinePaymentsPage({
     getOnlinePayments(user.restaurantId, branchIds),
   ])
 
-  const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
   const money = (v: number) => formatMoney(v, restaurant.currency, locale)
 
   const pending = rows.filter((r) => r.orderPaymentStatus !== 'PAID')

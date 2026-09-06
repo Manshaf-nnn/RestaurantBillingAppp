@@ -5,7 +5,7 @@ import { PageHeader, StatCard } from '@/features/dashboard/components/page-heade
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { ProductionWorkspace } from '@/features/production/components/production-workspace'
 import { getProductionWorkspace, listProductionBranches } from '@/features/production/queries'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -66,7 +66,7 @@ export default async function ProductionPage({
         branches={branches}
         branchId={branchId}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         canManage={canManage}
       />
 

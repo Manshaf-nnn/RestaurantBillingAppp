@@ -8,6 +8,7 @@ import { can, PERMISSIONS } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Daily close' }
@@ -87,7 +88,7 @@ export default async function DailyClosePage() {
         }))}
         canClose={can(user, PERMISSIONS.ACCOUNTING_CLOSE)}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         integrity={integrity}
       />
     </>

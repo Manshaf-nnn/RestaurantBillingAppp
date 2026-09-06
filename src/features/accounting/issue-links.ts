@@ -14,6 +14,9 @@ const ORDER_CHECKS = new Set([
   'unusual-discounts',
   'unusual-refunds',
   'unusual-cancellations',
+  'cogs-uncosted-sale',
+  'cogs-above-revenue',
+  'paid-without-invoice',
   'consumption-without-order',
   'depletion-without-order',
 ])
@@ -30,11 +33,14 @@ export function issueExampleHref(checkKey: string, exampleId: string): string {
   if (ORDER_CHECKS.has(checkKey)) return `/dashboard/orders/${exampleId}`
   if (ITEM_CHECKS.has(checkKey)) return `/dashboard/inventory/${exampleId}`
   if (checkKey === 'unusual-cash-variance') return `/dashboard/cash-drawer/${exampleId}`
+  if (checkKey === 'bank-double-match') return '/dashboard/accounting/reconciliation?tab=bank'
   if (checkKey === 'void-concentration') return '/dashboard/audit-logs'
   if (
     checkKey === 'duplicate-payments' ||
     checkKey === 'backdated-transactions' ||
-    checkKey === 'after-hours-activity'
+    checkKey === 'after-hours-activity' ||
+    checkKey === 'refund-excess' ||
+    checkKey === 'tenant-mismatch'
   ) {
     // Payment ids are not routable; the sales report's payment view is.
     return '/dashboard/reports/sales'
@@ -76,6 +82,9 @@ export function issueAdvice(checkKey: string): string {
     'unusual-stock-adjustments': 'A manual stock adjustment was large — in money, or as a share of what was on the shelf. Check the reason on the item’s history.',
     'unusual-wastage': 'This item is being wasted far more than usual, or a large share of what leaves stock is going in the bin. Look at the wastage board for who, when and why.',
     'unusual-cash-variance': 'A drawer closed with a large counted difference, or the same cashier has been short repeatedly. Review the session and its variance note.',
+    'cogs-uncosted-sale': 'Stock was sold with no cost recorded against it, so profit on those lines reads higher than it was. Usually a dish sold before its recipe was written — add the recipe, and price future sales properly.',
+    'cogs-above-revenue': 'A dish cost more to make than the guest paid for it. Fine for a loss leader or a staff meal; otherwise the recipe quantities or the ingredient cost are wrong.',
+    'bank-double-match': 'Two statement lines are matched to the same payment, so the bank balance is explained twice. Open the Bank tab and un-match whichever is wrong.',
     'after-hours-activity': 'Payments were taken outside the location’s opening hours. Check who was signed in and whether the hours on file are right.',
   }
   return advice[checkKey] ?? 'Open the linked records and verify them.'

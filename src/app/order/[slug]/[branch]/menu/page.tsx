@@ -6,6 +6,7 @@ import { orderableBranches, resolvePublicBranch } from '@/features/branches/publ
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
 import { resolvePublicTenant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,7 +53,7 @@ export default async function BranchMenuPage({
         restaurantName={restaurant.name}
         logoUrl={restaurant.logoUrl}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         taxLabel={restaurant.taxLabel}
         slug={slug}
         branchCode={branch.code}

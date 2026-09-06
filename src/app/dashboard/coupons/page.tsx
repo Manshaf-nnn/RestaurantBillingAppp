@@ -6,6 +6,7 @@ import { listSwitchableLocations } from '@/features/transfers/queries'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +37,7 @@ export default async function CouponsPage() {
   return (
     <CouponsManager
       currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       locations={locations.map((l) => ({ id: l.id, name: l.name }))}
       coupons={coupons.map((coupon) => ({
         id: coupon.id,

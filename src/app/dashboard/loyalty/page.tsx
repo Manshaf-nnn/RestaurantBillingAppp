@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { LoyaltyManager } from '@/features/loyalty/components/loyalty-manager'
 import { getLoyaltyOverview } from '@/features/loyalty/queries'
 import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -21,7 +21,7 @@ export default async function LoyaltyPage() {
     getLoyaltyOverview(user.restaurantId, visibleBranchIds(user)),
   ])
 
-  const locale = restaurant.locale === 'en' ? 'en-IN' : restaurant.locale
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
   const money = (v: number) => formatMoney(v, restaurant.currency, locale)
   // What all outstanding points would be worth if every guest redeemed them.
   const liability = overview.pointsOutstanding * restaurant.loyaltyPointValue

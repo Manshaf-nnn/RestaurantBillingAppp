@@ -6,6 +6,7 @@ import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +45,7 @@ export default async function CustomersPage({
     <CustomersManager
       canManage={can(user, PERMISSIONS.CUSTOMER_MANAGE)}
       currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       customers={customers.map((customer) => ({
         id: customer.id,
         name: customer.name,

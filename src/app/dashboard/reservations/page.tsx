@@ -6,6 +6,7 @@ import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Reservations' }
@@ -57,7 +58,7 @@ export default async function ReservationsPage({
 
   return (
     <ReservationsManager
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       /*
        * The branch label is only worth showing when the list spans more than
        * one — on a single-site restaurant it is noise on every row.

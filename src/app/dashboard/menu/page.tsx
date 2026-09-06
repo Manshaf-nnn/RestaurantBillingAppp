@@ -10,6 +10,7 @@ import { unmappedDishes } from '@/features/kitchen/service'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,7 +99,7 @@ export default async function MenuPage({
       <AutoRefresh scope="catalog" intervalMs={10000} />
     <MenuManager
       currency={restaurant.currency}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       canManage={can(user, PERMISSIONS.MENU_MANAGE)}
       branches={branches}
       activeBranchId={selection.branchId}

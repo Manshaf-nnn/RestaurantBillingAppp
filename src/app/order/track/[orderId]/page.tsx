@@ -8,6 +8,7 @@ import { OrderTracker } from '@/features/orders/components/order-tracker'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,7 +47,7 @@ export default async function TrackOrderPage({
       <OrderTracker
         restaurantName={restaurant.name}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         order={{
           id: order.id,
           orderNumber: order.orderNumber,

@@ -52,7 +52,10 @@ function render(
   column: Column,
   row: Record<string, unknown>,
   currency: CurrencyCode,
-  locale: string,
+  // Optional: formatMoney resolves the locale from the currency when the
+  // caller has none, which is how a non-INR tenant stops reading its money
+  // in lakhs.
+  locale?: string,
 ): string {
   const value = row[column.key]
   const fallback = column.fallback ?? '—'
@@ -96,7 +99,7 @@ export function ReportTable({
   rows,
   filename,
   currency = 'INR',
-  locale = 'en-IN',
+  locale,
   empty = 'Nothing in this period.',
   hrefTemplate,
 }: {

@@ -17,6 +17,7 @@ import { requireCashierSession } from '@/features/cashdrawer/gate'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -132,7 +133,7 @@ export default async function CashierPage({
       restaurant={{
         name: restaurant.name,
         currency: restaurant.currency,
-        locale: restaurant.locale === 'en' ? 'en-IN' : restaurant.locale,
+        locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
         taxLabel: restaurant.taxLabel,
         // Paper size the owner chose in Settings — receipts printed at the wrong
         // width waste a third of an 80 mm roll, or overflow a 58 mm one.

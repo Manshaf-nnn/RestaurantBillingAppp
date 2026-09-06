@@ -5,6 +5,7 @@ import { CartCheckout } from '@/features/orders/components/cart-checkout'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +37,7 @@ export default async function BranchCartPage({
     <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
       <CartCheckout
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         taxLabel={restaurant.taxLabel}
         restaurantName={restaurant.name}
         loyaltyEnabled={restaurant.loyaltyEnabled}

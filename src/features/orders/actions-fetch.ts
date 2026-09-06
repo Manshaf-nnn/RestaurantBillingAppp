@@ -8,6 +8,7 @@ import { requireRestaurant } from '@/server/db/tenant'
 import { readPaperWidths } from '@/features/printing/paper'
 import { getOrderForStaff, readOptions } from './queries'
 import type { OrderDetailView } from './components/order-detail'
+import { localeForCurrency } from '@/lib/money'
 
 /**
  * One order, for a screen that wants to show it without navigating away.
@@ -100,7 +101,7 @@ export async function fetchOrderDetail(orderId: string) {
     return {
       order: view,
       currency: restaurant.currency,
-      locale: restaurant.locale === 'en' ? 'en-IN' : restaurant.locale,
+      locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
       restaurant: {
         name: restaurant.name,
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,

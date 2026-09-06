@@ -17,6 +17,7 @@ import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Live floor' }
@@ -113,7 +114,7 @@ export default async function LiveFloorPage({
         avgCookMinutes={kitchen.averageCookMinutes}
         policy={policy}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         timeZone={restaurant.timezone}
         branchName={branch?.name ?? 'this location'}
         /*

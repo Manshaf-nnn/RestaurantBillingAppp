@@ -12,6 +12,26 @@ export type CurrencyCode = string
 
 const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK', 'XOF', 'XAF'])
 
+/** Currencies whose home convention groups digits in lakhs and crores. */
+const LAKH_GROUPED = new Set(['INR', 'PKR', 'BDT', 'NPR'])
+
+/**
+ * Which locale to render a currency's numbers in.
+ *
+ * Every formatter here used to default to 'en-IN', so digits were grouped in
+ * lakhs whatever the money was: a Sri Lankan restaurant read its takings as
+ * LKR 8,49,960.21 where its own bank statement says 849,960.21. Grouping
+ * follows the currency now. 'en-GB' rather than 'en-US' for the rest, because
+ * these callers format dates with the same locale and every market this
+ * product sells into writes the day first.
+ */
+export function localeForCurrency(currency: CurrencyCode = 'INR'): string {
+  const code = currency.toUpperCase()
+  if (LAKH_GROUPED.has(code)) return 'en-IN'
+  if (code === 'USD') return 'en-US'
+  return 'en-GB'
+}
+
 export function minorUnitFactor(currency: CurrencyCode): number {
   return ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase()) ? 1 : 100
 }
@@ -20,11 +40,11 @@ export function minorUnitFactor(currency: CurrencyCode): number {
 export function formatMoney(
   minor: number,
   currency: CurrencyCode = 'INR',
-  locale = 'en-IN',
+  locale?: string,
 ): string {
   const factor = minorUnitFactor(currency)
   try {
-    return new Intl.NumberFormat(locale, {
+    return new Intl.NumberFormat(locale ?? localeForCurrency(currency), {
       style: 'currency',
       currency,
       minimumFractionDigits: factor === 1 ? 0 : 2,
@@ -39,11 +59,11 @@ export function formatMoney(
 export function formatMoneyCompact(
   minor: number,
   currency: CurrencyCode = 'INR',
-  locale = 'en-IN',
+  locale?: string,
 ): string {
   const factor = minorUnitFactor(currency)
   try {
-    return new Intl.NumberFormat(locale, {
+    return new Intl.NumberFormat(locale ?? localeForCurrency(currency), {
       style: 'currency',
       currency,
       notation: 'compact',
@@ -54,10 +74,10 @@ export function formatMoneyCompact(
   }
 }
 
-export function currencySymbol(currency: CurrencyCode = 'INR', locale = 'en-IN'): string {
+export function currencySymbol(currency: CurrencyCode = 'INR', locale?: string): string {
   try {
     return (
-      new Intl.NumberFormat(locale, { style: 'currency', currency })
+      new Intl.NumberFormat(locale ?? localeForCurrency(currency), { style: 'currency', currency })
         .formatToParts(0)
         .find((p) => p.type === 'currency')?.value ?? currency
     )

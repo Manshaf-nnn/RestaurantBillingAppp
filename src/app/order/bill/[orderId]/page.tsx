@@ -9,6 +9,7 @@ import { readPaymentConfig } from '@/features/payments/service'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,7 +49,7 @@ export default async function GuestBillPage({
         restaurantName={restaurant.name}
         restaurantAddress={[restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         paymentConfig={readPaymentConfig(restaurant.paymentConfig)}
         bill={{
           id: order.id,

@@ -6,6 +6,7 @@ import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Reviews' }
@@ -58,7 +59,7 @@ export default async function ReviewsPage({
   return (
     <ReviewsManager
       average={agg._avg.rating ?? 0}
-      locale={restaurant.locale === 'en' ? 'en-IN' : restaurant.locale}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       reviews={reviews.map((review) => ({
         id: review.id,
         rating: review.rating,
