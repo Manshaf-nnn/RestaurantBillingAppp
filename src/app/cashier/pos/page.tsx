@@ -125,6 +125,9 @@ export default async function PosPage({
         menu={menu}
         currency={restaurant.currency}
         initialType={initialType}
+        // Where this till is standing. Without it the order took the branch
+        // from the top-bar switcher, not from the counter being rung up at.
+        branchId={branchId}
         /*
          * What a printed bill needs in its header. The same wiring the cashier
          * board has always used — see `app/cashier/page.tsx` — including the
@@ -135,6 +138,7 @@ export default async function PosPage({
           name: restaurant.name,
           currency: restaurant.currency,
           locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
+          timeZone: restaurant.timezone,
           taxLabel: restaurant.taxLabel,
           paper: readPaperWidths(restaurant.printerConfig),
           addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,

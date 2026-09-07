@@ -32,6 +32,9 @@ export interface ReceiptRestaurant {
   name: string
   currency: string
   locale: string
+  /** The restaurant's IANA zone. A bill is stamped in business time, not in
+   *  the server's timezone nor the reader's — see lib/datetime. */
+  timeZone?: string | null
   taxLabel: string
   /** Thermal paper widths chosen in Settings. */
   paper: { receipt: PaperWidth; kitchen: PaperWidth }

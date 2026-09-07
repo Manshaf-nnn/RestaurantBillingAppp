@@ -13,7 +13,7 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
+import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
 import { resolvePublicTenant } from '@/server/db/tenant'
@@ -915,8 +915,19 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
          *
          * A table still decides where there is one, and now disagreeing with it
          * is an error rather than a silent override.
+         *
+         * The screen's own branch wins over the switcher when it sends one:
+         * `actingBranchId` reads the top-bar cookie, which is NOT what a till
+         * scoped by `?branch=` is showing. An owner ringing up at Jaffna with
+         * the switcher on "All locations" filed the sale against the default
+         * branch — the ticket surfaced on another kitchen's rail. Guarded, so
+         * a URL cannot post a sale into a branch this user may not reach.
          */
-        branchId: data.tableId ? null : await actingBranchId(user),
+        branchId: data.tableId
+          ? null
+          : data.branchId
+            ? (await assertBranchAccess(user, data.branchId), data.branchId)
+            : await actingBranchId(user),
         // Falls back to whoever is signed in, so a waiter taking their own
         // order is attributed without having to pick themselves from a list.
         servedById: data.servedById || user.id,

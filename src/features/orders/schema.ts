@@ -106,6 +106,17 @@ export const staffOrderSchema = placeOrderSchema.extend({
   customerPhone: z.string().trim().max(20).optional().or(z.literal('')),
   /// Whose table it is, when a cashier rings up on a waiter's behalf.
   servedById: z.string().min(1).optional().or(z.literal('')),
+  /*
+   * The counter this till is standing at.
+   *
+   * The POS scopes its menu, prices and tables to `?branch=`, but the order
+   * write resolved the branch on its own from the top-bar switcher — so an
+   * owner ringing up at Jaffna with the switcher on "All locations" filed the
+   * sale against the DEFAULT branch. The ticket then appeared on another
+   * kitchen's rail and the takings landed in another branch's books. The
+   * screen sends where it is; the server still checks the user may reach it.
+   */
+  branchId: z.string().cuid().optional().or(z.literal('')),
   manualDiscount: z.coerce.number().int().min(0).default(0),
   redeemPoints: z.coerce.number().int().min(0).max(1_000_000).default(0),
 })

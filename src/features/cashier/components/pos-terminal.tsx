@@ -75,6 +75,7 @@ export function PosTerminal({
   currency,
   restaurant,
   initialType = 'COUNTER',
+  branchId = null,
   tables = [],
   servers = [],
   currentUserId,
@@ -84,6 +85,8 @@ export function PosTerminal({
   /** Everything a printed bill needs in its header. */
   restaurant: ReceiptRestaurant
   initialType?: OrderType
+  /** The counter this till is standing at — sent with the order. */
+  branchId?: string | null
   /** Free tables, so a counter order can be seated. */
   tables?: Array<{ id: string; number: string; area: string | null; status: string }>
   /** Who can be credited with serving it. */
@@ -234,6 +237,9 @@ export function PosTerminal({
     const result = await callAction(() =>
       createStaffOrder({
         type,
+        // A table decides the branch where there is one; otherwise the sale
+        // belongs to the counter on screen, not to the switcher's branch.
+        branchId: branchId ?? '',
         tableId: type === 'DINE_IN' ? tableId : '',
         guestCount: type === 'DINE_IN' && guests ? Number(guests) : undefined,
         servedById,

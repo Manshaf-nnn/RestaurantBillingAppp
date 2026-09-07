@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { EVENTS, type OrderSummaryPayload } from '@/lib/realtime/events'
 import { formatMoney } from '@/lib/money'
+import { formatDateTime } from '@/lib/datetime'
 import { useSocketEvent } from '@/hooks/use-socket'
 
 export interface OrderRow {
@@ -47,6 +48,7 @@ export function OrdersTable({
   pageCount,
   currency,
   locale,
+  timeZone,
   filters,
   branchIds,
 }: {
@@ -56,6 +58,8 @@ export function OrdersTable({
   pageCount: number
   currency: string
   locale: string
+  /** The restaurant's own clock — see lib/datetime. */
+  timeZone?: string | null
   filters: { search: string; status: string; paymentStatus: string; type: string }
   /** Locations this list is showing. Null means all of them. */
   branchIds: string[] | null
@@ -231,10 +235,7 @@ export function OrdersTable({
                     <PaymentStatusBadge status={order.paymentStatus} />
                   </TableCell>
                   <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
-                    {new Date(order.placedAt).toLocaleString(locale, {
-                      dateStyle: 'short',
-                      timeStyle: 'short',
-                    })}
+                    {formatDateTime(order.placedAt, { locale, timeZone })}
                   </TableCell>
                   <TableCell className="text-right font-semibold tabular-nums">
                     {formatMoney(order.grandTotal, currency, locale)}

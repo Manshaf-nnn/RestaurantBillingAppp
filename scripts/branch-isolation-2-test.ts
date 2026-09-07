@@ -389,6 +389,55 @@ async function main() {
   )
 
   // ── cleanup ───────────────────────────────────────────────────────────────
+  /*
+   * A till files its sale where the till is standing.
+   *
+   * The POS scopes its menu, prices and tables to the branch in its URL, but
+   * `createStaffOrder` resolved the branch from the top-bar switcher instead.
+   * An owner ringing up at one site with the switcher on "All locations" filed
+   * the sale against the restaurant's DEFAULT branch: the ticket appeared on
+   * another kitchen's rail and the money landed in another branch's books.
+   * Found by placing a real order on the live site and watching it surface at
+   * the wrong location.
+   */
+  console.log('\n── A sale belongs to the counter that rang it up ──')
+  {
+    // The dish has to be on that branch's menu before it can be rung up there.
+    await prisma.foodBranch.upsert({
+      where: { foodId_branchId: { foodId: dish.id, branchId: kandy.id } },
+      create: { restaurantId: restaurant.id, foodId: dish.id, branchId: kandy.id, isAvailable: true },
+      update: { isAvailable: true },
+    })
+
+    const { placeOrder } = await import('../src/features/orders/service')
+    const { staffOrderSchema } = await import('../src/features/orders/schema')
+
+    const parsed = staffOrderSchema.safeParse({
+      type: 'COUNTER',
+      branchId: kandy.id,
+      items: [{ foodId: dish.id, quantity: 1 }],
+    })
+    check('the staff order schema carries the till\'s branch', parsed.success,
+      parsed.success ? '' : JSON.stringify(parsed.error.issues[0]))
+
+    const placed = await placeOrder({
+      restaurantId: restaurant.id,
+      branchId: kandy.id,
+      tableId: null,
+      type: 'COUNTER',
+      channel: 'COUNTER',
+      customerName: 'Walk-in',
+      customerPhone: '',
+      items: [{ foodId: dish.id, quantity: 1, optionIds: [] }],
+    })
+    const row = await prisma.order.findUniqueOrThrow({ where: { id: placed.id } })
+    check('an explicit branch is honoured over the default',
+      row.branchId === kandy.id,
+      `filed against ${row.branchId}, rang up at ${kandy.id}`)
+    check('and it is NOT the restaurant default branch',
+      row.branchId !== colombo.id)
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
 
   console.log(`\n═══ ${passed} passed, ${failed} failed ═══\n`)

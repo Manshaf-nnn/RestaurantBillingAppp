@@ -134,6 +134,7 @@ export default async function CashierPage({
         name: restaurant.name,
         currency: restaurant.currency,
         locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
+        timeZone: restaurant.timezone,
         taxLabel: restaurant.taxLabel,
         // Paper size the owner chose in Settings — receipts printed at the wrong
         // width waste a third of an 80 mm roll, or overflow a 58 mm one.

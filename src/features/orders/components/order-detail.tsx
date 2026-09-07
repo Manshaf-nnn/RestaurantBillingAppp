@@ -22,6 +22,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, ORDER_STATUS_META, PaymentStatusBadge, VegIndicator } from '@/components/ui/status'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
+import { formatDateTime, formatTime } from '@/lib/datetime'
 import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
@@ -89,6 +90,7 @@ export function OrderDetail({
   order,
   currency,
   locale,
+  timeZone,
   restaurant,
   canUpdate,
   canCancel,
@@ -98,6 +100,8 @@ export function OrderDetail({
   order: OrderDetailView
   currency: string
   locale: string
+  /** The restaurant's own clock — see lib/datetime. */
+  timeZone?: string | null
   restaurant: {
     name: string
     addressLine: string | null
@@ -221,7 +225,7 @@ export function OrderDetail({
               <PaymentStatusBadge status={order.paymentStatus} />
             </h1>
             <p className="text-sm text-muted-foreground">
-              {new Date(order.placedAt).toLocaleString(locale)} ·{' '}
+              {formatDateTime(order.placedAt, { locale, timeZone })} ·{' '}
               {order.tableNumber ? `Table ${order.tableNumber}` : order.type.replace('_', ' ')}
             </p>
           </div>
@@ -317,7 +321,7 @@ export function OrderDetail({
                       <span className="flex items-center gap-2">
                         <Badge variant="secondary">{payment.method}</Badge>
                         <span className="text-muted-foreground">
-                          {new Date(payment.createdAt).toLocaleString(locale)}
+                          {formatDateTime(payment.createdAt, { locale, timeZone })}
                         </span>
                       </span>
                       <span className="flex items-center gap-3">
@@ -380,10 +384,7 @@ export function OrderDetail({
                   <div className="pb-1">
                     <p className="text-sm font-medium">{ORDER_STATUS_META[event.status].label}</p>
                     <p className="text-xs text-muted-foreground">
-                      {new Date(event.createdAt).toLocaleTimeString(locale, {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {formatTime(event.createdAt, { locale, timeZone })}
                       {event.actorName ? ` · ${event.actorName}` : ''}
                     </p>
                     {event.note ? <p className="text-xs text-muted-foreground">{event.note}</p> : null}

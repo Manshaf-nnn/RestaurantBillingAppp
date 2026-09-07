@@ -43,6 +43,7 @@ import { OpsShell, OpsStats } from '@/components/ops-shell'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/realtime/events'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
+import { formatDateTime } from '@/lib/datetime'
 import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
 import { useSocketEvent } from '@/hooks/use-socket'
@@ -945,7 +946,7 @@ function BillingDetailPanel({
           </div>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Placed</span>
-            <span>{new Date(bill.placedAt).toLocaleString(restaurant.locale)}</span>
+            <span>{formatDateTime(bill.placedAt, { locale: restaurant.locale, timeZone: restaurant.timeZone })}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Due now</span>
@@ -1213,7 +1214,7 @@ function SplitBillDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   bill: CashierBill
-  restaurant: { currency: string; locale: string }
+  restaurant: { currency: string; locale: string; timeZone?: string | null }
 }) {
   const [moves, setMoves] = React.useState<Record<string, number>>({})
   const [pending, setPending] = React.useState(false)
@@ -1358,7 +1359,7 @@ function MergeBillsDialog({
   onOpenChange: (open: boolean) => void
   bill: CashierBill
   otherBills: CashierBill[]
-  restaurant: { currency: string; locale: string }
+  restaurant: { currency: string; locale: string; timeZone?: string | null }
 }) {
   const [picked, setPicked] = React.useState<string[]>([])
   const [pending, setPending] = React.useState(false)

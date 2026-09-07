@@ -41,6 +41,9 @@ export default async function OrderDetailPage({
     <OrderDetail
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+      // Times read in the restaurant's own clock, not the server's or the
+      // viewer's — which is also what stops the hydration mismatch.
+      timeZone={restaurant.timezone}
       restaurant={{
         name: restaurant.name,
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
