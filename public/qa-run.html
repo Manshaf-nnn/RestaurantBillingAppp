@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- An internal test sheet, not a page for guests: keep it out of search. -->
+<meta name="robots" content="noindex, nofollow">
+<style>
+  html { color-scheme: light dark; }
+  body { margin: 0; font: 14px system-ui, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>TableFlow QA Run</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:   #F5F7F8;
+    --surface:  #FFFFFF;
+    --sunk:     #EDF0F2;
+    --ink:      #141A1E;
+    --ink-soft: #47535C;
+    --muted:    #6D7A83;
+    --rule:     #DFE4E8;
+    --rule-firm:#C3CBD1;
+    --accent:   #0D6B75;
+    --accent-wash: #E4F1F2;
+    --pass:     #16704A;
+    --pass-wash:#E3F1EA;
+    --fail:     #A62A20;
+    --fail-wash:#FAE9E7;
+    --block:    #8A5B00;
+    --block-wash:#FBF0DC;
+    --shadow: 0 1px 2px rgba(20,26,30,.05), 0 10px 26px -20px rgba(20,26,30,.35);
+    --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+    --body: 'IBM Plex Sans', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0F1316; --surface:#171D21; --sunk:#1F262B; --ink:#E9EDEF;
+      --ink-soft:#B3BEC5; --muted:#85939C; --rule:#2A3339; --rule-firm:#3C474E;
+      --accent:#54C2CC; --accent-wash:#12292C;
+      --pass:#5FC494; --pass-wash:#12271E; --fail:#F0907F; --fail-wash:#2B1815;
+      --block:#DCA945; --block-wash:#2A2113;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 28px -22px rgba(0,0,0,.8);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0F1316; --surface:#171D21; --sunk:#1F262B; --ink:#E9EDEF;
+    --ink-soft:#B3BEC5; --muted:#85939C; --rule:#2A3339; --rule-firm:#3C474E;
+    --accent:#54C2CC; --accent-wash:#12292C;
+    --pass:#5FC494; --pass-wash:#12271E; --fail:#F0907F; --fail-wash:#2B1815;
+    --block:#DCA945; --block-wash:#2A2113;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 28px -22px rgba(0,0,0,.8);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--body); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 20px 90px; }
+
+  /* ── header ─────────────────────────────────────────────── */
+  header.top { background: var(--surface); border-bottom: 1px solid var(--rule); }
+  .top-in { max-width: 1060px; margin: 0 auto; padding: 26px 20px 22px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 700; letter-spacing: -.02em;
+    font-size: clamp(1.7rem, 4vw, 2.4rem); line-height: 1.08; margin: 0; text-wrap: balance;
+  }
+  .sub { margin: 10px 0 0; color: var(--ink-soft); max-width: 62ch; }
+
+  /* ── sticky control bar ─────────────────────────────────── */
+  .bar {
+    position: sticky; top: 0; z-index: 20;
+    background: var(--surface); border-bottom: 1px solid var(--rule);
+    box-shadow: var(--shadow);
+  }
+  .bar-in {
+    max-width: 1060px; margin: 0 auto; padding: 10px 20px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  }
+  .who { display: flex; align-items: center; gap: 8px; }
+  .who label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  input[type="text"] {
+    font-family: var(--body); font-size: 14px; color: var(--ink);
+    background: var(--ground); border: 1px solid var(--rule-firm);
+    border-radius: 7px; padding: 6px 10px; width: 150px;
+  }
+  .meter { flex: 1 1 200px; min-width: 160px; }
+  .meter-track { height: 8px; border-radius: 99px; background: var(--sunk); overflow: hidden; display: flex; }
+  .meter-track i { display: block; height: 100%; }
+  .meter-pass { background: var(--pass); }
+  .meter-fail { background: var(--fail); }
+  .meter-block { background: var(--block); }
+  .meter-txt { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 4px; display: block; }
+  .filters { display: flex; gap: 5px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+    padding: 5px 10px; border-radius: 99px; border: 1px solid var(--rule-firm);
+    background: var(--surface); color: var(--ink-soft); cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .saving { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* ── intro panels ───────────────────────────────────────── */
+  .panel {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 12px; padding: 18px 20px; margin: 20px 0;
+  }
+  .panel h2 {
+    font-family: var(--display); font-size: 1.05rem; font-weight: 600;
+    margin: 0 0 10px; letter-spacing: -.01em;
+  }
+  .panel.warn { border-left: 3px solid var(--block); background: var(--block-wash); }
+  .panel p { margin: 0 0 10px; }
+  .panel p:last-child, .panel ol:last-child, .panel ul:last-child { margin-bottom: 0; }
+  ol.steps-list, ul.tips { margin: 0 0 10px; padding-left: 20px; }
+  ol.steps-list li, ul.tips li { margin-bottom: 6px; }
+  code, .path, .ui {
+    font-family: var(--mono); font-size: .85em;
+    background: var(--sunk); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+  }
+  .ui { background: var(--accent-wash); border-color: transparent; color: var(--accent); font-weight: 500; }
+  a { color: var(--accent); }
+
+  /* ── sections ───────────────────────────────────────────── */
+  section.group { margin: 26px 0 0; }
+  .group-head {
+    display: flex; align-items: baseline; gap: 12px;
+    border-top: 2px solid var(--ink); padding-top: 12px; margin-bottom: 4px;
+  }
+  .group-head h2 {
+    font-family: var(--display); font-weight: 700; font-size: 1.25rem;
+    letter-spacing: -.015em; margin: 0;
+  }
+  .group-key {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: .12em; color: var(--accent); text-transform: uppercase;
+  }
+  .group-note { color: var(--muted); font-size: 13.5px; margin: 0 0 6px; }
+
+  /* ── a test ─────────────────────────────────────────────── */
+  .test { border-bottom: 1px solid var(--rule); padding: 15px 0; }
+  .test.hidden { display: none; }
+  .test-top { display: flex; gap: 12px; align-items: baseline; }
+  .tid {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+    color: var(--surface); background: var(--ink-soft);
+    border-radius: 5px; padding: 2px 7px; flex: 0 0 auto;
+  }
+  .test[data-state="pass"] .tid { background: var(--pass); }
+  .test[data-state="fail"] .tid { background: var(--fail); }
+  .test[data-state="block"] .tid { background: var(--block); }
+  .test-title { font-weight: 600; font-family: var(--display); font-size: 1.02rem; }
+  .test-body { margin: 8px 0 0 0; padding-left: 46px; }
+  @media (max-width: 620px) { .test-body { padding-left: 0; } }
+  .do, .expect { margin: 0 0 6px; font-size: 14.2px; }
+  .do b, .expect b {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); display: inline-block; min-width: 74px;
+  }
+  .expect { color: var(--ink-soft); }
+  .expect b { color: var(--accent); }
+
+  .verdict { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+  .vbtn {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    border: 1px solid var(--rule-firm); background: var(--surface); color: var(--ink-soft);
+    border-radius: 7px; padding: 6px 12px; cursor: pointer;
+  }
+  .vbtn:hover { border-color: var(--ink-soft); }
+  .vbtn[aria-pressed="true"][data-v="pass"] { background: var(--pass-wash); border-color: var(--pass); color: var(--pass); }
+  .vbtn[aria-pressed="true"][data-v="fail"] { background: var(--fail-wash); border-color: var(--fail); color: var(--fail); }
+  .vbtn[aria-pressed="true"][data-v="block"] { background: var(--block-wash); border-color: var(--block); color: var(--block); }
+  textarea {
+    width: 100%; margin-top: 8px; min-height: 62px; resize: vertical;
+    font-family: var(--body); font-size: 14px; color: var(--ink);
+    background: var(--ground); border: 1px solid var(--rule-firm);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  textarea.needed { border-color: var(--fail); }
+  .stamp { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .out {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    white-space: pre-wrap; background: var(--sunk); border: 1px solid var(--rule);
+    border-radius: 8px; padding: 14px; max-height: 340px; overflow: auto;
+  }
+  .btn {
+    font-family: var(--body); font-size: 13.5px; font-weight: 600;
+    background: var(--ink); color: var(--ground); border: none;
+    border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="top">
+  <div class="top-in">
+    <p class="eyebrow">TableFlow · Quality assurance</p>
+    <h1>Test run: every feature, end to end</h1>
+    <p class="sub">
+      Work down the list. Each test says what to do and what should happen — if what you
+      see differs, mark it <strong>Fail</strong> and write what you saw instead. Your answers
+      save as you go and are visible to whoever sent you this.
+    </p>
+  </div>
+</header>
+
+<div class="bar">
+  <div class="bar-in">
+    <span class="who">
+      <label for="tester">Tester</label>
+      <input type="text" id="tester" placeholder="your name" autocomplete="name">
+    </span>
+    <span class="meter">
+      <span class="meter-track" id="meter"></span>
+      <span class="meter-txt" id="meter-text">0 of 0 checked</span>
+    </span>
+    <span class="filters" id="filters">
+      <button class="chip" data-f="all" aria-pressed="true">All</button>
+      <button class="chip" data-f="todo" aria-pressed="false">Not run</button>
+      <button class="chip" data-f="fail" aria-pressed="false">Failed</button>
+      <button class="chip" data-f="block" aria-pressed="false">Blocked</button>
+    </span>
+    <span class="saving" id="saving"></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="panel warn">
+    <h2>Before you start — read this</h2>
+    <ol class="steps-list">
+      <li><strong>Register your own restaurant.</strong> Go to <span class="path">/register</span> and sign up with your own email and a restaurant name that is obviously a test, e.g. <span class="ui">QA — Ravi</span>. You will land on a page saying <em>Waiting for approval</em>.</li>
+      <li><strong>Ask for approval.</strong> A new account cannot open the dashboard until an administrator approves it. Message whoever sent you this link and wait — it takes them a few seconds. Press <span class="ui">Refresh status</span> until it lets you in.</li>
+      <li><strong>Never test on anyone else's restaurant.</strong> Everything you create — dishes, staff, orders, payments — must be inside your own test account.</li>
+      <li><strong>Use a real browser and open the console.</strong> Press <kbd>F12</kbd> → Console tab, and keep it open. Red errors there are bugs even when the screen looks fine. Test M3 asks about this.</li>
+    </ol>
+    <p>
+      Sign in once and stay signed in — logging in more than 8 times in five minutes locks
+      the account for a while, by design.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>How to mark a test</h2>
+    <p>
+      <strong>Pass</strong> — it did what the “Expect” line says.
+      <strong>Fail</strong> — it did something else. Say what happened, in the notes: what you
+      clicked, what you expected, what you actually got, and the exact wording of any error.
+      <strong>Blocked</strong> — you could not run it (something earlier is broken, or you lack access).
+    </p>
+    <p>
+      A note on a Fail is what makes it fixable. Compare these two: <em>“discount doesn't work”</em>
+      versus <em>“On the POS, a 10% discount on a 1,000 bill took the total to 950 instead of 900 —
+      it looks like the tax is being discounted too. Order #260908-004.”</em> The second one gets fixed today.
+    </p>
+    <p>
+      Always include the <strong>order or invoice number</strong>, the <strong>branch</strong> you
+      were on, and the <strong>time</strong>. If the screen shows an error with a long code
+      (a “digest”), copy it exactly.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>How severe is it?</h2>
+    <ul class="tips">
+      <li><strong>Critical</strong> — money is wrong, data is lost, or nobody can work: a bill that adds up wrong, stock that does not move, a page nobody can open, one restaurant seeing another's data.</li>
+      <li><strong>Major</strong> — a feature does not work but there is a way round it: an export that fails, a filter that ignores you, a button that does nothing.</li>
+      <li><strong>Minor</strong> — wrong label, awkward layout, missing hint, an odd but harmless number format.</li>
+    </ul>
+    <p>Put the word Critical, Major or Minor at the start of your note.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Four things that were just fixed — check they stayed fixed</h2>
+    <ul class="tips">
+      <li><strong>A sale belongs to the till that rang it up.</strong> An order placed at one branch used to be filed against another. Tests <span class="path">G3</span> and <span class="path">H5</span>.</li>
+      <li><strong>Money grouping follows the currency.</strong> Sri Lankan rupees read <span class="ui">849,960.21</span>, not <span class="ui">8,49,960.21</span>. Test <span class="path">M1</span>.</li>
+      <li><strong>Times are the restaurant's own clock</strong> and must not change when you reload. Test <span class="path">M2</span>.</li>
+      <li><strong>Every failing check explains itself</strong> in plain words and links to the records. Test <span class="path">J10</span>.</li>
+    </ul>
+  </div>
+
+  <main id="list"></main>
+
+  <div class="panel" id="summary-panel">
+    <h2>Your report</h2>
+    <p>When you have worked through the list, press the button and send this back.</p>
+    <p><button class="btn" id="make">Build the summary</button> <button class="btn" id="copy" style="background:var(--accent)">Copy to clipboard</button></p>
+    <div class="out" id="out">Nothing yet.</div>
+  </div>
+</div>
+
+<script>
+const TESTS = [
+  { key: 'A', name: 'Getting in', note: 'Registration, approval and who lands where.', tests: [
+    { id:'A1', t:'Register a restaurant', d:'Open /register. Fill in restaurant name, your name, email, phone, pick Sri Lankan Rupee, set a password, tick the terms box, press "Send registration request".', e:'It accepts the form and shows a page titled "Waiting for approval" naming your restaurant.' },
+    { id:'A2', t:'An unapproved account cannot get in', d:'While still waiting, try to open /dashboard directly by typing the address.', e:'You are sent back to the waiting page. No dashboard, no data.' },
+    { id:'A3', t:'Approval opens the door', d:'After the admin approves you, press "Refresh status", or sign in again.', e:'You land on the dashboard. A banner says how many days are left in the free trial.' },
+    { id:'A4', t:'A wrong password is refused', d:'Sign out. Try signing in with the wrong password once.', e:'A clear refusal. It must NOT say whether the email exists or the password was the wrong part.' },
+    { id:'A5', t:'Forgot password', d:'On the sign-in page press "Forgot password?" and enter your email.', e:'It says a reset link has been sent, and the email arrives.' },
+  ]},
+  { key: 'B', name: 'Branches', note: 'Everything else hangs off a location, so do this first.', tests: [
+    { id:'B1', t:'Add your first branch', d:'Overview › Locations → "Add location" → choose Branch → name it "Main", short code MAIN → "Add location".', e:'The branch appears in the list straight away.' },
+    { id:'B2', t:'Add a second branch', d:'Add another branch called "Second", code SEC.', e:'Both branches listed. A location switcher now appears in the top bar.' },
+    { id:'B3', t:'The switcher actually filters', d:'Switch between "All locations", Main and Second, watching the dashboard figures.', e:'Figures change with the choice, and stay on that choice as you move between pages.' },
+    { id:'B4', t:'Opening hours', d:'Open a branch from the Locations page and set its opening hours.', e:'They save, and the guest menu shows open/closed correctly against them.' },
+  ]},
+  { key: 'C', name: 'The menu', note: 'Categories first, then dishes.', tests: [
+    { id:'C1', t:'Add a category', d:'/dashboard/categories → "Add category" → name it "Mains".', e:'Saved and listed.' },
+    { id:'C2', t:'Add a dish with a photo', d:'Menu › Menu items → "Add item" → name "Chicken Rice", category Mains, price 950, upload any photo → save.', e:'It appears in the list with its picture, and on the guest menu.' },
+    { id:'C3', t:'A dish with sizes', d:'Add "Fresh Juice" with a variant group "Size" — Regular 400, Large 650. Then add it on the POS.', e:'The till asks which size before adding it, and the price follows the size chosen.' },
+    { id:'C4', t:'Turn a dish off', d:'Set "Chicken Rice" to unavailable, then open the guest menu.', e:'Guests can no longer see or order it. It stays in your dashboard list.' },
+    { id:'C5', t:'Offer price', d:'Set an offer price on a dish and view it as a guest.', e:'The guest sees the offer price, with the old price shown as struck through.' },
+    { id:'C6', t:'Bulk menu import', d:'Menu › Add your menu — try the spreadsheet route.', e:'The page offers four ways in; rows land in a review table BEFORE anything saves.' },
+  ]},
+  { key: 'D', name: 'Stock and recipes', note: 'This is what makes profit figures real. Test it carefully.', tests: [
+    { id:'D1', t:'Add an ingredient', d:'Inventory › Stock → "Add item" → "Rice", unit KG, opening quantity 50, cost 300 → save.', e:'It shows 50 KG in stock at the branch you were on — not zero, and not at a different branch.' },
+    { id:'D2', t:'The opening quantity is explained', d:'Open the item you just made and read its Stock history.', e:'There is an "Opening balance" movement of +50. The balance is never a number with no movement behind it.' },
+    { id:'D3', t:'Write a recipe', d:'Menu › Recipes → pick "Chicken Rice" → add ingredient Rice, 0.2 KG, wastage 5% → save.', e:'It saves, and the screen explains that 5% on 100g removes 105g.' },
+    { id:'D4', t:'Selling drops the stock', d:'Note the Rice balance. Sell one Chicken Rice on the POS. Check the balance again.', e:'Rice falls by 0.21 KG (0.2 plus 5% wastage), and the stock history names the order that took it.' },
+    { id:'D5', t:'Stock count', d:'Inventory › Stock counts → count Rice as 40 → submit and approve.', e:'The balance becomes 40 and an adjustment movement records the difference and who signed it.' },
+    { id:'D6', t:'Wastage', d:'Inventory › Wastage → record 2 KG of Rice wasted with a reason.', e:'Stock drops by 2 and the cost appears as wastage in the accounting Overview.' },
+    { id:'D7', t:'Transfer between branches', d:'Transfers → move 5 KG of Rice from Main to Second.', e:'Main falls by 5, Second rises by 5, and the total across the business is unchanged.' },
+  ]},
+  { key: 'E', name: 'Buying stock', note: 'An order is a promise; a receipt is a fact.', tests: [
+    { id:'E1', t:'Add a supplier', d:'Inventory › Suppliers → "Add supplier" → name and phone.', e:'Saved and listed.' },
+    { id:'E2', t:'Raise a purchase order', d:'/dashboard/purchases/new → that supplier, 100 KG Rice at 300 → "Create order".', e:'Created as a draft. Stock has NOT moved.' },
+    { id:'E3', t:'Approve and send', d:'On the order press "Approve", then "Mark as ordered".', e:'The status walks Draft → Approved → Ordered. Stock still has not moved.' },
+    { id:'E4', t:'Receive a SHORT delivery', d:'Press "Receive delivery" and accept only 60 of the 100.', e:'Stock rises by exactly 60. The order stays partly received — it does not quietly close.' },
+    { id:'E5', t:'The bill to pay appears', d:'Accounting › Payables.', e:'The supplier is owed 60 × 300 = 18,000 — the value received, not the value ordered.' },
+  ]},
+  { key: 'F', name: 'Staff and permissions', note: 'The most important security tests in this list.', tests: [
+    { id:'F1', t:'Add staff', d:'People › Staff → "Add staff" → add one Waiter, one Cashier and one Accountant.', e:'All three appear with their roles.' },
+    { id:'F2', t:'Sign-in codes exist', d:'People › Staff codes.', e:'Each person has a short code like W-0001, a sign-in code and their own link.' },
+    { id:'F3', t:'A waiter lands on the waiter screen', d:'In a private window, sign in as the waiter.', e:'They land on the waiter station, and their sidebar is far shorter than yours.' },
+    { id:'F4', t:'A waiter cannot reach accounting', d:'Still as the waiter, type /dashboard/accounting into the address bar.', e:'Refused. Mark this CRITICAL if any accounting figure is visible.' },
+    { id:'F5', t:'An accountant lands on accounting', d:'Sign in as the accountant.', e:'They open on the accounting section and can reach payments and reports.' },
+    { id:'F6', t:'The accountant cannot approve their own payment', d:'As the accountant, look for an Approve button on a payment they raised.', e:'There is none. Approving is the owner’s alone.' },
+    { id:'F7', t:'Turning off a code locks them out', d:'People › Staff codes → "New code" for the waiter. Try their old link.', e:'The old code no longer works.' },
+  ]},
+  { key: 'G', name: 'Guests ordering', note: 'The QR journey, from the table.', tests: [
+    { id:'G1', t:'Print the QR sheet', d:'Back office › QR code.', e:'A printable sheet with one code per table plus a branch code.' },
+    { id:'G2', t:'Order as a guest', d:'Open a table QR on your phone (or paste the link). Add two dishes, press "View cart", then "Place order".', e:'The order is accepted and shows the correct total.' },
+    { id:'G3', t:'It lands at the right table AND branch', d:'On the dashboard, open the order you just placed.', e:'It shows the table you scanned and the branch that table belongs to. Mark CRITICAL if the branch is wrong.' },
+    { id:'G4', t:'The guest can follow it', d:'On the phone, stay on the tracking screen while the kitchen works.', e:'The status updates as the kitchen accepts and finishes it.' },
+    { id:'G5', t:'A sold-out dish cannot be ordered', d:'Mark a dish unavailable while it sits in a guest’s cart, then try to place the order.', e:'A clear message. It must not create an order for something you cannot cook.' },
+  ]},
+  { key: 'H', name: 'Kitchen and service', note: null, tests: [
+    { id:'H1', t:'A ticket walks the board', d:'Kitchen display → "Accept" a new ticket, then Start and Ready on the dishes.', e:'It moves New orders → In the kitchen → Ready to serve.' },
+    { id:'H2', t:'Sections route dishes', d:'Set up two kitchen sections and assign dishes to each. Place an order with both.', e:'Each section’s screen shows only its own dishes.' },
+    { id:'H3', t:'The waiter serves', d:'Waiter station → serve the ready dishes.', e:'They leave the ready list and the order moves on.' },
+    { id:'H4', t:'Live floor', d:'Overview › Live floor.', e:'Occupied tables, waiting times counting up, and guest calls if any.' },
+    { id:'H5', t:'One kitchen never sees another’s tickets', d:'Place an order at Main. Open the kitchen screen for Second.', e:'Second does NOT show it. Mark CRITICAL if it does.' },
+  ]},
+  { key: 'I', name: 'Money at the till', note: 'Count carefully — every number here must be exact.', tests: [
+    { id:'I1', t:'Open the drawer', d:'Start a shift with an opening float of 5,000.', e:'The drawer opens and shows 5,000 expected.' },
+    { id:'I2', t:'The bill adds up', d:'Ring up a 1,000 dish with tax set to 10%.', e:'Subtotal 1,000, tax 100, total 1,100. Check the arithmetic yourself.' },
+    { id:'I3', t:'Change is right', d:'Take cash, tendering 2,000 against that 1,100 bill.', e:'It shows 900 change and records only 1,100 as taken.' },
+    { id:'I4', t:'Split a bill', d:'On a bill for several dishes, press "Split" and divide it two ways, paying one half by cash and one by card.', e:'Both halves settle, the bill closes fully paid, and the two methods are recorded separately.' },
+    { id:'I5', t:'Part payment', d:'On a 2,000 bill, take only 500.', e:'It reads partly paid with 1,500 still due — not paid, not unpaid.' },
+    { id:'I6', t:'Refund with a reason', d:'Refund 300 of a settled bill, giving a reason.', e:'The refund is recorded with the reason, and net sales fall by 300.' },
+    { id:'I7', t:'A short drawer must be explained', d:'Close the drawer counting 500 LESS than expected.', e:'It shows the shortfall, and will not close without a written reason.' },
+    { id:'I8', t:'A manager reviews it', d:'As the owner, open the cash drawer page.', e:'The short drawer is waiting for review, and signing it off records who did.' },
+  ]},
+  { key: 'J', name: 'Accounting', note: 'The heart of it. Take your time here.', tests: [
+    { id:'J1', t:'Overview matches the reports', d:'Accounting › Overview. Note "Net sales", then open the sales report for the same dates.', e:'The two numbers are identical. Any difference at all is CRITICAL.' },
+    { id:'J2', t:'"Why is this number?"', d:'On the Net sales card press "Why is this number?".', e:'It shows the arithmetic with your real figures, and the lines add up to the total.' },
+    { id:'J3', t:'Ask the numbers', d:'In the "Ask the numbers" box, try "why did profit change?".', e:'A real answer built from your figures, naming where each came from. It must never invent a number.' },
+    { id:'J4', t:'Raise an expense', d:'Accounting › Money out → new EXPENSE payment, 5,000 rent, bank transfer → Submit.', e:'It saves as a draft, then moves to submitted. The amount locks once submitted.' },
+    { id:'J5', t:'Nobody approves their own', d:'As the same person who submitted it, try to approve it.', e:'Refused, in plain words. This is the control the whole module exists for — CRITICAL if it lets you.' },
+    { id:'J6', t:'Approve, then pay', d:'As the owner approve it; then mark it paid.', e:'Both steps are stamped with who did them and when.' },
+    { id:'J7', t:'Cash expenses reach the drawer', d:'Pay a small expense by CASH while a drawer is open, then look at the drawer.', e:'The cash leaving is on the drawer, so the till still balances.' },
+    { id:'J8', t:'A mistake is reversed, not erased', d:'Reverse the paid payment. Then try to reverse it a second time.', e:'The first reversal cancels it out and both entries remain visible. The second is refused.' },
+    { id:'J9', t:'Payables agree with the supplier', d:'Accounting › Payables, then open that supplier’s own ledger.', e:'The closing balance on the statement equals the balance on the ledger, to the cent.' },
+    { id:'J10', t:'Checks explain themselves', d:'Accounting › Checks → each of the four tabs.', e:'Identities read OK; every failing check says what happened in plain words and links to the actual records.' },
+    { id:'J11', t:'The books balance', d:'Accounting › Ledger → Trial balance.', e:'Total debits equal total credits exactly, and it says "Balanced: Yes". CRITICAL if not.' },
+    { id:'J12', t:'Closing a month locks it', d:'Accounting › Close month. Read the checklist, then close a month. Afterwards try to edit an order inside it.', e:'The checklist reflects reality; after closing, edits inside that month are refused.' },
+  ]},
+  { key: 'K', name: 'Reports and exports', note: null, tests: [
+    { id:'K1', t:'Ranges work', d:'Back office › Reports — switch between Today, Last 7 days and Last 30 days.', e:'Figures change sensibly and the wider range is never smaller than the narrower one.' },
+    { id:'K2', t:'Every report opens', d:'Open Sales, Gross profit, Inventory, Purchasing, Cash drawer and Petty cash.', e:'All load with data and no error.' },
+    { id:'K3', t:'Exports match the screen', d:'Export Excel and CSV from the reports page and open the file.', e:'The file downloads and its totals equal what the screen showed.' },
+    { id:'K4', t:'The P&L adds up', d:'Accounting › Reports → the profit and loss.', e:'Net sales − ingredient cost = gross profit; minus expenses = operating profit. Check it with a calculator.' },
+    { id:'K5', t:'Closing a day freezes it', d:'Inventory › Daily close → close yesterday. Then note its figures, add a backdated change, and look again.', e:'The closed day keeps the figures you signed for.' },
+  ]},
+  { key: 'L', name: 'Settings', note: null, tests: [
+    { id:'L1', t:'Restaurant details save', d:'Settings › Profile — change the tagline, upload a logo, check the timezone is your own.', e:'Saved, and the logo appears on the guest menu and printed bills.' },
+    { id:'L2', t:'Tax changes reach new bills', d:'Settings › Tax & charges — set tax to 15%. Ring up a new 1,000 bill.', e:'The new bill charges 150. Older bills keep the tax they were charged at.' },
+    { id:'L3', t:'Payment methods', d:'Turn card payments off in Settings, then look at the cashier screen.', e:'Card is no longer offered.' },
+    { id:'L4', t:'Service charge', d:'Set a 10% service charge and ring up a bill.', e:'It is added separately from tax and shown as its own line.' },
+  ]},
+  { key: 'M', name: 'Things that break quietly', note: 'Do these on every screen you visit, not just once.', tests: [
+    { id:'M1', t:'Money is grouped correctly', d:'Look at any figure over 100,000 — the trial balance is a good one.', e:'Sri Lankan rupees read 849,960.21. If you see 8,49,960.21 that is a bug.' },
+    { id:'M2', t:'Times do not move', d:'Note the time on an order. Reload the page. Look again.', e:'Identical. A time that shifts by hours after reload is a bug.' },
+    { id:'M3', t:'The console stays quiet', d:'With F12 open, visit ten different screens.', e:'No red errors. Copy any you see, with the screen you were on.' },
+    { id:'M4', t:'It works on a phone', d:'Open the POS, kitchen and dashboard on a phone or a narrow window.', e:'Everything is reachable, nothing is cut off, and the page never scrolls sideways.' },
+    { id:'M5', t:'A double tap makes one order', d:'On the POS, press "Send to kitchen" twice, quickly.', e:'Exactly one order is created. Two is CRITICAL.' },
+    { id:'M6', t:'Refreshing does not duplicate', d:'Right after taking a payment, refresh the page.', e:'The payment is recorded once.' },
+    { id:'M7', t:'Signing out really signs out', d:'Sign out, then press the browser Back button.', e:'You cannot see the dashboard again without signing in.' },
+    { id:'M8', t:'Two people at once', d:'Have someone else place an order while you watch the kitchen screen.', e:'It appears without you reloading.' },
+  ]},
+]
+
+const STATES = { pass: 'Pass', fail: 'Fail', block: 'Blocked' }
+const results = {}          // id -> { state, note, tester, at }
+let db = null
+let filter = 'all'
+const flat = TESTS.flatMap((g) => g.tests)
+
+/* ── local fallback, so the page works before (or without) the store ── */
+const local = {
+  read() { try { return JSON.parse(localStorage.getItem('qa-results') || '{}') } catch { return {} } },
+  write() { try { localStorage.setItem('qa-results', JSON.stringify(results)) } catch { /* private window */ } },
+}
+
+function testerName() {
+  return document.getElementById('tester').value.trim() || 'unnamed'
+}
+
+function render() {
+  const list = document.getElementById('list')
+  list.innerHTML = ''
+  for (const group of TESTS) {
+    const section = document.createElement('section')
+    section.className = 'group'
+    const head = document.createElement('div')
+    head.className = 'group-head'
+    head.innerHTML = `<span class="group-key">${group.key}</span><h2>${group.name}</h2>`
+    section.appendChild(head)
+    if (group.note) {
+      const note = document.createElement('p')
+      note.className = 'group-note'
+      note.textContent = group.note
+      section.appendChild(note)
+    }
+    for (const test of group.tests) section.appendChild(row(test))
+    list.appendChild(section)
+  }
+  applyFilter()
+  meter()
+}
+
+function row(test) {
+  const saved = results[test.id] || {}
+  const el = document.createElement('div')
+  el.className = 'test'
+  el.id = `t-${test.id}`
+  if (saved.state) el.dataset.state = saved.state
+  el.innerHTML = `
+    <div class="test-top">
+      <span class="tid">${test.id}</span>
+      <span class="test-title">${test.t}</span>
+    </div>
+    <div class="test-body">
+      <p class="do"><b>Do</b> ${test.d}</p>
+      <p class="expect"><b>Expect</b> ${test.e}</p>
+      <div class="verdict">
+        ${Object.entries(STATES).map(([v, label]) =>
+          `<button class="vbtn" data-v="${v}" aria-pressed="${saved.state === v}">${label}</button>`).join('')}
+        <span class="stamp">${saved.state ? `${saved.tester || ''} · ${saved.at ? new Date(saved.at).toLocaleString() : ''}` : ''}</span>
+      </div>
+      <textarea placeholder="What happened? Include the order number, the branch and the time."
+        class="${saved.state === 'fail' && !saved.note ? 'needed' : ''}">${saved.note ? escapeHtml(saved.note) : ''}</textarea>
+    </div>`
+
+  el.querySelectorAll('.vbtn').forEach((button) => {
+    button.addEventListener('click', () => {
+      const next = button.dataset.v === saved.state ? null : button.dataset.v
+      mark(test.id, { state: next, note: el.querySelector('textarea').value })
+    })
+  })
+  let timer = null
+  el.querySelector('textarea').addEventListener('input', (event) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => mark(test.id, { state: results[test.id]?.state ?? null, note: event.target.value }), 700)
+  })
+  return el
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+}
+
+async function mark(id, patch) {
+  const entry = {
+    state: patch.state ?? null,
+    note: patch.note ?? '',
+    tester: testerName(),
+    at: new Date().toISOString(),
+  }
+  if (!entry.state && !entry.note) delete results[id]
+  else results[id] = entry
+  local.write()
+
+  // Repaint just this row, so a long list never jumps and typing is not interrupted.
+  const el = document.getElementById(`t-${id}`)
+  if (el) {
+    const test = flat.find((t) => t.id === id)
+    const focused = document.activeElement === el.querySelector('textarea')
+    const caret = focused ? el.querySelector('textarea').selectionStart : null
+    const fresh = row(test)
+    el.replaceWith(fresh)
+    if (focused) {
+      const area = fresh.querySelector('textarea')
+      area.focus()
+      if (caret !== null) area.setSelectionRange(caret, caret)
+    }
+  }
+  applyFilter()
+  meter()
+
+  if (!db) return
+  const say = document.getElementById('saving')
+  try {
+    say.textContent = 'saving…'
+    if (results[id]) await db.doc(`results/${id}`).set(results[id])
+    else await db.doc(`results/${id}`).delete()
+    say.textContent = 'saved'
+    setTimeout(() => { if (say.textContent === 'saved') say.textContent = '' }, 1600)
+  } catch (error) {
+    say.textContent = 'saved on this device only'
+  }
+}
+
+function meter() {
+  const counts = { pass: 0, fail: 0, block: 0 }
+  for (const entry of Object.values(results)) if (entry.state) counts[entry.state] += 1
+  const done = counts.pass + counts.fail + counts.block
+  const total = flat.length
+  const bar = document.getElementById('meter')
+  bar.innerHTML = ['pass', 'fail', 'block']
+    .map((k) => `<i class="meter-${k}" style="width:${(counts[k] / total) * 100}%"></i>`).join('')
+  document.getElementById('meter-text').textContent =
+    `${done} of ${total} checked · ${counts.pass} passed · ${counts.fail} failed${counts.block ? ` · ${counts.block} blocked` : ''}`
+}
+
+function applyFilter() {
+  for (const test of flat) {
+    const el = document.getElementById(`t-${test.id}`)
+    if (!el) continue
+    const state = results[test.id]?.state ?? null
+    const show =
+      filter === 'all' ? true :
+      filter === 'todo' ? !state :
+      filter === state
+    el.classList.toggle('hidden', !show)
+  }
+  for (const section of document.querySelectorAll('.group')) {
+    const any = [...section.querySelectorAll('.test')].some((t) => !t.classList.contains('hidden'))
+    section.style.display = any ? '' : 'none'
+  }
+}
+
+document.getElementById('filters').addEventListener('click', (event) => {
+  const button = event.target.closest('.chip')
+  if (!button) return
+  filter = button.dataset.f
+  document.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(c === button)))
+  applyFilter()
+})
+
+document.getElementById('tester').addEventListener('input', (event) => {
+  try { localStorage.setItem('qa-tester', event.target.value) } catch { /* ignore */ }
+})
+
+document.getElementById('make').addEventListener('click', () => {
+  const counts = { pass: 0, fail: 0, block: 0 }
+  for (const entry of Object.values(results)) if (entry.state) counts[entry.state] += 1
+  const lines = []
+  lines.push(`TableFlow test run — ${testerName()} — ${new Date().toLocaleString()}`)
+  lines.push(`${counts.pass} passed, ${counts.fail} failed, ${counts.block} blocked, ${flat.length - counts.pass - counts.fail - counts.block} not run`)
+  const bad = flat.filter((t) => ['fail', 'block'].includes(results[t.id]?.state))
+  if (bad.length) {
+    lines.push('', 'PROBLEMS FOUND')
+    for (const test of bad) {
+      const entry = results[test.id]
+      lines.push('', `${test.id} [${STATES[entry.state].toUpperCase()}] ${test.t}`)
+      lines.push(`  expected: ${test.e}`)
+      lines.push(`  saw:      ${entry.note || '(no note written — please add one)'}`)
+    }
+  } else {
+    lines.push('', 'No failures recorded.')
+  }
+  const notRun = flat.filter((t) => !results[t.id]?.state)
+  if (notRun.length) lines.push('', `NOT RUN: ${notRun.map((t) => t.id).join(', ')}`)
+  document.getElementById('out').textContent = lines.join('\n')
+})
+
+document.getElementById('copy').addEventListener('click', async () => {
+  const text = document.getElementById('out').textContent
+  try {
+    await navigator.clipboard.writeText(text)
+    document.getElementById('copy').textContent = 'Copied'
+    setTimeout(() => { document.getElementById('copy').textContent = 'Copy to clipboard' }, 1600)
+  } catch {
+    document.getElementById('copy').textContent = 'Select the text and copy it'
+  }
+})
+
+/* ── boot: render from local first, then light up the shared store ── */
+Object.assign(results, local.read())
+try {
+  const who = localStorage.getItem('qa-tester')
+  if (who) document.getElementById('tester').value = who
+} catch { /* ignore */ }
+render()
+
+// Opened as a plain file — emailed, or saved to a desktop — there is no
+// viewer to ask, and the page has to carry on alone rather than throw.
+const host = typeof claude !== 'undefined' && claude && typeof claude.use === 'function' ? claude : null
+if (!host) {
+  document.getElementById('saving').textContent = 'answers save on this device'
+}
+host?.use('db').then((store) => {
+  if (!store) {                // works alone; answers stay on this device
+    document.getElementById('saving').textContent = 'answers save on this device'
+    return
+  }
+  db = store
+  db.collection('results').onSnapshot((snap) => {
+    const seen = new Set()
+    snap.docs.forEach((doc) => {
+      const data = doc.data()
+      if (!data) return
+      seen.add(doc.id)
+      results[doc.id] = data
+    })
+    for (const id of Object.keys(results)) if (!seen.has(id)) delete results[id]
+    local.write()
+    const active = document.activeElement
+    const typing = active && active.tagName === 'TEXTAREA'
+    if (!typing) render()
+    else meter()
+  }, () => { /* the local copy carries on */ })
+})
+</script>
+
+</body>
+</html>
