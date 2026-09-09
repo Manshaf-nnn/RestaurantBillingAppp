@@ -1,0 +1,76 @@
+# ============================================================================
+# TableFlow on an OVH server — the app and a TLS terminator, nothing else.
+#
+#   docker compose up -d --build
+#
+# There is deliberately NO database here. The data lives in Neon and this box
+# only runs code: that is what makes a bad deploy survivable — you rebuild the
+# container, and every order, payment and photo is exactly where it was.
+# (docker-compose.yml in the repo root is the LOCAL stack, with its own
+# Postgres, for development. Do not use that one here.)
+# ============================================================================
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Caddy terminates TLS and gets certificates by itself — including for
+  # restaurant domains nobody configured in advance. See the Caddyfile.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates — losing this means re-issuing them
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # The work that belongs to nobody's request: integrity sweeps, retention
+  # trimming. Netlify ran this as a scheduled function every 15 minutes.
+  jobs:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      - app
+    env_file: .env
+    command: >-
+      sh -c "apk add --no-cache curl >/dev/null &&
+      while true; do
+        sleep 900;
+        curl -fsS -X POST
+          -H 'content-type: application/json'
+          -H \"authorization: Bearer $$JOBS_SECRET\"
+          -d '{\"source\":\"ovh-loop\"}'
+          http://app:3000/api/jobs/run || echo '[jobs] call failed';
+      done"
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+volumes:
+  caddy_data:
+  caddy_config:
