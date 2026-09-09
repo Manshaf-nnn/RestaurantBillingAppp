@@ -1,55 +1,101 @@
 # ============================================================================
-# Render Blueprint — deploy RestaurantOS (app + PostgreSQL) almost one-click.
+# Render Blueprint — deploy TableFlow against the EXISTING Neon database.
 # Docs: https://render.com/docs/blueprint-spec
 #
 # In Render:  New +  →  Blueprint  →  connect this GitHub repo.
-# Render reads this file, creates the database and the web service, and asks you
-# for SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD. That's it.
+#
+# ── Read this before you click ──────────────────────────────────────────────
+#
+# This file used to declare a Render PostgreSQL database and point the app at
+# it. That was right when Render was the only host and the database was empty;
+# it is WRONG now. The live data — every restaurant, order, payment and the
+# image bytes themselves — lives in Neon, and a blueprint that creates a second
+# database would quietly stand up an empty one beside it and serve a site with
+# no customers in it. Nothing would be lost, and nothing would be there either.
+#
+# So there is no `databases:` block. DATABASE_URL is asked for (`sync: false`)
+# and you paste the Neon POOLED connection string — the one whose host contains
+# `-pooler`; `src/server/db/prisma.ts` refuses the direct host in production,
+# because a serverless-style app opening unpooled connections exhausts Neon.
+#
+# Everything else about the app is unchanged by the move: the same repo, the
+# same migrations, the same secrets. See RENDER-MIGRATION.md for the full
+# cutover, including the DNS step and how to roll back.
 # ============================================================================
-databases:
-  - name: restaurantos-db
-    databaseName: restaurantos
-    user: restaurantos
-    plan: basic-256mb          # smallest paid DB; change to "free" to trial
-    region: singapore          # closest Render region to India
 
 services:
   - type: web
-    name: restaurantos
+    name: tableflow
     runtime: node
-    plan: starter              # always-on; use "free" only to trial (it sleeps)
-    region: singapore
+    # 512 MB is enough to serve, and tight to BUILD this app. If a deploy dies
+    # with "JavaScript heap out of memory", move to `standard` for the build.
+    plan: starter
+    region: singapore          # closest Render region to Sri Lanka
     branch: main
     healthCheckPath: /api/health
     autoDeploy: true
-    # Build the app (no database needed here).
+
+    # No database work here: the build machine should not need the production
+    # database to compile a page.
     buildCommand: npm ci && npx prisma generate && npx next build
-    # Runs after the build, with the database available: bring the schema up to
-    # date and make sure the admin account exists. Safe to run on every deploy.
-    #
-    # This used to be `npx prisma db push`, which applies the schema WITHOUT
-    # recording any migration history — and a database in that state makes
-    # `prisma migrate deploy` (what Netlify runs) abort with P3005, so the two
-    # hosts could not share a database and the Netlify build failed on every
-    # push. `db:deploy:safe` migrates properly and baselines a pushed database
-    # once, so both hosts agree from then on.
+
+    # Runs after the build with the database reachable, and BEFORE the new
+    # version takes traffic. `db:deploy:safe` handles all three states a
+    # database can be in (empty / has history / pushed without history), so it
+    # is safe on every deploy and does nothing when there is nothing new.
     preDeployCommand: npm run db:deploy:safe && npm run db:seed:prod
-    startCommand: node server.mjs
+
+    # The custom Socket.IO server, which Netlify could not run. It listens on
+    # $PORT and reads RENDER_EXTERNAL_URL, so live order updates work here
+    # without any extra configuration.
+    startCommand: npm start
+
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: restaurantos-db
-          property: connectionString
-      - key: JWT_ACCESS_SECRET
-        generateValue: true    # Render generates a strong secret
-      - key: JWT_REFRESH_SECRET
-        generateValue: true
-      - key: NODE_ENV
-        value: production
-      # You are prompted for these two when you create the Blueprint:
+      # ── Paste these in Render (they are secrets; never commit them) ────────
+      - key: DATABASE_URL          # the Neon POOLED string
+        sync: false
+      - key: JWT_ACCESS_SECRET     # copy from Netlify, or every session ends
+        sync: false
+      - key: JWT_REFRESH_SECRET    # likewise
+        sync: false
       - key: SUPER_ADMIN_EMAIL
         sync: false
-      - key: SUPER_ADMIN_PASSWORD
+      - key: SUPER_ADMIN_PASSWORD  # NOTE: re-seeded on every deploy while set
         sync: false
-      # NEXT_PUBLIC_APP_URL / NEXT_PUBLIC_SOCKET_URL are detected automatically
-      # from Render's RENDER_EXTERNAL_URL at startup — nothing to set.
+      - key: JOBS_SECRET           # the scheduled runner's key
+        sync: false
+
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+
+      # NEXT_PUBLIC_APP_URL is deliberately NOT set here. Unset, the server
+      # falls back to RENDER_EXTERNAL_URL, so the service works on its
+      # onrender.com address while you test it. Set it to
+      # https://tableflow.markui.lk in the dashboard at the DNS cutover — the
+      # Secure cookie flag and every absolute link derive from it.
+
+# The nightly work Netlify ran as a scheduled function. Same endpoint, same
+# fifteen minutes; a cron job here is a container that runs and exits.
+  - type: cron
+    name: tableflow-jobs
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: main
+    schedule: "*/15 * * * *"
+    buildCommand: "true"
+    # Bearer, because that is what `/api/jobs/run` compares against JOBS_SECRET
+    # (and it compares in constant time — see the route).
+    startCommand: >-
+      curl -fsS -X POST
+      -H "content-type: application/json"
+      -H "authorization: Bearer $JOBS_SECRET"
+      -d '{"source":"render-cron"}'
+      "$APP_URL/api/jobs/run"
+    envVars:
+      - key: JOBS_SECRET
+        sync: false
+      - key: APP_URL
+        value: https://tableflow.markui.lk
