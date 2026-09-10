@@ -43,6 +43,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
+      # MUST be set explicitly. server.mjs binds `process.env.HOSTNAME ||
+      # "0.0.0.0"`, and Docker sets HOSTNAME by itself to the container's
+      # hostname — which resolves to the container IP (172.18.x.x). The app
+      # then listens ONLY on that address, so localhost inside the container is
+      # refused and the HEALTHCHECK below fails forever, while the app looks
+      # fine from outside because the port mapping targets the container IP.
+      # A permanently "unhealthy" container is worse than none: it hides the
+      # real thing when it happens, and blocks any depends_on: service_healthy.
+      HOSTNAME: "0.0.0.0"
     # Loopback ONLY. Publishing 3010 without the 127.0.0.1 prefix would put the
     # app straight onto both public IPs, and Docker writes its own iptables
     # rules — ufw would not stop it.
