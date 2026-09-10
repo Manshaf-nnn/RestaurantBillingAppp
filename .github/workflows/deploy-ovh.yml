@@ -1,0 +1,129 @@
+# ============================================================================
+# Push to main → the server is running the new code about two minutes later.
+#
+# ── Why it builds here and not on the server ────────────────────────────────
+#
+# The obvious script is "ssh in, git pull, docker compose up --build". It works,
+# and it is the wrong shape for this app: `next build` on 115k lines wants 2–4 GB
+# of RAM and several minutes of CPU, and the box doing that work is the same box
+# serving dinner service. On a 2 GB server the build competes with the running
+# app for memory and can take the site down to deploy the site.
+#
+# So the image is built HERE, on GitHub's hardware, and pushed to the registry.
+# The server pulls a finished image and restarts: seconds, no build, no memory
+# spike, and a broken build never reaches production because it fails before
+# anything is deployed.
+#
+# ── What it needs before it will run ────────────────────────────────────────
+#
+# Repo → Settings → Secrets and variables → Actions → New repository secret:
+#
+#   SSH_HOST        the OVH server's IP
+#   SSH_USER        the deploy user (not root)
+#   SSH_KEY         a PRIVATE key whose public half is in that user's
+#                   ~/.ssh/authorized_keys. Generate a NEW key for this —
+#                   never reuse a personal one:
+#                     ssh-keygen -t ed25519 -f deploy_key -N ""
+#
+# GITHUB_TOKEN is provided automatically; nothing to set for the registry.
+# ============================================================================
+name: Deploy to OVH
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}        # ...and a "Run workflow" button, for redeploys
+
+concurrency:
+  # A second push while the first is deploying should win, not interleave.
+  group: deploy-ovh
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    name: Build the image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        # The commit sha, so a rollback is naming an older tag rather than
+        # hoping "latest" still points where you think it does.
+        run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Lowercase, because registries reject capitals in image names.
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Release it
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull the new image and restart
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true          # stop at the first failing command
+          script: |
+            set -euo pipefail
+            cd ~/RestaurantBillingAppp
+
+            # The compose file and Caddyfile are read from the repo, so a
+            # change to either ships with the deploy.
+            git fetch --all --quiet
+            git reset --hard origin/main --quiet
+
+            cd deploy/ovh
+            export IMAGE_TAG="${{ needs.build.outputs.tag }}"
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker compose pull app
+
+            # Migrations run BEFORE the new container takes traffic, in a
+            # throwaway container on the new image. If this fails the deploy
+            # stops here and the old version keeps serving.
+            docker compose run --rm app npm run db:deploy:safe
+
+            docker compose up -d
+            docker image prune -f --filter "until=168h"
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check it came back up
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+              "https://tableflow.markui.lk/api/health" || true)
+            if [ "$code" = "200" ]; then echo "healthy"; exit 0; fi
+            echo "attempt $i: $code"; sleep 10
+          done
+          echo "The site did not come back healthy — check the server."
+          exit 1

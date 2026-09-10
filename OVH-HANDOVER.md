@@ -124,9 +124,23 @@ Encrypt can reach you about expiring certificates.
 
 ## 5. Deploy
 
+The compose file expects a ready-made image from the container registry (see
+§8). For the **very first** deploy, before GitHub Actions has ever run, you have
+two choices:
+
 ```bash
 cd ~/RestaurantBillingAppp/deploy/ovh
-docker compose up -d --build      # first build: 5–15 minutes
+
+# Either: log in and pull the image Actions built
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+docker compose pull app && docker compose up -d
+
+# Or: build it here once, by uncommenting the `build:` block in
+# docker-compose.yml. Takes 5–15 minutes and wants 2 GB+ of RAM.
+# docker compose up -d --build
+```
+
+```bash
 docker compose logs -f app
 ```
 
@@ -202,19 +216,52 @@ spreading logins across tenant domains breaks sessions in confusing ways.
 
 ---
 
-## 8. Day-to-day
+## 8. Deploying new code
+
+**Set this up once and pushes deploy themselves.**
+`.github/workflows/deploy-ovh.yml` builds the image on GitHub's hardware,
+pushes it to the container registry, and tells this server to pull and restart.
+About two minutes from `git push` to live.
+
+The build deliberately does **not** happen on this box. `next build` wants
+2–4 GB of RAM and several minutes of CPU, and the server doing that is the same
+server taking payments — on a 2 GB box the build competes with the running app
+for memory, and you would be taking the site down in order to deploy the site.
+Pulling a finished image is seconds, and a broken build never reaches
+production because it fails before anything is deployed.
+
+To switch it on, add three repository secrets (GitHub → Settings → Secrets and
+variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `SSH_HOST` | this server's IP |
+| `SSH_USER` | the deploy user (not root) |
+| `SSH_KEY` | a **new** private key made for this, public half in `~/.ssh/authorized_keys` |
 
 ```bash
-# Deploy a new version
-git pull && docker compose up -d --build
+ssh-keygen -t ed25519 -f deploy_key -N ""    # never reuse a personal key
+```
+
+The workflow runs `db:deploy:safe` on the new image **before** the new container
+takes traffic, so a failing migration stops the deploy with the old version
+still serving. It then polls `/api/health` and fails loudly if the site does not
+come back.
+
+### By hand, when you need to
+
+```bash
+cd ~/RestaurantBillingAppp && git pull
+cd deploy/ovh
+docker compose pull app && docker compose up -d
 docker compose exec app npm run db:deploy:safe    # if migrations were added
 
 # Watch
 docker compose logs -f app
 docker compose ps
 
-# Roll back
-git checkout <previous-commit> && docker compose up -d --build
+# Roll back to a specific build — every deploy is tagged with its commit
+IMAGE_TAG=abc1234 docker compose up -d
 ```
 
 Rolling back code is safe on its own. **Rolling back across a migration is

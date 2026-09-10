@@ -11,9 +11,17 @@
 # ============================================================================
 services:
   app:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
+    # Built by GitHub Actions and pulled ready-made — see
+    # .github/workflows/deploy-ovh.yml for why the server does not build its
+    # own image. IMAGE_TAG is set by the deploy; `latest` is the fallback for
+    # a hand-run `docker compose up -d`.
+    image: ghcr.io/manshaf-nnn/restaurantbillingappp:${IMAGE_TAG:-latest}
+    # To build on the server instead — no registry, no Actions — comment the
+    # image line above and uncomment these three. Expect 5–15 minutes and
+    # 2 GB+ of RAM for each deploy.
+    # build:
+    #   context: ../..
+    #   dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:
