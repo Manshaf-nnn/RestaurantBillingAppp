@@ -1,0 +1,24 @@
+# ============================================================================
+# → /etc/systemd/system/tableflow-jobs.service
+#
+# Drains the background job queue: integrity checks, and trimming of the error
+# log, outbox, job table and expired sessions. Without it those stop silently —
+# nothing in the UI reports that jobs have not run.
+#
+# Install alongside tableflow-jobs.timer:
+#   cp deploy/systemd/tableflow-jobs.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now tableflow-jobs.timer
+#   systemctl start tableflow-jobs.service     # run one now
+#   journalctl -u tableflow-jobs.service -n 30 --no-pager
+#
+# The first run of a day returns {"enqueued":5,...}; later runs return
+# {"enqueued":0,...} because the dedupe keys carry the date.
+# ============================================================================
+[Unit]
+Description=TableFlow background job tick
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tableflow-jobs.sh

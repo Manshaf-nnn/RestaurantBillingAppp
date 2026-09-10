@@ -132,8 +132,14 @@ const nextConfig = {
           { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
           { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
           {
+            // No `preload`. It only takes effect if markui.lk is submitted to
+            // hstspreload.org — which requires the header on the apex, so it
+            // does nothing here today. What it would do is assert a two-year,
+            // hard-to-withdraw HTTPS-only commitment on behalf of any
+            // restaurant that points its own apex domain at this app, covering
+            // subdomains of theirs we have never heard of.
             key: 'Strict-Transport-Security',
-            value: 'max-age=63072000; includeSubDomains; preload',
+            value: 'max-age=63072000; includeSubDomains',
           },
         ],
       },

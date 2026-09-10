@@ -28,6 +28,11 @@ yarn-error.log*
 .env*.local
 .env.production
 
+# secrets handed over out of band — the env values arrive as a document, and
+# `git add .` must never be able to pick one up
+*.docx
+*.xlsx
+
 # prisma
 /prisma/*.db
 /prisma/migrations/dev.db*

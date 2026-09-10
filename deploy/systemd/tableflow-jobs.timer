@@ -1,0 +1,23 @@
+# ============================================================================
+# → /etc/systemd/system/tableflow-jobs.timer
+#
+# Every 15 minutes, matching the schedule the Netlify scheduled function and the
+# Render cron service used. Overlapping ticks are safe: runJobs claims work with
+# FOR UPDATE SKIP LOCKED.
+#
+#   systemctl list-timers tableflow-jobs.timer --no-pager
+# ============================================================================
+[Unit]
+Description=Tick TableFlow jobs every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+# Keeps every VPS in a fleet from hitting the same second.
+RandomizedDelaySec=60
+# Runs a missed tick after downtime instead of silently skipping the window.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
