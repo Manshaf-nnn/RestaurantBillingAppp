@@ -19,11 +19,19 @@
 # Repo → Settings → Secrets and variables → Actions → New repository secret:
 #
 #   SSH_HOST        the OVH server's IP
-#   SSH_USER        the deploy user (not root)
+#   SSH_USER        the deploy user (not root). Must be in the `docker` group
+#                   and must already have this repo cloned at
+#                   ~/RestaurantBillingAppp, with deploy/ovh/.env filled in.
 #   SSH_KEY         a PRIVATE key whose public half is in that user's
 #                   ~/.ssh/authorized_keys. Generate a NEW key for this —
 #                   never reuse a personal one:
 #                     ssh-keygen -t ed25519 -f deploy_key -N ""
+#
+# ── This server is shared ───────────────────────────────────────────────────
+#
+# nginx on this box owns :80 and :443 for four other sites. The app therefore
+# publishes on 127.0.0.1:3010 and nginx proxies to it; there is no Caddy
+# container. See the header of deploy/ovh/docker-compose.yml.
 #
 # GITHUB_TOKEN is provided automatically; nothing to set for the registry.
 # ============================================================================
@@ -113,16 +121,44 @@ jobs:
 
             docker compose up -d
             docker image prune -f --filter "until=168h"
+
+            # Health is checked HERE, on the server, over loopback. The public
+            # URL is not a reliable signal: until DNS cutover it still answers
+            # from the old host, so a green check there could mean the new
+            # container never started.
+            echo "waiting for the container to report healthy…"
+            for i in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+                "http://127.0.0.1:3010/api/health" || true)
+              if [ "$code" = "200" ]; then
+                echo "healthy after ${i} attempt(s)"
+                curl -s http://127.0.0.1:3010/api/health | head -c 300; echo
+                exit 0
+              fi
+              echo "attempt $i: $code"; sleep 5
+            done
+            echo "The app did not come back healthy. Recent logs:"
+            docker compose logs --tail 60 app
+            exit 1
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check it came back up
+      - name: Check the public URL, once DNS points here
+        # Only meaningful after cutover. Skipped — not failed — while
+        # tableflow.markui.lk still resolves somewhere else, so the deploy is
+        # not held hostage to a DNS change that has not happened yet.
         run: |
+          resolved=$(getent hosts tableflow.markui.lk | awk '{print $1}' | head -1)
+          if [ "$resolved" != "${{ secrets.SSH_HOST }}" ]; then
+            echo "tableflow.markui.lk resolves to ${resolved:-nothing}, not this server."
+            echo "Skipping the public check — the server-side check above is authoritative."
+            exit 0
+          fi
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
               "https://tableflow.markui.lk/api/health" || true)
-            if [ "$code" = "200" ]; then echo "healthy"; exit 0; fi
+            if [ "$code" = "200" ]; then echo "publicly healthy"; exit 0; fi
             echo "attempt $i: $code"; sleep 10
           done
           echo "The site did not come back healthy — check the server."

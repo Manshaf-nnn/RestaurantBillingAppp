@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Deploy / update RestaurantOS on the server.
+# Deploy / update RestaurantOS on the server, WITHOUT Docker.
+#
+# ⚠ This is not the primary path. Pushing to main builds an image on GitHub
+# Actions and releases it — see .github/workflows/deploy-ovh.yml. Use this
+# script only for a PM2-on-metal deployment, or as a manual fallback when CI
+# is unavailable. Note it builds on the server, which on a shared box means
+# competing for RAM with whatever else is running.
 #
 #   sudo -u tableflow -H bash /srv/tableflow/current/deploy/update.sh
 #

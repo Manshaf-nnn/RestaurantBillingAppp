@@ -5,6 +5,10 @@
 # log, outbox, job table and expired sessions. Without it those stop silently —
 # nothing in the UI reports that jobs have not run.
 #
+# ⚠ ONLY for a non-Docker (PM2) deployment. The Docker stack in deploy/ovh/
+# already runs a `jobs` container on the same 15-minute schedule — installing
+# both would tick the queue twice. Pick one.
+#
 # Install alongside tableflow-jobs.timer:
 #   cp deploy/systemd/tableflow-jobs.{service,timer} /etc/systemd/system/
 #   systemctl daemon-reload

@@ -1,13 +1,28 @@
 # ============================================================================
-# TableFlow on an OVH server — the app and a TLS terminator, nothing else.
+# TableFlow on the OVH server — the app and its job ticker, nothing else.
 #
-#   docker compose up -d --build
+#   docker compose up -d
 #
 # There is deliberately NO database here. The data lives in Neon and this box
 # only runs code: that is what makes a bad deploy survivable — you rebuild the
 # container, and every order, payment and photo is exactly where it was.
 # (docker-compose.yml in the repo root is the LOCAL stack, with its own
 # Postgres, for development. Do not use that one here.)
+#
+# ── Why there is no TLS terminator here ─────────────────────────────────────
+#
+# This box is not ours alone. nginx already owns :80 and :443 and serves four
+# other sites (yova.markui.lk, travel-basic, travel-premium, vikkaa.lk). A Caddy
+# container publishing those ports cannot start while nginx holds them, and the
+# only way to "fix" that is to stop nginx — which takes all four sites down.
+#
+# So the app publishes on 127.0.0.1:3010 and the existing nginx proxies to it.
+# The vhost is deploy/nginx/tableflow.markui.lk.conf; certificates come from the
+# certbot that already renews the other four.
+#
+# deploy/ovh/Caddyfile is kept for the dedicated-box case — it does on-demand
+# TLS for restaurant custom domains, which nginx cannot do. It is NOT used here.
+# See the note at the bottom of the nginx vhost for the manual equivalent.
 # ============================================================================
 services:
   app:
@@ -18,7 +33,8 @@ services:
     image: ghcr.io/manshaf-nnn/restaurantbillingappp:${IMAGE_TAG:-latest}
     # To build on the server instead — no registry, no Actions — comment the
     # image line above and uncomment these three. Expect 5–15 minutes and
-    # 2 GB+ of RAM for each deploy.
+    # 2 GB+ of RAM for each deploy, on a box that has ~2 GB free and four other
+    # apps competing for it. That is the situation the CI build exists to avoid.
     # build:
     #   context: ../..
     #   dockerfile: Dockerfile
@@ -27,38 +43,31 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-    expose:
-      - "3000"
+    # Loopback ONLY. Publishing 3010 without the 127.0.0.1 prefix would put the
+    # app straight onto both public IPs, and Docker writes its own iptables
+    # rules — ufw would not stop it.
+    ports:
+      - "127.0.0.1:3010:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 40s
       retries: 3
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }
-
-  # Caddy terminates TLS and gets certificates by itself — including for
-  # restaurant domains nobody configured in advance. See the Caddyfile.
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      - app
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data      # certificates — losing this means re-issuing them
-      - caddy_config:/config
+    # The box has 3.7 GB shared with four other apps. Without a ceiling a leak
+    # here gets resolved by the kernel picking a victim, which may not be us.
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
   # The work that belongs to nobody's request: integrity sweeps, retention
   # trimming. Netlify ran this as a scheduled function every 15 minutes.
+  # Reaches the app over the compose network, so it does not care about the
+  # host port above.
   jobs:
     image: alpine:3.20
     restart: unless-stopped
@@ -78,7 +87,3 @@ services:
     logging:
       driver: json-file
       options: { max-size: "5m", max-file: "2" }
-
-volumes:
-  caddy_data:
-  caddy_config:
