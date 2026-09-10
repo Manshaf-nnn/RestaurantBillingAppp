@@ -49,7 +49,10 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository }}
+  # NOT ghcr.io/${{ github.repository }} — that is Manshaf-nnn/RestaurantBillingAppp,
+  # and a registry rejects capitals outright ("repository name must be
+  # lowercase"). The image name is lowercased in the `meta` step below, where
+  # there is a shell to do it in; ${{ }} expressions have no such function.
 
 jobs:
   build:
@@ -60,13 +63,17 @@ jobs:
       packages: write
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
       - id: meta
-        # The commit sha, so a rollback is naming an older tag rather than
-        # hoping "latest" still points where you think it does.
-        run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: |
+          # The commit sha, so a rollback is naming an older tag rather than
+          # hoping "latest" still points where you think it does.
+          echo "tag=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          # Registries reject capitals, and the repository name has three.
+          echo "image=${REGISTRY}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -80,10 +87,9 @@ jobs:
         with:
           context: .
           push: true
-          # Lowercase, because registries reject capitals in image names.
           tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-            ${{ env.IMAGE }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
