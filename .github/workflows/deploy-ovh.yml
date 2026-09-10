@@ -87,6 +87,11 @@ jobs:
         with:
           context: .
           push: true
+          # Stamped into the build so /api/health can say which commit is
+          # serving — see the ARGs in the Dockerfile's builder stage.
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            GIT_BRANCH=${{ github.ref_name }}
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.image }}:latest
@@ -105,6 +110,11 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script_stop: true          # stop at the first failing command
+          # The step's `env:` block below sets these on the RUNNER. This action
+          # opens a fresh shell on the server, which inherits none of it, so
+          # they have to be named here to be forwarded. Without this the script
+          # dies on `set -u` with "GHCR_TOKEN: unbound variable".
+          envs: GHCR_USER,GHCR_TOKEN
           script: |
             set -euo pipefail
             cd ~/RestaurantBillingAppp
