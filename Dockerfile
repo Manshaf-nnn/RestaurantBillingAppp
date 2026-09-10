@@ -58,6 +58,16 @@ COPY --from=builder /app/server.mjs ./server.mjs
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/prisma ./prisma
 
+# The deploy runs `npm run db:deploy:safe` in a throwaway container on this
+# image, before the new one takes traffic — so the script has to be IN the
+# image. It was not, and the deploy failed with MODULE_NOT_FOUND.
+#
+# Just this one file, not scripts/ entire. deploy-db.mjs imports only node
+# built-ins and @prisma/client, and the rest of that directory is ~100 test
+# scripts including load-test and phase11-perf, which write thousands of
+# orders and carry no guard against being pointed at production.
+COPY --from=builder /app/scripts/deploy-db.mjs ./scripts/deploy-db.mjs
+
 USER nextjs
 EXPOSE 3000
 
