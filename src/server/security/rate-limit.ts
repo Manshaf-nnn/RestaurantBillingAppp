@@ -52,6 +52,16 @@ export const RATE_LIMITS = {
   publicRead: { limit: 600, windowSeconds: 60 },
   mutation: { limit: 300, windowSeconds: 60 },
   upload: { limit: 30, windowSeconds: 300 },
+  /*
+   * A restaurant's own website calling in with its key (websiteconnect.md).
+   * Keyed on the KEY, not the address: a website is one server at one IP for
+   * all of its traffic, so an IP bucket would either be too loose to matter or
+   * would stall the whole site the moment it got busy. Reads are roomy — a
+   * menu page fetches on every visit — orders are sized for a real evening and
+   * closed to a script.
+   */
+  websiteRead: { limit: 600, windowSeconds: 60 },
+  websiteOrder: { limit: 120, windowSeconds: 600 },
 } satisfies Record<string, RateLimitRule>
 
 export type RateLimitName = keyof typeof RATE_LIMITS

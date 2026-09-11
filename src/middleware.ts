@@ -82,6 +82,10 @@ const PUBLIC_API = [
   // The change detector every station polls. It authenticates itself, and this
   // is now the hottest route in the app — skip the duplicate work here.
   '/api/pulse',
+  // A restaurant's own website calling in with its key (websiteconnect.md).
+  // It authenticates itself from the Authorization header; there is no session
+  // cookie to verify and no reason to try twice.
+  '/api/website/',
 ]
 
 function isProtected(pathname: string) {
@@ -153,6 +157,23 @@ export async function middleware(request: NextRequest) {
       return response
     }
     return NextResponse.next()
+  }
+
+  // ── 0b. the website API is server-to-server, and says so ──────────────────
+  // A request carrying an Origin header came from a browser page. The generic
+  // check below would refuse it as CSRF, which is true and unhelpful: the real
+  // problem is that a key meant to stay on the website's server has been put
+  // in page JavaScript, where anyone can read it and order as the restaurant.
+  // Refuse with a message that names that, before the key leaks any further.
+  if (pathname.startsWith('/api/website/') && request.headers.get('origin')) {
+    return NextResponse.json(
+      {
+        error:
+          'Call the TableFlow website API from your server, not from the browser. The key is a password: it must never be in page JavaScript.',
+        code: 'BROWSER_CALL',
+      },
+      { status: 403 },
+    )
   }
 
   // ── 1. cross-origin write protection ──────────────────────────────────────

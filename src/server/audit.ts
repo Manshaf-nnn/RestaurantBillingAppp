@@ -253,6 +253,16 @@ export const AUDIT_ACTIONS = {
   SESSION_REUSE_DETECTED: 'auth.session_reuse_detected',
   // SESSIONS_REVOKED already exists above under auth.*; the platform console
   // reuses it rather than minting a second name for the same event.
+  /*
+   * A restaurant's website connection (websiteconnect.md). Three events,
+   * because they answer three different questions a month later: when was the
+   * key first issued, who rotated it, and who cut the website off. The key
+   * itself never appears in a row — `redact` strips `apiKey`, and only the
+   * four-character hint is written.
+   */
+  WEBSITE_CONNECTED: 'platform.website_connected',
+  WEBSITE_KEY_REGENERATED: 'platform.website_key_regenerated',
+  WEBSITE_DISCONNECTED: 'platform.website_disconnected',
 } as const
 
 

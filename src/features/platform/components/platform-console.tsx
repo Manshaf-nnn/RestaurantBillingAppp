@@ -14,6 +14,7 @@ import {
   Store,
   Users,
   X,
+  Plug,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -32,6 +33,7 @@ import { Field } from '@/components/ui/label'
 import { Input, Textarea } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { ConnectWebsiteDialog } from '@/features/website/components/connect-website-dialog'
 import { StatCard } from '@/features/dashboard/components/page-header'
 import type { PlatformFeedbackItem, PlatformRestaurant, PlatformStats } from '../queries'
 import { callAction } from '@/lib/use-action'
@@ -81,6 +83,7 @@ export function PlatformConsole({
   const [rejectFor, setRejectFor] = React.useState<PlatformRestaurant | null>(null)
   const [suspendFor, setSuspendFor] = React.useState<PlatformRestaurant | null>(null)
   const [domainFor, setDomainFor] = React.useState<PlatformRestaurant | null>(null)
+  const [connectFor, setConnectFor] = React.useState<PlatformRestaurant | null>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
 
   React.useEffect(() => setRestaurants(initial), [initial])
@@ -300,6 +303,9 @@ export function PlatformConsole({
                     <Button size="sm" variant="outline" onClick={() => setDomainFor(restaurant)}>
                       <Globe /> {restaurant.customDomain ? 'Domain' : 'Set domain'}
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => setConnectFor(restaurant)}>
+                      <Plug /> {restaurant.website ? 'Website' : 'Connect website'}
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -358,6 +364,20 @@ export function PlatformConsole({
           restaurant={domainFor}
           platformHost={new URL(appUrl).host}
           onClose={() => setDomainFor(null)}
+        />
+      ) : null}
+
+      {/*
+        The freshest copy, not the one captured when the button was pressed:
+        the list is re-seeded every twelve seconds by AutoRefresh, and a dialog
+        reading a snapshot would never see "waiting" turn into "connected".
+      */}
+      {connectFor ? (
+        <ConnectWebsiteDialog
+          restaurant={restaurants.find((r) => r.id === connectFor.id) ?? connectFor}
+          apiUrl={`${appUrl}/api/website/v1`}
+          docsUrl={`${appUrl}/api/docs?format=html#website`}
+          onClose={() => setConnectFor(null)}
         />
       ) : null}
 

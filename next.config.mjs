@@ -144,6 +144,17 @@ const nextConfig = {
         ],
       },
       {
+        /*
+         * Logos and menu photos are read by a restaurant's own website on
+         * another origin (websiteconnect.md). The global CORP header above is
+         * `same-origin`, which makes a browser refuse to render them there.
+         * The pictures are public already — the guest menu shows them to
+         * anyone holding the URL — so nothing is exposed that was not.
+         */
+        source: '/api/media/:path*',
+        headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }],
+      },
+      {
         source: '/sw.js',
         headers: [
           { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },

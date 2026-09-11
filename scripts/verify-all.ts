@@ -134,6 +134,9 @@ const SERVICE = [
   'e2e-reconciliation-test',
   'variant-order-test',
   'custom-domain-test',
+  // websiteconnect.md — a restaurant's website connects with a key, reads only
+  // its own data, and its orders land in the existing pipeline.
+  'website-connection-test',
   'cash-drawer-test',
   'role-assignment-test',
   'branch-isolation-2-test',
@@ -158,6 +161,9 @@ const SERVICE = [
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // websiteconnect.md — the website API over real HTTP: key refused and accepted,
+  // menu priced per branch, an order that lands ONLINE, a browser call refused.
+  'website-api-test',
   // AUDIT.md C1/H10/H11 — a guest edit must hit kitchen, bill and stock alike.
   'guest-edit-test',
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',

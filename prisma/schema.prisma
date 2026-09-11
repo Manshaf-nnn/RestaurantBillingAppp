@@ -690,6 +690,7 @@ model Restaurant {
   mediaBackups     MediaBackup[]
   mediaAssets      MediaAsset[]
   invites          Invite[]
+  websiteConnection WebsiteConnection?
   staffRoles       StaffRole[]
   menuSnapshots    RestaurantMenuSnapshot[]
   branches         Branch[]
@@ -1142,6 +1143,55 @@ model Invite {
   @@index([restaurantId, isActive])
   @@index([restaurantId, branchId])
   @@map("invites")
+}
+
+/**
+ * A restaurant's own website, connected to TableFlow (websiteconnect.md).
+ *
+ * One row per restaurant, holding the credential its website presents. The
+ * key itself is shown to the operator exactly once and never stored: what is
+ * stored is its SHA-256, the same rule refresh tokens follow, so a database
+ * leak yields nothing that can read a menu or place an order.
+ *
+ * The row IS the connection. Delete it and the key stops working on the next
+ * request; regenerate and the old key is dead the moment the new hash lands.
+ * There is deliberately no `isActive` flag — a disabled-but-present credential
+ * is a thing somebody re-enables by accident.
+ */
+model WebsiteConnection {
+  id           String     @id @default(cuid())
+  restaurantId String     @unique
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the key. The raw key is never stored.
+  keyHash     String   @unique
+  /// The last four characters, so an operator can tell which key a website
+  /// holds without anyone being able to reconstruct it.
+  keyHint     String
+  keyIssuedAt DateTime @default(now())
+
+  /// Where the website lives, e.g. https://mrchai.lk. Informational: shown in
+  /// the console and pinged by Test Connection. Never used for authentication
+  /// — the key is the identity, not the origin.
+  websiteUrl String?
+
+  /// Set the first time the key authenticates a request. Null means the key
+  /// was issued and nothing has used it yet — "waiting for the website". The
+  /// same shape as `Restaurant.customDomainVerifiedAt`: issuing a credential
+  /// is a claim, and only its use makes the connection a fact.
+  connectedAt DateTime?
+  /// Bumped on authenticated requests, at most once a minute, so "last
+  /// connected" is live without costing a write per call.
+  lastSeenAt  DateTime?
+  /// Orders the website has placed. Cheap to keep, and it answers the owner's
+  /// actual question — "is it bringing me orders?"
+  orderCount  Int       @default(0)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("website_connections")
 }
 
 // ─────────────────────────────────────────────────────────────── menu ──────

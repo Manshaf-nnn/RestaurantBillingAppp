@@ -23,6 +23,20 @@ export interface PlatformRestaurant {
   ownerEmail: string | null
   staffCount: number
   orderCount: number
+  /**
+   * Their own website's connection (websiteconnect.md), or null when no key
+   * has been issued. Dates are ISO strings like every other date here.
+   */
+  website: {
+    keyHint: string
+    keyIssuedAt: string
+    websiteUrl: string | null
+    connectedAt: string | null
+    lastSeenAt: string | null
+    orderCount: number
+  } | null
+  /** The locations a website order can be sent to, default first. */
+  branches: Array<{ id: string; name: string; code: string; isDefault: boolean }>
 }
 
 export interface PlatformFeedbackItem {
@@ -67,6 +81,17 @@ export async function listPlatformRestaurants(status?: RestaurantStatus): Promis
           orders: true,
         },
       },
+      websiteConnection: {
+        select: {
+          keyHint: true, keyIssuedAt: true, websiteUrl: true,
+          connectedAt: true, lastSeenAt: true, orderCount: true,
+        },
+      },
+      branches: {
+        where: { deletedAt: null, isActive: true, type: 'BRANCH' },
+        select: { id: true, name: true, code: true, isDefault: true },
+        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      },
     },
   })
 
@@ -90,6 +115,17 @@ export async function listPlatformRestaurants(status?: RestaurantStatus): Promis
     ownerEmail: restaurant.users[0]?.email ?? null,
     staffCount: restaurant._count.users,
     orderCount: restaurant._count.orders,
+    website: restaurant.websiteConnection
+      ? {
+          keyHint: restaurant.websiteConnection.keyHint,
+          keyIssuedAt: restaurant.websiteConnection.keyIssuedAt.toISOString(),
+          websiteUrl: restaurant.websiteConnection.websiteUrl,
+          connectedAt: restaurant.websiteConnection.connectedAt?.toISOString() ?? null,
+          lastSeenAt: restaurant.websiteConnection.lastSeenAt?.toISOString() ?? null,
+          orderCount: restaurant.websiteConnection.orderCount,
+        }
+      : null,
+    branches: restaurant.branches,
   }))
 }
 

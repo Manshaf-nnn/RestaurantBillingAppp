@@ -23,5 +23,8 @@ error }`). The runtime test tier drives these over real HTTP with action ids
 harvested from the built client bundle — the transport is covered, not
 assumed.
 
-There is no public REST/JSON API; integrations read the database or wait for
-one to be designed on purpose.
+There is one public JSON API, for a restaurant's own website (`websiteconnect.md`):
+`/api/website/v1` — connection, restaurant, menu, orders, order status — authenticated by a
+per-restaurant key issued under Super Admin → Restaurants → Connect website. It is
+server-to-server only and every response is fenced by the key's restaurant. Reference and
+examples: `/api/docs?format=html#website`. Everything else remains server actions.
