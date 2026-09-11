@@ -3,7 +3,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
-import { METHOD_LABELS } from '@/features/payments/service'
+import { METHOD_LABELS, destinationName, readPaymentConfig } from '@/features/payments/service'
 import { localBucket, utc } from '@/server/db/sql-time'
 import type { DateRange } from './range'
 
@@ -296,6 +296,18 @@ export async function getSalesReport(params: {
 
 export interface PaymentsReport {
   byMethod: Array<{ method: string; label: string; amount: number; count: number; share: number }>
+  /**
+   * The same money by where it was allocated (bill.md §2). `destination` is
+   * null for payments taken before destinations existed — labelled
+   * "Unassigned" rather than folded into an account they never reached.
+   */
+  byDestination: Array<{
+    destination: string | null
+    label: string
+    amount: number
+    count: number
+    share: number
+  }>
   total: number
   refunded: number
   /** Cash counted in drawers minus cash the system recorded. */
@@ -318,7 +330,10 @@ export async function getPaymentsReport(params: {
 }): Promise<PaymentsReport> {
   const [payments, refunds, drawers] = await Promise.all([
     prisma.payment.groupBy({
-      by: ['method', 'status'],
+      // Destination rides along on the SAME rows, so the two breakdowns below
+      // are guaranteed to sum to the same total rather than being two queries
+      // that can disagree.
+      by: ['method', 'status', 'destination'],
       where: {
         restaurantId: params.restaurantId,
         paidAt: { gte: params.range.from, lte: params.range.to },
@@ -364,6 +379,14 @@ export async function getPaymentsReport(params: {
 
   // One copy of the names, in the module that owns payments.
   const LABELS = METHOD_LABELS
+  // Names come from settings, so a renamed account renames every label here
+  // too — including on reports of months already gone.
+  const config = readPaymentConfig(
+    (await prisma.restaurant.findUnique({
+      where: { id: params.restaurantId },
+      select: { paymentConfig: true },
+    }))?.paymentConfig,
+  )
 
   return {
     total,
@@ -384,6 +407,30 @@ export async function getPaymentsReport(params: {
         amount: p.amount,
         count: p.count,
         share: total > 0 ? Math.round((p.amount / total) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.amount - a.amount),
+    /*
+     * The same money, grouped by where it was allocated (bill.md §2).
+     *
+     * Payments taken before destinations existed carry none, and are reported
+     * as "Unassigned" rather than quietly folded into a bank they never
+     * reached — the honest answer, and it makes the rollout visible.
+     */
+    byDestination: [...paid
+      .reduce((map, p) => {
+        const code = p.destination ?? null
+        const row = map.get(code) ?? { destination: code, amount: 0, count: 0 }
+        row.amount += p._sum?.amount ?? 0
+        row.count += p._count
+        return map.set(code, row)
+      }, new Map<string | null, { destination: string | null; amount: number; count: number }>())
+      .values()]
+      .map((row) => ({
+        destination: row.destination,
+        label: destinationName(config, row.destination),
+        amount: row.amount,
+        count: row.count,
+        share: total > 0 ? Math.round((row.amount / total) * 10000) / 100 : 0,
       }))
       .sort((a, b) => b.amount - a.amount),
     cashDiscrepancy: drawers.reduce((s, d) => s + (d.variance ?? 0), 0),

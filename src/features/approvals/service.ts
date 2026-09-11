@@ -167,7 +167,9 @@ export async function decideApproval(params: {
   approve: boolean
   userId: string
   note?: string | null
-}): Promise<ApprovalRequest> {
+  // `previousStatus` rides along so the caller can audit what changed; the
+  // row itself cannot say what it used to be once it has been written.
+}): Promise<ApprovalRequest & { previousStatus: ApprovalStatus }> {
   const request = await prisma.approvalRequest.findFirst({
     where: { id: params.approvalId, restaurantId: params.restaurantId },
   })
@@ -182,9 +184,33 @@ export async function decideApproval(params: {
       'APPROVAL_SELF',
     )
   }
+  /*
+   * Saying no has to say why (bill.md §3).
+   *
+   * An approval that was refused with no reason leaves the person who asked
+   * with nothing to act on, and leaves the record unable to answer the only
+   * question anyone asks later. Approving needs no essay — the approval IS the
+   * answer — but a refusal without one is half a decision.
+   */
+  if (!params.approve && !params.note?.trim()) {
+    throw new AppError('Give a reason for rejecting this request', 400, 'APPROVAL_NO_REASON')
+  }
 
-  return prisma.approvalRequest.update({
-    where: { id: request.id },
+  /*
+   * Compare-and-swap, not read-then-write.
+   *
+   * The check above and the write below used to be two separate statements
+   * with no status predicate between them, so two managers opening the queue
+   * at the same moment BOTH passed the check and both wrote: the second
+   * silently overwrote the first's decision, and `applyDecision` ran twice —
+   * which for a stock transfer means the same stock reserved twice. Putting
+   * `status: 'PENDING'` in the WHERE makes the database the arbiter: exactly
+   * one update touches a row, and the loser is told so.
+   *
+   * This is the same shape `outgoing-payments/service.ts` already uses.
+   */
+  const decided = await prisma.approvalRequest.updateMany({
+    where: { id: request.id, restaurantId: params.restaurantId, status: 'PENDING' },
     data: {
       status: params.approve ? 'APPROVED' : 'REJECTED',
       decidedById: params.userId,
@@ -192,6 +218,14 @@ export async function decideApproval(params: {
       decisionNote: params.note?.trim() || null,
     },
   })
+  if (decided.count === 0) {
+    throw new AppError('That request has already been decided', 409, 'APPROVAL_DECIDED')
+  }
+
+  const after = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })
+  // Both rows, because the caller audits before/after and cannot reconstruct
+  // `before` once the write has happened (bill.md §4).
+  return Object.assign(after, { previousStatus: request.status })
 }
 
 /** Withdraw your own request before anyone rules on it. */
@@ -210,10 +244,21 @@ export async function withdrawApproval(params: {
   if (request.requestedById !== params.userId) {
     throw new AppError('Only the person who asked can withdraw it', 403, 'APPROVAL_NOT_YOURS')
   }
-  return prisma.approvalRequest.update({
-    where: { id: request.id },
+  // Both conditions in the WHERE, so "already decided" and "not yours" are
+  // settled atomically rather than re-checked after the fact.
+  const withdrawn = await prisma.approvalRequest.updateMany({
+    where: {
+      id: request.id,
+      restaurantId: params.restaurantId,
+      status: 'PENDING',
+      requestedById: params.userId,
+    },
     data: { status: 'WITHDRAWN' },
   })
+  if (withdrawn.count === 0) {
+    throw new AppError('That request has already been decided', 409, 'APPROVAL_DECIDED')
+  }
+  return prisma.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })
 }
 
 /** Confirm an action was actually authorised before applying it. */
@@ -251,7 +296,15 @@ export async function listApprovals(params: {
     where: {
       restaurantId: params.restaurantId,
       ...(params.status ? { status: params.status } : {}),
-      ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      /*
+       * A restaurant-wide request has `branchId: null`, and filtering on
+       * `branchId: { in: [...] }` alone dropped every one of them — so a
+       * branch manager could never see the requests that concern everybody.
+       * `inbox.ts` already had this right.
+       */
+      ...(params.branchIds
+        ? { OR: [{ branchId: { in: params.branchIds } }, { branchId: null }] }
+        : {}),
     },
     orderBy: { requestedAt: 'desc' },
     take: params.limit ?? 50,

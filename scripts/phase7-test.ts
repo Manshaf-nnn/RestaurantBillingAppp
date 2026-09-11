@@ -159,7 +159,12 @@ async function main() {
     restaurantId: shop.id, kind: 'STOCK_ADJUSTMENT', entity: 'InventoryItem', entityId: 'item-1',
     amount: 20_000_00, reason: 'miscount', userId: alice.id,
   })
-  await decideApproval({ restaurantId: shop.id, approvalId: rejected.id, approve: false, userId: bob.id })
+  // A refusal has to carry its reason now (bill.md §3) — the person who asked
+  // is owed one, and the record is the only place it survives.
+  await decideApproval({
+    restaurantId: shop.id, approvalId: rejected.id, approve: false, userId: bob.id,
+    note: 'The count sheet was read wrong',
+  })
   await throws('a rejected request does not authorise the action',
     () => assertApproved({ restaurantId: shop.id, entity: 'InventoryItem', entityId: 'item-1', kind: 'STOCK_ADJUSTMENT' }),
     'APPROVAL_REQUIRED')

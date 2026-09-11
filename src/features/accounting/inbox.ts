@@ -8,6 +8,16 @@ import { prisma } from '@/server/db/prisma'
  * lists; deciding stays with each domain's own guarded action.
  */
 
+/** What each generic request is, in the words an owner would use. */
+const KIND_TITLES: Record<string, string> = {
+  REFUND: 'Refund',
+  DISCOUNT: 'Discount',
+  STOCK_ADJUSTMENT: 'Stock adjustment',
+  PURCHASE_ORDER: 'Purchase order',
+  STOCK_TRANSFER: 'Stock transfer',
+  PRICE_OVERRIDE: 'Price override',
+}
+
 export interface ApprovalsInboxCount {
   /** Requests waiting for someone's decision, across every queue. */
   count: number
@@ -18,13 +28,32 @@ export interface ApprovalsInboxCount {
 
 export interface InboxItem {
   queue: string
+  /** Which queue this row belongs to, so a decision can be routed to it. */
+  kind: 'APPROVAL_REQUEST' | 'OUTGOING_PAYMENT' | 'PETTY_CASH' | 'STOCK_COUNT' | 'PURCHASE'
   id: string
+  /** WHAT is being asked for. */
   title: string
+  /** WHY — the requester's own words, where the queue captures them. */
+  reason: string | null
+  /** AMOUNT, in minor units; null where the request is not about money. */
   amount: number | null
+  /** BRANCH. Null means it concerns the whole restaurant. */
+  branchId: string | null
+  branchName: string | null
+  /** REQUESTED BY, and by whose id — so self-approval can be greyed out. */
   requestedByName: string
+  requestedById: string | null
   requestedAt: Date
+  /** RELATED RECORD — the document this decision is about. */
+  reference: string | null
   /** What approving actually does — stated honestly, never oversold. */
   consequence: string
+  /**
+   * Whether this row can be decided from the list at all. Some cannot be
+   * judged from a summary — a stock count is lines of counted shelves, and
+   * approving it unseen is not a decision, it is a rubber stamp.
+   */
+  decidable: boolean
   href: string
 }
 
@@ -51,6 +80,9 @@ export async function getApprovalsInbox(
       where: { restaurantId, status: 'PENDING', ...atBranchOrGlobal },
       select: {
         id: true, kind: true, amount: true, reason: true, createdAt: true,
+        entity: true, entityId: true, branchId: true,
+        branch: { select: { name: true } },
+        requestedById: true,
         requestedBy: { select: { name: true } },
       },
       orderBy: { createdAt: 'asc' },
@@ -61,6 +93,7 @@ export async function getApprovalsInbox(
       select: {
         id: true, number: true, amount: true, description: true,
         submittedAt: true, createdAt: true, createdByName: true,
+        branchId: true, branch: { select: { name: true } }, submittedById: true,
       },
       orderBy: { createdAt: 'asc' },
       take: 100,
@@ -69,6 +102,7 @@ export async function getApprovalsInbox(
       where: { restaurantId, status: 'PENDING', ...atBranch },
       select: {
         id: true, amount: true, description: true, requestedAt: true,
+        branchId: true, branch: { select: { name: true } }, requestedById: true,
         requestedBy: { select: { name: true } },
       },
       orderBy: { requestedAt: 'asc' },
@@ -76,7 +110,11 @@ export async function getApprovalsInbox(
     }),
     prisma.stockCount.findMany({
       where: { restaurantId, status: 'AWAITING_APPROVAL', ...atBranch },
-      select: { id: true, reference: true, createdAt: true, countedBy: { select: { name: true } } },
+      select: {
+        id: true, reference: true, createdAt: true, branchId: true,
+        branch: { select: { name: true } }, countedById: true,
+        countedBy: { select: { name: true } },
+      },
       orderBy: { createdAt: 'asc' },
       take: 100,
     }),
@@ -84,6 +122,7 @@ export async function getApprovalsInbox(
       where: { restaurantId, status: 'PENDING_APPROVAL', ...atBranch },
       select: {
         id: true, number: true, total: true, createdAt: true,
+        branchId: true, branch: { select: { name: true } }, createdById: true,
         supplier: { select: { name: true } },
       },
       orderBy: { createdAt: 'asc' },
@@ -94,55 +133,94 @@ export async function getApprovalsInbox(
   const items: InboxItem[] = [
     ...outgoing.map((row) => ({
       queue: 'Payment out',
+      kind: 'OUTGOING_PAYMENT' as const,
       id: row.id,
-      title: `${row.number} — ${row.description}`,
+      title: row.description,
+      reason: null,
       amount: row.amount,
+      branchId: row.branchId,
+      branchName: row.branch?.name ?? null,
       requestedByName: row.createdByName,
+      requestedById: row.submittedById,
       requestedAt: row.submittedAt ?? row.createdAt,
+      reference: row.number,
       consequence: 'Approving releases it for payment. The person who submitted it cannot approve it.',
+      decidable: true,
       href: '/dashboard/accounting/approvals',
     })),
     ...generic.map((row) => ({
       queue: row.kind === 'STOCK_TRANSFER' ? 'Stock transfer' : row.kind === 'REFUND' ? 'Refund' : 'Discount / override',
       id: row.id,
-      title: row.reason,
+      kind: 'APPROVAL_REQUEST' as const,
+      title: KIND_TITLES[row.kind] ?? 'Approval',
+      reason: row.reason,
       amount: row.amount,
+      branchId: row.branchId,
+      branchName: row.branch?.name ?? null,
       requestedByName: row.requestedBy?.name ?? 'Someone',
+      requestedById: row.requestedById,
       requestedAt: row.createdAt,
+      reference: row.entityId ? `${row.entity} ${row.entityId.slice(0, 8)}` : row.entity,
       consequence:
         row.kind === 'STOCK_TRANSFER'
           ? 'Approving dispatches the transfer.'
-          : 'Records the decision — no automatic change is made to the bill.',
+          : 'Records the decision — the person who asked still has to carry it out.',
+      decidable: true,
       href: '/dashboard/approvals',
     })),
     ...petty.map((row) => ({
       queue: 'Petty cash',
       id: row.id,
+      kind: 'PETTY_CASH' as const,
       title: row.description,
+      reason: null,
       amount: row.amount,
+      branchId: row.branchId,
+      branchName: row.branch?.name ?? null,
       requestedByName: row.requestedBy?.name ?? 'Someone',
+      requestedById: row.requestedById,
       requestedAt: row.requestedAt,
+      reference: null,
       consequence: 'Approving allows the cash to be paid out of the tin.',
+      decidable: true,
       href: '/dashboard/petty-cash',
     })),
     ...purchases.map((row) => ({
       queue: 'Purchase order',
       id: row.id,
-      title: `${row.number} — ${row.supplier?.name ?? 'supplier'}`,
+      kind: 'PURCHASE' as const,
+      title: `Order from ${row.supplier?.name ?? 'a supplier'}`,
+      reason: null,
       amount: row.total,
+      branchId: row.branchId,
+      branchName: row.branch?.name ?? null,
       requestedByName: 'Purchasing',
+      requestedById: row.createdById,
       requestedAt: row.createdAt,
+      reference: row.number,
       consequence: 'Approving lets the order be placed and the goods received.',
+      // The lines matter — what was ordered, at what price — so this one is
+      // read on its own page rather than waved through from a summary.
+      decidable: false,
       href: `/dashboard/purchases/${row.id}`,
     })),
     ...counts.map((row) => ({
       queue: 'Stock count',
       id: row.id,
-      title: `Count ${row.reference}`,
+      kind: 'STOCK_COUNT' as const,
+      title: `Stock count ${row.reference}`,
+      reason: null,
       amount: null,
+      branchId: row.branchId,
+      branchName: row.branch?.name ?? null,
       requestedByName: row.countedBy?.name ?? 'Someone',
+      requestedById: row.countedById,
       requestedAt: row.createdAt,
+      reference: row.reference,
       consequence: 'Approving posts stock adjustments — review the counted lines first.',
+      // A count is shelves of numbers. Approving it unseen is a rubber stamp,
+      // so this row sends you to read it.
+      decidable: false,
       href: `/dashboard/inventory/counts/${row.id}`,
     })),
   ]

@@ -6,7 +6,8 @@ import { z } from 'zod'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { assertRecordBranch, requirePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { decideApproval, withdrawApproval } from './service'
 import { approveTransfer, closeTransfer } from '@/features/transfers/service'
 
@@ -20,14 +21,43 @@ export async function decideApprovalAction(
   input: unknown,
 ): Promise<ActionResult<{ status: string }>> {
   return runAction(
-    z.object({
-      approvalId: z.string().min(1),
-      approve: z.boolean(),
-      note: z.string().trim().max(200).optional().or(z.literal('')),
-    }),
+    z
+      .object({
+        approvalId: z.string().min(1),
+        approve: z.boolean(),
+        note: z.string().trim().max(200).optional().or(z.literal('')),
+      })
+      // A refusal has to carry its reason, and saying so on the FIELD gives
+      // the person a message beside the box rather than a toast they have to
+      // guess at. The service enforces it too, for callers that never see this.
+      .superRefine((value, ctx) => {
+        if (!value.approve && !value.note?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['note'],
+            message: 'Give a reason for rejecting this request',
+          })
+        }
+      }),
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+
+      /*
+       * Whose request this is, before deciding it.
+       *
+       * This action scoped by restaurant alone, so a manager confined to one
+       * branch could approve another branch's refund — the permission was
+       * checked and the location never was. `assertRecordBranch` returns early
+       * on a null branchId, so a restaurant-wide request stays decidable by
+       * everyone who holds the permission.
+       */
+      const target = await prisma.approvalRequest.findFirst({
+        where: { id: data.approvalId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      await assertRecordBranch(user, target, 'approval request')
+
       const request = await decideApproval({
         restaurantId: user.restaurantId,
         approvalId: data.approvalId,
@@ -39,6 +69,9 @@ export async function decideApprovalAction(
         restaurantId: user.restaurantId, branchId: request.branchId, userId: user.id,
         actorName: user.name, action: AUDIT_ACTIONS.APPROVAL_DECIDED,
         entity: 'ApprovalRequest', entityId: request.id,
+        // Old status and new, because §4 asks the log to answer what changed
+        // and not merely what it ended up as.
+        before: { status: request.previousStatus },
         after: { status: request.status, kind: request.kind, note: data.note || null },
       })
 

@@ -208,6 +208,40 @@ async function main() {
     await prisma.restaurant.delete({ where: { id: plain.id } })
   }
 
+  console.log('\n── 7. The report groups the same money two ways ──')
+  {
+    const { getPaymentsReport } = await import('../src/features/reports/sales')
+    const { resolveRange } = await import('../src/features/reports/range')
+    const report = await getPaymentsReport({
+      restaurantId: restaurant.id,
+      range: resolveRange({ preset: 'TODAY', timeZone: 'Asia/Colombo' }),
+    })
+
+    const byMethod = report.byMethod.reduce((sum, row) => sum + row.amount, 0)
+    const byDestination = report.byDestination.reduce((sum, row) => sum + row.amount, 0)
+    check('by method and by destination sum to the same figure',
+      byMethod === byDestination && byMethod === report.total,
+      `${byMethod} vs ${byDestination} vs ${report.total}`)
+
+    check('destinations are labelled by their current name',
+      report.byDestination.some((row) => row.label === 'Bank of Ceylon — current'),
+      report.byDestination.map((row) => row.label).join(', '))
+
+    // A payment from before destinations existed.
+    const order = await newOrder()
+    const legacy = await capturePayment({
+      restaurantId: restaurant.id, orderId: order.id, method: 'CASH', amount: order.grandTotal,
+    })
+    await prisma.payment.update({ where: { id: legacy.payment.id }, data: { destination: null } })
+    const withLegacy = await getPaymentsReport({
+      restaurantId: restaurant.id,
+      range: resolveRange({ preset: 'TODAY', timeZone: 'Asia/Colombo' }),
+    })
+    check('a payment with no destination reads as Unassigned, not dropped',
+      withLegacy.byDestination.some((row) => row.destination === null && row.label === 'Unassigned') &&
+        withLegacy.byDestination.reduce((sum, row) => sum + row.amount, 0) === withLegacy.total)
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed > 0 ? 1 : 0)
