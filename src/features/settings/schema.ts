@@ -59,6 +59,40 @@ export const printerSettingsSchema = z.object({
 export type PrinterSettingsInput = z.infer<typeof printerSettingsSchema>
 
 /**
+ * What a printed bill shows (bill.md §1).
+ *
+ * Every field is optional with a default, so a form that posts a subset — or a
+ * toggle added to the interface after this restaurant last saved — still
+ * resolves to something rather than to `undefined`.
+ */
+export const receiptFieldsSchema = z.object({
+  logo: z.coerce.boolean().default(false),
+  logoMono: z.coerce.boolean().default(true),
+  restaurantName: z.coerce.boolean().default(true),
+  address: z.coerce.boolean().default(true),
+  phone: z.coerce.boolean().default(true),
+  cashierName: z.coerce.boolean().default(false),
+  invoiceNumber: z.coerce.boolean().default(true),
+  dateTime: z.coerce.boolean().default(true),
+  customer: z.coerce.boolean().default(true),
+  itemNames: z.coerce.boolean().default(true),
+  quantity: z.coerce.boolean().default(true),
+  unitPrice: z.coerce.boolean().default(false),
+  discount: z.coerce.boolean().default(true),
+  subtotal: z.coerce.boolean().default(true),
+  serviceCharge: z.coerce.boolean().default(true),
+  tax: z.coerce.boolean().default(true),
+  rounding: z.coerce.boolean().default(true),
+  grandTotal: z.coerce.boolean().default(true),
+  paymentMethod: z.coerce.boolean().default(true),
+  paidAmount: z.coerce.boolean().default(true),
+  balance: z.coerce.boolean().default(true),
+  footer: z.coerce.boolean().default(true),
+  footerText: z.string().trim().max(160).default(''),
+})
+export type ReceiptFieldsInput = z.infer<typeof receiptFieldsSchema>
+
+/**
  * The cash controls.
  *
  * Amounts are entered in major units — the owner types what they would say out

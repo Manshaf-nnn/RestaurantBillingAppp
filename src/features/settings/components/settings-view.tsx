@@ -21,10 +21,15 @@ import {
   updateCashControls,
   updatePaymentSettings,
   updatePrinterSettings,
+  updateReceiptFields,
   updateLiveBoardPolicy,
   updateRestaurantSettings,
 } from '../actions'
 import type { LiveBoardPolicy } from '@/features/live/policy'
+import {
+  RECEIPT_FIELD_KEYS,
+  type ReceiptFields,
+} from '@/features/printing/receipt-fields'
 import { callAction } from '@/lib/use-action'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
@@ -79,6 +84,8 @@ export interface SettingsData {
     receiptWidth: 58 | 80
     kitchenWidth: 58 | 80
   }
+  /** Which rows a printed bill shows (bill.md §1). */
+  receipt: ReceiptFields
   /** Thresholds in MAJOR units — what the owner would say out loud. */
   cash: {
     cashVarianceAbove: number
@@ -95,6 +102,8 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
   const [savingProfile, setSavingProfile] = React.useState(false)
   const [savingPayments, setSavingPayments] = React.useState(false)
   const [printer, setPrinter] = React.useState(initial.printer)
+  const [receipt, setReceipt] = React.useState(initial.receipt)
+  const [savingReceipt, setSavingReceipt] = React.useState(false)
   const [savingPrinter, setSavingPrinter] = React.useState(false)
   const [cash, setCash] = React.useState(initial.cash)
   const [savingCash, setSavingCash] = React.useState(false)
@@ -136,6 +145,14 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
     else toast.error(result.error)
   }
 
+  const saveReceipt = async () => {
+    setSavingReceipt(true)
+    const result = await callAction(() => updateReceiptFields(receipt))
+    setSavingReceipt(false)
+    if (result.ok) toast.success('Bill settings saved')
+    else toast.error(result.error)
+  }
+
   const saveCash = async () => {
     setSavingCash(true)
     const result = await callAction(() => updateCashControls(cash))
@@ -154,7 +171,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           <TabsTrigger value="billing">Tax & charges</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="loyalty">Loyalty</TabsTrigger>
-          <TabsTrigger value="printer">Printer</TabsTrigger>
+          <TabsTrigger value="printer">Printer &amp; bill</TabsTrigger>
           <TabsTrigger value="cash">Cash controls</TabsTrigger>
           <TabsTrigger value="live">Live floor</TabsTrigger>
         </TabsList>
@@ -287,10 +304,10 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
         <TabsContent value="payments" className="space-y-4">
           <SectionCard title="Accepted payment methods">
             <div className="space-y-3">
-              <PaymentToggle label="Cash" checked={payment.cash} onChange={(v) => setPayment({ ...payment, cash: v })} disabled={!canManage} />
-              <PaymentToggle label="Card" checked={payment.card} onChange={(v) => setPayment({ ...payment, card: v })} disabled={!canManage} />
-              <PaymentToggle label="QR / UPI" checked={payment.qr} onChange={(v) => setPayment({ ...payment, qr: v })} disabled={!canManage} />
-              <PaymentToggle label="Online gateway" checked={payment.online} onChange={(v) => setPayment({ ...payment, online: v })} disabled={!canManage} />
+              <ToggleRow label="Cash" checked={payment.cash} onChange={(v) => setPayment({ ...payment, cash: v })} disabled={!canManage} />
+              <ToggleRow label="Card" checked={payment.card} onChange={(v) => setPayment({ ...payment, card: v })} disabled={!canManage} />
+              <ToggleRow label="QR / UPI" checked={payment.qr} onChange={(v) => setPayment({ ...payment, qr: v })} disabled={!canManage} />
+              <ToggleRow label="Online gateway" checked={payment.online} onChange={(v) => setPayment({ ...payment, online: v })} disabled={!canManage} />
             </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <Field label="UPI ID" hint="For dynamic payment QR (India)">
@@ -308,7 +325,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
               the receipt on WhatsApp. Great where card machines aren&rsquo;t used.
             </p>
             <div className="mt-4">
-              <PaymentToggle
+              <ToggleRow
                 label="Accept online bank transfer"
                 checked={payment.bankTransfer}
                 onChange={(v) => setPayment({ ...payment, bankTransfer: v })}
@@ -437,6 +454,59 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           {canManage ? (
             <Button onClick={savePrinter} loading={savingPrinter}>
               Save printer settings
+            </Button>
+          ) : null}
+
+          <SectionCard title="What the bill shows">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Every row is optional. A row you switch on is printed even when its value
+              is zero — so <strong>Service charge</strong> on a bill with no service
+              charge prints <em>Service 0.00</em>, which is what stops a guest asking
+              whether it was quietly included.
+            </p>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              {RECEIPT_GROUPS.map((group) => (
+                <div key={group.title}>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {group.title}
+                  </p>
+                  <div className="space-y-1">
+                    {group.keys.map((key) => (
+                      <ToggleRow
+                        key={key}
+                        label={RECEIPT_FIELD_LABELS[key]}
+                        checked={receipt[key]}
+                        disabled={!canManage}
+                        onChange={(next) => setReceipt((current) => ({ ...current, [key]: next }))}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5">
+              <Field
+                label="Footer message"
+                hint="The last line of the bill. Left empty, it reads “Thank you — please come again!”"
+              >
+                <Input
+                  value={receipt.footerText}
+                  maxLength={160}
+                  disabled={!canManage || !receipt.footer}
+                  placeholder="Thank you — please come again!"
+                  onChange={(event) =>
+                    setReceipt((current) => ({ ...current, footerText: event.target.value }))
+                  }
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          {canManage ? (
+            <Button onClick={saveReceipt} loading={savingReceipt}>
+              Save bill settings
             </Button>
           ) : null}
         </TabsContent>
@@ -634,7 +704,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
   )
 }
 
-function PaymentToggle({
+function ToggleRow({
   label,
   checked,
   onChange,
@@ -654,6 +724,42 @@ function PaymentToggle({
 }
 
 /** 58 mm / 80 mm picker — the two standard thermal roll sizes. */
+/** Plain names for the receipt toggles — what an owner calls each row. */
+const RECEIPT_FIELD_LABELS: Record<Exclude<keyof ReceiptFields, 'footerText'>, string> = {
+  logo: 'Logo',
+  logoMono: 'Print the logo in black and white',
+  restaurantName: 'Restaurant name',
+  address: 'Address',
+  phone: 'Phone number',
+  cashierName: 'Who served it',
+  invoiceNumber: 'Invoice number',
+  dateTime: 'Date and time',
+  customer: 'Customer details',
+  itemNames: 'Item names',
+  quantity: 'Quantity',
+  unitPrice: 'Unit price',
+  discount: 'Discount',
+  subtotal: 'Subtotal',
+  serviceCharge: 'Service charge',
+  tax: 'Tax',
+  rounding: 'Rounding',
+  grandTotal: 'Grand total',
+  paymentMethod: 'Payment method',
+  paidAmount: 'Paid amount',
+  balance: 'Balance and change',
+  footer: 'Footer message',
+}
+
+/** Grouped the way somebody reads a bill: top, middle, bottom. */
+const RECEIPT_GROUPS: Array<{ title: string; keys: Array<Exclude<keyof ReceiptFields, 'footerText'>> }> = [
+  { title: 'The top of the bill', keys: ['logo', 'logoMono', 'restaurantName', 'address', 'phone'] },
+  { title: 'This bill', keys: ['invoiceNumber', 'dateTime', 'customer', 'cashierName'] },
+  { title: 'The food', keys: ['itemNames', 'quantity', 'unitPrice'] },
+  { title: 'The money', keys: ['subtotal', 'discount', 'serviceCharge', 'tax', 'rounding', 'grandTotal'] },
+  { title: 'How it was paid', keys: ['paymentMethod', 'paidAmount', 'balance'] },
+  { title: 'The bottom', keys: ['footer'] },
+]
+
 function PaperChoice({
   value,
   onChange,

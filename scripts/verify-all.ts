@@ -109,6 +109,9 @@ const SERVICE = [
   'e2e-accountant-test',
   // acCal.md §3/§18 — every explanation folds to its value; no invented numbers.
   'explain-test',
+  // bill.md §1 — the bill settings persist, and neither settings form can
+  // erase the other's column.
+  'receipt-settings-test',
   // acCal.md §9 — the derived journal balances and ties to every engine.
   'ledger-test',
   // acCal.md §6 — statement import, matching rules, duplicates, races.

@@ -19,6 +19,7 @@ import {
   liveBoardPolicySchema,
   paymentSettingsSchema,
   printerSettingsSchema,
+  receiptFieldsSchema,
   restaurantSettingsSchema,
 } from './schema'
 
@@ -158,6 +159,44 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
       return { id: user.restaurantId }
     },
     'Payment settings saved.',
+  )
+}
+
+/**
+ * Which rows a printed bill shows (bill.md §1).
+ *
+ * Its own action writing its own column, deliberately: the paper-width form
+ * next to it writes `printerConfig`, and keeping them apart is what makes it
+ * impossible for one to erase the other.
+ */
+export async function updateReceiptFields(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    receiptFieldsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: { receiptConfig: data as unknown as Prisma.InputJsonValue },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        after: { receipt: data },
+      })
+
+      revalidatePath('/dashboard/settings')
+      revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
+      return { id: user.restaurantId }
+    },
+    'Bill settings saved.',
   )
 }
 

@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { SettingsView } from '@/features/settings/components/settings-view'
 import { readPaymentConfig } from '@/features/payments/service'
 import { readPaperWidths } from '@/features/printing/paper'
+import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import { minorUnitFactor } from '@/lib/money'
@@ -53,6 +54,7 @@ export default async function SettingsPage() {
           receiptWidth: readPaperWidths(restaurant.printerConfig).receipt,
           kitchenWidth: readPaperWidths(restaurant.printerConfig).kitchen,
         },
+        receipt: readReceiptFields(restaurant.receiptConfig),
         live: {
           ...livePolicy,
           // Typed in whole currency like every other amount on this screen.
