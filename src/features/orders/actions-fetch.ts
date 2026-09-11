@@ -6,6 +6,7 @@ import { PERMISSIONS, canAccessBranch } from '@/lib/rbac'
 import { requirePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import { readPaperWidths } from '@/features/printing/paper'
+import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getOrderForStaff, readOptions } from './queries'
 import type { OrderDetailView } from './components/order-detail'
 import { localeForCurrency } from '@/lib/money'
@@ -107,6 +108,8 @@ export async function fetchOrderDetail(orderId: string) {
         addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
         phone: restaurant.phone,
         paper: readPaperWidths(restaurant.printerConfig),
+        logoUrl: restaurant.logoUrl,
+        fields: readReceiptFields(restaurant.receiptConfig),
       },
       canUpdate: false,
       canCancel: false,

@@ -5,6 +5,7 @@ import type { Metadata } from 'next'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { GuestBill } from '@/features/payments/components/guest-bill'
+import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { readPaymentConfig } from '@/features/payments/service'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
@@ -51,6 +52,7 @@ export default async function GuestBillPage({
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         paymentConfig={readPaymentConfig(restaurant.paymentConfig)}
+        fields={readReceiptFields(restaurant.receiptConfig)}
         bill={{
           id: order.id,
           orderNumber: order.orderNumber,

@@ -114,9 +114,7 @@ export default async function ApprovalsPage({
           timeZone={restaurant.timezone}
           locale={locale}
         />
-        {history.length > 0 ? (
-          <ApprovalQueue rows={history} currency={restaurant.currency} canDecide={false} />
-        ) : null}
+        <ApprovalQueue rows={history} currency={restaurant.currency} />
       </div>
     </>
   )

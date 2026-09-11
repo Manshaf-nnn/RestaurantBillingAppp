@@ -33,6 +33,7 @@ import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { submitFeedback } from '@/features/feedback/actions'
 import type { PaymentConfig } from '../service'
+import { DEFAULT_RECEIPT_FIELDS, type ReceiptFields } from '@/features/printing/receipt-fields'
 import { declareGuestPayment, emailReceipt, requestPaymentQr } from '../actions'
 import { callAction } from '@/lib/use-action'
 
@@ -72,6 +73,18 @@ export function GuestBill({
   currency,
   locale,
   paymentConfig,
+  /*
+   * The same switches the printed bill obeys (bill.md §1).
+   *
+   * This screen is a second, independent markup — a responsive page with pay
+   * buttons cannot be forced through the thermal template — but it must not be
+   * a second set of RULES. An owner who switches Service charge off and still
+   * sees it on the guest's phone has been told the setting does not work.
+   *
+   * Defaulted so a caller that has not threaded it yet renders today's bill
+   * rather than an empty one.
+   */
+  fields = DEFAULT_RECEIPT_FIELDS,
 }: {
   bill: BillView
   restaurantName: string
@@ -79,6 +92,7 @@ export function GuestBill({
   currency: string
   locale: string
   paymentConfig: PaymentConfig
+  fields?: ReceiptFields
 }) {
   const [bill, setBill] = React.useState(initial)
 
@@ -313,31 +327,38 @@ export function GuestBill({
           <Separator className="my-4" />
 
           <dl className="space-y-1.5 text-sm">
-            <BillRow label="Subtotal" value={formatMoney(bill.subtotal, currency, locale)} />
-            {bill.discountTotal > 0 ? (
+            {fields.subtotal ? (
+              <BillRow label="Subtotal" value={formatMoney(bill.subtotal, currency, locale)} />
+            ) : null}
+            {fields.discount ? (
               <BillRow
                 label={bill.couponCode ? `Discount (${bill.couponCode})` : 'Discount'}
                 value={`− ${formatMoney(bill.discountTotal, currency, locale)}`}
                 tone="success"
               />
             ) : null}
-            {bill.loyaltyDiscount > 0 ? (
+            {/* Loyalty rides with the discount switch — it is a discount, and
+                an owner turning Discount off is not asking to keep a second
+                discount row. Still hidden at zero: unlike a service charge,
+                "Loyalty points − 0.00" answers a question nobody asked. */}
+            {fields.discount && bill.loyaltyDiscount > 0 ? (
               <BillRow
                 label="Loyalty points"
                 value={`− ${formatMoney(bill.loyaltyDiscount, currency, locale)}`}
                 tone="success"
               />
             ) : null}
-            {bill.serviceCharge > 0 ? (
+            {fields.serviceCharge ? (
               <BillRow label="Service charge" value={formatMoney(bill.serviceCharge, currency, locale)} />
             ) : null}
-            {bill.taxTotal > 0 ? (
+            {fields.tax ? (
               <BillRow label={bill.taxLabel} value={formatMoney(bill.taxTotal, currency, locale)} />
             ) : null}
+            {/* No switch: a tip the guest agreed to pay is never suppressed. */}
             {bill.tipAmount > 0 ? (
               <BillRow label="Tip" value={formatMoney(bill.tipAmount, currency, locale)} />
             ) : null}
-            {bill.roundingAdj !== 0 ? (
+            {fields.rounding && bill.roundingAdj !== 0 ? (
               <BillRow
                 label="Rounding"
                 value={`${bill.roundingAdj > 0 ? '+' : '−'} ${formatMoney(Math.abs(bill.roundingAdj), currency, locale)}`}

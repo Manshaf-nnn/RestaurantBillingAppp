@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { PosTerminal } from '@/features/cashier/components/pos-terminal'
 import { readPaperWidths } from '@/features/printing/paper'
+import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getPublicMenu } from '@/features/menu/queries'
 import {
   listStationBranches,
@@ -140,6 +141,8 @@ export default async function PosPage({
           locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
           timeZone: restaurant.timezone,
           taxLabel: restaurant.taxLabel,
+          logoUrl: restaurant.logoUrl,
+          fields: readReceiptFields(restaurant.receiptConfig),
           paper: readPaperWidths(restaurant.printerConfig),
           addressLine: [restaurant.addressLine, restaurant.city].filter(Boolean).join(', ') || null,
           phone: restaurant.phone,

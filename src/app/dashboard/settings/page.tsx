@@ -55,6 +55,10 @@ export default async function SettingsPage() {
           kitchenWidth: readPaperWidths(restaurant.printerConfig).kitchen,
         },
         receipt: readReceiptFields(restaurant.receiptConfig),
+        destinations: payment.destinations ?? [],
+        // `readPaymentConfig` drops empty codes, so a method missing from this
+        // map is a method with nowhere to book — which is what the screen shows.
+        methodDestinations: (payment.methodDestinations ?? {}) as Record<string, string>,
         live: {
           ...livePolicy,
           // Typed in whole currency like every other amount on this screen.

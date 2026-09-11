@@ -166,7 +166,16 @@ export async function getApprovalsInbox(
           ? 'Approving dispatches the transfer.'
           : 'Records the decision — the person who asked still has to carry it out.',
       decidable: true,
-      href: '/dashboard/approvals',
+      /*
+       * A transfer has a record worth reading — which items, from which branch
+       * to which. Everything else in this queue (a refund, a discount) is fully
+       * described by the row itself, so it stays on the approvals desk rather
+       * than linking back to the page the reader is already looking at.
+       */
+      href:
+        row.kind === 'STOCK_TRANSFER' && row.entityId
+          ? `/dashboard/transfers/${row.entityId}`
+          : '/dashboard/approvals',
     })),
     ...petty.map((row) => ({
       queue: 'Petty cash',

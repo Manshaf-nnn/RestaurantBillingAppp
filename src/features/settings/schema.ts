@@ -46,6 +46,71 @@ export const paymentSettingsSchema = z.object({
 export type PaymentSettingsInput = z.infer<typeof paymentSettingsSchema>
 
 /**
+ * Where each payment method is allocated for accounting (bill.md §2).
+ *
+ * Its own schema and its own action, separate from the Payments form above,
+ * because these are two different decisions: that form says which methods a
+ * guest may choose, this one says which account the money is booked to. They
+ * also fail differently — a bad destination map can stop a till taking money,
+ * so it is checked far harder than a toggle.
+ *
+ * The invariant enforced here, and the reason this is not a plain record:
+ * every method that points anywhere must point at a destination that exists
+ * and is live. Saving a map with a dangling code would leave a till refusing
+ * payments with no way for the owner to see why.
+ */
+export const paymentDestinationsSchema = z
+  .object({
+    destinations: z
+      .array(
+        z.object({
+          // Minted once from the name, then frozen: stamped payments hold it.
+          code: z
+            .string()
+            .trim()
+            .min(1)
+            .max(40)
+            .regex(/^[a-z0-9_]+$/, 'A destination code may only use a-z, 0-9 and _'),
+          name: z.string().trim().min(1, 'Give the account a name').max(60),
+          kind: z.enum(['BANK', 'CASH', 'WALLET', 'OTHER']).default('OTHER'),
+          archived: z.coerce.boolean().default(false),
+        }),
+      )
+      .max(40, 'That is more accounts than anybody reconciles'),
+    /** METHOD → destination code. An empty string means "not booked anywhere". */
+    methodDestinations: z.record(z.string(), z.string().trim().max(40)),
+  })
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>()
+    value.destinations.forEach((destination, index) => {
+      if (seen.has(destination.code)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['destinations', index, 'code'],
+          message: `Two accounts share the code "${destination.code}"`,
+        })
+      }
+      seen.add(destination.code)
+    })
+
+    // A live destination is one a payment may be settled into today.
+    const live = new Set(
+      value.destinations.filter((destination) => !destination.archived).map((d) => d.code),
+    )
+    for (const [method, code] of Object.entries(value.methodDestinations)) {
+      if (!code) continue
+      if (!live.has(code)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['methodDestinations', method],
+          message: `${method} points at an account that no longer exists or has been retired`,
+        })
+      }
+    }
+  })
+export type PaymentDestinationsInput = z.infer<typeof paymentDestinationsSchema>
+
+/**
  * Receipt and kitchen-ticket paper width, in millimetres.
  *
  * 58 mm and 80 mm are the two standard thermal roll sizes. The width decides the
@@ -89,6 +154,13 @@ export const receiptFieldsSchema = z.object({
   balance: z.coerce.boolean().default(true),
   footer: z.coerce.boolean().default(true),
   footerText: z.string().trim().max(160).default(''),
+  /*
+   * The logo lives on the restaurant, not in the receipt blob — but it is set
+   * HERE, beside the switch that decides whether it prints. Sending an owner to
+   * another tab to find the thing the toggle refers to is how a toggle looks
+   * broken.
+   */
+  logoUrl: imageUrlField().optional(),
 })
 export type ReceiptFieldsInput = z.infer<typeof receiptFieldsSchema>
 

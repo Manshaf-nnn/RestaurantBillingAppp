@@ -239,6 +239,8 @@ async function main() {
       paper: { receipt: 58, kitchen: 80 },
       addressLine: null,
       phone: null,
+      logoUrl: null,
+      fields: DEFAULT_RECEIPT_FIELDS,
     },
   )
 
@@ -306,6 +308,8 @@ async function main() {
       paper: { receipt: 58, kitchen: 80 },
       addressLine: null,
       phone: null,
+      logoUrl: null,
+      fields: DEFAULT_RECEIPT_FIELDS,
     },
   )
   const shown = plain.totals.map((r) => r.label)
@@ -338,6 +342,7 @@ async function main() {
       paper: { receipt: 58, kitchen: 80 },
       addressLine: null,
       phone: null,
+      logoUrl: null,
       fields: {
         ...DEFAULT_RECEIPT_FIELDS,
         discount: false,

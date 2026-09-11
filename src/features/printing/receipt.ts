@@ -50,9 +50,17 @@ export interface ReceiptRestaurant {
   addressLine: string | null
   phone: string | null
   /** Shown at the top of the bill when the logo field is switched on. */
-  logoUrl?: string | null
-  /** Which rows this restaurant prints. Defaults when absent. */
-  fields?: ReceiptFields
+  logoUrl: string | null
+  /*
+   * Which rows this restaurant prints.
+   *
+   * REQUIRED, deliberately. It was optional, with `buildReceipt` falling back
+   * to the defaults — which compiled everywhere and meant the settings screen
+   * saved toggles that no receipt ever read. An owner switched a row off, the
+   * bill printed it anyway, and nothing anywhere said why. Required, the
+   * compiler names every screen that has to pass it.
+   */
+  fields: ReceiptFields
 }
 
 /** Everything a receipt needs from the order itself. */
@@ -167,7 +175,7 @@ export function buildReceipt(
   } = {},
 ) {
   const money = (minor: number) => formatMoney(minor, restaurant.currency, restaurant.locale)
-  const fields = restaurant.fields ?? DEFAULT_RECEIPT_FIELDS
+  const fields = restaurant.fields
 
   /*
    * Switched-off fields are nulled here rather than gated in the template, so

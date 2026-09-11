@@ -31,6 +31,8 @@ import {
   type ReceiptFields,
 } from '@/features/printing/receipt-fields'
 import { callAction } from '@/lib/use-action'
+import { PaymentDestinations } from './payment-destinations'
+import type { PaymentDestination } from '@/features/payments/destinations'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
 const TIMEZONES = [
@@ -86,6 +88,10 @@ export interface SettingsData {
   }
   /** Which rows a printed bill shows (bill.md §1). */
   receipt: ReceiptFields
+  /** The book of accounts payments are allocated to (bill.md §2). */
+  destinations: PaymentDestination[]
+  /** METHOD → destination code. A method missing here is booked nowhere. */
+  methodDestinations: Record<string, string>
   /** Thresholds in MAJOR units — what the owner would say out loud. */
   cash: {
     cashVarianceAbove: number
@@ -147,7 +153,13 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
 
   const saveReceipt = async () => {
     setSavingReceipt(true)
-    const result = await callAction(() => updateReceiptFields(receipt))
+    /*
+     * The logo travels with the bill settings, and it is the SAME piece of
+     * state the Profile tab edits — one logo, one value. Two independent copies
+     * meant whichever tab you saved second quietly reinstated the logo the
+     * first had just replaced.
+     */
+    const result = await callAction(() => updateReceiptFields({ ...receipt, logoUrl: form.logoUrl }))
     setSavingReceipt(false)
     if (result.ok) toast.success('Bill settings saved')
     else toast.error(result.error)
@@ -356,6 +368,12 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
               Save payment settings
             </Button>
           ) : null}
+
+          <PaymentDestinations
+            initialDestinations={initial.destinations}
+            initialMethodDestinations={initial.methodDestinations}
+            canManage={canManage}
+          />
         </TabsContent>
 
         <TabsContent value="loyalty" className="space-y-4">
@@ -486,7 +504,17 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
               ))}
             </div>
 
-            <div className="mt-5">
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Logo"
+                hint="Printed at the top when the Logo switch above is on. The same logo as your profile."
+              >
+                <ImageUpload
+                  value={form.logoUrl}
+                  onChange={(url) => set('logoUrl', url)}
+                  aspect="square"
+                />
+              </Field>
               <Field
                 label="Footer message"
                 hint="The last line of the bill. Left empty, it reads “Thank you — please come again!”"

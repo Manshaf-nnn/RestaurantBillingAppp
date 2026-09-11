@@ -17,6 +17,7 @@ import { getApprovalPolicy } from '@/features/approvals/service'
 import {
   cashControlsSchema,
   liveBoardPolicySchema,
+  paymentDestinationsSchema,
   paymentSettingsSchema,
   printerSettingsSchema,
   receiptFieldsSchema,
@@ -163,6 +164,99 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
 }
 
 /**
+ * Where each method's money is booked (bill.md §2).
+ *
+ * A separate action from the Payments form above, writing the same column
+ * through the same read-merge-write, because the two forms are saved
+ * independently and neither may clobber the other's keys.
+ *
+ * The audit entry carries `before` as well as `after`: this map decides which
+ * account a payment is allocated to, so "who changed Card from HNB to BOC, and
+ * when" is a question the books have to be able to answer (§4).
+ */
+export async function updatePaymentDestinations(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    paymentDestinationsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+
+      const existing = readPaymentConfig(
+        (await prisma.restaurant.findUniqueOrThrow({
+          where: { id: user.restaurantId },
+          select: { paymentConfig: true },
+        })).paymentConfig,
+      )
+
+      /*
+       * A code that a payment already carries can never be dropped, only
+       * retired. Deleting one would leave stamped payments pointing at nothing
+       * and every historical report reading the raw code instead of a name.
+       */
+      const stamped = await prisma.payment.findMany({
+        where: { restaurantId: user.restaurantId, destination: { not: null } },
+        select: { destination: true },
+        distinct: ['destination'],
+      })
+      const kept = data.destinations.map((destination) => destination.code)
+      const orphaned = stamped
+        .map((row) => row.destination)
+        .filter((code): code is string => code !== null && !kept.includes(code))
+
+      const survivors = orphaned.flatMap((code) => {
+        const previous = existing.destinations?.find((entry) => entry.code === code)
+        return [
+          {
+            code,
+            name: previous?.name ?? code,
+            kind: previous?.kind ?? ('OTHER' as const),
+            archived: true,
+          },
+        ]
+      })
+
+      // Empty string means "not booked anywhere" — dropped, so the map holds
+      // only real decisions and `destinationForMethod` refuses the rest.
+      const methodDestinations = Object.fromEntries(
+        Object.entries(data.methodDestinations).filter(([, code]) => Boolean(code)),
+      )
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: {
+          paymentConfig: {
+            ...existing,
+            destinations: [...data.destinations, ...survivors],
+            methodDestinations,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        before: {
+          destinations: existing.destinations ?? [],
+          methodDestinations: existing.methodDestinations ?? {},
+        },
+        after: { destinations: data.destinations, methodDestinations },
+      })
+
+      revalidatePath('/dashboard/settings')
+      revalidatePath('/cashier')
+      return { id: user.restaurantId }
+    },
+    'Payment destinations saved.',
+  )
+}
+
+/**
  * Which rows a printed bill shows (bill.md §1).
  *
  * Its own action writing its own column, deliberately: the paper-width form
@@ -176,9 +270,16 @@ export async function updateReceiptFields(input: unknown): Promise<ActionResult<
     async (data) => {
       const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
 
+      const { logoUrl, ...fields } = data
+
       await prisma.restaurant.update({
         where: { id: user.restaurantId },
-        data: { receiptConfig: data as unknown as Prisma.InputJsonValue },
+        data: {
+          receiptConfig: fields as unknown as Prisma.InputJsonValue,
+          // Only when the form sent one, so saving the toggles never clears a
+          // logo the owner set on the profile tab.
+          ...(logoUrl === undefined ? {} : { logoUrl: logoUrl || null }),
+        },
       })
 
       await audit({
@@ -188,7 +289,7 @@ export async function updateReceiptFields(input: unknown): Promise<ActionResult<
         action: AUDIT_ACTIONS.SETTINGS_UPDATED,
         entity: 'Restaurant',
         entityId: user.restaurantId,
-        after: { receipt: data },
+        after: { receipt: fields, logoUrl: logoUrl ?? null },
       })
 
       revalidatePath('/dashboard/settings')

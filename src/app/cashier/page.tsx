@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { CashierBoard } from '@/features/cashier/components/cashier-board'
 import { readPaperWidths } from '@/features/printing/paper'
+import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
@@ -136,6 +137,8 @@ export default async function CashierPage({
         locale: restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale,
         timeZone: restaurant.timezone,
         taxLabel: restaurant.taxLabel,
+        logoUrl: restaurant.logoUrl,
+        fields: readReceiptFields(restaurant.receiptConfig),
         // Paper size the owner chose in Settings — receipts printed at the wrong
         // width waste a third of an 80 mm roll, or overflow a 58 mm one.
         paper: readPaperWidths(restaurant.printerConfig),

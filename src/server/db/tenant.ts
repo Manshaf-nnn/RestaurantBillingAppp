@@ -64,6 +64,7 @@ export type TenantSummary = Pick<
   | 'theme'
   | 'paymentConfig'
   | 'printerConfig'
+  | 'receiptConfig'
   | 'loyaltyEnabled'
   | 'loyaltyEarnRateX100'
   | 'loyaltyPointValue'
@@ -94,6 +95,7 @@ const SUMMARY_SELECT = {
   theme: true,
   paymentConfig: true,
   printerConfig: true,
+  receiptConfig: true,
   loyaltyEnabled: true,
   loyaltyEarnRateX100: true,
   loyaltyPointValue: true,

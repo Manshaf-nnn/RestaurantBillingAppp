@@ -38,6 +38,9 @@ import { decidePettyRequestAction } from '@/features/pettycash/actions'
  * send you to read them.
  */
 
+/** This page's own path — a row linking here would link to itself. */
+const HERE = '/dashboard/approvals'
+
 export interface ApprovalRow {
   queue: string
   kind: 'APPROVAL_REQUEST' | 'OUTGOING_PAYMENT' | 'PETTY_CASH' | 'STOCK_COUNT' | 'PURCHASE'
@@ -159,12 +162,32 @@ export function CentralApprovals({
                 ) : null}
 
                 {!row.decidable || !row.canDecide || row.isOwnRequest ? (
-                  <Link
-                    href={row.href}
-                    className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-                  >
-                    {row.decidable ? 'Open →' : 'Review →'}
-                  </Link>
+                  /*
+                   * Say WHICH of the three reasons it is.
+                   *
+                   * All three used to collapse into one "Open →" link that, for
+                   * a generic approval request, pointed back at this very page.
+                   * A screen full of rows whose only control returns you to
+                   * itself, with no word about why, reads as a broken page
+                   * rather than as the rules working.
+                   */
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="text-[11px] text-muted-foreground">
+                      {row.isOwnRequest
+                        ? 'You raised this — somebody else signs it off'
+                        : !row.canDecide
+                          ? 'Someone with the right permission has to decide this'
+                          : 'Read the lines before deciding'}
+                    </span>
+                    {row.href !== HERE ? (
+                      <Link
+                        href={row.href}
+                        className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+                      >
+                        {row.decidable ? 'Open →' : 'Review →'}
+                      </Link>
+                    ) : null}
+                  </div>
                 ) : rejecting === row.id ? (
                   <div className="flex flex-col items-end gap-2">
                     <Input
@@ -208,10 +231,6 @@ export function CentralApprovals({
                     </Button>
                   </span>
                 )}
-
-                {row.isOwnRequest ? (
-                  <span className="text-[11px] text-muted-foreground">You raised this one</span>
-                ) : null}
               </div>
             </div>
           </li>

@@ -242,6 +242,54 @@ async function main() {
         withLegacy.byDestination.reduce((sum, row) => sum + row.amount, 0) === withLegacy.total)
   }
 
+  console.log('\n── 8. The settings form cannot save a map the till would choke on ──')
+  {
+    const { paymentDestinationsSchema } = await import('../src/features/settings/schema')
+    const { slugifyDestinationCode } = await import('../src/features/payments/destinations')
+
+    const good = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: false }],
+      methodDestinations: { CASH: 'boc', CARD: '' },
+    })
+    check('a sound map saves — including a method deliberately left unbooked', good.success,
+      JSON.stringify(good.success ? null : good.error.issues))
+
+    const dangling = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: false }],
+      methodDestinations: { CASH: 'hnb' },
+    })
+    check('pointing a method at an account that does not exist is refused',
+      !dangling.success, 'it saved')
+
+    const retired = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: true }],
+      methodDestinations: { CASH: 'boc' },
+    })
+    check('…and so is pointing one at an account that was just retired',
+      !retired.success, 'it saved')
+
+    const twins = paymentDestinationsSchema.safeParse({
+      destinations: [
+        { code: 'boc', name: 'BOC', kind: 'BANK', archived: false },
+        { code: 'boc', name: 'BOC savings', kind: 'BANK', archived: false },
+      ],
+      methodDestinations: {},
+    })
+    check('two accounts cannot share one code — that is what a payment stamps',
+      !twins.success, 'it saved')
+
+    const blank = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'boc', name: '   ', kind: 'BANK', archived: false }],
+      methodDestinations: {},
+    })
+    check('an account with no name is refused', !blank.success, 'it saved')
+
+    check('a code is minted from the name, and never collides',
+      slugifyDestinationCode('Bank of Ceylon — Current') === 'bank_of_ceylon_current' &&
+        slugifyDestinationCode('BOC', ['boc']) === 'boc_2' &&
+        slugifyDestinationCode('!!!') === 'account')
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed > 0 ? 1 : 0)

@@ -182,5 +182,66 @@ console.log('\n── 6. One ladder, two surfaces ──')
     labels(coupon).includes('Discount (SAVE10)'))
 }
 
+console.log('\n── 7. Every surface that shows a bill reads the OWNER’s settings ──')
+{
+  /*
+   * The bug this section exists for.
+   *
+   * `fields` was optional, so `buildReceipt` fell back to the defaults; every
+   * screen compiled, and the settings page saved toggles that no bill ever
+   * read. Making it required closed that — the compiler now names any screen
+   * that passes nothing — but it cannot tell the difference between a screen
+   * passing the STORED settings and one passing `DEFAULT_RECEIPT_FIELDS`,
+   * which is the same bug wearing a type annotation.
+   *
+   * So this reads the source. Any screen that hands a receipt a `fields:` must
+   * get it from the restaurant's own column.
+   */
+  const fs = require('node:fs') as typeof import('node:fs')
+  const path = require('node:path') as typeof import('node:path')
+
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) return walk(full)
+      return /\.tsx?$/.test(entry.name) ? [full] : []
+    })
+
+  const sources = walk('src').map((file) => ({ file, text: fs.readFileSync(file, 'utf8') }))
+
+  /*
+   * The signature of a screen that builds a bill: it assembles the
+   * `ReceiptRestaurant` shape (`paper:` and `taxLabel:` together) AND it is the
+   * place that loaded the restaurant. That second clause is what keeps the
+   * check honest — `receipt.ts` only declares the shape, and `order-detail.tsx`
+   * forwards a prop its page already filled in. Neither fetches, so neither is
+   * where the settings could go missing.
+   */
+  const loadsRestaurant = (text: string) =>
+    text.includes('requireRestaurant(') ||
+    text.includes('resolvePublicTenant(') ||
+    text.includes('prisma.restaurant.')
+
+  const suppliers = sources.filter(
+    ({ text }) => text.includes('paper:') && text.includes('taxLabel:') && loadsRestaurant(text),
+  )
+  const faking = suppliers.filter(({ text }) => !text.includes('readReceiptFields('))
+  check('every screen that loads a restaurant to print a bill reads its saved settings',
+    faking.length === 0,
+    faking.map((entry) => entry.file).join(', '))
+  check('…and it found the screens, so the check is not vacuous',
+    suppliers.length >= 4, `${suppliers.length} found`)
+
+  const guestBill = fs.readFileSync('src/features/payments/components/guest-bill.tsx', 'utf8')
+  check('the guest’s on-screen bill gates on the same switches, not on “is it zero”',
+    guestBill.includes('fields.serviceCharge') &&
+      guestBill.includes('fields.tax') &&
+      !guestBill.includes('bill.serviceCharge > 0'))
+
+  const printer = fs.readFileSync('src/features/printing/print.ts', 'utf8')
+  check('the printed template waits for the logo before printing',
+    printer.includes('waitForImages'))
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed > 0 ? 1 : 0)

@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, ORDER_STATUS_META, PaymentStatusBadge, VegIndicator } from '@/components/ui/status'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { formatDateTime, formatTime } from '@/lib/datetime'
+import type { ReceiptFields } from '@/features/printing/receipt-fields'
 import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
 import { printReceipt } from '@/features/printing/print'
@@ -108,6 +109,9 @@ export function OrderDetail({
     phone: string | null
     /** Thermal paper widths chosen in Settings. */
     paper: { receipt: PaperWidth; kitchen: PaperWidth }
+    logoUrl: string | null
+    /** Which rows the owner prints (bill.md §1). */
+    fields: ReceiptFields
   }
   canUpdate: boolean
   canCancel: boolean
@@ -193,6 +197,9 @@ export function OrderDetail({
           paper: restaurant.paper,
           addressLine: restaurant.addressLine,
           phone: restaurant.phone,
+          logoUrl: restaurant.logoUrl,
+          fields: restaurant.fields,
+          timeZone,
         },
       )
     let ok = true
