@@ -55,7 +55,7 @@ export async function requestOrigin(): Promise<string> {
     const store = await headers()
     /*
      * `x-forwarded-host` first, the same precedence as `requestHost` in
-     * `server/db/tenant.ts`. Behind a proxy — Netlify included — `host` is
+     * `server/db/tenant.ts`. Behind a proxy — Caddy on OVH — `host` is
      * whatever the proxy used internally, and only the forwarded header carries
      * what the visitor typed. `host` remains the fallback for local
      * development and any un-proxied deployment.
@@ -104,14 +104,21 @@ export function dnsInstructions(domain: string, platformHost: string) {
   return {
     /*
      * An apex domain cannot legally be a CNAME, so most registrars offer
-     * ALIAS/ANAME instead — and the ones that do not need an A record to
-     * Netlify's load balancer.
+     * ALIAS/ANAME instead — and the ones that do not need an A record straight
+     * at the server's IP.
+     *
+     * The A-record advice deliberately names no IP address. It used to name
+     * Netlify's load balancer, which stopped being true the day this moved to
+     * OVH, and a hard-coded IP in a help string is a fact that goes stale
+     * silently — the client follows it, nothing answers, and nobody suspects
+     * the instructions. Pointing at "whatever the platform host resolves to"
+     * cannot go out of date, because it is the same answer by construction.
      */
     type: apex ? 'ALIAS (or ANAME)' : 'CNAME',
     name: apex ? '@' : domain.split('.')[0],
     value: platformHost,
     note: apex
-      ? 'If your registrar has no ALIAS or ANAME record, use an A record pointing at 75.2.60.5 (Netlify’s load balancer), or point a subdomain such as order.' + domain + ' instead.'
+      ? `If your registrar has no ALIAS or ANAME record, use an A record pointing at the same IP address as ${platformHost} (look it up with: dig +short ${platformHost}), or point a subdomain such as order.${domain} instead — a subdomain takes a plain CNAME and is simpler.`
       : null,
   }
 }

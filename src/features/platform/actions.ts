@@ -262,7 +262,7 @@ export async function setCustomDomain(input: unknown): Promise<ActionResult<{ do
       revalidatePath('/admin')
       return { domain }
     },
-    'Domain saved. Add it in Netlify, then press Check.',
+    'Domain saved. Add the DNS record, then press Check.',
   )
 }
 
@@ -337,7 +337,7 @@ export async function verifyCustomDomain(
         ? `Not live yet — ${reason}.`
         : seen?.resolved
           ? `That domain currently reaches ${seen.name ?? 'another restaurant'}, not ${restaurant.name}.`
-          : 'The domain reached the app but matched no restaurant. Add it in Netlify as a domain alias.'
+          : 'The domain reached the app but matched no restaurant — check the hostname above is spelled exactly as the DNS record.'
 
       return { verified: false, detail }
     },

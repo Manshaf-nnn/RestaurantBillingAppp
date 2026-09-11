@@ -27,7 +27,7 @@
  */
 import { prisma } from '../src/server/db/prisma'
 import { normaliseHost } from '../src/server/db/tenant'
-import { tenantOrigin } from '../src/lib/tenant-url'
+import { dnsInstructions, tenantOrigin } from '../src/lib/tenant-url'
 import { appUrl } from '../src/lib/env'
 
 let passed = 0
@@ -250,6 +250,35 @@ async function main() {
     (await resolveFor({ host: 'tableflow.example.com', path: nilazaSlug }))?.id === nilaza.id,
     'removing a domain must never take a restaurant offline',
   )
+
+  // ── 8. the record we tell a client to add ─────────────────────────────────
+  console.log('\n── 8. the DNS record an owner is told to add ──')
+  {
+    const sub = dnsInstructions('tableflow.mrchai.lk', 'tableflow.markui.lk')
+    check('a subdomain is a plain CNAME at the label',
+      sub.type === 'CNAME' && sub.name === 'tableflow' && sub.value === 'tableflow.markui.lk',
+      JSON.stringify(sub))
+    check('…with no extra caveat to read — a CNAME is the whole job',
+      sub.note === null)
+
+    const apex = dnsInstructions('mrchai.lk', 'tableflow.markui.lk')
+    check('an apex domain cannot be a CNAME, so it is offered ALIAS/ANAME at @',
+      apex.type === 'ALIAS (or ANAME)' && apex.name === '@')
+
+    /*
+     * The instruction used to name Netlify's load-balancer IP. That became
+     * wrong the day this moved to OVH, and a client following it would have
+     * pointed their domain at a host that is nothing to do with us — with the
+     * screen still insisting it was right. No literal IP may appear here
+     * again; the advice has to be one that cannot go stale.
+     */
+    check('the advice names no hard-coded IP address, so it cannot rot',
+      !/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(apex.note ?? ''), apex.note ?? '')
+    check('…and it mentions no host we stopped using',
+      !/netlify/i.test(apex.note ?? '') && !/netlify/i.test(sub.note ?? ''))
+    check('it points the client back at the platform host instead',
+      (apex.note ?? '').includes('tableflow.markui.lk'))
+  }
 
   // ── cleanup ───────────────────────────────────────────────────────────────
   await prisma.restaurant.deleteMany({ where: { id: { in: [nilaza.id, spice.id] } } })

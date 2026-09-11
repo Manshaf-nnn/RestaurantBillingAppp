@@ -207,7 +207,7 @@ export function PlatformConsole({
                     Their own address, and whether it actually answers. An
                     unverified domain is stored but resolves nothing, so saying
                     "waiting for DNS" is the difference between "I typed it
-                    wrong" and "I have not added it in Netlify yet".
+                    wrong" and "the DNS record has not propagated yet".
                   */}
                   {restaurant.customDomain ? (
                     <p className="mt-1 flex items-center gap-1.5 text-xs">
@@ -449,7 +449,7 @@ function RejectDialog({
  * know what a CNAME is without being told exactly what to type.
  *
  * Check is a real request to the domain, not a database read. That is the whole
- * point: it proves DNS, TLS, Netlify and our own resolver at once, and reports
+ * point: it proves DNS, TLS and our own resolver at once, and reports
  * whichever of them is not ready yet.
  */
 function DomainDialog({
@@ -543,8 +543,10 @@ function DomainDialog({
                 <p className="mt-2 text-xs text-muted-foreground">{dns.note}</p>
               ) : null}
               <p className="mt-2 text-xs text-muted-foreground">
-                Then add <span className="font-mono">{saved}</span> in Netlify → Domain management →
-                Add a domain alias. Netlify issues the certificate.
+                That is the only step. The certificate is issued automatically the first time
+                somebody opens <span className="font-mono">{saved}</span> — there is nothing to add
+                on the server. DNS usually takes a few minutes, occasionally up to an hour; press
+                Check until it goes green.
               </p>
             </div>
           ) : null}
