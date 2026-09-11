@@ -3,6 +3,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
+import { METHOD_LABELS } from '@/features/payments/service'
 import { localBucket, utc } from '@/server/db/sql-time'
 import type { DateRange } from './range'
 
@@ -361,10 +362,8 @@ export async function getPaymentsReport(params: {
   const refunded = refunds._sum.amount ?? 0
   const paid = payments
 
-  const LABELS: Record<string, string> = {
-    CASH: 'Cash', CARD: 'Card', QR: 'QR', ONLINE: 'Online',
-    WALLET: 'Wallet', BANK_TRANSFER: 'Bank transfer', OTHER: 'Other',
-  }
+  // One copy of the names, in the module that owns payments.
+  const LABELS = METHOD_LABELS
 
   return {
     total,

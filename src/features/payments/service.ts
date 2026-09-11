@@ -64,7 +64,54 @@ export interface PaymentDestination {
   archived?: boolean
 }
 
-const DEFAULT_PAYMENT_CONFIG: PaymentConfig = { cash: true, card: true, qr: true }
+/**
+ * The destinations a restaurant has before anybody configures any.
+ *
+ * Named after the methods themselves, because that is the one naming nobody
+ * can find wrong, and an owner renames them to real banks the first time they
+ * look. They exist so that "never opened the setting" is not the same state as
+ * "switched a method off": a till with no configuration keeps working, and the
+ * refusal is reserved for a restaurant that HAS a configuration which does not
+ * cover the method being tendered.
+ */
+export const DEFAULT_DESTINATIONS: PaymentDestination[] = [
+  { code: 'cash', name: 'Cash', kind: 'CASH' },
+  { code: 'card', name: 'Card', kind: 'BANK' },
+  { code: 'qr', name: 'QR', kind: 'BANK' },
+  { code: 'online', name: 'Online', kind: 'BANK' },
+  { code: 'wallet', name: 'Wallet', kind: 'WALLET' },
+  { code: 'bank_transfer', name: 'Bank transfer', kind: 'BANK' },
+  { code: 'other', name: 'Other', kind: 'OTHER' },
+]
+
+export const DEFAULT_METHOD_DESTINATIONS: Record<string, string> = {
+  CASH: 'cash',
+  CARD: 'card',
+  QR: 'qr',
+  ONLINE: 'online',
+  WALLET: 'wallet',
+  BANK_TRANSFER: 'bank_transfer',
+  OTHER: 'other',
+}
+
+const DEFAULT_PAYMENT_CONFIG: PaymentConfig = {
+  cash: true,
+  card: true,
+  qr: true,
+  destinations: DEFAULT_DESTINATIONS,
+  methodDestinations: DEFAULT_METHOD_DESTINATIONS,
+}
+
+/** What each method is called on a screen or a receipt. */
+export const METHOD_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  CARD: 'Card',
+  QR: 'QR',
+  ONLINE: 'Online',
+  WALLET: 'Wallet',
+  BANK_TRANSFER: 'Bank transfer',
+  OTHER: 'Other',
+}
 
 /**
  * Settlement now depends on this, so it can no longer be a blind cast.
@@ -96,7 +143,17 @@ export function readPaymentConfig(value: unknown): PaymentConfig {
         ) as Partial<Record<string, string>>
       : undefined
 
-  return { ...(raw as PaymentConfig), destinations, methodDestinations }
+  /*
+   * Absent is not the same as empty. A restaurant that has never opened the
+   * setting falls back to the defaults and keeps trading; one that HAS a map
+   * and left a method out of it is the case worth refusing, because somebody
+   * made a decision there and this method was not part of it.
+   */
+  return {
+    ...(raw as PaymentConfig),
+    destinations: destinations ?? DEFAULT_DESTINATIONS,
+    methodDestinations: methodDestinations ?? DEFAULT_METHOD_DESTINATIONS,
+  }
 }
 
 /** The destination a method is pointed at, or null when it has none live. */
@@ -252,6 +309,29 @@ export async function capturePayment(params: {
 }) {
   const restaurant = await requireRestaurant(params.restaurantId)
 
+  /*
+   * Where this money is allocated (bill.md §2).
+   *
+   * Resolved out here rather than inside the transaction: it is configuration,
+   * not contended state, and `requireRestaurant` already has `paymentConfig` in
+   * hand — so the check costs nothing and refuses before the bill is locked.
+   *
+   * Refusing is the point. A payment recorded against no account is money the
+   * books cannot place, and finding that out at month end — across a hundred
+   * settlements nobody can now remember — is far worse than a cashier being
+   * told, once, to go and ask somebody.
+   */
+  const paymentConfig = readPaymentConfig(restaurant.paymentConfig)
+  const destination = destinationForMethod(paymentConfig, params.method)
+  if (!destination) {
+    throw new AppError(
+      `${METHOD_LABELS[params.method] ?? params.method} has no accounting destination set up. ` +
+        'Ask an administrator to choose one in Settings → Payments before taking this payment.',
+      409,
+      'NO_PAYMENT_DESTINATION',
+    )
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     /*
      * Lock the bill before reading what is outstanding.
@@ -406,6 +486,10 @@ export async function capturePayment(params: {
             tenderedAmount: params.tenderedAmount ?? null,
             changeAmount,
             reference: params.reference || null,
+            // Stamped on the settling branch as well as the creating one: a QR
+            // intent row is created UNPAID long before it is settled, and the
+            // destination belongs to the settlement, not to the intent.
+            destination: destination.code,
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
             cashDrawerSessionId: drawer?.id ?? null,
@@ -422,6 +506,7 @@ export async function capturePayment(params: {
             tenderedAmount: params.tenderedAmount ?? null,
             changeAmount,
             reference: params.reference || null,
+            destination: destination.code,
             receivedById: params.receivedById ?? null,
             paidAt: new Date(),
             cashDrawerSessionId: drawer?.id ?? null,
@@ -781,6 +866,12 @@ export async function refundPayment(params: {
         paymentId: payment.id,
         amount,
         method: payment.method,
+        /*
+         * Money goes back where it came from — the destination is inherited
+         * from the payment rather than looked up afresh, so re-pointing Card
+         * at a new bank today cannot send last month's refund to it.
+         */
+        destination: payment.destination,
         reason: params.reason,
         refundedById: params.actorId,
         clientRequestId: params.clientRequestId ?? null,

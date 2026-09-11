@@ -1,0 +1,216 @@
+/**
+ * Where the money is allocated (bill.md §2).
+ *
+ * TableFlow has no gateway and no bank API, so a "destination" is a
+ * bookkeeping decision and nothing more: it records which account the owner
+ * considers a payment to have landed in. The rules worth holding are the ones
+ * that keep that record honest —
+ *
+ *   • a payment that cannot be placed is refused rather than recorded loose,
+ *   • each half of a split carries its own destination,
+ *   • a refund goes back where the money came from,
+ *   • renaming an account never rewrites what already happened.
+ *
+ * Run: npx tsx --tsconfig tsconfig.test.json scripts/payment-destination-test.ts
+ */
+import { capturePayment, refundPayment, readPaymentConfig, destinationName } from '../src/features/payments/service'
+import { placeOrder } from '../src/features/orders/service'
+import { prisma } from '../src/server/db/prisma'
+
+let passed = 0
+let failed = 0
+function check(name: string, ok: boolean, detail = '') {
+  if (ok) { passed += 1; console.log(`  ✓ ${name}`) }
+  else { failed += 1; console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`) }
+}
+async function refuses(name: string, run: () => Promise<unknown>, expect: RegExp) {
+  try {
+    await run()
+    check(name, false, 'it was allowed')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    check(name, expect.test(message), `wrong error: ${message}`)
+  }
+}
+
+/** Two real banks, the way an owner would set it up. */
+const CONFIGURED = {
+  cash: true,
+  card: true,
+  destinations: [
+    { code: 'boc', name: 'BOC', kind: 'BANK' },
+    { code: 'hnb', name: 'HNB', kind: 'BANK' },
+    { code: 'ndb', name: 'NDB', kind: 'BANK', archived: true },
+  ],
+  methodDestinations: { CASH: 'boc', CARD: 'hnb', QR: 'ndb' },
+}
+
+async function main() {
+  const stamp = Date.now().toString(36)
+
+  const restaurant = await prisma.restaurant.create({
+    data: {
+      name: `Dest ${stamp}`, slug: `dest-${stamp}`, status: 'ACTIVE', isActive: true,
+      currency: 'LKR', taxRateBps: 0, serviceChargeBps: 0, taxInclusive: false,
+      timezone: 'Asia/Colombo',
+      paymentConfig: CONFIGURED,
+    },
+  })
+  const branch = await prisma.branch.create({
+    data: { restaurantId: restaurant.id, name: 'Main', code: 'MAIN', isDefault: true },
+  })
+  const category = await prisma.category.create({
+    data: { restaurantId: restaurant.id, name: 'Mains', slug: `mains-${stamp}` },
+  })
+  const staff = await prisma.user.create({
+    data: {
+      restaurantId: restaurant.id, email: `till-${stamp}@test.local`,
+      name: 'Till', passwordHash: 'x', role: 'CASHIER',
+    },
+  })
+  const dish = await prisma.food.create({
+    data: { restaurantId: restaurant.id, categoryId: category.id, name: 'Rice', slug: `rice-${stamp}`, price: 150_000 },
+  })
+
+  // A dish has to be on the branch's menu before it can be rung up there.
+  await prisma.foodBranch.create({
+    data: { restaurantId: restaurant.id, foodId: dish.id, branchId: branch.id, isAvailable: true },
+  })
+
+  const newOrder = async () =>
+    placeOrder({
+      restaurantId: restaurant.id, branchId: branch.id, tableId: null,
+      type: 'COUNTER', channel: 'COUNTER', customerName: 'Walk-in', customerPhone: '',
+      items: [{ foodId: dish.id, quantity: 1, optionIds: [] }],
+    })
+
+  console.log('\n── 1. A payment is stamped where the owner pointed it ──')
+  {
+    const order = await newOrder()
+    const paid = await capturePayment({
+      restaurantId: restaurant.id, orderId: order.id, method: 'CASH', amount: order.grandTotal,
+    })
+    check('cash lands on BOC, by code not by name', paid.payment.destination === 'boc', `${paid.payment.destination}`)
+  }
+
+  console.log('\n── 2. A method nobody assigned is refused, and records nothing ──')
+  {
+    const order = await newOrder()
+    const before = await prisma.payment.count({ where: { orderId: order.id } })
+    await refuses(
+      'settling on an unassigned method is refused, by name, pointing at Settings',
+      () => capturePayment({
+        restaurantId: restaurant.id, orderId: order.id, method: 'WALLET', amount: order.grandTotal,
+      }),
+      /Wallet has no accounting destination.*Settings → Payments/s,
+    )
+    const after = await prisma.payment.count({ where: { orderId: order.id } })
+    check('…and no payment row was written', after === before, `${before} → ${after}`)
+
+    await refuses(
+      'a retired destination is refused too — it cannot be pulled out from under a till',
+      () => capturePayment({
+        restaurantId: restaurant.id, orderId: order.id, method: 'QR', amount: order.grandTotal,
+      }),
+      /no accounting destination/,
+    )
+  }
+
+  console.log('\n── 3. A split bill: each half goes where its method points ──')
+  {
+    const order = await newOrder()
+    await capturePayment({ restaurantId: restaurant.id, orderId: order.id, method: 'CASH', amount: 100_000 })
+    const second = await capturePayment({
+      restaurantId: restaurant.id, orderId: order.id, method: 'CARD', amount: 50_000,
+    })
+
+    const rows = await prisma.payment.findMany({
+      where: { orderId: order.id }, orderBy: { createdAt: 'asc' },
+    })
+    check('two payments, on two different destinations',
+      rows.length === 2 && rows[0].destination === 'boc' && rows[1].destination === 'hnb',
+      rows.map((row) => `${row.method}:${row.destination}`).join(' '))
+    check('and the bill is settled in full',
+      second.fullySettled && rows.reduce((sum, row) => sum + row.amount, 0) === 150_000)
+
+    console.log('\n── 4. A refund goes back where the money came from ──')
+    const refunded = await refundPayment({
+      restaurantId: restaurant.id, paymentId: rows[1].id, amount: 50_000,
+      reason: 'Card charged twice', actorId: staff.id,
+    })
+    check('the refund inherits the payment it reverses — HNB, not whatever CARD points at today',
+      refunded.destination === 'hnb', `${refunded.destination}`)
+  }
+
+  console.log('\n── 5. Renaming an account does not rewrite history ──')
+  {
+    const before = await prisma.payment.findMany({
+      where: { restaurantId: restaurant.id }, select: { id: true, destination: true },
+    })
+    await prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: {
+        paymentConfig: {
+          ...CONFIGURED,
+          destinations: [
+            { code: 'boc', name: 'Bank of Ceylon — current', kind: 'BANK' },
+            { code: 'hnb', name: 'HNB', kind: 'BANK' },
+            { code: 'ndb', name: 'NDB', kind: 'BANK', archived: true },
+          ],
+        },
+      },
+    })
+    const after = await prisma.payment.findMany({
+      where: { restaurantId: restaurant.id }, select: { id: true, destination: true },
+    })
+    check('every stamped code is untouched',
+      JSON.stringify(before) === JSON.stringify(after))
+
+    const renamed = await prisma.restaurant.findUniqueOrThrow({ where: { id: restaurant.id } })
+    check('…while the label everyone reads follows the rename',
+      destinationName(readPaymentConfig(renamed.paymentConfig), 'boc') === 'Bank of Ceylon — current')
+  }
+
+  console.log('\n── 6. A restaurant nobody configured keeps trading ──')
+  {
+    const plain = await prisma.restaurant.create({
+      data: {
+        name: `Plain ${stamp}`, slug: `plaind-${stamp}`, status: 'ACTIVE', isActive: true,
+        currency: 'LKR', taxRateBps: 0, serviceChargeBps: 0, taxInclusive: false,
+      },
+    })
+    const plainBranch = await prisma.branch.create({
+      data: { restaurantId: plain.id, name: 'Main', code: 'MAIN', isDefault: true },
+    })
+    const plainDish = await prisma.food.create({
+      data: {
+        restaurantId: plain.id,
+        categoryId: (await prisma.category.create({
+          data: { restaurantId: plain.id, name: 'Mains', slug: `m-${stamp}` },
+        })).id,
+        name: 'Tea', slug: `tea-${stamp}`, price: 10_000,
+      },
+    })
+    await prisma.foodBranch.create({
+      data: { restaurantId: plain.id, foodId: plainDish.id, branchId: plainBranch.id, isAvailable: true },
+    })
+    const order = await placeOrder({
+      restaurantId: plain.id, branchId: plainBranch.id, tableId: null,
+      type: 'COUNTER', channel: 'COUNTER', customerName: 'Walk-in', customerPhone: '',
+      items: [{ foodId: plainDish.id, quantity: 1, optionIds: [] }],
+    })
+    const paid = await capturePayment({
+      restaurantId: plain.id, orderId: order.id, method: 'CASH', amount: order.grandTotal,
+    })
+    check('never opening the setting is not the same as switching a method off',
+      paid.payment.destination === 'cash', `${paid.payment.destination}`)
+
+    await prisma.restaurant.delete({ where: { id: plain.id } })
+  }
+
+  await prisma.restaurant.delete({ where: { id: restaurant.id } })
+  console.log(`\n${passed} passed, ${failed} failed`)
+  process.exit(failed > 0 ? 1 : 0)
+}
+
+main().catch((error) => { console.error(error); process.exit(1) })

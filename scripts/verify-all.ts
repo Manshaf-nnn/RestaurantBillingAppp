@@ -94,6 +94,9 @@ const SERVICE = [
   'pos-billing-test',
   // AUDIT.md Slice 2 — tips, refund rows, discount split, counters, loyalty ledger.
   'payment-model-test',
+  // bill.md §2 — money is allocated to an account, splits carry their own,
+  // refunds go back where they came from, and renaming never rewrites history.
+  'payment-destination-test',
   // AUDIT.md Slice 3 — option consumption, value-carrying WAC, branch guards.
   'inventory-truth-test',
   // AUDIT.md Slice 4 / §102 — every screen answers with the same number.

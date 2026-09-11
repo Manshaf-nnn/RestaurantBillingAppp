@@ -1759,6 +1759,14 @@ model Payment {
   reference     String?
   gateway       String?
   gatewayRef    String?
+  /// Where the money was allocated for accounting (bill.md §2) — the stable
+  /// CODE of a destination in `Restaurant.paymentConfig`, never its name.
+  /// TableFlow moves no money; this records which account the owner considers
+  /// it to have landed in. Stamped at settlement and never rewritten, so
+  /// renaming "HBN" to "HNB" fixes every label without touching what happened.
+  /// NULL on payments taken before destinations existed: they report as
+  /// "Unassigned" rather than being backfilled with a fact nobody recorded.
+  destination   String?
   /// intent identifier for dynamic QR payments
   intentId      String? @unique
   qrPayload     String?
@@ -1812,6 +1820,9 @@ model Refund {
   amount Int
   /// How the money went back — normally the method it arrived by.
   method PaymentMethod
+  /// Inherited from the payment being refunded: money goes back where it came
+  /// from, so re-pointing a method later cannot send an old refund elsewhere.
+  destination String?
   reason String
 
   refundedById String?
