@@ -11,6 +11,7 @@
 
 export type { PaperWidth } from './paper'
 import type { PaperWidth } from './paper'
+import { receiptTimestamp } from './receipt'
 
 interface TicketItem {
   name: string
@@ -31,27 +32,47 @@ interface TicketInput {
 interface ReceiptLine {
   name: string
   optionsLabel?: string
-  quantity: number
+  /** null when the owner has switched the quantity column off. */
+  quantity: number | null
+  unitPrice?: string | null
   lineTotal: string
 }
 
+/*
+ * Every field here may be null, and null means "the owner switched this off"
+ * (bill.md §1). The decision was made in `buildReceipt`; this template only
+ * renders what survived it, which is why it needs to know nothing about
+ * settings.
+ */
 interface ReceiptInput {
-  restaurantName: string
+  restaurantName: string | null
+  logoUrl?: string | null
+  logoMono?: boolean
   addressLine?: string | null
   phone?: string | null
   orderNumber: string
   invoiceNumber?: string | null
   tableNumber: string | null
-  customerName: string
-  placedAt: string
+  customerName: string | null
+  customerPhone?: string | null
+  cashierName?: string | null
+  placedAt: string | null
+  timeZone?: string | null
+  locale?: string
   lines: ReceiptLine[]
   totals: Array<{ label: string; value: string; strong?: boolean }>
-  footer?: string
+  /** null prints no footer at all; a string prints that string. */
+  footer?: string | null
   paymentMethod?: string | null
 }
 
 const BASE_STYLES = (width: PaperWidth) => `
   @page { size: ${width}mm auto; margin: 3mm; }
+  .logo { display: block; margin: 0 auto 4px; max-width: 60%; max-height: 18mm; }
+  /* A thermal head is one bit deep and its driver dithers whatever it gets;
+     lifting contrast first is the one thing that measurably helps a mid-grey
+     mark. Off leaves an already black-and-white logo alone. */
+  .logo.mono { filter: grayscale(1) contrast(2.2) brightness(1.05); }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -112,8 +133,36 @@ function printDocument(title: string, width: PaperWidth, body: string) {
     }
   }
 
-  if (doc.readyState === 'complete') run()
-  else frame.onload = run
+  /*
+   * A logo is an <img> in a document written with document.write, and
+   * `print()` fired on `readyState === 'complete'` does not wait for it: the
+   * first receipt comes out with a blank space where the logo is and the
+   * second is fine, which is the most maddening class of bug to be told about
+   * second-hand. Wait for the images, with a ceiling so a dead URL can never
+   * wedge a till mid-service.
+   */
+  const waitForImages = async () => {
+    const images = [...doc.images]
+    if (images.length === 0) return
+    await Promise.race([
+      Promise.all(
+        images.map((image) =>
+          image.complete
+            ? Promise.resolve()
+            : new Promise((resolve) => {
+                image.onload = resolve
+                image.onerror = resolve
+              }),
+        ),
+      ),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ])
+  }
+
+  const start = () => { void waitForImages().then(run) }
+
+  if (doc.readyState === 'complete') start()
+  else frame.onload = start
 }
 
 export function escapeHtml(value: string): string {
@@ -176,9 +225,9 @@ export function printReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
     .map(
       (line) => `
         <tr>
-          <td>${line.quantity} × ${escapeHtml(line.name)}${
+          <td>${line.quantity === null ? '' : `${line.quantity} × `}${escapeHtml(line.name)}${
             line.optionsLabel ? `<br><span class="muted">&nbsp;&nbsp;${escapeHtml(line.optionsLabel)}</span>` : ''
-          }</td>
+          }${line.unitPrice ? `<br><span class="muted">&nbsp;&nbsp;@ ${escapeHtml(line.unitPrice)}</span>` : ''}</td>
           <td class="right">${escapeHtml(line.lineTotal)}</td>
         </tr>`,
     )
@@ -208,9 +257,7 @@ export function downloadReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
   const lines = receipt.lines
     .map(
       (line) =>
-        `<tr><td class="qty">${line.quantity}×</td><td>${escapeHtml(line.name)}${
-          line.optionsLabel ? `<div class="muted">${escapeHtml(line.optionsLabel)}</div>` : ''
-        }</td><td class="right">${escapeHtml(line.lineTotal)}</td></tr>`,
+        receiptLineRow(line),
     )
     .join('')
 
@@ -242,11 +289,29 @@ export function downloadReceipt(receipt: ReceiptInput, width: PaperWidth = 58) {
   setTimeout(() => URL.revokeObjectURL(url), 5_000)
 }
 
+/**
+ * One item row. Quantity and unit price are columns the owner can switch off
+ * (bill.md §1), so a line renders what survived `buildReceipt` — and both the
+ * printed and the downloaded copy call this, because they were identical
+ * copies and a line with optional columns is two places to forget.
+ */
+function receiptLineRow(line: ReceiptLine): string {
+  const qty = line.quantity === null ? '' : `${line.quantity}×`
+  const unit = line.unitPrice ? `<div class="muted">@ ${escapeHtml(line.unitPrice)}</div>` : ''
+  const options = line.optionsLabel ? `<div class="muted">${escapeHtml(line.optionsLabel)}</div>` : ''
+  return `<tr><td class="qty">${qty}</td><td>${escapeHtml(line.name)}${options}${unit}</td><td class="right">${escapeHtml(line.lineTotal)}</td></tr>`
+}
+
 /** Shared receipt markup so the printed and downloaded copies cannot drift. */
 function receiptBody(receipt: ReceiptInput, lines: string, totals: string): string {
+  // Business time, not the reader's. A bill rung up at 8pm in Colombo was rung
+  // up at 8pm however far away it is later opened — and `toLocaleString()` with
+  // no zone printed whatever clock the browser happened to be on.
+  const timestamp = receiptTimestamp(receipt)
   return `
       <div class="center">
-        <h1>${escapeHtml(receipt.restaurantName)}</h1>
+        ${receipt.logoUrl ? `<img class="logo${receipt.logoMono ? ' mono' : ''}" src="${escapeHtml(receipt.logoUrl)}" alt="">` : ''}
+        ${receipt.restaurantName ? `<h1>${escapeHtml(receipt.restaurantName)}</h1>` : ''}
         ${receipt.addressLine ? `<div class="muted">${escapeHtml(receipt.addressLine)}</div>` : ''}
         ${receipt.phone ? `<div class="muted">${escapeHtml(receipt.phone)}</div>` : ''}
       </div>
@@ -254,15 +319,17 @@ function receiptBody(receipt: ReceiptInput, lines: string, totals: string): stri
       <div class="row"><span>Order</span><span class="bold">#${escapeHtml(receipt.orderNumber)}</span></div>
       ${receipt.invoiceNumber ? `<div class="row"><span>Invoice</span><span>${escapeHtml(receipt.invoiceNumber)}</span></div>` : ''}
       ${receipt.tableNumber ? `<div class="row"><span>Table</span><span>${escapeHtml(receipt.tableNumber)}</span></div>` : ''}
-      <div class="row"><span>Guest</span><span>${escapeHtml(receipt.customerName)}</span></div>
-      <div class="row"><span>Date</span><span>${new Date(receipt.placedAt).toLocaleString()}</span></div>
+      ${receipt.customerName ? `<div class="row"><span>Guest</span><span>${escapeHtml(receipt.customerName)}</span></div>` : ''}
+      ${receipt.customerPhone ? `<div class="row"><span>Phone</span><span>${escapeHtml(receipt.customerPhone)}</span></div>` : ''}
+      ${receipt.cashierName ? `<div class="row"><span>Served by</span><span>${escapeHtml(receipt.cashierName)}</span></div>` : ''}
+      ${timestamp ? `<div class="row"><span>Date</span><span>${escapeHtml(timestamp)}</span></div>` : ''}
       <div class="rule"></div>
       <table>${lines}</table>
       <div class="rule"></div>
       ${totals}
       ${receipt.paymentMethod ? `<div class="rule"></div><div class="row"><span>Paid via</span><span class="bold">${escapeHtml(receipt.paymentMethod)}</span></div>` : ''}
       <div class="rule"></div>
-      <div class="center">${escapeHtml(receipt.footer ?? 'Thank you — please come again!')}</div>
+      ${receipt.footer ? `<div class="center">${escapeHtml(receipt.footer)}</div>` : ''}
       <div class="center muted">Powered by TableFlow</div>
     `
 }

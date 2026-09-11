@@ -29,6 +29,8 @@ const STATIC = [
   'billing-math-test',
   // acCal.md §2 — the calculator's math: tax round trip, margin vs markup.
   'calc-math-test',
+  // bill.md §1 — an enabled receipt row prints at zero; a disabled one is gone.
+  'receipt-fields-test',
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
   'no-item-branch-filter',

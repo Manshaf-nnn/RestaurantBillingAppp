@@ -25,6 +25,7 @@
 import { prisma } from '../src/server/db/prisma'
 import { placeOrder } from '../src/features/orders/service'
 import { buildReceipt } from '../src/features/printing/receipt'
+import { DEFAULT_RECEIPT_FIELDS } from '../src/features/printing/receipt-fields'
 import { readOptions } from '../src/features/orders/queries'
 import { formatMoney } from '../src/lib/money'
 import { PERMISSIONS } from '../src/lib/rbac'
@@ -275,7 +276,14 @@ async function main() {
   )
 
   // ── 3. zero rows are omitted ──────────────────────────────────────────────
-  console.log('\n── 3. a narrow receipt omits what is zero ──')
+  /*
+   * This section used to assert that a zero row is dropped. bill.md §1 reverses
+   * that deliberately: the owner decides, and a row they switched ON prints at
+   * zero, because a bill that silently omits a service charge is the bill a
+   * guest argues about. Both directions are pinned here now, and
+   * receipt-fields-test covers the setting itself.
+   */
+  console.log('\n── 3. a receipt prints the rows the owner asked for ──')
 
   const plain = buildReceipt(
     {
@@ -300,12 +308,50 @@ async function main() {
       phone: null,
     },
   )
+  const shown = plain.totals.map((r) => r.label)
   check(
-    'no Discount, Service or tax row when they are zero',
-    plain.totals.length === 2 && plain.totals[0].label === 'Subtotal',
-    plain.totals.map((r) => r.label).join(', '),
+    'the default receipt prints its money rows even at zero',
+    shown.includes('Subtotal') && shown.some((l) => l.startsWith('Discount')) &&
+      shown.includes('Service') && shown.includes('VAT'),
+    shown.join(', '),
   )
-  check('TOTAL is still there', plain.totals[1].label === 'TOTAL')
+  check('TOTAL is still there', shown.includes('TOTAL'))
+
+  const trimmed = buildReceipt(
+    {
+      orderNumber: 'A-1',
+      placedAt: new Date().toISOString(),
+      tableNumber: null,
+      customerName: 'Walk-in',
+      items: [{ name: 'Tea', quantity: 1, lineTotal: 10_000 }],
+      subtotal: 10_000,
+      discountTotal: 0,
+      serviceCharge: 0,
+      taxTotal: 0,
+      grandTotal: 10_000,
+    },
+    {
+      name: 'X',
+      currency: 'LKR',
+      locale: 'en-IN',
+      taxLabel: 'VAT',
+      paper: { receipt: 58, kitchen: 80 },
+      addressLine: null,
+      phone: null,
+      fields: {
+        ...DEFAULT_RECEIPT_FIELDS,
+        discount: false,
+        serviceCharge: false,
+        tax: false,
+        rounding: false,
+      },
+    },
+  )
+  check(
+    'and drops exactly the ones switched off, keeping Subtotal and TOTAL',
+    trimmed.totals.map((r) => r.label).join(',') === 'Subtotal,TOTAL',
+    trimmed.totals.map((r) => r.label).join(', '),
+  )
 
   // ── 4. every order type places ────────────────────────────────────────────
   console.log('\n── 4. all four order types ──')

@@ -32,11 +32,90 @@ export interface PaymentConfig {
   bankBranch?: string
   /// WhatsApp number guests send their transfer receipt to.
   receiptWhatsapp?: string
+
+  /*
+   * Where the money is allocated for accounting (bill.md §2).
+   *
+   * TableFlow moves no money — it has no gateway and no bank API — so this is
+   * bookkeeping, not a transfer: it records which account the owner considers
+   * a payment to have landed in. `destinations` is the book of accounts;
+   * `methodDestinations` points each method at one of them BY CODE.
+   *
+   * The code, not the name, is what a payment stamps. A code is minted once
+   * and never edited, so grouping a year of reports is stable; the name is
+   * editable, so correcting "HBN" to "HNB" fixes every label including
+   * historical ones — which is what an owner means by fixing a typo, and is
+   * different from rewriting what happened.
+   */
+  destinations?: PaymentDestination[]
+  methodDestinations?: Partial<Record<string, string>>
 }
 
+export interface PaymentDestination {
+  /** Stable slug. Minted once, never edited. */
+  code: string
+  /** The display name — editable. */
+  name: string
+  kind?: 'BANK' | 'CASH' | 'WALLET' | 'OTHER'
+  /**
+   * Retired: hidden from new settlements, kept so historical payments still
+   * resolve a name. Deleting instead would leave stamped codes dangling.
+   */
+  archived?: boolean
+}
+
+const DEFAULT_PAYMENT_CONFIG: PaymentConfig = { cash: true, card: true, qr: true }
+
+/**
+ * Settlement now depends on this, so it can no longer be a blind cast.
+ *
+ * It still never throws: one malformed JSON blob in one restaurant's settings
+ * must not be able to stop that restaurant taking money. Bad shapes degrade to
+ * the defaults, which the caller then refuses on for a reason it can explain.
+ */
 export function readPaymentConfig(value: unknown): PaymentConfig {
-  if (!value || typeof value !== 'object') return { cash: true, card: true, qr: true }
-  return value as PaymentConfig
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return DEFAULT_PAYMENT_CONFIG
+  const raw = value as Record<string, unknown>
+
+  const destinations = Array.isArray(raw.destinations)
+    ? (raw.destinations as unknown[]).filter(
+        (entry): entry is PaymentDestination =>
+          Boolean(entry) &&
+          typeof entry === 'object' &&
+          typeof (entry as PaymentDestination).code === 'string' &&
+          typeof (entry as PaymentDestination).name === 'string',
+      )
+    : undefined
+
+  const methodDestinations =
+    raw.methodDestinations && typeof raw.methodDestinations === 'object' && !Array.isArray(raw.methodDestinations)
+      ? Object.fromEntries(
+          Object.entries(raw.methodDestinations as Record<string, unknown>).filter(
+            ([, code]) => typeof code === 'string' && code.length > 0,
+          ),
+        ) as Partial<Record<string, string>>
+      : undefined
+
+  return { ...(raw as PaymentConfig), destinations, methodDestinations }
+}
+
+/** The destination a method is pointed at, or null when it has none live. */
+export function destinationForMethod(
+  config: PaymentConfig,
+  method: string,
+): PaymentDestination | null {
+  const code = config.methodDestinations?.[method]
+  if (!code) return null
+  const found = config.destinations?.find((entry) => entry.code === code)
+  // An archived destination is not a destination you may settle into: that is
+  // what stops one being retired out from under a till mid-service.
+  return found && !found.archived ? found : null
+}
+
+/** The display name for a stamped code — falls back to the code itself. */
+export function destinationName(config: PaymentConfig, code: string | null | undefined): string {
+  if (!code) return 'Unassigned'
+  return config.destinations?.find((entry) => entry.code === code)?.name ?? code
 }
 
 /**

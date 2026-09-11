@@ -607,6 +607,12 @@ model Restaurant {
   printerConfig Json?
   /// [PaymentConfig] — { cash: true, card: true, qr: true, upiId: "x@bank", online: false }
   paymentConfig Json?
+  /// [ReceiptFields] — which rows a printed bill shows, e.g. { serviceCharge: true,
+  /// unitPrice: false, footerText: "Thank you" }. Deliberately NOT inside
+  /// `printerConfig`: that column is the hardware (paper width) and is written
+  /// by its own form. Two forms writing one column is how one silently erases
+  /// the other's fields — the bug this separation makes structurally impossible.
+  receiptConfig Json?
   /// Dead since it was added: written once at registration, read by nothing.
   /// Superseded by `enabledFeatures` below, which is a real list the platform
   /// operator controls rather than a shape nobody agreed on.

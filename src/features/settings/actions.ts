@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import type { Prisma } from '@prisma/client'
 
 import { getLiveBoardPolicy } from '@/features/live/policy'
+import { readPaymentConfig } from '@/features/payments/service'
 import { runAction, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -106,10 +107,27 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
     async (data) => {
       const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
 
+      /*
+       * Read, merge, write — not write.
+       *
+       * This used to hand Prisma an object literal of exactly the twelve keys
+       * this form owns, which silently deleted every key it does not: the
+       * moment anything else lives in `paymentConfig` (the destinations map
+       * below does), saving the Payments tab would wipe it. `updateLiveBoardPolicy`
+       * already does it the right way; this now matches.
+       */
+      const existing = readPaymentConfig(
+        (await prisma.restaurant.findUniqueOrThrow({
+          where: { id: user.restaurantId },
+          select: { paymentConfig: true },
+        })).paymentConfig,
+      )
+
       await prisma.restaurant.update({
         where: { id: user.restaurantId },
         data: {
           paymentConfig: {
+            ...existing,
             cash: data.cash,
             card: data.card,
             qr: data.qr,
@@ -122,7 +140,7 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
             accountNumber: data.accountNumber || undefined,
             bankBranch: data.bankBranch || undefined,
             receiptWhatsapp: data.receiptWhatsapp || undefined,
-          } as Prisma.InputJsonValue,
+          } as unknown as Prisma.InputJsonValue,
         },
       })
 
@@ -150,10 +168,22 @@ export async function updatePrinterSettings(input: unknown): Promise<ActionResul
     async (data) => {
       const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
 
+      // Merged, for the same reason `updatePaymentSettings` above is: a form
+      // owns its own keys and has no business deleting the rest of the column.
+      const storedPrinter = (await prisma.restaurant.findUniqueOrThrow({
+        where: { id: user.restaurantId },
+        select: { printerConfig: true },
+      })).printerConfig
+      const basePrinter =
+        storedPrinter && typeof storedPrinter === 'object' && !Array.isArray(storedPrinter)
+          ? (storedPrinter as Record<string, unknown>)
+          : {}
+
       await prisma.restaurant.update({
         where: { id: user.restaurantId },
         data: {
           printerConfig: {
+            ...basePrinter,
             receipt: { width: data.receiptWidth },
             kitchen: { width: data.kitchenWidth },
           } as Prisma.InputJsonValue,
