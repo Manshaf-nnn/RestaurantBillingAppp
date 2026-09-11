@@ -205,16 +205,13 @@ export async function updatePaymentDestinations(
         .map((row) => row.destination)
         .filter((code): code is string => code !== null && !kept.includes(code))
 
-      const survivors = orphaned.flatMap((code) => {
+      const survivors = orphaned.map((code) => {
         const previous = existing.destinations?.find((entry) => entry.code === code)
-        return [
-          {
-            code,
-            name: previous?.name ?? code,
-            kind: previous?.kind ?? ('OTHER' as const),
-            archived: true,
-          },
-        ]
+        // Everything it had, retired — not a stub. Rebuilding it from a couple
+        // of fields would silently drop the bank details the owner recorded,
+        // which are exactly what a retired account is still consulted for when
+        // reconciling the month it was live.
+        return { ...previous, code, name: previous?.name ?? code, archived: true }
       })
 
       // Empty string means "not booked anywhere" — dropped, so the map holds

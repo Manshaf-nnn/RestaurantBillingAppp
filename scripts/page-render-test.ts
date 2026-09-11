@@ -75,7 +75,7 @@ const PAGES = [
   '/dashboard/links',
   '/dashboard/reports/cash-drawer',
   '/dashboard/reports/petty-cash',
-  '/dashboard/online-payments',
+  '/dashboard/payment-details',
 ]
 
 /** The dashboard error boundary's own words — the failure signal. */

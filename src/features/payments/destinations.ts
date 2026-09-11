@@ -78,17 +78,47 @@ export interface PaymentConfig {
   methodDestinations?: Partial<Record<string, string>>
 }
 
+/**
+ * One account money is booked into — a bank account, the cash tin, or one day
+ * a gateway's settlement account.
+ *
+ * ── Every bank field is optional, deliberately ──────────────────────────────
+ *
+ * An owner who knows "card goes to HNB" and not the account number should be
+ * able to say so and move on; a form that demands an account number before it
+ * will record that much is a form that gets abandoned, and then nothing is
+ * booked anywhere. `name` is the only thing required, because every screen and
+ * every report has to call this account something — and the form fills it in
+ * from the bank name as you type, so in practice it is not a field you answer.
+ *
+ * ── Why the bank details live here and not on the method ────────────────────
+ *
+ * Two methods routinely land in one account: cash and card both swept into the
+ * current account, QR and online both into the same settlement account. Held
+ * per method, the same account number would be typed twice, drift apart on the
+ * day one is corrected, and report as two banks that each hold half the money.
+ * Held here, "where does Card go?" is a pointer, and there is one BOC.
+ */
 export interface PaymentDestination {
   /** Stable slug. Minted once, never edited. */
   code: string
   /** The display name — editable. */
   name: string
-  kind?: 'BANK' | 'CASH' | 'WALLET' | 'OTHER'
+  /** GATEWAY is unused today; it is where a real processor will land. */
+  kind?: 'BANK' | 'CASH' | 'WALLET' | 'GATEWAY' | 'OTHER'
   /**
    * Retired: hidden from new settlements, kept so historical payments still
    * resolve a name. Deleting instead would leave stamped codes dangling.
    */
   archived?: boolean
+
+  /* The bank details, all optional. Recorded for the owner's own reference and
+   * for reconciling a statement — nothing in the app transmits them. */
+  bankName?: string
+  accountNumber?: string
+  holderName?: string
+  /** The BANK's branch, not one of the restaurant's. */
+  bankBranch?: string
 }
 
 /**
@@ -194,6 +224,25 @@ export function destinationForMethod(
   // An archived destination is not a destination you may settle into: that is
   // what stops one being retired out from under a till mid-service.
   return found && !found.archived ? found : null
+}
+
+/**
+ * The bank details on one line — "BOC · A/C 1234567 · Colombo".
+ *
+ * Built from whatever the owner actually filled in, because every field is
+ * optional: an account with only a bank name describes itself as that, and one
+ * with nothing at all returns empty rather than a string of stray separators.
+ */
+export function destinationDetailLine(destination: PaymentDestination): string {
+  return [
+    destination.bankName,
+    destination.accountNumber ? `A/C ${destination.accountNumber}` : '',
+    destination.holderName,
+    destination.bankBranch,
+  ]
+    .map((part) => (part ?? '').trim())
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /** The display name for a stamped code — falls back to the code itself. */

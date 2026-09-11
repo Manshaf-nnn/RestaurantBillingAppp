@@ -290,6 +290,89 @@ async function main() {
         slugifyDestinationCode('!!!') === 'account')
   }
 
+  console.log('\n── 9. Bank details: optional going in, intact coming out ──')
+  {
+    const { paymentDestinationsSchema } = await import('../src/features/settings/schema')
+    const { destinationDetailLine } = await import('../src/features/payments/destinations')
+
+    const full = paymentDestinationsSchema.safeParse({
+      destinations: [{
+        code: 'boc', name: 'BOC current', kind: 'BANK',
+        bankName: 'Bank of Ceylon', accountNumber: '0012345678',
+        holderName: 'Nila Foods (Pvt) Ltd', bankBranch: 'Colombo 07',
+      }],
+      methodDestinations: { CASH: 'boc' },
+    })
+    check('an account with full bank details saves', full.success,
+      JSON.stringify(full.success ? null : full.error.issues))
+
+    const bare = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'tin', name: 'The cash tin', kind: 'CASH' }],
+      methodDestinations: { CASH: 'tin' },
+    })
+    check('…and so does one with none of them — every bank field is optional',
+      bare.success, JSON.stringify(bare.success ? null : bare.error.issues))
+
+    const gateway = paymentDestinationsSchema.safeParse({
+      destinations: [{ code: 'stripe', name: 'Stripe payouts', kind: 'GATEWAY' }],
+      methodDestinations: {},
+    })
+    check('a gateway account is already expressible, for the day there is one',
+      gateway.success)
+
+    check('the one-line summary is built from whatever was filled in',
+      destinationDetailLine({
+        code: 'boc', name: 'BOC',
+        bankName: 'Bank of Ceylon', accountNumber: '0012345678', bankBranch: 'Colombo 07',
+      }) === 'Bank of Ceylon · A/C 0012345678 · Colombo 07')
+    check('…and an account with nothing filled in describes itself as nothing, not as separators',
+      destinationDetailLine({ code: 'tin', name: 'The cash tin' }) === '')
+  }
+
+  console.log('\n── 10. Cash taken at the till is readable under its account ──')
+  {
+    const { getDestinationTotals, getDestinationPayments } = await import(
+      '../src/features/payments/queries'
+    )
+
+    const totals = await getDestinationTotals(restaurant.id)
+    const boc = totals.find((row) => row.destination === 'boc')
+    const hnb = totals.find((row) => row.destination === 'hnb')
+
+    check('BOC holds the cash, HNB holds the card — separately',
+      boc !== undefined && hnb !== undefined && boc.collected > 0 && hnb.collected > 0,
+      JSON.stringify(totals))
+
+    check('the card refund shows against HNB rather than reducing it out of sight',
+      hnb?.refunded === 50_000, `${hnb?.refunded}`)
+
+    /*
+     * The figure on this screen and the figure on the payments report are the
+     * same money read two ways. If they can disagree, one of them is lying and
+     * nobody can tell which — so they are asserted equal here.
+     */
+    const { getPaymentsReport } = await import('../src/features/reports/sales')
+    const { resolveRange } = await import('../src/features/reports/range')
+    const report = await getPaymentsReport({
+      restaurantId: restaurant.id,
+      range: resolveRange({ preset: 'TODAY', timeZone: 'Asia/Colombo' }),
+    })
+    const screenTotal = totals.reduce((sum, row) => sum + row.collected, 0)
+    check('what the accounts screen adds up to is what the report adds up to',
+      screenTotal === report.total, `${screenTotal} vs ${report.total}`)
+
+    const inBoc = await getDestinationPayments(restaurant.id, 'boc')
+    check('opening BOC lists its own payments and nobody else’s',
+      inBoc.length > 0 && inBoc.every((row) => row.method === 'CASH'),
+      inBoc.map((row) => row.method).join(','))
+    check('…each carrying the order it settled, so it can be traced back',
+      inBoc.every((row) => Boolean(row.orderNumber) && Boolean(row.orderId)))
+
+    const legacy = await getDestinationPayments(restaurant.id, null)
+    check('the money taken before accounts existed is still reachable, not lost',
+      legacy.length > 0)
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed > 0 ? 1 : 0)

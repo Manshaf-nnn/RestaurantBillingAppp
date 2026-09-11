@@ -36,6 +36,25 @@ import { join } from 'node:path'
  * for being on this list: the page shows either master data shared across the
  * whole business, or something with no location dimension at all.
  */
+
+/**
+ * A page whose whole job is to forward to another one.
+ *
+ * It renders nothing, reads nothing and answers no query, so there is no data
+ * for a guard to protect or a branch to scope — the page it forwards to does
+ * both. Recognised by shape rather than listed by path, so the next renamed
+ * route gets this right without editing this file; the `!` on a data call keeps
+ * a page that redirects AND fetches out of the exemption.
+ */
+function isRedirectStub(src: string): boolean {
+  return (
+    /\b(permanentRedirect|redirect)\(/.test(src) &&
+    !src.includes('prisma.') &&
+    !src.includes('requirePagePermission') &&
+    !/await\s+get[A-Z]/.test(src)
+  )
+}
+
 const GROUP_WIDE: Record<string, string> = {
   // ── Master data. Shared on purpose; the branch dimension lives on the
   //    per-branch join rows (FoodBranch, InventoryStock), not on these.
@@ -161,6 +180,7 @@ function main() {
       continue
     }
     if (key in GROUP_WIDE) continue
+    if (isRedirectStub(readFileSync(file, 'utf8'))) continue
     unscoped.push(`  ${file}\n    route: ${key}`)
   }
 

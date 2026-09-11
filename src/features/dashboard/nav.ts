@@ -211,8 +211,8 @@ export const NAV_SECTIONS: NavSection[] = [
         exact: true,
       },
       {
-        href: '/dashboard/online-payments',
-        label: 'Online payments',
+        href: '/dashboard/payment-details',
+        label: 'Payment details',
         icon: Landmark,
         permission: PERMISSIONS.PAYMENT_COLLECT,
       },

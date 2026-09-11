@@ -72,8 +72,14 @@ export const paymentDestinationsSchema = z
             .max(40)
             .regex(/^[a-z0-9_]+$/, 'A destination code may only use a-z, 0-9 and _'),
           name: z.string().trim().min(1, 'Give the account a name').max(60),
-          kind: z.enum(['BANK', 'CASH', 'WALLET', 'OTHER']).default('OTHER'),
+          kind: z.enum(['BANK', 'CASH', 'WALLET', 'GATEWAY', 'OTHER']).default('OTHER'),
           archived: z.coerce.boolean().default(false),
+          /* Every bank detail is optional — an owner who only knows the bank's
+           * name should be able to record that and get on with service. */
+          bankName: z.string().trim().max(80).optional().or(z.literal('')),
+          accountNumber: z.string().trim().max(40).optional().or(z.literal('')),
+          holderName: z.string().trim().max(80).optional().or(z.literal('')),
+          bankBranch: z.string().trim().max(80).optional().or(z.literal('')),
         }),
       )
       .max(40, 'That is more accounts than anybody reconciles'),

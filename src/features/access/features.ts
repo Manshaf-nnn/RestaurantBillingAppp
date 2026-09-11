@@ -350,7 +350,7 @@ export const FEATURES: Feature[] = [
       { key: 'edit', label: 'Apply discount', permission: PERMISSIONS.DISCOUNT_APPLY },
       { key: 'export', label: 'See invoices', permission: PERMISSIONS.INVOICE_VIEW },
     ],
-    routes: ['/cashier', '/dashboard/online-payments', '/dashboard/invoices'],
+    routes: ['/cashier', '/dashboard/payment-details', '/dashboard/invoices'],
   },
 
   // ── Menu ──────────────────────────────────────────────────────────────────

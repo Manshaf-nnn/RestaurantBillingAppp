@@ -68,3 +68,133 @@ export async function getOnlinePayments(
     orderPaymentStatus: p.order.paymentStatus,
   }))
 }
+
+/**
+ * What has actually landed in each account (bill.md §2).
+ *
+ * ── Why "collected" is PAID *and* REFUNDED ──────────────────────────────────
+ *
+ * A payment that was later refunded still arrived: the money hit the account
+ * and then left it. Counting only PAID would quietly erase the arrival and
+ * leave the account's figure disagreeing with the bank statement it exists to
+ * be checked against. So both are collected, and what went back is subtracted
+ * as `refunded` — the same rule `getPaymentsReport` uses, which is what keeps
+ * this screen and the reports telling one story.
+ *
+ * A partial refund is why refunds are read from the refunds ledger rather than
+ * from the REFUNDED status: a payment half returned still reads PAID.
+ */
+export interface DestinationTotals {
+  /** Null for money taken before destinations existed — shown as Unassigned. */
+  destination: string | null
+  collected: number
+  refunded: number
+  count: number
+  lastAt: string | null
+}
+
+export async function getDestinationTotals(
+  restaurantId: string,
+  branchIds?: string[] | null,
+): Promise<DestinationTotals[]> {
+  const atBranch = branchIds ? { order: { branchId: { in: branchIds } } } : {}
+
+  const [payments, refunds] = await Promise.all([
+    prisma.payment.groupBy({
+      by: ['destination'],
+      where: { restaurantId, status: { in: ['PAID', 'REFUNDED'] }, ...atBranch },
+      _sum: { amount: true },
+      _count: true,
+      _max: { paidAt: true },
+    }),
+    prisma.refund.groupBy({
+      by: ['destination'],
+      where: { restaurantId, ...atBranch },
+      _sum: { amount: true },
+    }),
+  ])
+
+  const returned = new Map(
+    refunds.map((row) => [row.destination, row._sum.amount ?? 0] as const),
+  )
+
+  return payments
+    .map((row) => ({
+      destination: row.destination,
+      collected: row._sum.amount ?? 0,
+      refunded: returned.get(row.destination) ?? 0,
+      count: row._count,
+      lastAt: row._max.paidAt?.toISOString() ?? null,
+    }))
+    .sort((a, b) => b.collected - a.collected)
+}
+
+export interface DestinationPaymentRow {
+  id: string
+  paidAt: string | null
+  method: PaymentMethod
+  status: PaymentStatus
+  amount: number
+  refunded: number
+  reference: string | null
+  orderId: string
+  orderNumber: string
+  invoiceNumber: string | null
+  branchName: string | null
+}
+
+/**
+ * Every payment filed under one account, newest first.
+ *
+ * `destination: null` is a real query, not a missing filter — it is how the
+ * money taken before any of this existed is read, and it has to be reachable
+ * or that money is invisible rather than merely unassigned.
+ */
+export async function getDestinationPayments(
+  restaurantId: string,
+  destination: string | null,
+  branchIds?: string[] | null,
+  take = 200,
+): Promise<DestinationPaymentRow[]> {
+  const rows = await prisma.payment.findMany({
+    where: {
+      restaurantId,
+      destination,
+      status: { in: ['PAID', 'REFUNDED'] },
+      ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
+    },
+    orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+    take,
+    select: {
+      id: true,
+      paidAt: true,
+      method: true,
+      status: true,
+      amount: true,
+      reference: true,
+      refunds: { select: { amount: true } },
+      order: {
+        select: {
+          id: true,
+          orderNumber: true,
+          invoice: { select: { number: true } },
+          branch: { select: { name: true } },
+        },
+      },
+    },
+  })
+
+  return rows.map((row) => ({
+    id: row.id,
+    paidAt: row.paidAt?.toISOString() ?? null,
+    method: row.method,
+    status: row.status,
+    amount: row.amount,
+    refunded: row.refunds.reduce((sum, refund) => sum + refund.amount, 0),
+    reference: row.reference,
+    orderId: row.order.id,
+    orderNumber: row.order.orderNumber,
+    invoiceNumber: row.order.invoice?.number ?? null,
+    branchName: row.order.branch?.name ?? null,
+  }))
+}

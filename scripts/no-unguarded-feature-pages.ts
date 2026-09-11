@@ -65,6 +65,24 @@ const IDENTITY_ONLY: Record<string, string> = {
   'dashboard/settings/profile': 'Your own name, password and sessions — not the restaurant’s.',
 }
 
+/**
+ * A page whose whole job is to forward to another one.
+ *
+ * It renders nothing, reads nothing and answers no query, so there is no data
+ * for a guard to protect or a branch to scope — the page it forwards to does
+ * both. Recognised by shape rather than listed by path, so the next renamed
+ * route gets this right without editing this file; the `!` on a data call keeps
+ * a page that redirects AND fetches out of the exemption.
+ */
+function isRedirectStub(src: string): boolean {
+  return (
+    /\b(permanentRedirect|redirect)\(/.test(src) &&
+    !src.includes('prisma.') &&
+    !src.includes('requirePagePermission') &&
+    !/await\s+get[A-Z]/.test(src)
+  )
+}
+
 const ROOT = 'src/app'
 
 /** Every page.tsx under a directory, as a route-ish key. */
@@ -136,6 +154,7 @@ function main() {
 
     if (perms === null) {
       if (key in IDENTITY_ONLY) continue
+      if (isRedirectStub(src)) continue
       unguarded.push(`  ${file}\n    route: /${key}`)
       continue
     }
