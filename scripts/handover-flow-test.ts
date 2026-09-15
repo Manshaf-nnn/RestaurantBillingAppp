@@ -264,7 +264,68 @@ async function main() {
     check('and Cara, who was not involved, sees none of it', caras.length === 0, String(caras.length))
   }
 
-  console.log('\n── 4. Tenant isolation ──')
+  console.log('\n── 4. What is still to do, at the moment of handing over (§11) ──')
+  {
+    /*
+     * §11 lists outstanding tasks among what a handover must show. The point
+     * is not a new feature — it is putting the existing list at the one
+     * moment somebody about to go home will read it.
+     *
+     * What matters here is that it is the SAME permission-filtered list, so
+     * the handover screen cannot become a way to read another location's
+     * instructions.
+     */
+    const { createInstruction, listInstructions } = await import(
+      '../src/features/instructions/service'
+    )
+    const owner = await mk('Owner', 'MANAGER', main_.id)
+    await prisma.user.update({ where: { id: owner.id }, data: { role: 'OWNER', branchId: null } })
+    const ownerRow = await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })
+
+    await createInstruction({
+      restaurantId: restaurant.id,
+      user: ownerRow,
+      branchId: main_.id,
+      assigneeId: alice.id,
+      title: 'Restock the napkins',
+      body: null,
+      priority: 'URGENT',
+      dueAt: null,
+    })
+    await createInstruction({
+      restaurantId: restaurant.id,
+      user: ownerRow,
+      branchId: other.id,
+      assigneeId: null,
+      title: "Another site's job",
+      body: null,
+      priority: 'NORMAL',
+      dueAt: null,
+    })
+
+    const here = await listInstructions({
+      restaurantId: restaurant.id,
+      user: alice,
+      branchId: main_.id,
+      status: 'OPEN',
+    })
+    check(
+      "the handover list shows this location's open task",
+      here.some((t) => t.title === 'Restock the napkins'),
+      here.map((t) => t.title).join(', '),
+    )
+    check(
+      "and not another location's",
+      !here.some((t) => t.title === "Another site's job"),
+      here.map((t) => t.title).join(', '),
+    )
+    check(
+      'with who it is on, so it can be said out loud',
+      here.find((t) => t.title === 'Restock the napkins')?.assigneeName === 'Alice',
+    )
+  }
+
+  console.log('\n── 5. Tenant isolation ──')
   {
     const elsewhere = await prisma.restaurant.create({
       data: { name: 'Rival', slug: `rivalh-${stamp}`, email: `rh-${stamp}@test.local` },
@@ -274,6 +335,7 @@ async function main() {
     await prisma.restaurant.delete({ where: { id: elsewhere.id } })
   }
 
+  await prisma.branchInstruction.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.cashHandover.deleteMany({ where: { restaurantId: restaurant.id } })
   // CashMovement hangs off the session, not the restaurant.
   await prisma.cashMovement.deleteMany({
