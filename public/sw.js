@@ -12,7 +12,7 @@
  */
 // Bumped to tf-v3 so the activate handler drops `tf-v2-pages`, which had been
 // hoarding rendered dashboard HTML since it was written.
-const VERSION = 'tf-v3'
+const VERSION = 'tf-v4'
 const STATIC_CACHE = `${VERSION}-static`
 const PAGE_CACHE = `${VERSION}-pages`
 const OFFLINE_URL = '/offline'
@@ -62,7 +62,21 @@ self.addEventListener('fetch', (event) => {
      * hiccup, to whoever is holding the device by then. An offline copy of last
      * Tuesday's revenue is worth less than not storing it.
      */
-    const isPrivate = url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/admin')
+    /*
+     * Every root that renders something for a signed-in person, not just the
+     * two this used to name. `/cashier`, `/kitchen` and `/waiter` are the
+     * shared tablets: the open-bill queue with guests' names and amounts,
+     * the live ticket rail — and this cached them, with no TTL, and served
+     * them to whoever picked the tablet up next on the first dropped packet.
+     * (The static guard now derives this list from the app's own routes.)
+     */
+    const PRIVATE_ROOTS = [
+      '/dashboard', '/admin', '/cashier', '/kitchen', '/waiter',
+      '/onboarding', '/join', '/pending-approval', '/trial-ended', '/locked', '/forbidden', '/logout',
+    ]
+    const isPrivate = PRIVATE_ROOTS.some(
+      (root) => url.pathname === root || url.pathname.startsWith(root + '/'),
+    )
 
     event.respondWith(
       fetch(request)

@@ -36,6 +36,25 @@ const ALLOWED: Record<string, string> = {
  * still points at us, so swapping or losing the CDN account changes delivery
  * speed and nothing else.
  */
+/** The file's own signature agrees with the type the client declared. */
+function looksLike(bytes: Buffer, mime: string): boolean {
+  const ascii = (start: number, end: number) => bytes.subarray(start, end).toString('latin1')
+  switch (mime) {
+    case 'image/png':
+      return bytes.length > 8 && bytes[0] === 0x89 && ascii(1, 4) === 'PNG'
+    case 'image/jpeg':
+      return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    case 'image/gif':
+      return bytes.length > 6 && ascii(0, 4) === 'GIF8'
+    case 'image/webp':
+      return bytes.length > 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP'
+    case 'image/avif':
+      return bytes.length > 12 && ascii(4, 8) === 'ftyp' && /^avi[fs]$/.test(ascii(8, 12))
+    default:
+      return false
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireTenantUser()
@@ -63,6 +82,15 @@ export async function POST(request: NextRequest) {
     }
 
     const bytes = Buffer.from(await file.arrayBuffer())
+    // `file.type` is whatever the client wrote in the multipart header. The
+    // first bytes are what the file actually is; a mismatch is refused before
+    // anything is stored under an image label and served back as one.
+    if (!looksLike(bytes, file.type)) {
+      return NextResponse.json(
+        { error: 'That file is not the image type it claims to be', code: 'BAD_TYPE' },
+        { status: 400 },
+      )
+    }
     const key = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
     const checksum = createHash('sha256').update(bytes).digest('hex')
     const url = `/api/media/${key}`

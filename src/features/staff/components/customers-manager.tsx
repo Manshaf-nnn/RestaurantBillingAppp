@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { Gift, MoreVertical, Pencil, Plus, Search, UserRound } from 'lucide-react'
 import { toast } from 'sonner'
@@ -139,7 +140,7 @@ export function CustomersManager({
                     <Badge variant="warning">{customer.loyaltyPoints} pts</Badge>
                   </TableCell>
                   <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
-                    {customer.lastOrderAt ? new Date(customer.lastOrderAt).toLocaleDateString(locale) : '—'}
+                    {customer.lastOrderAt ? <LocalDateTime value={customer.lastOrderAt} locale={locale} options={{ dateStyle: 'medium' }} /> : '—'}
                   </TableCell>
                   {canManage ? (
                     <TableCell>

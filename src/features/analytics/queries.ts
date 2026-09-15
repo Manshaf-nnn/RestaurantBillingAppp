@@ -120,21 +120,21 @@ export async function getDashboardStats(params: {
       -- SUM(grandTotal) — tax, service charge and (before slice 2) tips all
       -- counted as this restaurant's earnings, and the number never agreed
       -- with the sales report one click away.
-      ((SELECT COALESCE(SUM("subtotal" - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
+      ((SELECT COALESCE(SUM("subtotal" - CASE WHEN "taxInclusive" THEN "taxTotal" ELSE 0 END - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(range.from)} AND "placedAt" <= ${utc(range.to)})
        - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r JOIN orders o2 ON o2.id = r."orderId"
         WHERE o2."restaurantId" = ${restaurantId} AND o2.status <> 'CANCELLED' ${atBranchO2}
-          AND o2."placedAt" >= ${utc(range.from)} AND o2."placedAt" <= ${utc(range.to)}))::bigint AS revenue,
+          AND r."createdAt" >= ${utc(range.from)} AND r."createdAt" <= ${utc(range.to)}))::bigint AS revenue,
       (SELECT COUNT(*) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(range.from)} AND "placedAt" <= ${utc(range.to)})::bigint       AS orders,
-      ((SELECT COALESCE(SUM("subtotal" - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
+      ((SELECT COALESCE(SUM("subtotal" - CASE WHEN "taxInclusive" THEN "taxTotal" ELSE 0 END - "discountTotal" - "loyaltyDiscount"), 0) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(prior.from)} AND "placedAt" <= ${utc(prior.to)})
        - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r JOIN orders o2 ON o2.id = r."orderId"
         WHERE o2."restaurantId" = ${restaurantId} AND o2.status <> 'CANCELLED' ${atBranchO2}
-          AND o2."placedAt" >= ${utc(prior.from)} AND o2."placedAt" <= ${utc(prior.to)}))::bigint AS revenue_prior,
+          AND r."createdAt" >= ${utc(prior.from)} AND r."createdAt" <= ${utc(prior.to)}))::bigint AS revenue_prior,
       (SELECT COUNT(*) FROM orders
         WHERE "restaurantId" = ${restaurantId} AND status <> 'CANCELLED' ${atBranch}
           AND "placedAt" >= ${utc(prior.from)} AND "placedAt" <= ${utc(prior.to)})::bigint       AS orders_prior,
@@ -253,21 +253,44 @@ export async function getRevenueSeries(params: {
   const tz = range.timeZone
 
   const atBranch = branchScope(params.branchIds)
+  const atBranchO = branchScope(params.branchIds, 'o')
 
+  /*
+   * Two aggregations, joined: what was sold in each bucket, and what was
+   * refunded in each bucket. Refunds sit in the bucket of the day they were
+   * GIVEN — the basis the totals one screen up use (owner decision,
+   * 2026-09-13) — not the bucket of the order they belong to. A single join
+   * on the order put a March refund into January's bar.
+   */
   const rows = await prisma.$queryRaw<Array<{ bucket: Date; revenue: bigint | null; orders: bigint }>>`
-    SELECT ${localBucket(unit, '"placedAt"', tz)} AS bucket,
-           SUM("subtotal" - "discountTotal" - "loyaltyDiscount" - COALESCE(r.refunded, 0))::bigint AS revenue,
-           COUNT(*)::bigint               AS orders
-    FROM orders
-    LEFT JOIN (
-      SELECT "orderId", SUM(amount) AS refunded FROM refunds GROUP BY "orderId"
-    ) r ON r."orderId" = orders.id
-    WHERE "restaurantId" = ${restaurantId}
-      AND "placedAt" >= ${utc(range.from)}
-      AND "placedAt" <= ${utc(range.to)}
-      AND status <> 'CANCELLED'
-      ${atBranch}
-    GROUP BY 1
+    WITH sold AS (
+      SELECT ${localBucket(unit, '"placedAt"', tz)} AS bucket,
+             SUM("subtotal" - CASE WHEN "taxInclusive" THEN "taxTotal" ELSE 0 END - "discountTotal" - "loyaltyDiscount")::bigint AS revenue,
+             COUNT(*)::bigint AS orders
+      FROM orders
+      WHERE "restaurantId" = ${restaurantId}
+        AND "placedAt" >= ${utc(range.from)}
+        AND "placedAt" <= ${utc(range.to)}
+        AND status <> 'CANCELLED'
+        ${atBranch}
+      GROUP BY 1
+    ), returned AS (
+      SELECT ${localBucket(unit, 'r."createdAt"', tz)} AS bucket,
+             SUM(r.amount)::bigint AS refunded
+      FROM refunds r
+      JOIN orders o ON o.id = r."orderId"
+      WHERE o."restaurantId" = ${restaurantId}
+        AND r."createdAt" >= ${utc(range.from)}
+        AND r."createdAt" <= ${utc(range.to)}
+        AND o.status <> 'CANCELLED'
+        ${atBranchO}
+      GROUP BY 1
+    )
+    SELECT COALESCE(s.bucket, x.bucket) AS bucket,
+           (COALESCE(s.revenue, 0) - COALESCE(x.refunded, 0))::bigint AS revenue,
+           COALESCE(s.orders, 0)::bigint AS orders
+    FROM sold s
+    FULL OUTER JOIN returned x ON x.bucket = s.bucket
     ORDER BY 1
   `
 
@@ -375,7 +398,7 @@ export async function getPeakHours(
   const rows = await prisma.$queryRaw<Array<{ hour: number; orders: bigint; revenue: bigint | null }>>`
     SELECT EXTRACT(HOUR FROM ("placedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone})::int AS hour,
            COUNT(*)::bigint                   AS orders,
-           SUM("subtotal" - "discountTotal" - "loyaltyDiscount")::bigint AS revenue
+           SUM("subtotal" - CASE WHEN "taxInclusive" THEN "taxTotal" ELSE 0 END - "discountTotal" - "loyaltyDiscount")::bigint AS revenue
     FROM orders
     WHERE "restaurantId" = ${restaurantId}
       AND "placedAt" >= ${utc(start)}

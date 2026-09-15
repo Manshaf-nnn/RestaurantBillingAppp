@@ -1,5 +1,6 @@
 'use client'
 
+import { formatDate } from '@/lib/datetime'
 import * as React from 'react'
 import { KeyRound, ShieldCheck, ShieldOff } from 'lucide-react'
 
@@ -90,7 +91,7 @@ export function MfaCard({ enabled, enabledAt }: { enabled: boolean; enabledAt: s
         </CardTitle>
         <CardDescription>
           {enabled
-            ? `On for your account since ${enabledAt ? new Date(enabledAt).toLocaleDateString() : 'today'}. Every sign-in asks for a code from your authenticator app.`
+            ? `On for your account since ${enabledAt ? formatDate(enabledAt, { timeZone: 'UTC' }) : 'today'}. Every sign-in asks for a code from your authenticator app.`
             : 'Your account signs in with a password alone. Add an authenticator app so a stolen password is not enough.'}
         </CardDescription>
       </CardHeader>

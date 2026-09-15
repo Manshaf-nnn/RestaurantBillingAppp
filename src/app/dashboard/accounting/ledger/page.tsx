@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { formatDate } from '@/lib/datetime'
 import Link from 'next/link'
 
 import { Badge } from '@/components/ui/badge'
@@ -124,7 +125,7 @@ export default async function LedgerPage({
                       entry.lines.map((line, index) => (
                         <tr key={`${entry.id}:${line.account}:${index}`} className={index === 0 ? '' : 'border-t-0'}>
                           <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground">
-                            {index === 0 ? entry.date.toLocaleDateString() : ''}
+                            {index === 0 ? formatDate(entry.date, { timeZone: restaurant.timezone }) : ''}
                           </td>
                           <td className="py-2 pr-3">
                             {index === 0 ? (
@@ -227,7 +228,7 @@ export default async function LedgerPage({
                     {ledger.cashBook.rows.map((row, index) => (
                       <tr key={`${row.href}:${index}`}>
                         <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground">
-                          {row.date.toLocaleDateString()}
+                          {formatDate(row.date, { timeZone: restaurant.timezone })}
                         </td>
                         <td className="py-2 pr-3">
                           <Link href={row.href} className="text-primary underline-offset-2 hover:underline">

@@ -239,6 +239,10 @@ async function main() {
   await prisma.recipe.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.food.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.category.deleteMany({ where: { restaurantId: restaurant.id } })
+  // Tables now hold their sittings and service requests with a RESTRICT key
+  // (bugfix.md D13), so that history clears before the table it belongs to.
+  await prisma.serviceRequest.deleteMany({ where: { restaurantId: restaurant.id } })
+  await prisma.tableSession.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.restaurantTable.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.customer.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: restaurant.id } })

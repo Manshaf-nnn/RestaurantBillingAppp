@@ -118,6 +118,32 @@ export async function runIntegrityChecks(restaurantId: string): Promise<Integrit
   )
 
   add(
+    'paid-over-billed',
+    'No bill holds more money than it charged',
+    'ERROR',
+    'paidTotal must never exceed grandTotal + tipAmount — the void-below-collected class. Every write path refuses it now; a row here predates that.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT o.id FROM orders o
+      WHERE o."restaurantId" = ${restaurantId}
+        AND o."paidTotal" > o."grandTotal" + o."tipAmount"
+      LIMIT 200
+    `,
+  )
+
+  add(
+    'loyalty-earned-once',
+    'Points are earned once per bill',
+    'ERROR',
+    'One EARNED loyalty entry per order — the refund-then-recapture double-earn class. Settlement refuses a second now; a row here needs a hand correction, and this names it.',
+    await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "orderId" AS id FROM loyalty_entries
+      WHERE "restaurantId" = ${restaurantId} AND kind = 'EARNED' AND "orderId" IS NOT NULL
+      GROUP BY "orderId" HAVING COUNT(*) > 1
+      LIMIT 200
+    `,
+  )
+
+  add(
     'refund-excess',
     'No payment refunded beyond its amount',
     'ERROR',

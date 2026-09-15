@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { Check, Send } from 'lucide-react'
 import { toast } from 'sonner'
@@ -83,7 +84,7 @@ export function HandoverBoard({ initial }: { initial: ShiftNoteView[] }) {
                   <div className="min-w-0 flex-1">
                     <p className="whitespace-pre-wrap text-sm">{n.body}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {n.authorName} · {new Date(n.createdAt).toLocaleString()}
+                      {n.authorName} · <LocalDateTime value={n.createdAt} />
                     </p>
                   </div>
                   <Button

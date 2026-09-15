@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import type { ReservationStatus } from '@prisma/client'
 import { CalendarClock, MoreVertical, Pencil, Plus, Trash2, Users } from 'lucide-react'
@@ -137,10 +138,11 @@ export function ReservationsManager({
                     <p className="text-xs text-muted-foreground">{reservation.customerPhone}</p>
                   </TableCell>
                   <TableCell className="text-sm">
-                    {new Date(reservation.reservedAt).toLocaleString(locale, {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                    })}
+                    <LocalDateTime
+                      value={reservation.reservedAt}
+                      locale={locale}
+                      options={{ dateStyle: 'medium', timeStyle: 'short' }}
+                    />
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
                     <span className="flex items-center gap-1 text-sm">

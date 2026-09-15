@@ -307,8 +307,6 @@ export async function approveStockCount(params: {
         unchanged += 1
         continue
       }
-      valueDelta += Math.round(line.variance * line.item.costPerUnit)
-
       /*
        * The stored variance, deliberately — not one recomputed now.
        *
@@ -318,7 +316,7 @@ export async function approveStockCount(params: {
        * number nobody observed. (A comment here used to claim the opposite of
        * what the code does. It was the comment that was wrong.)
        */
-      await postMovement(tx, {
+      const posted = await postMovement(tx, {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         type: line.variance > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
@@ -333,6 +331,14 @@ export async function approveStockCount(params: {
         locationId: count.locationId,
         userId: params.userId,
       })
+      /*
+       * The money figure the approver signs is the money the ledger booked —
+       * the exact value the movement carried at the running average — not
+       * `variance × costPerUnit`, which the schema itself calls "a CACHE …
+       * rounded — display and fallback only". The two drifted by the
+       * rounding on every line.
+       */
+      valueDelta += Math.sign(line.variance) * Math.round(posted.valueMoved)
       adjusted += 1
     }
 

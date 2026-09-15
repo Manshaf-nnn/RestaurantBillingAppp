@@ -483,6 +483,19 @@ export async function saveCustomer(input: unknown): Promise<ActionResult<{ id: s
     async (data) => {
       const user = await requirePermission(PERMISSIONS.CUSTOMER_MANAGE)
 
+      /*
+       * Fenced on the tenant BEFORE the write. The update by primary key alone
+       * would rename, re-phone or block any restaurant's customer from here —
+       * `adjustLoyalty` two functions down always did this correctly.
+       */
+      const existing = data.id
+        ? await prisma.customer.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            select: { id: true, name: true, phone: true, email: true, isBlocked: true },
+          })
+        : null
+      if (data.id && !existing) throw new NotFoundError('Customer')
+
       const payload = {
         name: data.name,
         phone: data.phone,
@@ -492,12 +505,25 @@ export async function saveCustomer(input: unknown): Promise<ActionResult<{ id: s
       }
 
       try {
-        const record = data.id
+        const record = existing
           ? await prisma.customer.update({
-              where: { id: data.id },
+              where: { id: existing.id },
               data: payload,
             })
           : await prisma.customer.create({ data: { ...payload, restaurantId: user.restaurantId } })
+
+        // Blocking a regular, or moving their phone (the loyalty key), is a
+        // change somebody may ask about; this path wrote no audit row at all.
+        await audit({
+          restaurantId: user.restaurantId,
+          userId: user.id,
+          actorName: user.name,
+          action: existing ? AUDIT_ACTIONS.UPDATE : AUDIT_ACTIONS.CREATE,
+          entity: 'Customer',
+          entityId: record.id,
+          before: existing ? { name: existing.name, phone: existing.phone, email: existing.email, isBlocked: existing.isBlocked } : undefined,
+          after: { name: payload.name, phone: payload.phone, email: payload.email, isBlocked: payload.isBlocked },
+        })
 
         revalidatePath('/dashboard/customers')
         return { id: record.id }
@@ -564,6 +590,21 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
       const branchId = data.branchId || null
       if (branchId) await assertBranchAccess(user, branchId)
 
+      /*
+       * The record being edited must be this restaurant's, and at a branch
+       * this person reaches. `deleteCoupon` below always scoped its delete;
+       * the update by primary key alone could set another restaurant's live
+       * promotion to 100% off — with the audit row filed under THIS tenant.
+       */
+      const existing = data.id
+        ? await prisma.coupon.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            select: { id: true, branchId: true },
+          })
+        : null
+      if (data.id && !existing) throw new NotFoundError('Coupon')
+      if (existing) await assertRecordBranch(user, existing, 'coupon')
+
       const payload = {
         code: data.code,
         branchId,
@@ -580,8 +621,8 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
       }
 
       try {
-        const record = data.id
-          ? await prisma.coupon.update({ where: { id: data.id }, data: payload })
+        const record = existing
+          ? await prisma.coupon.update({ where: { id: existing.id }, data: payload })
           : await prisma.coupon.create({ data: { ...payload, restaurantId: user.restaurantId } })
 
         await audit({
@@ -608,6 +649,20 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
 export async function deleteCoupon(id: string): Promise<ActionResult<{ id: string }>> {
   return runSafe(async () => {
     const user = await requirePermission(PERMISSIONS.COUPON_MANAGE)
+    /*
+     * A coupon that discounted a bill is part of that bill's history: its
+     * redemption rows cascade with it, and every order it touched would keep
+     * a discount figure with nothing left to explain it. The same rule
+     * `deleteStation` applies — used once, it can only be retired.
+     */
+    const used = await prisma.couponRedemption.count({
+      where: { couponId: id, coupon: { restaurantId: user.restaurantId } },
+    })
+    if (used > 0) {
+      throw new ConflictError(
+        `This coupon has been used on ${used} bill${used === 1 ? '' : 's'} — deactivate it instead of deleting it`,
+      )
+    }
     const result = await prisma.coupon.deleteMany({ where: { id, restaurantId: user.restaurantId } })
     if (result.count === 0) throw new NotFoundError('Coupon')
     revalidatePath('/dashboard/coupons')

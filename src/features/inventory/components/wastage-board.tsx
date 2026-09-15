@@ -13,6 +13,7 @@ import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { recordWastageAction, reviewWastageAction } from '../wastage-actions'
+import { newRequestKey } from '@/lib/request-key'
 import { callAction } from '@/lib/use-action'
 
 const REASONS = [
@@ -75,6 +76,8 @@ export function WastageBoard({
   const item = items.find((i) => i.id === itemId)
   React.useEffect(() => { if (item) setUnit(item.unit) }, [item])
 
+  const requestKey = React.useRef(newRequestKey('waste'))
+
   const submit = async () => {
     const q = Number(quantity)
     if (!itemId) { toast.error('Choose an item'); return }
@@ -84,11 +87,15 @@ export function WastageBoard({
     }
 
     setBusy(true)
+    // One key per write-off, reused across retries of the same tap, so a
+    // dropped connection cannot post the same tray of food twice.
     const result = await callAction(() => recordWastageAction({
       itemId, quantity: q, unit: unit || undefined, reason, reasonNote, notes,
+      clientRequestId: requestKey.current,
     }))
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
+    requestKey.current = newRequestKey('waste')
     toast.success(`Recorded — ${money(result.data.costValue)} written off`)
     setQuantity(''); setReasonNote(''); setNotes('')
     router.refresh()

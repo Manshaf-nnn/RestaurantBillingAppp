@@ -1,10 +1,11 @@
 import 'server-only'
 
-import { customRange } from '@/features/reports/range'
+import { customRange, startOfDay } from '@/features/reports/range'
 import { getPaymentReconciliation } from '@/features/payments/reconciliation'
 import { buildJournal } from '@/features/ledger/journal'
 import { foldTrialBalance } from '@/features/ledger/queries'
 import { prisma } from '@/server/db/prisma'
+import { localBucket, utc } from '@/server/db/sql-time'
 import { getApprovalsInboxCount } from './inbox'
 import { runIntegrityChecks } from './integrity'
 
@@ -37,14 +38,33 @@ export interface MonthCloseChecklist {
 }
 
 /** First and last instant of a calendar month in the restaurant's own time. */
-export function monthBounds(month: string, timeZone: string): { from: Date; to: Date; label: string } {
+export function monthBounds(
+  month: string,
+  timeZone: string,
+): { from: Date; to: Date; label: string; dateFrom: Date; dateTo: Date } {
   const [yearText, monthText] = month.split('-')
   const year = Number(yearText)
   const monthIndex = Number(monthText) - 1
-  const from = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0))
-  const to = new Date(Date.UTC(year, monthIndex + 1, 1, 0, 0, 0, 0) - 1)
-  const label = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(from)
-  return { from, to, label }
+  /*
+   * The restaurant's month, not UTC's. `timeZone` was accepted here and never
+   * read, so a Colombo April ran from 05:30 on the 1st to 05:30 on May 1st —
+   * and the checklist, the journal, the reconciliation and the seal all used
+   * that window. Noon UTC on the first is inside the local first day in every
+   * zone, so its local midnight is the month's first instant; the next
+   * month's first instant, less a millisecond, is the last.
+   */
+  const from = startOfDay(new Date(Date.UTC(year, monthIndex, 1, 12)), timeZone)
+  const to = new Date(startOfDay(new Date(Date.UTC(year, monthIndex + 1, 1, 12)), timeZone).getTime() - 1)
+  /*
+   * Business dates — `DailyClose.businessDate`, a statement line's date — are
+   * calendar dates stored at UTC midnight. They are compared against the
+   * calendar month, never against the instant range above, or a zone west of
+   * UTC would lose the first of every month.
+   */
+  const dateFrom = new Date(Date.UTC(year, monthIndex, 1))
+  const dateTo = new Date(Date.UTC(year, monthIndex + 1, 1) - 1)
+  const label = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(dateFrom)
+  return { from, to, label, dateFrom, dateTo }
 }
 
 export async function getMonthCloseChecklist(params: {
@@ -61,14 +81,19 @@ export async function getMonthCloseChecklist(params: {
   const [tradingDays, closes, openDrawers, integrity, inbox, paymentRecon, bankLines, journal, sealed] =
     await Promise.all([
       // Days that saw any trading at all — a quiet day needs no close.
-      prisma.$queryRaw<Array<{ day: Date }>>`
-        SELECT DISTINCT DATE("placedAt") AS day FROM orders
+      // In the restaurant's own calendar: `DATE("placedAt")` truncated in UTC
+      // and the bounds were bound as timestamptz, both of which the rest of
+      // the reporting code stopped doing long ago — this was the one raw
+      // query left doing either.
+      prisma.$queryRaw<Array<{ day: string }>>`
+        SELECT DISTINCT to_char(${localBucket('day', '"placedAt"', timeZone)}, 'YYYY-MM-DD') AS day
+        FROM orders
         WHERE "restaurantId" = ${restaurantId}
           AND status <> 'CANCELLED'
-          AND "placedAt" BETWEEN ${bounds.from} AND ${bounds.to}
+          AND "placedAt" >= ${utc(bounds.from)} AND "placedAt" <= ${utc(bounds.to)}
       `,
       prisma.dailyClose.findMany({
-        where: { restaurantId, businessDate: { gte: bounds.from, lte: bounds.to } },
+        where: { restaurantId, businessDate: { gte: bounds.dateFrom, lte: bounds.dateTo } },
         select: { businessDate: true },
       }),
       prisma.cashDrawerSession.count({
@@ -83,7 +108,7 @@ export async function getMonthCloseChecklist(params: {
       getApprovalsInboxCount(restaurantId, branchIds),
       getPaymentReconciliation({ restaurantId, range, branchIds, money }),
       prisma.bankStatementLine.count({
-        where: { restaurantId, status: 'UNMATCHED', lineDate: { gte: bounds.from, lte: bounds.to } },
+        where: { restaurantId, status: 'UNMATCHED', lineDate: { gte: bounds.dateFrom, lte: bounds.dateTo } },
       }),
       buildJournal({ restaurantId, range, branchIds }),
       prisma.accountingPeriod.findFirst({
@@ -99,7 +124,7 @@ export async function getMonthCloseChecklist(params: {
 
   const closedDays = new Set(closes.map((row) => row.businessDate.toISOString().slice(0, 10)))
   const unclosedDays = tradingDays
-    .map((row) => new Date(row.day).toISOString().slice(0, 10))
+    .map((row) => row.day)
     .filter((day) => !closedDays.has(day))
 
   const errors = integrity.checks.filter((check) => check.status === 'ERROR')

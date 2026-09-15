@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
@@ -119,8 +120,8 @@ export function ShiftCorrection({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Recorded: {new Date(startedAt).toLocaleString()} →{' '}
-            {endedAt ? new Date(endedAt).toLocaleString() : 'still open'}
+            Recorded: <LocalDateTime value={startedAt} /> →{' '}
+            {endedAt ? <LocalDateTime value={endedAt} /> : 'still open'}
           </p>
 
           <DialogFooter>

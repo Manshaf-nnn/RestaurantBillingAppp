@@ -85,7 +85,7 @@ async function main() {
       restaurantId: restaurant.id, branchId: branch.id, orderNumber: `C-${stamp}`,
       type: 'DINE_IN', status: 'PENDING', paymentStatus: 'UNPAID',
       customerName: 'Guest', customerPhone: '07',
-      subtotal: 10_000, discountTotal: 1_000, grandTotal: 9_000,
+      subtotal: 10_000, discountTotal: 1_000, manualDiscount: 1_000, grandTotal: 9_000,
       items: {
         create: [{
           foodId: burger.id, name: 'Burger', quantity: 10,

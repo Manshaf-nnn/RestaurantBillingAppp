@@ -3,9 +3,10 @@ import 'server-only'
 import type { Order } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { computeTotals } from '@/features/orders/pricing'
+import { computeTotals, derivePaymentStatus } from '@/features/orders/pricing'
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { reconcileIfDepleted, reconcileOrderDepletion } from '@/features/inventory/depletion'
+import { nextCounterValue } from '@/server/db/counters'
 import { prisma, type TxClient } from '@/server/db/prisma'
 
 /**
@@ -39,14 +40,17 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
 
   const restaurant = await tx.restaurant.findUniqueOrThrow({
     where: { id: order.restaurantId },
-    select: { taxInclusive: true, currency: true },
+    select: { currency: true, loyaltyPointValue: true },
   })
 
   const totals = computeTotals({
     lines: order.items,
     taxRateBps: order.taxRateBps,
     serviceChargeBps: order.serviceChargeBps,
-    taxInclusive: restaurant.taxInclusive,
+    // The bill's own rule, snapshotted at placement like the rates above.
+    // Reading the restaurant's CURRENT setting here meant flipping the switch
+    // in Settings silently repriced every open bill on the next recompute.
+    taxInclusive: order.taxInclusive,
     // The order already stores what was actually granted; a discount is not
     // re-evaluated here, only re-applied, and it is clamped to the new subtotal
     // by computeTotals so a split can never leave a discount larger than the bill.
@@ -62,6 +66,42 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
     roundTotal: true,
   })
 
+  /*
+   * A bill that shrank can no longer absorb everything that was taken off it.
+   * `computeTotals` clamps the loyalty and coupon discounts to the new
+   * subtotal — right for the bill, and silently wrong for the guest, whose
+   * points were debited at placement and whose coupon was counted as used.
+   * Whatever the clamp removed goes back where it came from, the way
+   * `cancelOrder` returns everything on a cancellation.
+   */
+  const loyaltyLost = order.loyaltyDiscount - totals.loyaltyDiscount
+  if (loyaltyLost > 0 && order.customerId && restaurant.loyaltyPointValue > 0) {
+    const returned = Math.round(loyaltyLost / restaurant.loyaltyPointValue)
+    if (returned > 0) {
+      await tx.customer.update({
+        where: { id: order.customerId },
+        data: { loyaltyPoints: { increment: returned } },
+      })
+      await tx.loyaltyEntry.create({
+        data: {
+          restaurantId: order.restaurantId,
+          customerId: order.customerId,
+          orderId: order.id,
+          points: returned,
+          kind: 'RETURNED',
+          note: `${order.orderNumber} reduced — ${returned} points it no longer needed were returned`,
+        },
+      })
+    }
+  }
+  if (order.couponDiscount > totals.couponDiscount) {
+    // The redemption records what the coupon actually took off this bill.
+    await tx.couponRedemption.updateMany({
+      where: { orderId: order.id },
+      data: { amount: totals.couponDiscount },
+    })
+  }
+
   return tx.order.update({
     where: { id: orderId },
     data: {
@@ -75,6 +115,14 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
       tipAmount: totals.tipAmount,
       roundingAdj: totals.roundingAdj,
       grandTotal: totals.grandTotal,
+      // Derived from the money, never left as it was: a bill that grew past
+      // what was collected is PARTIAL again, whatever it said before.
+      paymentStatus: derivePaymentStatus({
+        paidTotal: order.paidTotal,
+        grandTotal: totals.grandTotal,
+        tipAmount: totals.tipAmount,
+        current: order.paymentStatus,
+      }),
     },
   })
 }
@@ -218,6 +266,22 @@ export async function splitBill(
         createdById: params.actorId ?? null,
         taxRateBps: order.taxRateBps,
         serviceChargeBps: order.serviceChargeBps,
+        taxInclusive: order.taxInclusive,
+        /*
+         * The same sitting, the same table, the same guest — a split is the
+         * bill divided, not a new customer. Without these the half could not
+         * be found from the guest's phone (no guestSessionId), fell out of
+         * the sitting's own total (no tableSessionId), and printed with no
+         * table number.
+         */
+        channel: order.channel,
+        tableNumber: order.tableNumber,
+        tableSessionId: order.tableSessionId,
+        guestSessionId: order.guestSessionId,
+        guestCount: order.guestCount,
+        notes: order.notes,
+        couponId: order.couponId,
+        servedById: order.servedById,
         splitFromId: order.id,
         placedAt: order.placedAt,
         events: {
@@ -309,12 +373,17 @@ export async function splitBill(
         const targetCoupon = Math.round(order.couponDiscount * share)
         const targetManual = Math.round(order.manualDiscount * share)
         const targetLoyalty = Math.round(order.loyaltyDiscount * share)
+        // `discountTotal` is set alongside the split it is the sum of — the
+        // `orders_discount_split` CHECK (discountTotal = coupon + manual) is
+        // evaluated per statement, so leaving it stale here would fail before
+        // the recalculate below could put it right. Loyalty is not part of it.
         await tx.order.update({
           where: { id: target.id },
           data: {
             couponDiscount: targetCoupon,
             manualDiscount: targetManual,
             loyaltyDiscount: targetLoyalty,
+            discountTotal: targetCoupon + targetManual,
           },
         })
         await tx.order.update({
@@ -323,6 +392,7 @@ export async function splitBill(
             couponDiscount: order.couponDiscount - targetCoupon,
             manualDiscount: order.manualDiscount - targetManual,
             loyaltyDiscount: order.loyaltyDiscount - targetLoyalty,
+            discountTotal: (order.couponDiscount - targetCoupon) + (order.manualDiscount - targetManual),
           },
         })
       }
@@ -392,11 +462,25 @@ async function splitOrderNumber(
   baseNumber: string,
 ): Promise<string> {
   const root = baseNumber.replace(/-[A-Z]$/, '')
+  /*
+   * From the counter, not from COUNT(*): two concurrent splits of one bill
+   * counted the same existing suffixes and both minted `-B`, and the loser
+   * surfaced a raw unique-constraint failure. The counter is seeded from what
+   * already exists the first time a root is split, so numbering continues
+   * where it left off; after that the counter is the arbiter.
+   */
+  const key = `split:${root}`
   const existing = await tx.order.count({
     where: { restaurantId, orderNumber: { startsWith: `${root}-` } },
   })
+  await tx.$executeRaw`
+    INSERT INTO "restaurant_counters" ("restaurantId", "key", "value")
+    VALUES (${restaurantId}, ${key}, ${existing})
+    ON CONFLICT ("restaurantId", "key") DO NOTHING
+  `
+  const index = (await nextCounterValue(tx, restaurantId, key)) - 1
   // 'A' is the first split; wrap to a numeric suffix past 26 rather than break.
-  const suffix = existing < 26 ? String.fromCharCode(65 + existing) : String(existing + 1)
+  const suffix = index < 26 ? String.fromCharCode(65 + index) : String(index + 1)
   return `${root}-${suffix}`
 }
 
@@ -418,8 +502,9 @@ export async function mergeBills(
   }
 
   const target = await loadOpenBill(params.restaurantId, params.targetId)
-  if (target.paymentStatus === 'PAID') {
-    throw new AppError('The bill being merged into is already paid', 409, 'ORDER_PAID')
+  // Same rule as voiding: a bill with money on it does not change shape.
+  if (target.paidTotal > 0) {
+    throw new AppError('The bill being merged into has a payment on it — refund it first', 409, 'ORDER_PAID')
   }
 
   const sources = await prisma.order.findMany({
@@ -428,7 +513,7 @@ export async function mergeBills(
       restaurantId: params.restaurantId,
       status: { in: [...OPEN_STATUSES] },
     },
-    include: { items: true },
+    include: { items: true, redemptions: true },
   })
 
   if (sources.length !== sourceIds.length) {
@@ -439,12 +524,50 @@ export async function mergeBills(
     throw new AppError(`${paid.orderNumber} already has a payment against it`, 409, 'ORDER_PAID')
   }
 
+  // Signed books do not quietly change (§59) — void and discount already
+  // asked; merging reshapes every bill involved and asks too.
+  await assertPeriodOpen(prisma, params.restaurantId, target.placedAt, 'This bill')
+  for (const source of sources) {
+    await assertPeriodOpen(prisma, params.restaurantId, source.placedAt, source.orderNumber)
+  }
+
   return prisma.$transaction(async (tx) => {
     for (const source of sources) {
       await tx.orderItem.updateMany({
         where: { orderId: source.id },
         data: { orderId: target.id },
       })
+
+      /*
+       * The coupon follows its food. Zeroing the source left its redemption
+       * row pointing at a cancelled bill — the coupon's own take (AUDIT C5)
+       * recorded against nothing — and `usedCount` counting a use that the
+       * merged bill then carried again. One row per (coupon, bill): when the
+       * target already redeemed the same coupon, the two become one with the
+       * amounts added, and the coupon is used once, not twice.
+       */
+      for (const redemption of source.redemptions) {
+        const onTarget = await tx.couponRedemption.findFirst({
+          where: { orderId: target.id, couponId: redemption.couponId },
+          select: { id: true },
+        })
+        if (onTarget) {
+          await tx.couponRedemption.update({
+            where: { id: onTarget.id },
+            data: { amount: { increment: redemption.amount } },
+          })
+          await tx.couponRedemption.delete({ where: { id: redemption.id } })
+          await tx.coupon.update({
+            where: { id: redemption.couponId },
+            data: { usedCount: { decrement: 1 } },
+          })
+        } else {
+          await tx.couponRedemption.update({
+            where: { id: redemption.id },
+            data: { orderId: target.id },
+          })
+        }
+      }
 
       /*
        * The source is set CANCELLED directly rather than through `cancelOrder`,
@@ -501,6 +624,9 @@ export async function mergeBills(
         data: {
           couponDiscount: { increment: absorbedCoupon },
           manualDiscount: { increment: absorbedManual },
+          // "discountTotal is their sum, always" — and the database now
+          // checks it on every write, so it moves in the same statement.
+          discountTotal: { increment: absorbedCoupon + absorbedManual },
           loyaltyDiscount: { increment: absorbedLoyalty },
         },
       })
@@ -548,8 +674,14 @@ export async function voidOrderItem(
   // Signed books do not quietly change (§59).
   await assertPeriodOpen(prisma, params.restaurantId, order.placedAt)
 
-  if (order.paymentStatus === 'PAID') {
-    throw new AppError('This bill is paid — refund it instead of voiding a line', 409, 'ORDER_PAID')
+  /*
+   * ANY money on the bill, not only a settled one. A PARTIAL bill could be
+   * voided below what had already been collected, and the overpayment then
+   * appeared in no report, produced no refund and showed on no screen — the
+   * rule `cancelOrder` already applies, brought here.
+   */
+  if (order.paidTotal > 0) {
+    throw new AppError('This bill has money on it — refund the payment before voiding a line', 409, 'ORDER_PAID')
   }
 
   const item = order.items.find((entry) => entry.id === params.itemId)

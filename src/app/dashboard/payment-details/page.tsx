@@ -12,6 +12,7 @@ import { destinationDetailLine } from '@/features/payments/destinations'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { resolveRange } from '@/features/reports/range'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -49,10 +50,13 @@ export default async function PaymentDetailsPage({
   const { branchIds } = await selectedBranch(user, await searchParams)
   const seesAccounts = can(user, PERMISSIONS.SETTINGS_VIEW)
 
-  const [restaurant, rows, totals] = await Promise.all([
-    requireRestaurant(user.restaurantId),
+  const restaurant = await requireRestaurant(user.restaurantId)
+  // This month, in the restaurant's clock — a running total of everything
+  // ever taken is a report, and lives under Reports with a date picker.
+  const range = resolveRange({ preset: 'THIS_MONTH', timeZone: restaurant.timezone })
+  const [rows, totals] = await Promise.all([
     getOnlinePayments(user.restaurantId, branchIds),
-    seesAccounts ? getDestinationTotals(user.restaurantId, branchIds) : Promise.resolve([]),
+    seesAccounts ? getDestinationTotals(user.restaurantId, branchIds, range) : Promise.resolve([]),
   ])
 
   const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
@@ -100,7 +104,7 @@ export default async function PaymentDetailsPage({
 
   return (
     <>
-      <AutoRefresh intervalMs={8000} />
+      <AutoRefresh intervalMs={30000} />
       <PageHeader
         title="Payment details"
         description="Every account your money is filed under, and the bank transfers waiting to be confirmed."
@@ -109,8 +113,8 @@ export default async function PaymentDetailsPage({
       {seesAccounts ? (
         <div className="mb-4">
           <SectionCard
-            title="Your accounts"
-            description="Set up under Settings → Payments. A cashier taking cash files it here automatically — open one to see every payment inside it."
+            title="Your accounts this month"
+            description="Set up under Settings → Payments. A cashier taking cash files it here automatically — open one to see every payment inside it. Totals are this month's."
           >
             {cards.length === 0 && !unassigned ? (
               <EmptyState

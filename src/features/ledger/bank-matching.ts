@@ -198,7 +198,7 @@ export async function importStatement(params: {
   })
   if (already) {
     throw new ConflictError(
-      `That exact file was already imported on ${already.createdAt.toLocaleDateString()} as "${already.fileName}".`,
+      `That exact file was already imported on ${already.createdAt.toISOString().slice(0, 10)} as "${already.fileName}".`,
     )
   }
 

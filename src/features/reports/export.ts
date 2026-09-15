@@ -1,4 +1,5 @@
 import 'server-only'
+import { formatDate } from '@/lib/datetime'
 import ExcelJS from 'exceljs'
 
 import { formatMoney } from '@/lib/money'
@@ -78,8 +79,8 @@ export async function buildReportWorkbook(
   overview.getRow(1).font = { bold: true }
   const rows: Array<[string, string]> = [
     ['Restaurant', restaurantName],
-    ['From', summary.range.from.toLocaleDateString()],
-    ['To', summary.range.to.toLocaleDateString()],
+    ['From', formatDate(summary.range.from, { timeZone: summary.range.timeZone })],
+    ['To', formatDate(summary.range.to, { timeZone: summary.range.timeZone })],
     ['Orders', String(summary.orderCount)],
     ['Cancelled', String(summary.cancelledCount)],
     ['Gross sales (before discounts)', money(summary.grossSales)],

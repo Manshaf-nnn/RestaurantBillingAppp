@@ -6,7 +6,7 @@ import type { UserRole } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { canAccessBranch } from '@/lib/rbac'
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { prisma, type TxClient, guardLocks, type DbClient } from '@/server/db/prisma'
 import { startOfDay } from '@/features/reports/range'
 import { notify } from '@/server/notifications'
 import { ensureDefaultBranch, resolveBranchId } from '@/features/branches/service'
@@ -208,7 +208,7 @@ export async function openDrawer(params: {
          * So a stale key is released and the open retried once. A live one
          * still refuses, which is the whole point of the constraint.
          */
-        if (await releaseStaleKeys(registerId, params.userId)) continue
+        if (await releaseStaleKeys(params.restaurantId, registerId, params.userId)) continue
 
         /*
          * Which message, decided from the data rather than from `target`.
@@ -250,9 +250,10 @@ export async function openDrawer(params: {
  * Returns true when something was actually released, so the caller knows a
  * retry is worth making rather than looping on a live conflict.
  */
-async function releaseStaleKeys(registerId: string, userId: string): Promise<boolean> {
+async function releaseStaleKeys(restaurantId: string, registerId: string, userId: string): Promise<boolean> {
   const result = await prisma.cashDrawerSession.updateMany({
     where: {
+      restaurantId,
       status: { not: 'OPEN' },
       OR: [{ activeRegisterKey: registerId }, { activeCashierKey: userId }],
     },
@@ -480,26 +481,26 @@ export async function getUnrecordedRefunds(params: {
 // ── totals ───────────────────────────────────────────────────────────────────
 
 /** Recompute a session's money from its own payments and movements. */
-export async function computeDrawerTotals(sessionId: string): Promise<DrawerTotals> {
-  const session = await prisma.cashDrawerSession.findUnique({
+export async function computeDrawerTotals(sessionId: string, db: DbClient = prisma): Promise<DrawerTotals> {
+  const session = await db.cashDrawerSession.findUnique({
     where: { id: sessionId },
     select: { openingFloat: true, openingPettyCash: true },
   })
   if (!session) throw new NotFoundError('Drawer session')
 
   const [cash, byMethod, movements, pettySpent] = await Promise.all([
-    prisma.payment.aggregate({
+    db.payment.aggregate({
       where: { cashDrawerSessionId: sessionId, ...COLLECTED_CASH },
       _sum: { amount: true },
       _count: true,
     }),
-    prisma.payment.groupBy({
+    db.payment.groupBy({
       by: ['method'],
       where: { cashDrawerSessionId: sessionId, status: { in: ['PAID', 'REFUNDED'] } },
       _sum: { amount: true },
       _count: true,
     }),
-    prisma.cashMovement.groupBy({
+    db.cashMovement.groupBy({
       by: ['type'],
       where: { sessionId },
       _sum: { amount: true },
@@ -509,7 +510,7 @@ export async function computeDrawerTotals(sessionId: string): Promise<DrawerTota
      * counted here — it already left as a PETTY_CASH_PAID movement, and taking
      * it off the tin as well would charge the restaurant twice.
      */
-    prisma.pettyCashRequest.aggregate({
+    db.pettyCashRequest.aggregate({
       where: { sessionId, status: 'PAID', paidFrom: 'PETTY_FUND' },
       _sum: { amount: true },
     }),
@@ -627,8 +628,27 @@ export async function closeDrawer(params: {
 
   await requireOpenSession(params.restaurantId, params.sessionId, params.actor)
 
-  // Computed before the update so the snapshot reflects the session as counted.
-  const totals = await computeDrawerTotals(params.sessionId)
+  /*
+   * Everything from the count to the flip happens under a lock on the session
+   * row, in one transaction. This was a read-then-write with nothing between
+   * them: a payment captured in the gap landed in a drawer that had just
+   * frozen its expected cash, and read as an overage for ever — the frozen
+   * figure and a live recount of the same till gave two different answers.
+   * A capture racing this now waits on the row (it takes FOR SHARE) and then
+   * finds no open drawer, which it reports honestly as unattributed.
+   */
+  return prisma.$transaction(async (tx) => {
+  await guardLocks(tx)
+  const live = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM cash_drawer_sessions
+    WHERE id = ${params.sessionId} AND "restaurantId" = ${params.restaurantId} AND status = 'OPEN'
+    FOR UPDATE
+  `
+  if (live.length === 0) {
+    throw new AppError('That drawer was closed a moment ago', 409, 'DRAWER_CLOSED')
+  }
+
+  const totals = await computeDrawerTotals(params.sessionId, tx)
   const variance = params.countedCash - totals.expectedCash
 
   /*
@@ -657,8 +677,8 @@ export async function closeDrawer(params: {
     )
   }
 
-  const session = await prisma.cashDrawerSession.update({
-    where: { id: params.sessionId },
+  const flipped = await tx.cashDrawerSession.updateMany({
+    where: { id: params.sessionId, status: 'OPEN' },
     data: {
       status: needsReview ? 'PENDING_REVIEW' : 'CLOSED',
       closedAt: new Date(),
@@ -674,8 +694,13 @@ export async function closeDrawer(params: {
       activeCashierKey: null,
     },
   })
+  if (flipped.count === 0) {
+    throw new AppError('That drawer was closed a moment ago', 409, 'DRAWER_CLOSED')
+  }
+  const session = await tx.cashDrawerSession.findUniqueOrThrow({ where: { id: params.sessionId } })
 
   return { session, totals, variance, needsReview }
+  })
 }
 
 /**
@@ -742,7 +767,19 @@ export async function forceCloseDrawer(params: {
     throw new AppError('That drawer is not open', 409, 'DRAWER_CLOSED')
   }
 
-  const totals = await computeDrawerTotals(session.id)
+  // Same fence as closeDrawer, for the same reason.
+  return prisma.$transaction(async (tx) => {
+  await guardLocks(tx)
+  const live = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM cash_drawer_sessions
+    WHERE id = ${session.id} AND "restaurantId" = ${params.restaurantId} AND status = 'OPEN'
+    FOR UPDATE
+  `
+  if (live.length === 0) {
+    throw new AppError('That drawer was closed a moment ago', 409, 'DRAWER_CLOSED')
+  }
+
+  const totals = await computeDrawerTotals(session.id, tx)
   const variance = params.countedCash === null ? null : params.countedCash - totals.expectedCash
 
   /*
@@ -753,8 +790,8 @@ export async function forceCloseDrawer(params: {
   const needsReview =
     variance !== null && (await varianceNeedsReview(params.restaurantId, variance))
 
-  const closed = await prisma.cashDrawerSession.update({
-    where: { id: session.id },
+  const flipped = await tx.cashDrawerSession.updateMany({
+    where: { id: session.id, status: 'OPEN' },
     data: {
       status: needsReview ? 'PENDING_REVIEW' : 'CLOSED',
       closedAt: new Date(),
@@ -772,8 +809,13 @@ export async function forceCloseDrawer(params: {
       activeCashierKey: null,
     },
   })
+  if (flipped.count === 0) {
+    throw new AppError('That drawer was closed a moment ago', 409, 'DRAWER_CLOSED')
+  }
+  const closed = await tx.cashDrawerSession.findUniqueOrThrow({ where: { id: session.id } })
 
   return { session: closed, totals, variance }
+  })
 }
 
 /** Every drawer open right now, wherever this person can see. */

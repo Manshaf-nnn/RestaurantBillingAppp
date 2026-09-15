@@ -125,6 +125,11 @@ export async function emailReceipt(input: unknown): Promise<ActionResult<{ sent:
     emailReceiptSchema,
     input,
     async (data) => {
+      // Every other guest action here is limited; this one sends mail to an
+      // address the caller types, and had no limit at all.
+      await enforceRateLimit('mutation')
+      await enforceRateLimit('emailReceipt', `receipt:${data.orderId}`)
+
       const restaurant = await resolvePublicTenant()
       if (!restaurant) throw new NotFoundError('Restaurant')
 
@@ -288,16 +293,27 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
       if (
         await needsApproval({ restaurantId: user.restaurantId, kind: 'REFUND', amount })
       ) {
-        const approved = await prisma.approvalRequest.findFirst({
+        // Consumed first, by compare-and-swap — one signature, one refund.
+        // See applyManualDiscount for the reasoning; the rule is the same.
+        const candidate = await prisma.approvalRequest.findFirst({
           where: {
             restaurantId: user.restaurantId,
             entity: 'Payment',
             entityId: data.paymentId,
             kind: 'REFUND',
             status: 'APPROVED',
+            consumedAt: null,
             amount: { gte: amount },
           },
+          select: { id: true },
         })
+        const consumed = candidate
+          ? await prisma.approvalRequest.updateMany({
+              where: { id: candidate.id, status: 'APPROVED', consumedAt: null },
+              data: { consumedAt: new Date() },
+            })
+          : { count: 0 }
+        const approved = consumed.count === 1
         if (!approved) {
           await requestApproval({
             restaurantId: user.restaurantId,
@@ -348,6 +364,13 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
 export async function createStaffPaymentQr(input: unknown) {
   return runAction(paymentIntentSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.PAYMENT_COLLECT)
+    // The same two lines `collectPayment` has: an intent row is written onto
+    // the bill, and a Kandy till could write one onto a Colombo bill by id.
+    const target = await prisma.order.findFirst({
+      where: { id: data.orderId, restaurantId: user.restaurantId },
+      select: { branchId: true },
+    })
+    await assertRecordBranch(user, target, 'order')
     const intent = await createPaymentIntent({
       restaurantId: user.restaurantId,
       orderId: data.orderId,
@@ -362,12 +385,17 @@ export async function createStaffPaymentQr(input: unknown) {
   })
 }
 
-export async function issueInvoiceEmail(orderId: string, email: string) {
-  return runSafe(async () => {
+export async function issueInvoiceEmail(input: unknown): Promise<ActionResult<{ sent: boolean }>> {
+  return runAction(emailReceiptSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVOICE_VIEW)
+    // The email was a raw positional string with no schema, the order was not
+    // branch-checked, and nothing metered it — an itemised bill from any
+    // branch, to any address, as often as wanted.
+    await enforceRateLimit('mutation')
+    await enforceRateLimit('emailReceipt', `receipt:${data.orderId}`)
 
     const order = await prisma.order.findFirst({
-      where: { id: orderId, restaurantId: user.restaurantId },
+      where: { id: data.orderId, restaurantId: user.restaurantId },
       include: {
         items: true,
         restaurant: {
@@ -382,9 +410,10 @@ export async function issueInvoiceEmail(orderId: string, email: string) {
       },
     })
     if (!order) throw new NotFoundError('Order')
+    await assertRecordBranch(user, order, 'order')
 
     const { sent } = await sendMail({
-      to: email,
+      to: data.email,
       ...receiptEmail({
         customerName: order.customerName,
         restaurantName: order.restaurant.name,

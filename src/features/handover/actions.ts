@@ -26,7 +26,7 @@ export async function addShiftNote(input: unknown): Promise<ActionResult<{ id: s
     shiftNoteSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.ORDER_VIEW)
+      const user = await requirePermission(PERMISSIONS.HANDOVER_VIEW)
 
       /*
        * The author's own location, not a posted one. A handover is written by
@@ -58,7 +58,7 @@ export async function addShiftNote(input: unknown): Promise<ActionResult<{ id: s
 /** Mark a handover note as done. */
 export async function resolveShiftNote(id: string): Promise<ActionResult<{ id: string }>> {
   return runSafe(async () => {
-    const user = await requirePermission(PERMISSIONS.ORDER_VIEW)
+    const user = await requirePermission(PERMISSIONS.HANDOVER_VIEW)
 
     /*
      * Scoped in the `where`, not checked afterwards. `updateMany` with the

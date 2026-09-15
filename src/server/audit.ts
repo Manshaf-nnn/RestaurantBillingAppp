@@ -26,6 +26,17 @@ const REDACTED_KEYS = new Set([
   'token',
   'secret',
   'apiKey',
+  // The columns this schema actually holds credentials in. `signInCode` IS a
+  // password (it is hashed into passwordHash); the rest are second factors,
+  // key fingerprints and bank details — none of them belongs in a row every
+  // AUDIT_VIEW holder can read.
+  'signInCode',
+  'mfaSecret',
+  'totpSecret',
+  'recoveryCodes',
+  'keyHash',
+  'qrPayload',
+  'accountNumber',
 ])
 
 /** Strips credentials before anything is persisted to the audit trail. */

@@ -4,7 +4,7 @@ import QRCode from 'qrcode'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { assertPeriodOpen } from '@/features/accounting/service'
-import { outstandingOn } from '@/features/orders/pricing'
+import { outstandingOn, derivePaymentStatus } from '@/features/orders/pricing'
 import { nextCounterValue, yearIn } from '@/server/db/counters'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { prisma, guardLocks, type TxClient } from '@/server/db/prisma'
@@ -332,38 +332,58 @@ export async function capturePayment(params: {
      * plausible — and when the cashier has no drawer at that branch, the
      * payment is correctly left unattributed instead of landing somewhere else.
      */
+    // FOR SHARE: a close in progress holds the row FOR UPDATE, so this waits
+    // for it and then sees the drawer closed — rather than reading OPEN a
+    // moment before the close froze its expected cash without this payment.
     const drawer = params.receivedById
-      ? await tx.cashDrawerSession.findFirst({
-          where: {
-            restaurantId: params.restaurantId,
-            openedById: params.receivedById,
-            branchId: order.branchId,
-            status: 'OPEN',
-          },
-          orderBy: { openedAt: 'desc' },
-          select: { id: true },
-        })
+      ? (
+          await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM cash_drawer_sessions
+            WHERE "restaurantId" = ${params.restaurantId}
+              AND "openedById" = ${params.receivedById}
+              AND "branchId" = ${order.branchId}
+              AND status = 'OPEN'
+            ORDER BY "openedAt" DESC
+            LIMIT 1
+            FOR SHARE
+          `
+        )[0] ?? null
       : null
 
     const payment = params.paymentId
-      ? await tx.payment.update({
-          where: { id: params.paymentId },
-          data: {
-            status: 'PAID',
-            amount: params.amount,
-            tenderedAmount: params.tenderedAmount ?? null,
-            changeAmount,
-            reference: params.reference || null,
-            // Stamped on the settling branch as well as the creating one: a QR
-            // intent row is created UNPAID long before it is settled, and the
-            // destination belongs to the settlement, not to the intent.
-            destination: destination.code,
-            receivedById: params.receivedById ?? null,
-            paidAt: new Date(),
-            cashDrawerSessionId: drawer?.id ?? null,
-            clientRequestId: params.clientRequestId ?? null,
-          },
-        })
+      ? await (async () => {
+          /*
+           * Fenced on restaurant, order and status, not just the id. The
+           * plain update by primary key would have settled any tenant's
+           * intent row onto this bill — latent, since no caller passed a
+           * foreign id, and latent is not the same as safe.
+           */
+          const claimed = await tx.payment.updateMany({
+            where: {
+              id: params.paymentId,
+              restaurantId: params.restaurantId,
+              orderId: order.id,
+              status: 'UNPAID',
+            },
+            data: {
+              status: 'PAID',
+              amount: params.amount,
+              tenderedAmount: params.tenderedAmount ?? null,
+              changeAmount,
+              reference: params.reference || null,
+              // Stamped on the settling branch as well as the creating one: a QR
+              // intent row is created UNPAID long before it is settled, and the
+              // destination belongs to the settlement, not to the intent.
+              destination: destination.code,
+              receivedById: params.receivedById ?? null,
+              paidAt: new Date(),
+              cashDrawerSessionId: drawer?.id ?? null,
+              clientRequestId: params.clientRequestId ?? null,
+            },
+          })
+          if (claimed.count === 0) throw new NotFoundError('Payment')
+          return tx.payment.findUniqueOrThrow({ where: { id: params.paymentId } })
+        })()
       : await tx.payment.create({
           data: {
             restaurantId: params.restaurantId,
@@ -423,7 +443,7 @@ export async function capturePayment(params: {
           // Settled in full and nothing else open: the sitting is over.
           await tx.tableSession.updateMany({
             where: { restaurantId: params.restaurantId, tableId: order.tableId, status: 'OPEN' },
-            data: { status: 'CLOSED', closedAt: new Date() },
+            data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
           })
         }
       }
@@ -683,6 +703,14 @@ export async function refundPayment(params: {
     if (lockedOrder.length === 0) throw new NotFoundError('Order')
 
     /*
+     * Signed books do not quietly change (§59). A refund belongs to the day it
+     * is GIVEN (owner decision, 2026-09-13), so the seal that matters is the
+     * one over today — every sibling (capture, cancel, void, discount) had
+     * this guard and this one did not.
+     */
+    await assertPeriodOpen(tx, params.restaurantId, new Date(), 'This refund')
+
+    /*
      * A retry of a refund that already went out. Read inside the fence for the
      * same reason capture does, and the unique index on
      * (restaurantId, clientRequestId) is the backstop.
@@ -771,14 +799,57 @@ export async function refundPayment(params: {
       where: { id: payment.orderId },
       data: {
         paidTotal,
-        paymentStatus:
-          paidTotal === 0
-            ? 'REFUNDED'
-            : paidTotal >= payment.order.grandTotal + payment.order.tipAmount
-              ? 'PAID'
-              : 'PARTIAL',
+        paymentStatus: derivePaymentStatus({
+          paidTotal,
+          grandTotal: payment.order.grandTotal,
+          tipAmount: payment.order.tipAmount,
+          current: paidTotal === 0 ? 'REFUNDED' : payment.order.paymentStatus,
+        }),
       },
     })
+
+    /*
+     * Every rupee came back, so the points it earned go back too (owner
+     * decision, 2026-09-13) — the mirror of `cancelOrder` returning redeemed
+     * points. Once, however many refunds it took to get here; and never below
+     * the balance the guest still holds, though the ledger records the full
+     * reversal so the books explain the difference.
+     */
+    if (paidTotal === 0 && payment.order.customerId) {
+      const earned = await tx.loyaltyEntry.findFirst({
+        where: { orderId: payment.orderId, kind: 'EARNED' },
+        select: { points: true },
+      })
+      const alreadyReversed = await tx.loyaltyEntry.findFirst({
+        where: { orderId: payment.orderId, kind: 'ADJUSTED', note: { startsWith: 'Refunded in full' } },
+        select: { id: true },
+      })
+      if (earned && !alreadyReversed) {
+        const holder = await tx.customer.findUnique({
+          where: { id: payment.order.customerId },
+          select: { loyaltyPoints: true, totalSpent: true },
+        })
+        const take = Math.min(Math.max(0, earned.points), holder?.loyaltyPoints ?? 0)
+        await tx.customer.update({
+          where: { id: payment.order.customerId },
+          data: {
+            loyaltyPoints: { decrement: take },
+            totalSpent: { decrement: Math.min(payment.order.grandTotal, holder?.totalSpent ?? 0) },
+          },
+        })
+        await tx.loyaltyEntry.create({
+          data: {
+            restaurantId: params.restaurantId,
+            customerId: payment.order.customerId,
+            orderId: payment.orderId,
+            points: -take,
+            kind: 'ADJUSTED',
+            note: `Refunded in full — the ${earned.points} points earned on ${payment.order.orderNumber} taken back`,
+            actorId: params.actorId,
+          },
+        })
+      }
+    }
 
     // Cash handed back leaves the drawer that is open right now, which is not
     // necessarily the drawer that took the money — a bill paid this morning can

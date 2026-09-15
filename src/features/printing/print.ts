@@ -10,6 +10,7 @@
  */
 
 export type { PaperWidth } from './paper'
+import { formatTime } from '@/lib/datetime'
 import type { PaperWidth } from './paper'
 import { receiptTimestamp } from './receipt'
 
@@ -27,6 +28,8 @@ interface TicketInput {
   placedAt: string
   notes?: string | null
   items: TicketItem[]
+  /** The restaurant's IANA zone — the pass judges ticket age by ITS clock. */
+  timeZone?: string | null
 }
 
 interface ReceiptLine {
@@ -179,10 +182,13 @@ export function printKitchenTicket(
   restaurantName: string,
   width: PaperWidth = 80,
 ) {
-  const time = new Date(ticket.placedAt).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  /*
+   * Business time, not the tablet's. The receipt path was fixed for exactly
+   * this and says so; the ticket was not, and a kitchen tablet on a factory
+   * default of UTC printed "12:30" on an order taken at 18:00 — the number a
+   * cook uses to decide what is late.
+   */
+  const time = formatTime(ticket.placedAt, { timeZone: ticket.timeZone })
 
   const items = ticket.items
     .map(
@@ -214,7 +220,7 @@ export function printKitchenTicket(
       ${items}
       ${ticket.notes ? `<div class="rule"></div><div class="bold">NOTE: ${escapeHtml(ticket.notes)}</div>` : ''}
       <div class="rule"></div>
-      <div class="center muted">Printed ${new Date().toLocaleTimeString()}</div>
+      <div class="center muted">Printed ${formatTime(new Date(), { timeZone: ticket.timeZone })}</div>
     `,
   )
 }

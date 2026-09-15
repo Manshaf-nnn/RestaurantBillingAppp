@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { toast } from 'sonner'
 import { Copy, KeyRound, Link2, Monitor, Plus, RefreshCw, Trash2, UserRound } from 'lucide-react'
@@ -209,7 +210,7 @@ export function LinksManager({
                   <TableCell className="hidden md:table-cell text-sm">
                     {row.lastUsedAt ? (
                       <>
-                        {new Date(row.lastUsedAt).toLocaleDateString()}
+                        <LocalDateTime value={row.lastUsedAt} options={{ dateStyle: 'medium' }} />
                         <span className="block text-xs text-muted-foreground">
                           {row.useCount} {row.useCount === 1 ? 'time' : 'times'}
                         </span>

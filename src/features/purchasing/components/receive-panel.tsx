@@ -1,5 +1,6 @@
 'use client'
 
+import { newRequestKey } from '@/lib/request-key'
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -82,6 +83,8 @@ export function ReceivePanel({
     router.refresh()
   }
 
+  const requestKey = React.useRef(newRequestKey('receive'))
+
   const receive = async () => {
     const lines = detail.lines
       .map((l) => ({
@@ -110,11 +113,17 @@ export function ReceivePanel({
     }
 
     setBusy(true)
+    // One key per delivery, reused across retries of the same tap, renewed
+    // once it lands — a dropped connection cannot put the delivery in twice.
     const result = await callAction(() =>
-      receiveGoodsAction({ purchaseId: detail.id, supplierRef, branchId: destination, lines }),
+      receiveGoodsAction({
+        purchaseId: detail.id, supplierRef, branchId: destination, lines,
+        clientRequestId: requestKey.current,
+      }),
     )
     setBusy(false)
     if (!result.ok) { toast.error(result.error); return }
+    requestKey.current = newRequestKey('receive')
     toast.success(`${result.data.number} received — stock updated`)
     setRejected({})
     setBatchNo({})

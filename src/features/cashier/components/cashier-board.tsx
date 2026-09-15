@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { outstandingOn } from '@/features/orders/pricing'
+import { outstandingOn, derivePaymentStatus } from '@/features/orders/pricing'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -412,13 +412,32 @@ export function CashierBoard({
     ])
   }
 
-  const onSettled = (billId: string, amount: number, fullySettled: boolean) => {
+  const onSettled = (billId: string, amount: number, tip: number, fullySettled: boolean) => {
     setCollected((current) => ({ total: current.total + amount, count: current.count + 1 }))
     setBills((current) =>
       fullySettled
         ? current.filter((bill) => bill.id !== billId)
         : current.map((bill) =>
-            bill.id === billId ? { ...bill, paidTotal: bill.paidTotal + amount, paymentStatus: 'PARTIAL' } : bill,
+            bill.id === billId
+              ? {
+                  ...bill,
+                  paidTotal: bill.paidTotal + amount,
+                  /*
+                   * The tip rides on the bill as well as inside the payment:
+                   * what is still due is grandTotal + tip − paid. Leaving the
+                   * tip off understated the balance by exactly the tip until
+                   * the next refresh — the window the second tender happens in.
+                   * Status comes from the same derivation the server uses.
+                   */
+                  tipAmount: bill.tipAmount + tip,
+                  paymentStatus: derivePaymentStatus({
+                    paidTotal: bill.paidTotal + amount,
+                    grandTotal: bill.grandTotal,
+                    tipAmount: bill.tipAmount + tip,
+                    current: bill.paymentStatus,
+                  }),
+                }
+              : bill,
           ),
     )
     if (fullySettled) setSelectedId(null)
@@ -971,7 +990,7 @@ function BillPanel({
 }: {
   bill: CashierBill
   restaurant: ReceiptRestaurant
-  onSettled: (billId: string, amount: number, fullySettled: boolean) => void
+  onSettled: (billId: string, amount: number, tip: number, fullySettled: boolean) => void
 }) {
   const due = outstandingOn(bill)
   const [method, setMethod] = React.useState<(typeof METHODS)[number]['key']>('CASH')
@@ -1032,7 +1051,7 @@ function BillPanel({
         ? `Paid. Change due ${formatMoney(result.data.change, restaurant.currency, restaurant.locale)}`
         : 'Payment recorded',
     )
-    onSettled(bill.id, amountDue, result.data.settled)
+    onSettled(bill.id, amountDue, tipMinor, result.data.settled)
     setTaking('')
     setTendered('')
     setReference('')

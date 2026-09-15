@@ -278,6 +278,28 @@ export function outstandingOn(order: {
   return Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal)
 }
 
+/**
+ * The payment status a bill's money implies — the ONE place it is derived.
+ *
+ * It used to be written in two places (capture and refund) and nowhere else,
+ * so a bill whose total changed after a payment — a guest adding a dish to a
+ * prepaid order, a line voided off a partly-paid one — kept whatever status it
+ * had. PAID with money still owed is a bill no screen will ever offer for
+ * settlement. A terminal status with nothing paid (REFUNDED, FAILED) is kept,
+ * because those record what happened, not what is owed.
+ */
+export function derivePaymentStatus(order: {
+  paidTotal: number
+  grandTotal: number
+  tipAmount: number
+  current?: string | null
+}): 'UNPAID' | 'PARTIAL' | 'PAID' | 'REFUNDED' | 'FAILED' {
+  if (order.paidTotal <= 0) {
+    return order.current === 'REFUNDED' || order.current === 'FAILED' ? order.current : 'UNPAID'
+  }
+  return order.paidTotal >= order.grandTotal + order.tipAmount ? 'PAID' : 'PARTIAL'
+}
+
 // ── loyalty ──────────────────────────────────────────────────────────────────
 
 /** Points earned on a settled order. */

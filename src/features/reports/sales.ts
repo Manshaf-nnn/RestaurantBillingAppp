@@ -125,7 +125,10 @@ export async function getSalesReport(params: {
         service: bigint | null; tips: bigint | null; guests: bigint | null; orders: bigint | null
       }>>`
         SELECT
-          COALESCE(SUM(o.subtotal), 0)::bigint                                  AS gross,
+          -- Ex-tax on every bill: an inclusive bill's subtotal already holds
+          -- the tax that the tax column reports, so it is taken back out —
+          -- net sales must never contain tax, whichever way the menu prices it.
+          COALESCE(SUM(o.subtotal - CASE WHEN o."taxInclusive" THEN o."taxTotal" ELSE 0 END), 0)::bigint AS gross,
           COALESCE(SUM(o."discountTotal" + o."loyaltyDiscount"), 0)::bigint     AS discounts,
           COALESCE(SUM(o."taxTotal"), 0)::bigint                                AS tax,
           COALESCE(SUM(o."serviceCharge"), 0)::bigint                           AS service,
@@ -137,15 +140,25 @@ export async function getSalesReport(params: {
 
       /*
        * Refunds come from the refunds ledger, not from payment rows flipped to
-       * REFUNDED — partial refunds only exist there. Attributed to the order
-       * they belong to rather than the day they were given, so a report always
-       * reconciles against the bill it describes.
+       * REFUNDED — partial refunds only exist there.
+       *
+       * Dated when the money went back, not by the order it belongs to
+       * (owner decision, 2026-09-13). The two conventions lived side by side —
+       * this report by order date, the payments report and the journal by
+       * refund date — so a March refund of a January bill changed January's
+       * signed net sales while showing in March's cash. One basis now; a
+       * refund belongs to the day it was given, and a sealed month stays what
+       * it was. A cancelled order's refunds are left out because cancellation
+       * already removed its sale.
        */
       prisma.$queryRaw<Array<{ total: bigint | null }>>`
         SELECT COALESCE(SUM(r.amount), 0)::bigint AS total
         FROM refunds r
         JOIN orders o ON o.id = r."orderId"
-        WHERE ${ORDER_SCOPE}
+        WHERE o."restaurantId" = ${params.restaurantId}
+          AND o.status <> 'CANCELLED'
+          AND r."createdAt" >= ${from} AND r."createdAt" <= ${to}
+          ${branchFilter}
       `,
 
       prisma.$queryRaw<Row[]>`
@@ -363,7 +376,10 @@ export async function getPaymentsReport(params: {
     prisma.cashDrawerSession.findMany({
       where: {
         restaurantId: params.restaurantId,
-        status: 'CLOSED',
+        // The count is final at PENDING_REVIEW; review only signs it. The
+        // journal's J16 counts both, and a drawer parked for review is by
+        // definition one of the large variances — this line must not omit it.
+        status: { in: ['CLOSED', 'PENDING_REVIEW'] },
         closedAt: { gte: params.range.from, lte: params.range.to },
         ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
       },

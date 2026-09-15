@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -138,7 +139,7 @@ export function BankReconcile({
               {statements.map((statement) => (
                 <li key={statement.id}>
                   {statement.fileName} · {statement.lineCount} lines ·{' '}
-                  {new Date(statement.createdAt).toLocaleDateString()} · {statement.uploadedByName}
+                  <LocalDateTime value={statement.createdAt} options={{ dateStyle: 'medium' }} /> · {statement.uploadedByName}
                 </li>
               ))}
             </ul>
@@ -168,7 +169,7 @@ export function BankReconcile({
                     ) : null}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {new Date(line.lineDate).toLocaleDateString()}
+                    <LocalDateTime value={line.lineDate} options={{ dateStyle: 'medium', timeZone: 'UTC' }} />
                     {line.reference ? ` · ref ${line.reference}` : ''}
                   </p>
                   {line.suggestion ? (
@@ -177,7 +178,7 @@ export function BankReconcile({
                       <Link href={line.suggestion.href} className="font-medium text-primary underline-offset-2 hover:underline">
                         {line.suggestion.label}
                       </Link>{' '}
-                      · {money(line.suggestion.amount)} on {new Date(line.suggestion.date).toLocaleDateString()}
+                      · {money(line.suggestion.amount)} on <LocalDateTime value={line.suggestion.date} options={{ dateStyle: 'medium' }} />
                     </p>
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground">

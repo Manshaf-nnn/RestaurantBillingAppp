@@ -4,7 +4,7 @@ import type { StockUnit, WastageReason, WastageRecord } from '@prisma/client'
 
 import type { DateRange } from '@/features/reports/range'
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma, type TxClient } from '@/server/db/prisma'
+import { prisma, type TxClient, isUniqueViolation, uniqueViolationTargets } from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { toBaseUnits } from './units'
 import { allocateFefo, consumeBatches } from './batches'
@@ -42,6 +42,12 @@ export const WASTAGE_REASON_LABELS: Record<WastageReason, string> = {
 export interface RecordWastageParams {
   restaurantId: string
   itemId: string
+  /**
+   * One id per submission, minted by the screen. A retry after a dropped
+   * connection carries the same id and gets the record already written —
+   * not a second WASTAGE movement and a second expensed write-off.
+   */
+  clientRequestId?: string | null
   quantity: number
   unit?: StockUnit | null
   reason: WastageReason
@@ -91,6 +97,16 @@ export async function recordWastageWithin(
   })
   if (!item) throw new NotFoundError('Inventory item')
 
+  // A replay of a write-off that already posted. The unique index on
+  // (restaurantId, clientRequestId) is the backstop for the race this read
+  // cannot see; `recordWastage` below turns that violation into the same answer.
+  if (params.clientRequestId) {
+    const already = await tx.wastageRecord.findFirst({
+      where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+    })
+    if (already) return already
+  }
+
   const enteredUnit = params.unit ?? item.unit
   const base = toBaseUnits(params.quantity, enteredUnit, item)
 
@@ -139,6 +155,7 @@ export async function recordWastageWithin(
       movementId: posted.movement.id,
       productionOrderId: params.productionOrderId ?? null,
       status: 'RECORDED',
+      clientRequestId: params.clientRequestId ?? null,
     },
   })
 
@@ -151,7 +168,19 @@ export async function recordWastageWithin(
 }
 
 export async function recordWastage(params: RecordWastageParams): Promise<WastageRecord> {
-  return prisma.$transaction((tx) => recordWastageWithin(tx, params))
+  try {
+    return await prisma.$transaction((tx) => recordWastageWithin(tx, params))
+  } catch (error) {
+    // Two taps in the same instant both passed the replay read; the unique
+    // index decided, and the loser reports the winner's record.
+    if (params.clientRequestId && isUniqueViolation(error) && uniqueViolationTargets(error).includes('clientRequestId')) {
+      const winner = await prisma.wastageRecord.findFirst({
+        where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+      })
+      if (winner) return winner
+    }
+    throw error
+  }
 }
 
 /** A manager's review of wastage that has already happened. */

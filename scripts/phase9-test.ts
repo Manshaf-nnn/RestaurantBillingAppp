@@ -31,10 +31,21 @@ async function main() {
     { foodId: burger.id, categoryId: mains.id, quantity: 2, lineTotal: 2_000_00 },
     { foodId: cake.id, categoryId: desserts.id, quantity: 1, lineTotal: 400_00 },
   ]
-  const ctx = { restaurantId: shop.id, subtotal: 2_400_00, lines: basket, branchId: colombo.id }
+  // DELIBERATE behaviour change 2026-09-13 (bugfix.md D7): the window and the
+  // day are read in the RESTAURANT's clock, not the server's, so every `now`
+  // built with local components below is tagged with the zone it was built in.
+  const ctx = {
+    restaurantId: shop.id, subtotal: 2_400_00, lines: basket, branchId: colombo.id,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  }
 
+  // DELIBERATE behaviour change 2026-09-13 (bugfix.md D7b): a PERCENT coupon's
+  // `value` is basis points — the form stores 10% as 1000 — so the amounts
+  // below use bps. The evaluator used to divide by 100, reading 1000 as 1000%;
+  // this fixture matched that bug (value 10 = "10%") and so never exercised a
+  // real coupon.
   const mkCoupon = (data: Record<string, unknown>) =>
-    prisma.coupon.create({ data: { restaurantId: shop.id, code: `X${Math.random().toString(36).slice(2, 8).toUpperCase()}`, type: 'PERCENT', value: 10, ...data } })
+    prisma.coupon.create({ data: { restaurantId: shop.id, code: `X${Math.random().toString(36).slice(2, 8).toUpperCase()}`, type: 'PERCENT', value: 1000, ...data } })
 
   console.log('\n── 1. Loyalty is configurable ───────────────────────────')
   const loyalty = await loyaltyFor(shop.id)
@@ -54,25 +65,25 @@ async function main() {
   await prisma.restaurant.update({ where: { id: shop.id }, data: { loyaltyEnabled: true } })
 
   console.log('\n── 2. Discount types ────────────────────────────────────')
-  const pct = await mkCoupon({ type: 'PERCENT', value: 10 })
+  const pct = await mkCoupon({ type: 'PERCENT', value: 1000 })
   ok('10% off the bill = 240', (await evaluate(pct, ctx)).amount === 240_00)
   const fixed = await mkCoupon({ type: 'FIXED', value: 300_00 })
   ok('a fixed discount is exact', (await evaluate(fixed, ctx)).amount === 300_00)
-  const capped = await mkCoupon({ type: 'PERCENT', value: 50, maxDiscount: 500_00 })
+  const capped = await mkCoupon({ type: 'PERCENT', value: 5000, maxDiscount: 500_00 })
   ok('a cap limits the discount', (await evaluate(capped, ctx)).amount === 500_00)
   const huge = await mkCoupon({ type: 'FIXED', value: 9_999_00 })
   ok('a discount never exceeds the bill', (await evaluate(huge, ctx)).amount === 2_400_00)
 
   console.log('\n── 3. Scope ─────────────────────────────────────────────')
-  const catOnly = await mkCoupon({ type: 'PERCENT', value: 50, scope: 'CATEGORY', categoryIds: [desserts.id] })
+  const catOnly = await mkCoupon({ type: 'PERCENT', value: 5000, scope: 'CATEGORY', categoryIds: [desserts.id] })
   const catResult = await evaluate(catOnly, ctx)
   ok('50% off desserts takes 200, not 1200', catResult.amount === 200_00, `got ${catResult.amount}`)
   ok('it reports what it applied to', catResult.eligibleLineTotal === 400_00)
 
-  const itemOnly = await mkCoupon({ type: 'PERCENT', value: 10, scope: 'ITEM', itemIds: [burger.id] })
+  const itemOnly = await mkCoupon({ type: 'PERCENT', value: 1000, scope: 'ITEM', itemIds: [burger.id] })
   ok('an item discount only touches that item', (await evaluate(itemOnly, ctx)).amount === 200_00)
 
-  const missing = await mkCoupon({ type: 'PERCENT', value: 10, scope: 'ITEM', itemIds: ['nope'] })
+  const missing = await mkCoupon({ type: 'PERCENT', value: 1000, scope: 'ITEM', itemIds: ['nope'] })
   const missingResult = await evaluate(missing, ctx)
   ok('nothing qualifying is refused', !missingResult.ok)
   ok('and explains why', (missingResult.reason ?? '').includes('qualifies'))

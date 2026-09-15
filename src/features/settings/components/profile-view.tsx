@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { LogOut, Monitor, Shield } from 'lucide-react'
 import { toast } from 'sonner'
@@ -130,7 +131,7 @@ export function ProfileView({
                     ) : null}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {session.ipAddress ?? '—'} · {new Date(session.lastUsedAt).toLocaleString()}
+                    {session.ipAddress ?? '—'} · <LocalDateTime value={session.lastUsedAt} />
                   </p>
                 </div>
               </li>

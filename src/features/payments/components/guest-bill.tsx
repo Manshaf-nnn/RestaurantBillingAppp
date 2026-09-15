@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -27,6 +28,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { PaymentStatusBadge } from '@/components/ui/status'
 import { EVENTS } from '@/lib/realtime/events'
+import { derivePaymentStatus } from '@/features/orders/pricing'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
@@ -125,8 +127,15 @@ export function GuestBill({
     setBill((current) => ({
       ...current,
       paidTotal: current.paidTotal + payload.amount,
-      paymentStatus:
-        current.paidTotal + payload.amount >= current.grandTotal ? 'PAID' : 'PARTIAL',
+      // The same derivation the server uses — `due` fifteen lines up already
+      // counted the tip; this comparison had forgotten it, so a tipped bill
+      // read "settled, thank you" on the phone while the till held it PARTIAL.
+      paymentStatus: derivePaymentStatus({
+        paidTotal: current.paidTotal + payload.amount,
+        grandTotal: current.grandTotal,
+        tipAmount: current.tipAmount,
+        current: current.paymentStatus,
+      }),
     }))
     setQr(null)
     toast.success('Payment confirmed — thank you!')
@@ -297,10 +306,11 @@ export function GuestBill({
             <dd className="text-right font-medium">{bill.customerName}</dd>
             <dt className="text-muted-foreground">Date</dt>
             <dd className="text-right font-medium">
-              {new Date(bill.placedAt).toLocaleString(locale, {
-                dateStyle: 'medium',
-                timeStyle: 'short',
-              })}
+              <LocalDateTime
+                value={bill.placedAt}
+                locale={locale}
+                options={{ dateStyle: 'medium', timeStyle: 'short' }}
+              />
             </dd>
           </dl>
 

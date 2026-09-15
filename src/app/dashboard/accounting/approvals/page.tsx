@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { formatDate } from '@/lib/datetime'
 import Link from 'next/link'
 
 import { getApprovalsInbox } from '@/features/accounting/inbox'
@@ -72,7 +73,7 @@ export default async function PaymentApprovalsPage({
                       {item.title}
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.requestedByName} · {item.requestedAt.toLocaleDateString()} · {item.consequence}
+                      {item.requestedByName} · {formatDate(item.requestedAt, { timeZone: restaurant.timezone })} · {item.consequence}
                     </p>
                   </div>
                   <span className="flex items-center gap-3 whitespace-nowrap">

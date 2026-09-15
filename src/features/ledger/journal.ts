@@ -55,6 +55,13 @@ export interface JournalEntry {
   lines: JournalLine[]
   /** Σ debits, which by construction equals Σ credits. */
   total: number
+  /**
+   * Set when the source did not balance and the gap was plugged into 4910.
+   * A plug keeps the trial balance foldable; the warning is what stops it
+   * hiding a real defect — it hid a year of tax-inclusive sales crediting
+   * revenue gross of tax.
+   */
+  warning?: string
 }
 
 function entry(params: {
@@ -79,7 +86,9 @@ function entry(params: {
 
   const debits = lines.reduce((sum, line) => sum + line.debit, 0)
   const credits = lines.reduce((sum, line) => sum + line.credit, 0)
+  let warning: string | undefined
   if (debits !== credits) {
+    warning = `Source is unbalanced: debits ${debits} ≠ credits ${credits}; the gap of ${debits - credits} was plugged into 4910`
     // Never silently publish an unbalanced entry: a rounding artefact goes to
     // 4910 where it can be seen and explained, exactly as a bill's rounding
     // adjustment does.
@@ -94,6 +103,7 @@ function entry(params: {
   }
 
   return {
+    warning,
     id: params.id,
     date: params.date,
     sourceType: params.sourceType,
@@ -124,7 +134,7 @@ export async function buildJournal(params: {
         select: {
           id: true, orderNumber: true, placedAt: true, subtotal: true, discountTotal: true,
           loyaltyDiscount: true, taxTotal: true, serviceCharge: true, tipAmount: true,
-          roundingAdj: true, grandTotal: true,
+          roundingAdj: true, grandTotal: true, taxInclusive: true,
           items: { where: { status: { not: 'CANCELLED' } }, select: { costPrice: true, quantity: true } },
         },
         orderBy: { placedAt: 'desc' },
@@ -234,7 +244,14 @@ export async function buildJournal(params: {
       lines: [
         { account: '1100', debit: order.grandTotal + order.tipAmount },
         { account: '4100', debit: discounts },
-        { account: '4000', credit: order.subtotal },
+        /*
+         * Revenue is what the guest paid for the food, without the tax. On a
+         * tax-inclusive bill the subtotal already CONTAINS the tax that the
+         * 2100 line below records as a liability; crediting both in full
+         * double-counted it, and `entry()` quietly plugged the difference —
+         * about a tax rate's worth of every inclusive sale — into "rounding".
+         */
+        { account: '4000', credit: order.subtotal - (order.taxInclusive ? order.taxTotal : 0) },
         { account: '2100', credit: order.taxTotal },
         { account: '4900', credit: order.serviceCharge },
         { account: '2120', credit: order.tipAmount },

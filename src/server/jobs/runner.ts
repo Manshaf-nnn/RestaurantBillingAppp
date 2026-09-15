@@ -2,7 +2,7 @@ import 'server-only'
 
 import type { Prisma } from '@prisma/client'
 
-import { prisma } from '@/server/db/prisma'
+import { prisma, isUniqueViolation } from '@/server/db/prisma'
 import { trimOutbox } from '@/server/realtime/outbox'
 import { runIntegrityChecks } from '@/features/accounting/integrity'
 import { captureError } from '@/server/errors'
@@ -156,6 +156,9 @@ function backoffMs(attempts: number): number {
   return Math.min(attempts * attempts * 60_000, 3_600_000)
 }
 
+/** How long a job may sit RUNNING before it is assumed dead and re-queued. */
+const STALE_RUNNING_MS = 15 * 60_000
+
 export interface JobRunSummary {
   claimed: number
   done: number
@@ -172,6 +175,28 @@ export interface JobRunSummary {
  */
 export async function runJobs(limit = 5): Promise<JobRunSummary> {
   const summary: JobRunSummary = { claimed: 0, done: 0, failed: 0, results: [] }
+
+  /*
+   * Reclaim jobs whose runner died mid-flight FIRST, and as its own statement.
+   *
+   * A crashed RUNNING job otherwise stays RUNNING for ever, and its dedupeKey
+   * then blocks that day's sweep — the nightly integrity check silently did not
+   * run on exactly the nights it timed out. Fifteen minutes is longer than any
+   * handler here legitimately takes; `attempts`/`maxAttempts` still bound how
+   * many times it comes back.
+   *
+   * This is deliberately NOT folded into the claim's WHERE as an OR. That
+   * `(QUEUED …) OR (RUNNING …)` turns the planner's index scan into a bitmap
+   * scan, and `FOR UPDATE SKIP LOCKED` under a bitmap scan stops isolating —
+   * two racing runners then each claim every row and every job runs twice
+   * (jobs-test §2). Re-queuing first with an idempotent, self-concurrent-safe
+   * UPDATE keeps the claim a single-predicate index scan, where SKIP LOCKED
+   * works. `startedAt: null` here is what makes it eligible below.
+   */
+  await prisma.job.updateMany({
+    where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - STALE_RUNNING_MS) } },
+    data: { status: 'QUEUED', startedAt: null },
+  })
 
   /*
    * Claim inside a short transaction: SELECT ... FOR UPDATE SKIP LOCKED and
@@ -265,17 +290,28 @@ export async function enqueue(params: {
     if (existing) return { id: existing.id, created: false }
   }
 
-  const job = await prisma.job.create({
-    data: {
-      kind: params.kind,
-      restaurantId: params.restaurantId ?? null,
-      payload: params.payload,
-      runAt: params.runAt ?? new Date(),
-      dedupeKey: params.dedupeKey ?? null,
-      ...(params.maxAttempts ? { maxAttempts: params.maxAttempts } : {}),
-    },
-  })
-  return { id: job.id, created: true }
+  try {
+    const job = await prisma.job.create({
+      data: {
+        kind: params.kind,
+        restaurantId: params.restaurantId ?? null,
+        payload: params.payload,
+        runAt: params.runAt ?? new Date(),
+        dedupeKey: params.dedupeKey ?? null,
+        ...(params.maxAttempts ? { maxAttempts: params.maxAttempts } : {}),
+      },
+    })
+    return { id: job.id, created: true }
+  } catch (error) {
+    // Two schedulers ticking at once both passed the read above; the unique
+    // index on dedupeKey decides, and the loser reports the winner's row
+    // instead of escaping as a 500 from /api/jobs/run.
+    if (params.dedupeKey && isUniqueViolation(error)) {
+      const winner = await prisma.job.findUnique({ where: { dedupeKey: params.dedupeKey } })
+      if (winner) return { id: winner.id, created: false }
+    }
+    throw error
+  }
 }
 
 /**

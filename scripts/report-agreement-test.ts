@@ -170,6 +170,12 @@ async function main() {
     `${profit.totals.grossProfit} vs ${profit.totals.revenue} − ${profit.totals.cogs}`)
   check('the hub’s profit figures are the profit report’s',
     summary.grossProfit === profit.totals.grossProfit && summary.foodCost === profit.totals.cogs)
+  // The fixture always had the partial refund; this assertion did not exist,
+  // and the profit report read refunds from payments flipped to REFUNDED — a
+  // partial one never flips — so it overstated revenue by exactly the 400.00.
+  check('profit revenue IS the sales report’s net sales — the partial refund included',
+    profit.totals.revenue === sales.totals.netSales,
+    `${profit.totals.revenue} vs ${sales.totals.netSales}`)
 
   console.log('\n── Collected is cash-basis and separate ──')
   // A: 1015 (with tip) + B: settled − C: 400 refunded of its payment

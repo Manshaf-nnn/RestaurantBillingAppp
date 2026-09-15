@@ -9,7 +9,7 @@ import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
-import { prisma } from '@/server/db/prisma'
+import { prisma, isUniqueViolation } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 /*
@@ -28,6 +28,8 @@ const paymentSchema = z.object({
   reference: z.string().trim().max(80).optional().or(z.literal('')),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
   paidAt: z.string().optional().or(z.literal('')),
+  /** One id per submission; a retry with the same id is answered, not repeated. */
+  clientRequestId: z.string().trim().min(8).max(64).optional().or(z.literal('')),
 })
 
 export async function recordSupplierPaymentAction(
@@ -73,20 +75,50 @@ export async function recordSupplierPaymentAction(
       // other money field here, so typing 500 cannot become five rupees.
       const amount = Math.round(data.amount * minorUnitFactor(restaurant.currency))
 
-      const payment = await prisma.supplierPayment.create({
-        data: {
-          restaurantId: user.restaurantId,
-          supplierId: supplier.id,
-          purchaseId: data.purchaseId || null,
-          amount,
-          method: data.method,
-          reference: data.reference || null,
-          notes: data.notes || null,
-          paidAt: data.paidAt ? new Date(data.paidAt) : new Date(),
-          createdById: user.id,
-          createdByName: user.name,
-        },
-      })
+      /*
+       * A replay of a payment already recorded — the tap that committed and
+       * then lost its response. Two taps in the same instant both pass this
+       * read; the unique index on (restaurantId, clientRequestId) decides,
+       * and the loser reports the winner's row. Without this, the supplier
+       * was credited twice and the balance read paid when it was not.
+       */
+      const clientRequestId = data.clientRequestId || null
+      if (clientRequestId) {
+        const already = await prisma.supplierPayment.findFirst({
+          where: { restaurantId: user.restaurantId, clientRequestId },
+          select: { id: true },
+        })
+        if (already) return { id: already.id }
+      }
+
+      let payment: { id: string }
+      try {
+        payment = await prisma.supplierPayment.create({
+          data: {
+            restaurantId: user.restaurantId,
+            supplierId: supplier.id,
+            purchaseId: data.purchaseId || null,
+            amount,
+            method: data.method,
+            reference: data.reference || null,
+            notes: data.notes || null,
+            paidAt: data.paidAt ? new Date(data.paidAt) : new Date(),
+            createdById: user.id,
+            createdByName: user.name,
+            clientRequestId,
+          },
+          select: { id: true },
+        })
+      } catch (error) {
+        if (clientRequestId && isUniqueViolation(error)) {
+          const winner = await prisma.supplierPayment.findFirst({
+            where: { restaurantId: user.restaurantId, clientRequestId },
+            select: { id: true },
+          })
+          if (winner) return { id: winner.id }
+        }
+        throw error
+      }
 
       await audit({
         restaurantId: user.restaurantId,
@@ -144,11 +176,21 @@ export async function deleteSupplierPaymentAction(
         action: AUDIT_ACTIONS.SUPPLIER_PAYMENT_REMOVED,
         entity: 'SupplierPayment',
         entityId: payment.id,
+        // The whole row, not four fields: this is the only production path
+        // that hard-deletes a money row, and the audit entry is all that is
+        // left of it afterwards.
         before: {
           supplier: payment.supplier.name,
+          supplierId: payment.supplierId,
+          purchaseId: payment.purchaseId,
           amount: payment.amount,
+          method: payment.method,
           reference: payment.reference,
+          notes: payment.notes,
           paidAt: payment.paidAt.toISOString(),
+          createdById: payment.createdById,
+          createdByName: payment.createdByName,
+          createdAt: payment.createdAt.toISOString(),
         },
       })
 

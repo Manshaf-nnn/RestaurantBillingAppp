@@ -416,6 +416,13 @@ export async function requestPasswordReset(input: unknown): Promise<ActionResult
 
       // Respond identically whether or not the account exists.
       if (user && user.isActive && !user.deletedAt) {
+        // One live reset link at a time. Each request used to add another,
+        // so a mail intercepted last week still opened the door after the
+        // user had asked again; every earlier unused link expires now.
+        await prisma.verificationToken.updateMany({
+          where: { userId: user.id, purpose: 'PASSWORD_RESET', usedAt: null },
+          data: { expiresAt: new Date() },
+        })
         const token = generateToken(24)
         await prisma.verificationToken.create({
           data: {

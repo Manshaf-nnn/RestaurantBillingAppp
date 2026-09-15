@@ -96,20 +96,28 @@ export interface DestinationTotals {
 export async function getDestinationTotals(
   restaurantId: string,
   branchIds?: string[] | null,
+  /*
+   * Bounded, like every sibling report. Unbounded, this was a lifetime
+   * aggregate over payments ⋈ orders on a page that re-rendered every eight
+   * seconds during service — the slowest page in the app, slower every day.
+   */
+  range?: { from: Date; to: Date },
 ): Promise<DestinationTotals[]> {
   const atBranch = branchIds ? { order: { branchId: { in: branchIds } } } : {}
+  const paidWithin = range ? { paidAt: { gte: range.from, lte: range.to } } : {}
+  const refundedWithin = range ? { createdAt: { gte: range.from, lte: range.to } } : {}
 
   const [payments, refunds] = await Promise.all([
     prisma.payment.groupBy({
       by: ['destination'],
-      where: { restaurantId, status: { in: ['PAID', 'REFUNDED'] }, ...atBranch },
+      where: { restaurantId, status: { in: ['PAID', 'REFUNDED'] }, ...atBranch, ...paidWithin },
       _sum: { amount: true },
       _count: true,
       _max: { paidAt: true },
     }),
     prisma.refund.groupBy({
       by: ['destination'],
-      where: { restaurantId, ...atBranch },
+      where: { restaurantId, ...atBranch, ...refundedWithin },
       _sum: { amount: true },
     }),
   ])

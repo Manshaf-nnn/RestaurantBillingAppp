@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ensureStaffCodes } from '@/features/staff/codes'
 import { appUrl } from '@/lib/env'
-import { landingFor, PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { assignableRoles, landingFor, PERMISSIONS, ROLE_LABELS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { CopyLink } from '@/features/staff/components/copy-link'
@@ -16,20 +16,36 @@ export const metadata: Metadata = { title: 'Staff codes' }
 /**
  * Each member of staff, their code, and their personal sign-in link.
  *
- * The link carries the code so the sign-in page can name who it is expecting.
- * It is a convenience, not a credential — the code identifies, the password
- * authenticates. Anyone opening someone else's link still has to know that
- * person's password, which is why the code can safely be printed on a docket
- * or stuck to the side of a till.
+ * ── The sign-in code IS the password ────────────────────────────────────────
+ *
+ * `issueSignInCode` writes the same value into `signInCode` and, hashed, into
+ * `passwordHash`; the ordinary login verifies against that hash. So this
+ * page prints credentials, and it used to print every one in the restaurant
+ * to anybody holding STAFF_VIEW, with no branch filter. A branch manager
+ * could read the admin's code and sign in as the admin.
+ *
+ * Three rules now, each borrowed from a sibling: the list is narrowed by
+ * `visibleBranchIds` exactly as `/dashboard/staff` is; a code is shown only
+ * for a role the viewer could reset (`assignableRoles`, the same rank check
+ * `credentialTarget` applies to "New code"); and the page asks for
+ * STAFF_MANAGE, because reading a credential is the same power as issuing it.
  */
 export default async function StaffCodesPage() {
-  const user = await requirePagePermission(PERMISSIONS.STAFF_VIEW, '/dashboard/staff/codes')
+  const user = await requirePagePermission(PERMISSIONS.STAFF_MANAGE, '/dashboard/staff/codes')
 
   // Anyone hired before codes existed gets one on first view.
   await ensureStaffCodes(user.restaurantId)
 
+  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const canReveal = new Set<string>(assignableRoles(user.role))
+
   const staff = await prisma.user.findMany({
-    where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true },
+    where: {
+      restaurantId: user.restaurantId,
+      deletedAt: null,
+      isActive: true,
+      ...(reach ? { branchId: { in: reach } } : {}),
+    },
     select: {
       id: true, name: true, email: true, role: true, staffCode: true, signInCode: true,
       // The custom role's name, so a printed card is not labelled with a role
@@ -91,7 +107,7 @@ export default async function StaffCodesPage() {
                       <span className="block text-xs text-muted-foreground">{s.email}</span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <StaffCodeCell userId={s.id} code={s.signInCode} />
+                      <StaffCodeCell userId={s.id} code={canReveal.has(s.role) ? s.signInCode : null} />
                     </td>
                     <td className="py-2.5 pr-3 text-muted-foreground">
                       {s.staffRole?.isActive ? (

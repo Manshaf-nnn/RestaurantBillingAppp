@@ -1,5 +1,6 @@
 'use client'
 
+import { newRequestKey } from '@/lib/request-key'
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -316,6 +317,10 @@ function Payments({
     purchaseId: '',
   })
 
+  // One key per payment, reused across retries of the same tap, renewed once
+  // it lands — so a dropped connection cannot credit the supplier twice.
+  const requestKey = React.useRef(newRequestKey('supplier-pay'))
+
   const save = () =>
     run(
       () =>
@@ -327,10 +332,12 @@ function Payments({
           notes: form.notes,
           paidAt: form.paidAt,
           purchaseId: form.purchaseId,
+          clientRequestId: requestKey.current,
         }),
       {
         success: 'Payment recorded.',
         onDone: () => {
+          requestKey.current = newRequestKey('supplier-pay')
           setOpen(false)
           setForm({ amount: '', method: 'CASH', reference: '', notes: '', paidAt: '', purchaseId: '' })
           router.refresh()

@@ -105,15 +105,28 @@ const PAGE = 50
 export async function readOutbox(params: {
   restaurantId: string
   branchId?: string | null
+  /**
+   * The branches the reader may hear, in the house convention: `null` is
+   * unrestricted, `[]` is confined with nowhere to look and hears nothing.
+   * Wins over `branchId` when both are given. A single omitted `branchId`
+   * used to mean "every branch", which is exactly backwards for a confined
+   * till — it must be derived from the session, never from the absence of a
+   * parameter.
+   */
+  branchIds?: string[] | null
   since?: bigint | null
 }): Promise<{ events: OutboxRead[]; seq: string | null; truncated: boolean }> {
+  const reach =
+    params.branchIds !== undefined ? params.branchIds : params.branchId ? [params.branchId] : null
+  if (reach && reach.length === 0) {
+    return { events: [], seq: null, truncated: false }
+  }
+
   const rows = await prisma.outboxEvent.findMany({
     where: {
       restaurantId: params.restaurantId,
       ...(params.since != null ? { seq: { gt: params.since } } : {}),
-      ...(params.branchId
-        ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-        : {}),
+      ...(reach ? { OR: [{ branchId: { in: reach } }, { branchId: null }] } : {}),
     },
     orderBy: { seq: 'asc' },
     // One more than the page, so "is there more" costs nothing extra.

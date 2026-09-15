@@ -43,7 +43,9 @@ export async function createInstructionAction(
     instructionSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
+      // TASKS_VIEW, the split child the registry sells for /dashboard/tasks —
+      // not DASHBOARD_VIEW, which a custom role can hold with tasks switched off.
+      const user = await requirePermission(PERMISSIONS.TASKS_VIEW)
 
       const instruction = await createInstruction({
         restaurantId: user.restaurantId,
@@ -79,7 +81,9 @@ export async function completeInstructionAction(
     completeSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
+      // TASKS_VIEW, the split child the registry sells for /dashboard/tasks —
+      // not DASHBOARD_VIEW, which a custom role can hold with tasks switched off.
+      const user = await requirePermission(PERMISSIONS.TASKS_VIEW)
 
       const instruction = await completeInstruction({
         restaurantId: user.restaurantId,
@@ -112,7 +116,9 @@ export async function cancelInstructionAction(
     z.object({ instructionId: z.string().min(1) }),
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
+      // TASKS_VIEW, the split child the registry sells for /dashboard/tasks —
+      // not DASHBOARD_VIEW, which a custom role can hold with tasks switched off.
+      const user = await requirePermission(PERMISSIONS.TASKS_VIEW)
 
       const instruction = await cancelInstruction({
         restaurantId: user.restaurantId,

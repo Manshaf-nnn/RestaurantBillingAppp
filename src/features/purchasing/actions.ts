@@ -238,6 +238,8 @@ const receiveSchema = z.object({
     batchNo: z.string().trim().max(60).optional().or(z.literal('')),
     expiryDate: z.string().trim().max(30).optional().or(z.literal('')),
   })).min(1),
+  /** One id per submission; a retry with the same id is answered, not repeated. */
+  clientRequestId: z.string().trim().min(8).max(64).optional().or(z.literal('')),
 })
 
 export async function receiveGoodsAction(
@@ -262,6 +264,7 @@ export async function receiveGoodsAction(
       branchId: data.branchId || null,
       locationId: data.locationId || null,
       userId: user.id,
+      clientRequestId: data.clientRequestId || null,
       lines: data.lines
         .filter((l) => l.acceptedQty > 0 || l.rejectedQty > 0)
         .map((l) => ({

@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { StickyNote } from 'lucide-react'
@@ -90,7 +91,7 @@ export function NoteButton({
                 <li key={note.id} className="rounded-lg border bg-muted/30 p-2.5">
                   <p>{note.body}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {note.authorName} · {new Date(note.createdAt).toLocaleString()}
+                    {note.authorName} · <LocalDateTime value={note.createdAt} />
                   </p>
                 </li>
               ))}

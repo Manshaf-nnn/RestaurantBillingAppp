@@ -61,6 +61,14 @@ export async function receiveGoods(params: {
   branchId?: string | null
   locationId?: string | null
   userId?: string | null
+  /**
+   * One id per submission, minted by the screen. The over-receipt check
+   * below stops FOUR deliveries of 50 landing against a 50-unit order; it
+   * does nothing about the SAME delivery of 50 posted twice when the total
+   * still fits — a double-tap put the stock in twice and credited the
+   * supplier twice. The replay read inside the lock is what stops that.
+   */
+  clientRequestId?: string | null
 }): Promise<{ receipt: GoodsReceipt; status: string; posted: number }> {
   const po = await requirePurchase(params.restaurantId, params.purchaseId)
 
@@ -135,6 +143,15 @@ export async function receiveGoods(params: {
       WHERE id = ${po.id} AND "restaurantId" = ${params.restaurantId}
       FOR UPDATE
     `
+    // Inside the fence: the purchase row is locked, so a retry of a receipt
+    // that already posted is answered with it, and two taps in one instant
+    // serialise on the lock rather than both passing this read.
+    if (params.clientRequestId) {
+      const already = await tx.goodsReceipt.findFirst({
+        where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+      })
+      if (already) return { receipt: already, status: po.status, posted: 0 }
+    }
     const current = await tx.purchaseItem.findMany({
       where: { purchaseId: po.id },
       include: { item: { select: { name: true } } },
@@ -166,6 +183,7 @@ export async function receiveGoods(params: {
         branchId: destinationBranchId,
         locationId: destinationLocationId,
         receivedById: params.userId ?? null,
+        clientRequestId: params.clientRequestId ?? null,
       },
     })
 
@@ -217,6 +235,14 @@ export async function receiveGoods(params: {
           quantity: accepted,
           enteredUnit: unit,
           unitCost: costPerBase,
+          /*
+           * The exact value, not the rounded per-base cost times the base
+           * quantity. 100 kg at 123.45/kg is 12,345.00 on the invoice and the
+           * GRN journal; at 12/g (12.345 rounded) the ledger booked 12,000.00
+           * and the stock valuation disagreed with the payable that created
+           * it by 2.8% on every receipt — far worse on cheap bulk goods.
+           */
+          totalValue: accepted * unitCost,
           reason: `Received on ${receipt.number}`,
           referenceType: 'Purchase',
           referenceId: po.id,

@@ -125,9 +125,17 @@ export async function GET(request: NextRequest) {
       since = null
     }
 
+    /*
+     * Derived from the session, never from the absence of a parameter. A
+     * cashier confined to Kandy who omitted `branchId` used to receive every
+     * branch's ORDER_CREATED, PAYMENT_RECEIVED and refund events — order
+     * numbers, amounts and ids — from a route every station polls all day.
+     * `[]` is a confined account with no branch: it hears nothing.
+     */
+    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const stream = await readOutbox({
       restaurantId: user.restaurantId,
-      branchId,
+      branchIds: branchId ? [branchId] : reach,
       since,
     })
     return json(token, stream)

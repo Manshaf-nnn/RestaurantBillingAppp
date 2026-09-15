@@ -1,5 +1,7 @@
 'use client'
 
+import { formatDate } from '@/lib/datetime'
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { Check, Copy, KeyRound } from 'lucide-react'
 import { toast } from 'sonner'
@@ -222,7 +224,7 @@ export function ConnectWebsiteDialog({
                     note={
                       freshKey
                         ? undefined
-                        : `Issued ${new Date(website.keyIssuedAt).toLocaleDateString()}. Not retrievable — regenerate if lost.`
+                        : `Issued ${formatDate(website.keyIssuedAt, { timeZone: 'UTC' })}. Not retrievable — regenerate if lost.`
                     }
                   />
                   <Row
@@ -346,7 +348,7 @@ function StatusLine({
     <p className="flex flex-wrap items-center gap-2 text-sm">
       <Badge variant="success">Connected</Badge>
       <span className="text-muted-foreground">
-        Last connected {website?.lastSeenAt ? new Date(website.lastSeenAt).toLocaleString() : '—'}
+        Last connected {website?.lastSeenAt ? <LocalDateTime value={website.lastSeenAt} /> : '—'}
         {' · '}
         {website?.orderCount ?? 0} order{website?.orderCount === 1 ? '' : 's'} from the website
       </span>

@@ -62,6 +62,13 @@ export const RATE_LIMITS = {
    */
   websiteRead: { limit: 600, windowSeconds: 60 },
   websiteOrder: { limit: 120, windowSeconds: 600 },
+  /*
+   * A receipt emailed for one order, keyed on the order. Three is one typo
+   * and one "send it to my partner too"; unbounded, it was a mail relay to
+   * any address from the restaurant's own sending domain, and the first
+   * thing it exhausted was the quota password resets depend on.
+   */
+  emailReceipt: { limit: 3, windowSeconds: 600 },
 } satisfies Record<string, RateLimitRule>
 
 export type RateLimitName = keyof typeof RATE_LIMITS

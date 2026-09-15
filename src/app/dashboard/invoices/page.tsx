@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { formatDate } from '@/lib/datetime'
 import Link from 'next/link'
 
 import { Badge } from '@/components/ui/badge'
@@ -134,7 +135,7 @@ export default async function InvoicesPage({
                       </td>
                       <td className="py-2.5 pr-3">{invoice.order.customerName}</td>
                       <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
-                        {invoice.issuedAt.toLocaleDateString()}
+                        {formatDate(invoice.issuedAt, { timeZone: restaurant.timezone })}
                       </td>
                       <td className="py-2.5 pr-3 text-right tabular-nums">
                         {money(invoice.order.grandTotal + invoice.order.tipAmount)}

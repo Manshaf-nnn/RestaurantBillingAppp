@@ -25,7 +25,8 @@
  *
  *   npx tsx --tsconfig tsconfig.test.json scripts/no-unsafe-sw-cache.ts
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 const SW = 'public/sw.js'
 
@@ -85,6 +86,42 @@ function main() {
     )
     process.exit(1)
   }
+
+  /*
+   * The private roots are DERIVED from the app, not listed here by hand.
+   *
+   * The rule list above named /dashboard and /admin and was never extended
+   * when /cashier, /kitchen and /waiter were added — so this guard passed
+   * for months while the worker cached the cashier's open bills, guests'
+   * names and amounts, and served them to whoever picked the tablet up next.
+   * Any root whose page or layout signs somebody in must be refused, and the
+   * list of such roots is read from src/app, so the next one cannot be missed.
+   */
+  const AUTH_MARKERS = /requirePage|requireTenantUser|requireUser|requirePermission|getCurrentUser|getAdminUser/
+  const PUBLIC_ROOTS = new Set(['(auth)', 'api', 'order', 'offline'])
+  const roots = readdirSync('src/app', { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !PUBLIC_ROOTS.has(entry.name))
+    .map((entry) => entry.name)
+  const authenticated = roots.filter((root) => {
+    const files: string[] = []
+    const walk = (dir: string, depth: number) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory() && depth < 3) walk(full, depth + 1)
+        else if (/^(page|layout)\.tsx$/.test(entry.name)) files.push(full)
+      }
+    }
+    walk(join('src/app', root), 0)
+    return files.some((file) => AUTH_MARKERS.test(readFileSync(file, 'utf8')))
+  })
+  const unprotected = authenticated.filter((root) => !source.includes(`'/${root}'`))
+  if (unprotected.length > 0) {
+    console.error(`\n✖ ${unprotected.length} authenticated root(s) are not refused by the service worker:\n`)
+    for (const root of unprotected) console.error(`  • /${root}`)
+    console.error('\nAdd each to PRIVATE_ROOTS in public/sw.js. A signed-in page in the page cache is the previous user\'s screen on the next user\'s tablet.')
+    process.exit(1)
+  }
+  console.log(`private:  ${authenticated.length} authenticated root(s) refused (${authenticated.join(', ')})`)
 
   /*
    * The offline page must not promise a sync that does not exist. It used to,

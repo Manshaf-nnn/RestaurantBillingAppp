@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 
+import { formatDateTime } from '@/lib/datetime'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { OpsTable, Stat, StatRow, StatusPill, ago, bytes } from '@/features/platform/components/ops-ui'
 import { RecordRestoreTestControl } from '@/features/platform/components/ops-controls'
@@ -76,7 +77,7 @@ export default async function BackupsPage() {
               tone={neon.historyRetentionDays && neon.historyRetentionDays > 0 ? 'ok' : 'bad'}
               hint={
                 neon.pitrOldest
-                  ? `restorable back to ${new Date(neon.pitrOldest).toLocaleString()}`
+                  ? `restorable back to ${formatDateTime(neon.pitrOldest, { timeZone: 'UTC' })} UTC`
                   : 'This plan retains no history — a mistake cannot be undone.'
               }
             />
@@ -102,7 +103,7 @@ export default async function BackupsPage() {
               branch.name,
               ago(branch.createdAt),
               branch.logicalSizeBytes === null ? '—' : bytes(branch.logicalSizeBytes),
-              branch.restoredFrom ? new Date(branch.restoredFrom).toLocaleString() : '—',
+              branch.restoredFrom ? `${formatDateTime(branch.restoredFrom, { timeZone: 'UTC' })} UTC` : '—',
               [branch.isDefault ? 'default' : null, branch.isProtected ? 'protected' : null]
                 .filter(Boolean)
                 .join(', ') || '—',

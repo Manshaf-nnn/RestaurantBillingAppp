@@ -85,6 +85,32 @@ export interface ProfitReport {
 const DISCLAIMER =
   'Gross profit only — revenue less the cost of ingredients. It does not include rent, wages, utilities or any other operating cost.'
 
+/**
+ * Split `total` across `weights` in proportion, in whole minor units that sum
+ * to `total` exactly (largest remainder). Works for a negative total — a bill
+ * refunded for more than its goods — the same way. Zero weights get nothing.
+ */
+function apportion(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((s, w) => s + Math.max(0, w), 0)
+  if (weights.length === 0) return []
+  if (sum <= 0) {
+    // Nothing to weigh by: everything lands on the first line so the whole is kept.
+    return weights.map((_, i) => (i === 0 ? total : 0))
+  }
+  const raw = weights.map((w) => (total * Math.max(0, w)) / sum)
+  const parts = raw.map((r) => Math.floor(r))
+  let remainder = total - parts.reduce((s, p) => s + p, 0)
+  const order = raw
+    .map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i)
+  for (const { i } of order) {
+    if (remainder <= 0) break
+    parts[i] += 1
+    remainder -= 1
+  }
+  return parts
+}
+
 export async function getProfitReport(params: {
   restaurantId: string
   range: DateRange
@@ -110,11 +136,37 @@ export async function getProfitReport(params: {
           discountTotal: true,
           loyaltyDiscount: true,
           branch: { select: { id: true, name: true } },
-          payments: { where: { status: 'REFUNDED' }, select: { amount: true } },
+          taxInclusive: true,
+          taxTotal: true,
         },
       },
     },
   })
+
+  /*
+   * Refunds by the day they were GIVEN (owner decision, 2026-09-13) — the
+   * basis the sales report uses — read from the refunds ledger. This used to
+   * read payments flipped to REFUNDED, and a payment only flips when refunds
+   * cover it in full, so every partial refund was invisible here and this
+   * report overstated revenue against the sales report by exactly those
+   * amounts. A refund of an order that is not in this range still came out
+   * of this range's money; it is taken off the total below, unapportioned.
+   */
+  const refunds = await prisma.refund.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      createdAt: { gte: params.range.from, lte: params.range.to },
+      order: {
+        status: { not: 'CANCELLED' },
+        ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      },
+    },
+    select: { orderId: true, amount: true },
+  })
+  const refundedByOrder = new Map<string, number>()
+  for (const refund of refunds) {
+    refundedByOrder.set(refund.orderId, (refundedByOrder.get(refund.orderId) ?? 0) + refund.amount)
+  }
 
   /*
    * Revenue here must mean the same thing it means on the sales report.
@@ -126,15 +178,29 @@ export async function getProfitReport(params: {
    *
    * Order-level reductions are apportioned across the lines in proportion to
    * what each contributed, which is the only division that keeps the parts
-   * summing to the whole.
+   * summing to the whole — and they are made to sum to it EXACTLY, by largest
+   * remainder, and never clamped. Rounding each line on its own drifted the
+   * total by up to half a unit per line, and clamping a line at zero hid the
+   * part of a refund that exceeded the goods (the tax a full refund gives
+   * back), so this report and the sales report disagreed by exactly those
+   * amounts on any day with a refund. A bill's net here is now, to the unit,
+   * what the sales report counts for it: subtotal ex-tax − discounts − refunds.
    */
-  const reductionShare = new Map<string, number>()
-  for (const line of lines) {
-    const order = line.order
-    if (!order || reductionShare.has(order.id)) continue
-    const refunded = order.payments.reduce((sum, p) => sum + p.amount, 0)
-    const reduction = order.discountTotal + order.loyaltyDiscount + refunded
-    reductionShare.set(order.id, order.subtotal > 0 ? reduction / order.subtotal : 0)
+  const byOrder = new Map<string, number[]>()
+  lines.forEach((line, index) => {
+    const bucket = byOrder.get(line.order.id) ?? []
+    bucket.push(index)
+    byOrder.set(line.order.id, bucket)
+  })
+  const netOfLine = new Array<number>(lines.length).fill(0)
+  for (const [orderId, indices] of byOrder) {
+    const order = lines[indices[0]].order
+    const refunded = refundedByOrder.get(orderId) ?? 0
+    // On a tax-inclusive bill the lines contain the tax; it is not revenue.
+    const containedTax = order.taxInclusive ? order.taxTotal : 0
+    const net = order.subtotal - order.discountTotal - order.loyaltyDiscount - containedTax - refunded
+    const parts = apportion(net, indices.map((i) => lines[i].lineTotal))
+    indices.forEach((lineIndex, k) => { netOfLine[lineIndex] = parts[k] })
   }
 
   /*
@@ -165,7 +231,7 @@ export async function getProfitReport(params: {
     foodCostPercent: null, grossMarginPercent: null, quantity: 0,
   })
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     /*
      * `costPrice` is the cost snapshot taken when the kitchen accepted the line,
      * priced from the pinned recipe at the weighted average then in force. The
@@ -187,8 +253,7 @@ export async function getProfitReport(params: {
     const known = unitCost > 0
 
     // What this line actually earned, after its share of any discount or refund.
-    const share = reductionShare.get(line.order.id) ?? 0
-    const netLine = Math.max(0, Math.round(line.lineTotal * (1 - share)))
+    const netLine = netOfLine[lineIndex]
 
     revenue += netLine
     cogs += lineCost
@@ -233,6 +298,15 @@ export async function getProfitReport(params: {
       .sort((a, b) => b.grossProfit - a.grossProfit)
 
   const total = lines.length || 1
+
+  // Money that went back this period on orders sold in another one. There is
+  // no line here to apportion it across, so it reduces the total only — which
+  // is exactly what keeps this total equal to the sales report's net sales.
+  const ordersInRange = new Set(lines.map((line) => line.order.id))
+  const refundedElsewhere = refunds
+    .filter((refund) => !ordersInRange.has(refund.orderId))
+    .reduce((sum, refund) => sum + refund.amount, 0)
+  revenue -= refundedElsewhere
 
   return {
     range: {

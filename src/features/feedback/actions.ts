@@ -39,7 +39,9 @@ export async function submitSystemFeedback(input: unknown): Promise<ActionResult
     feedbackSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.REVIEW_MANAGE)
+      // FEEDBACK_VIEW, the split child the registry sells for /dashboard/feedback —
+      // not REVIEW_MANAGE, which a custom role can hold with feedback switched off.
+      const user = await requirePermission(PERMISSIONS.FEEDBACK_VIEW)
       await prisma.feedback.create({
         data: {
           restaurantId: user.restaurantId,

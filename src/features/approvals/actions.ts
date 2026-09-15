@@ -137,7 +137,9 @@ async function applyDecision(
 
 export async function withdrawApprovalAction(approvalId: string): Promise<ActionResult<{ status: string }>> {
   return runSafe(async () => {
-    const user = await requirePermission(PERMISSIONS.DASHBOARD_VIEW)
+    // APPROVALS_VIEW, which the registry sells for this feature — a custom
+    // role with the dashboard on and approvals off could still withdraw.
+    const user = await requirePermission(PERMISSIONS.APPROVALS_VIEW)
     const request = await withdrawApproval({
       restaurantId: user.restaurantId,
       approvalId,

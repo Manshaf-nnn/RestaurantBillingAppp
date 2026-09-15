@@ -33,6 +33,11 @@ const STATIC = [
   'receipt-fields-test',
   'no-bad-server-exports', 'no-function-props', 'no-raw-action-calls',
   'no-unscoped-branch-pages', 'no-unguarded-feature-pages',
+  // bugfix.md D15 — every date names its zone: no toLocale*() in the process's zone.
+  'no-bare-locale-dates',
+  // bugfix.md S10 — an action asks for the split permission its feature sells,
+  // never the parent a custom role can hold with the feature switched off.
+  'no-parent-permission-actions',
   'no-item-branch-filter',
   // production.md §1 — nothing in src may rewrite an append-only record; the
   // database refuses it too, this just fails in CI instead of in front of a user.
@@ -134,6 +139,10 @@ const SERVICE = [
   'e2e-reconciliation-test',
   'variant-order-test',
   'custom-domain-test',
+  // bugfix.md — the 2026-09-13 audit's money, data and security defects, each
+  // reproduced (races run as races) and pinned against the fix.
+  'bugfix-money-test',
+  'bugfix-security-test',
   // websiteconnect.md — a restaurant's website connects with a key, reads only
   // its own data, and its orders land in the existing pipeline.
   'website-connection-test',
@@ -161,6 +170,9 @@ const SERVICE = [
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // bugfix.md — the staff-codes page per branch, the pulse stream confined,
+  // uploads checked by signature, cross-tenant writes through real actions.
+  'security-runtime-test',
   // websiteconnect.md — the website API over real HTTP: key refused and accepted,
   // menu priced per branch, an order that lands ONLINE, a browser call refused.
   'website-api-test',

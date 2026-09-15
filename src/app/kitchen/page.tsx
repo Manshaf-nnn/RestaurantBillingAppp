@@ -109,6 +109,7 @@ export default async function KitchenPage({
     <KitchenBoard
       restaurantName={restaurant.name}
       paperWidth={readPaperWidths(restaurant.printerConfig).kitchen}
+      timeZone={restaurant.timezone}
       branchIds={branchIds}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       exit={<StationExit user={user} current="/kitchen" />}

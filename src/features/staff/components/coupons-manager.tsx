@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { Pencil, Plus, Ticket, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -156,7 +157,7 @@ export function CouponsManager({
                 {coupon.endsAt ? (
                   <div className="flex justify-between">
                     <dt>Expires</dt>
-                    <dd>{new Date(coupon.endsAt).toLocaleDateString(locale)}</dd>
+                    <dd><LocalDateTime value={coupon.endsAt} locale={locale} options={{ dateStyle: 'medium' }} /></dd>
                   </div>
                 ) : null}
               </dl>

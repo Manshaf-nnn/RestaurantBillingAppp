@@ -3,6 +3,8 @@ import 'server-only'
 import type { Coupon, CustomerGroup } from '@prisma/client'
 
 import { AppError } from '@/lib/errors'
+import { applyBps } from '@/lib/money'
+import { localMinutes } from '@/features/orders/pricing'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -40,6 +42,8 @@ export interface DiscountContext {
   customerId?: string | null
   /** Passed in so the check is testable at any hour. */
   now?: Date
+  /** The restaurant's IANA zone — the hours below are ITS hours. */
+  timeZone?: string
 }
 
 export interface DiscountResult {
@@ -79,9 +83,17 @@ export async function evaluate(
     return reject('That offer is not available at this location')
   }
 
+  /*
+   * In the restaurant's clock, not the server's. `getHours()` read the Node
+   * process's local time — UTC on every host this runs on — so a Colombo
+   * 17:00–19:00 offer was accepted from 22:30 to 00:30 local and refused
+   * during the actual happy hour. `isHappyHourActive` got this right; this
+   * now uses the same helper.
+   */
+  const { minutes: localNow, day: localDay } = localMinutes(now, context.timeZone ?? 'UTC')
   // Hours may wrap past midnight — a 22:00–02:00 late-night offer is normal.
   if (coupon.startHour !== null && coupon.endHour !== null) {
-    const hour = now.getHours()
+    const hour = Math.floor(localNow / 60)
     const inWindow =
       coupon.startHour <= coupon.endHour
         ? hour >= coupon.startHour && hour < coupon.endHour
@@ -92,7 +104,7 @@ export async function evaluate(
   }
 
   const days = coupon.daysOfWeek as number[] | null
-  if (Array.isArray(days) && days.length > 0 && !days.includes(now.getDay())) {
+  if (Array.isArray(days) && days.length > 0 && !days.includes(localDay)) {
     return reject('That offer does not run today')
   }
 
@@ -142,9 +154,11 @@ export async function evaluate(
 
   const base = coupon.scope === 'BILL' ? context.subtotal : eligibleTotal
 
+  // PERCENT is stored in basis points (schema: "PERCENT → basis points"),
+  // the way every rate in this codebase is. `/ 100` read 1000 bps as 1000%.
   let amount =
     coupon.type === 'PERCENT'
-      ? Math.round((base * coupon.value) / 100)
+      ? applyBps(base, coupon.value)
       : coupon.type === 'FIXED'
         ? coupon.value
         : // FREE_ITEM takes the cheapest eligible line off, which is the

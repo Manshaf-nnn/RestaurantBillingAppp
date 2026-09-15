@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { formatDateTime } from '@/lib/datetime'
 import { ScrollText } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -126,7 +127,7 @@ export default async function AuditLogsPage({
               {logs.map((log) => (
                 <TableRow key={log.id}>
                   <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                    {new Date(log.createdAt).toLocaleString(locale)}
+                    {formatDateTime(log.createdAt, { locale, timeZone: restaurant.timezone })}
                   </TableCell>
                   <TableCell className="text-sm font-medium">{log.user?.name ?? log.actorName ?? 'System'}</TableCell>
                   <TableCell>

@@ -293,6 +293,20 @@ export async function deleteTable(id: string): Promise<ActionResult<{ id: string
     })
     if (openOrders > 0) throw new ConflictError('This table has open orders')
 
+    /*
+     * Every sitting the table ever hosted, and every call bell rung from it,
+     * used to cascade away with it. `Order.tableNumber` was snapshotted so a
+     * deleted table would not erase which table past orders were at; the
+     * sitting itself got no such care. The database now refuses (RESTRICT);
+     * the screen says why and offers the honest alternative.
+     */
+    const sittings = await prisma.tableSession.count({
+      where: { tableId: id, restaurantId: user.restaurantId },
+    })
+    if (sittings > 0) {
+      throw new ConflictError('This table has seating history — mark it inactive instead of deleting it')
+    }
+
     const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
     const result = await prisma.restaurantTable.deleteMany({
       where: {
@@ -329,6 +343,22 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
        * With no table yet — a phone booking for "sometime Friday" — it falls to
        * the branch on screen, which is what `actingBranchId` reads.
        */
+      /*
+       * The booking being edited must be this restaurant's, at a branch this
+       * person reaches — the same two checks the table branch of this file
+       * applies. The update by primary key alone let a Kandy manager cancel
+       * a Colombo booking, and with a foreign id rewrite another restaurant's
+       * booking onto this restaurant's branch and table.
+       */
+      const existing = data.id
+        ? await prisma.reservation.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+            select: { id: true, branchId: true },
+          })
+        : null
+      if (data.id && !existing) throw new NotFoundError('Reservation')
+      if (existing) await assertRecordBranch(user, existing, 'reservation')
+
       let branchId: string | null = null
 
       if (data.tableId) {
@@ -339,6 +369,10 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         if (!table) throw new NotFoundError('Table')
         await assertBranchAccess(user, table.branchId)
         branchId = table.branchId
+      } else if (existing) {
+        // No table chosen on an edit: the booking stays where it was booked,
+        // never re-homed to whichever branch the editor happens to be on.
+        branchId = existing.branchId
       } else {
         branchId = await actingBranchId(user)
       }
@@ -356,9 +390,9 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         notes: data.notes || null,
       }
 
-      const record = data.id
+      const record = existing
         ? await prisma.reservation.update({
-            where: { id: data.id },
+            where: { id: existing.id },
             data: payload,
           })
         : await prisma.reservation.create({ data: { ...payload, restaurantId: user.restaurantId } })

@@ -330,13 +330,19 @@ export async function updateGuestOrderItems(
         include: {
           items: true,
           table: { select: { id: true, number: true } },
-          restaurant: { select: { currency: true, taxInclusive: true, taxRateBps: true, serviceChargeBps: true } },
+          restaurant: { select: { currency: true, taxRateBps: true, serviceChargeBps: true } },
         },
       })
 
       if (!order) throw new NotFoundError('Order')
       if (['SERVED', 'COMPLETED', 'CANCELLED'].includes(order.status)) {
         throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
+      }
+      // A bill that has been paid — at the counter, before the food is even
+      // out — is not the guest's to grow from their phone: the extra would
+      // sit outside every outstanding figure with no screen to collect it.
+      if (order.paymentStatus !== 'UNPAID') {
+        throw new AppError('This bill has been paid — ask a member of staff to change it.', 409, 'ORDER_PAID')
       }
       // Signed books do not quietly change (§59).
       await assertPeriodOpen(prisma, restaurant.id, order.placedAt)
@@ -389,7 +395,7 @@ export async function updateGuestOrderItems(
         })),
         taxRateBps: order.taxRateBps || order.restaurant.taxRateBps,
         serviceChargeBps: order.serviceChargeBps || order.restaurant.serviceChargeBps,
-        taxInclusive: order.restaurant.taxInclusive,
+        taxInclusive: order.taxInclusive,
         couponDiscount: order.couponDiscount,
         manualDiscount: order.manualDiscount,
         loyaltyDiscount: order.loyaltyDiscount,
@@ -1004,12 +1010,13 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
         include: {
           items: true,
           redemptions: { select: { amount: true } },
-          restaurant: { select: { currency: true, taxInclusive: true } },
+          restaurant: { select: { currency: true } },
         },
       })
       if (!order) throw new NotFoundError('Order')
-      if (order.paymentStatus === 'PAID') {
-        throw new AppError('This order is already paid', 409, 'ORDER_PAID')
+      // Any money on the bill, not only a settled one — see voidOrderItem.
+      if (order.paidTotal > 0) {
+        throw new AppError('This bill has money on it — refund the payment before changing the discount', 409, 'ORDER_PAID')
       }
       // Signed books do not quietly change (§59).
       await assertPeriodOpen(prisma, user.restaurantId, order.placedAt)
@@ -1028,16 +1035,32 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
           amount: data.amount,
         })
       ) {
-        const approved = await prisma.approvalRequest.findFirst({
+        /*
+         * One signature, one use (owner decision, 2026-09-13). The approval is
+         * consumed FIRST, by compare-and-swap, so two cashiers applying it at
+         * once cannot both get through on one manager's yes — and an approval
+         * that has been used reads as "not approved" and raises a fresh
+         * request, exactly as if it had never existed.
+         */
+        const candidate = await prisma.approvalRequest.findFirst({
           where: {
             restaurantId: user.restaurantId,
             entity: 'Order',
             entityId: order.id,
             kind: 'DISCOUNT',
             status: 'APPROVED',
+            consumedAt: null,
             amount: { gte: data.amount },
           },
+          select: { id: true },
         })
+        const consumed = candidate
+          ? await prisma.approvalRequest.updateMany({
+              where: { id: candidate.id, status: 'APPROVED', consumedAt: null },
+              data: { consumedAt: new Date() },
+            })
+          : { count: 0 }
+        const approved = consumed.count === 1
         if (!approved) {
           await requestApproval({
             restaurantId: user.restaurantId,
@@ -1072,7 +1095,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
           .map((item) => ({ lineTotal: item.lineTotal })),
         taxRateBps: order.taxRateBps,
         serviceChargeBps: order.serviceChargeBps,
-        taxInclusive: order.restaurant.taxInclusive,
+        taxInclusive: order.taxInclusive,
         couponDiscount,
         manualDiscount: data.amount,
         loyaltyDiscount: order.loyaltyDiscount,

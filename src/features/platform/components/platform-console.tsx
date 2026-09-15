@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import type { RestaurantStatus } from '@prisma/client'
 import {
@@ -225,7 +226,7 @@ export function PlatformConsole({
                   ) : null}
                 </div>
                 <span className="shrink-0 text-xs text-muted-foreground">
-                  {new Date(restaurant.createdAt).toLocaleDateString()}
+                  <LocalDateTime value={restaurant.createdAt} options={{ dateStyle: 'medium' }} />
                 </span>
               </div>
 
@@ -351,7 +352,7 @@ export function PlatformConsole({
                 </div>
                 <p className="mt-2 text-sm text-foreground">{entry.comment || 'No extra note provided.'}</p>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {new Date(entry.createdAt).toLocaleDateString()} · /{entry.restaurantSlug}
+                  <LocalDateTime value={entry.createdAt} options={{ dateStyle: 'medium' }} /> · /{entry.restaurantSlug}
                 </p>
               </li>
             ))}

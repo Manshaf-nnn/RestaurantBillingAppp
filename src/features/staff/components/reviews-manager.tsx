@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { MessageSquare, Star } from 'lucide-react'
 import { toast } from 'sonner'
@@ -151,7 +152,7 @@ function ReviewCard({
             </Badge>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {new Date(review.createdAt).toLocaleDateString(locale)}
+            <LocalDateTime value={review.createdAt} locale={locale} options={{ dateStyle: 'medium' }} />
           </p>
         </div>
 

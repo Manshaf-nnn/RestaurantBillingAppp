@@ -1,5 +1,6 @@
 'use server'
 
+import { prisma } from '@/server/db/prisma'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
@@ -7,7 +8,7 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { resolveStockLocation } from '@/features/branches/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
+import { assertBranchAccess, requirePermission, assertRecordBranch } from '@/server/auth/guard'
 import { recordWastage, reviewWastage } from './wastage'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
@@ -34,6 +35,8 @@ const wastageSchema = z.object({
   branchId: z.string().min(1).optional().or(z.literal('')),
   locationId: z.string().min(1).optional().or(z.literal('')),
   batchId: z.string().min(1).optional().or(z.literal('')),
+  /** One id per submission; a retry with the same id is answered, not repeated. */
+  clientRequestId: z.string().trim().min(8).max(64).optional().or(z.literal('')),
 })
 
 /**
@@ -67,6 +70,7 @@ export async function recordWastageAction(
       locationId: data.locationId || null,
       batchId: data.batchId || null,
       userId: user.id,
+      clientRequestId: data.clientRequestId || null,
     })
 
     await audit({
@@ -96,6 +100,14 @@ export async function reviewWastageAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.INVENTORY_WASTAGE_APPROVE)
+      // The record's branch, not the reviewer's. `recordWastageAction` above
+      // asserts the branch it writes to; this one let a Kandy manager reject
+      // Colombo's write-off and overwrite its notes.
+      const target = await prisma.wastageRecord.findFirst({
+        where: { id: data.wastageId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      await assertRecordBranch(user, target, 'wastage record')
       const record = await reviewWastage({
         restaurantId: user.restaurantId,
         wastageId: data.wastageId,

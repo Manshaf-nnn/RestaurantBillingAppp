@@ -193,27 +193,38 @@ export async function closePeriod(params: {
     )
   }
 
-  const overlapping = await prisma.accountingPeriod.findFirst({
-    where: {
-      restaurantId: params.restaurantId,
-      status: 'CLOSED',
-      periodStart: { lt: params.to },
-      periodEnd: { gt: params.from },
-    },
-  })
-  if (overlapping) {
-    throw new AppError('That range overlaps a period that is already closed', 409, 'PERIOD_OVERLAP')
-  }
+  /*
+   * The overlap check and the insert are one unit under a per-restaurant
+   * advisory lock — the same lock production numbering takes. As two
+   * statements with nothing between them, two accountants sealing at once
+   * both passed the check and produced two overlapping sealed ranges, and
+   * reopening one left the other still refusing every write.
+   */
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.restaurantId}))`
 
-  return prisma.accountingPeriod.create({
-    data: {
-      restaurantId: params.restaurantId,
-      periodStart: params.from,
-      periodEnd: params.to,
-      status: 'CLOSED',
-      closedById: params.userId,
-      notes: params.notes?.trim() || null,
-    },
+    const overlapping = await tx.accountingPeriod.findFirst({
+      where: {
+        restaurantId: params.restaurantId,
+        status: 'CLOSED',
+        periodStart: { lt: params.to },
+        periodEnd: { gt: params.from },
+      },
+    })
+    if (overlapping) {
+      throw new AppError('That range overlaps a period that is already closed', 409, 'PERIOD_OVERLAP')
+    }
+
+    return tx.accountingPeriod.create({
+      data: {
+        restaurantId: params.restaurantId,
+        periodStart: params.from,
+        periodEnd: params.to,
+        status: 'CLOSED',
+        closedById: params.userId,
+        notes: params.notes?.trim() || null,
+      },
+    })
   })
 }
 

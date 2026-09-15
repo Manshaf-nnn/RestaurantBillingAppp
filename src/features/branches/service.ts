@@ -61,11 +61,23 @@ export async function ensureDefaultBranch(restaurantId: string): Promise<BranchS
       select: SUMMARY,
     })
   } catch {
-    const raced = await prisma.branch.findFirst({
-      where: { restaurantId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
-      select: SUMMARY,
-    })
+    /*
+     * Lost a race, or a MAIN-coded branch already exists that is not the
+     * default. Either way the answer is the default if there is one — the
+     * partial unique on (restaurantId) WHERE isDefault guarantees at most
+     * one — and only then the oldest branch. Returning the oldest first
+     * quietly handed back a non-default while the default sat one row away.
+     */
+    const raced =
+      (await prisma.branch.findFirst({
+        where: { restaurantId, deletedAt: null, isDefault: true },
+        select: SUMMARY,
+      })) ??
+      (await prisma.branch.findFirst({
+        where: { restaurantId, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+        select: SUMMARY,
+      }))
     if (!raced) throw new AppError('Could not resolve a branch', 500, 'BRANCH_UNRESOLVED')
     return raced
   }

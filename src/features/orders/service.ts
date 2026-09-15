@@ -8,9 +8,11 @@ import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-me
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { orderIsRouted, routeOrderItems } from '@/features/kitchen/routing'
+import { evaluate } from '@/features/customers/discounts'
 import { notifyLowStock } from '@/features/inventory/alerts'
 import {
   prisma,
+  guardLocks,
   isUniqueViolation,
   uniqueViolationTargets,
   type TxClient,
@@ -274,24 +276,34 @@ export async function buildDraft(params: {
     if (!coupon) {
       couponError = 'That coupon code was not found'
     } else {
-      const evaluation = evaluateCoupon(coupon, subtotal, now)
-      if (!evaluation.valid) {
-        couponError = evaluation.reason ?? 'This coupon cannot be applied'
-      } else if (coupon.perCustomerLimit !== null && params.customerId) {
-        const used = await db.couponRedemption.count({
-          where: { couponId: coupon.id, customerId: params.customerId },
-        })
-        if (used >= coupon.perCustomerLimit) {
-          couponError = 'You have already used this coupon'
-        } else {
-          couponId = coupon.id
-          couponCode = coupon.code
-          couponDiscount = evaluation.discount
-        }
+      /*
+       * Every rule the coupon carries, not just the four `evaluateCoupon`
+       * knew about. `customers/discounts.evaluate` — hours, weekdays, branch,
+       * customer group, item and category scope, per-customer limit — was
+       * written and never called: any active coupon was accepted at any hour
+       * on any day (owner decision to enforce, 2026-09-13). It judges the
+       * clock in the restaurant's own timezone.
+       */
+      const verdict = await evaluate(coupon, {
+        restaurantId: params.restaurantId,
+        subtotal,
+        lines: priced.map((line) => ({
+          foodId: line.foodId,
+          categoryId: foodById.get(line.foodId)?.categoryId ?? null,
+          quantity: line.quantity,
+          lineTotal: line.lineTotal,
+        })),
+        branchId: params.branchId ?? null,
+        customerId: params.customerId ?? null,
+        now,
+        timeZone: restaurant.timezone,
+      })
+      if (!verdict.ok) {
+        couponError = verdict.reason ?? 'This coupon cannot be applied'
       } else {
         couponId = coupon.id
         couponCode = coupon.code
-        couponDiscount = evaluation.discount
+        couponDiscount = verdict.amount
       }
     }
   }
@@ -577,6 +589,11 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               branchId,
               tableId: table.id,
               guestCount: params.guestCount ?? null,
+              // The unique key that makes the database, not the read above,
+              // the arbiter of "one open sitting per table". Two first orders
+              // at once: the second insert fails, the placement retries, and
+              // the retry's read finds the winner.
+              activeTableKey: table.id,
             },
           })
           tableSessionId = session.id
@@ -635,6 +652,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               grandTotal: draft.totals.grandTotal,
               taxRateBps: restaurant.taxRateBps,
               serviceChargeBps: restaurant.serviceChargeBps,
+              taxInclusive: restaurant.taxInclusive,
               estimatedMinutes: draft.estimatedMinutes,
               items: {
                 create: draft.items.map((item) => ({
@@ -857,12 +875,25 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
         if (winner) return winner
       }
 
-      const isDuplicateNumber =
-        isUniqueViolation(error) && uniqueViolationTargets(error).includes('orderNumber')
+      const targets = isUniqueViolation(error) ? uniqueViolationTargets(error) : []
+      const isDuplicateNumber = targets.includes('orderNumber')
+      /*
+       * Two first orders at one table: the loser's sitting insert failed on
+       * `activeTableKey`. A sitting that closed without releasing its key
+       * (it should not happen; belt and braces) is released here so the
+       * retry is not doomed, and the retry's read then finds the winner.
+       */
+      const isSittingRace = targets.includes('activeTableKey')
+      if (isSittingRace && params.tableId) {
+        await prisma.tableSession.updateMany({
+          where: { activeTableKey: params.tableId, status: { not: 'OPEN' } },
+          data: { activeTableKey: null },
+        })
+      }
       const code = (error as { code?: string })?.code
       const isTransient = typeof code === 'string' && TRANSIENT_CODES.has(code)
 
-      if ((!isDuplicateNumber && !isTransient) || attempt === MAX_ATTEMPTS) throw error
+      if ((!isDuplicateNumber && !isSittingRace && !isTransient) || attempt === MAX_ATTEMPTS) throw error
 
       // Jittered backoff — a fixed delay would just line the losers up to
       // collide with each other again on the next attempt. Capped at 120ms so
@@ -1102,6 +1133,28 @@ export async function updateOrderStatus(params: {
 
   const updated = await prisma.$transaction(async (tx) => {
     /*
+     * Judged again under the lock. The read above happened outside any
+     * transaction, so two cooks accepting the same ticket both passed
+     * `canTransition` and both wrote: two ACCEPTED events, the loser's clock
+     * on `acceptedAt`, and the routing run twice. If somebody else already
+     * moved it to where we were going, that is the answer; anywhere else and
+     * the transition has to be judged from where it actually is.
+     */
+    await guardLocks(tx)
+    const locked = await tx.$queryRaw<Array<{ status: OrderStatus }>>`
+      SELECT status FROM orders WHERE id = ${order.id} FOR UPDATE
+    `
+    const current = locked[0]?.status
+    if (current !== order.status) {
+      if (current === params.status) return null
+      throw new AppError(
+        `This order was just moved to ${String(current).toLowerCase()} by someone else — try again`,
+        409,
+        'STATUS_RACE',
+      )
+    }
+
+    /*
      * Which direction this order's statuses flow.
      *
      * An order whose items have been sent to kitchen sections is a READOUT of
@@ -1212,7 +1265,7 @@ export async function updateOrderStatus(params: {
         // The table clearing is what ends the sitting.
         await tx.tableSession.updateMany({
           where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
-          data: { status: 'CLOSED', closedAt: new Date() },
+          data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
         })
       }
     }
@@ -1255,6 +1308,10 @@ export async function updateOrderStatus(params: {
       // An alert must never fail the acceptance it rides on.
     }
   }
+
+  // Somebody else completed this exact transition while we waited for the
+  // lock. Their broadcast went out; ours would be a duplicate ticket.
+  if (!updated) return prisma.order.findUniqueOrThrow({ where: { id: order.id } })
 
   await broadcastOrder(order.id, 'status')
   await notifyStatusChange(updated, order.table?.number ?? null)
@@ -1408,7 +1465,7 @@ export async function cancelOrder(params: {
         })
         await tx.tableSession.updateMany({
           where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
-          data: { status: 'CLOSED', closedAt: new Date() },
+          data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
         })
       }
     }
@@ -1572,6 +1629,25 @@ export async function settleLoyalty(orderId: string): Promise<void> {
   const earned = pointsEarned(order.grandTotal, order.restaurant.loyaltyEarnRateX100)
 
   await prisma.$transaction(async (tx) => {
+    /*
+     * Once per bill. Settlement calls this on EVERY transition to fully
+     * settled — refund a little, take it again, and it ran again — and nothing
+     * here asked whether the points had already been given. The customer held
+     * double the points and double the lifetime spend for one bill, and the
+     * ledger check passed because both sides of it were doubled together.
+     *
+     * The order row is locked so two settlements cannot both read "not yet";
+     * the EARNED entry is written even for zero points so the guard holds
+     * for a bill too small to earn any.
+     */
+    await guardLocks(tx)
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`
+    const already = await tx.loyaltyEntry.findFirst({
+      where: { orderId: order.id, kind: 'EARNED' },
+      select: { id: true },
+    })
+    if (already) return
+
     await tx.customer.update({
       where: { id: order.customerId! },
       data: {
@@ -1579,18 +1655,16 @@ export async function settleLoyalty(orderId: string): Promise<void> {
         totalSpent: { increment: order.grandTotal },
       },
     })
-    if (earned > 0) {
-      await tx.loyaltyEntry.create({
-        data: {
-          restaurantId: order.restaurantId,
-          customerId: order.customerId!,
-          orderId: order.id,
-          points: earned,
-          kind: 'EARNED',
-          note: `Earned on ${order.orderNumber}`,
-        },
-      })
-    }
+    await tx.loyaltyEntry.create({
+      data: {
+        restaurantId: order.restaurantId,
+        customerId: order.customerId!,
+        orderId: order.id,
+        points: earned,
+        kind: 'EARNED',
+        note: `Earned on ${order.orderNumber}`,
+      },
+    })
   })
 }
 

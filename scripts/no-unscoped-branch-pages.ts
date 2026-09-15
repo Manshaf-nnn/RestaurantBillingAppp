@@ -85,7 +85,10 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/locations/[branchId]/kitchen-stations':
     'IS one location; canAccessBranch on the id in the URL, before anything is read',
   'dashboard/staff': 'Narrowed by visibleBranchIds — the roster is a permission question, not a filter',
-  'dashboard/staff/codes': 'As above',
+  // DELIBERATE behaviour change 2026-09-13: this said 'As above' — "narrowed
+  // by visibleBranchIds" — and the page was not. It is now, and the sign-in
+  // codes on it are credentials, so the exemption reason is written out.
+  'dashboard/staff/codes': 'Narrowed by visibleBranchIds like /dashboard/staff; sign-in codes are credentials and never cross a site',
 
   // ── Reads that carry the branch on the record instead of in a selection.
   'dashboard/orders/[orderId]': 'One order; its own branch is checked with canAccessBranch',

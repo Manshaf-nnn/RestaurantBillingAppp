@@ -186,6 +186,9 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
     const { payload } = await jwtVerify(token, secret('JWT_ACCESS_SECRET'), {
       issuer: ISSUER,
       audience: AUDIENCE,
+      // jose already refuses `none` and non-HMAC algorithms for a symmetric
+      // key; naming the one we sign with makes that a decision, not a default.
+      algorithms: ['HS256'],
     })
     return payload as AccessTokenClaims
   } catch {

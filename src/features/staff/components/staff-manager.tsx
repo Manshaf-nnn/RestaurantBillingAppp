@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import type { UserRole } from '@prisma/client'
 import { Copy, KeyRound, MoreVertical, Pencil, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
@@ -255,7 +256,7 @@ export function StaffManager({
                   </TableCell>
                   <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
                     {member.lastLoginAt
-                      ? new Date(member.lastLoginAt).toLocaleDateString()
+                      ? <LocalDateTime value={member.lastLoginAt} options={{ dateStyle: 'medium' }} />
                       : 'Never'}
                   </TableCell>
                   <TableCell>

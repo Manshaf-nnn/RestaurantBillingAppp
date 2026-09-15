@@ -1,5 +1,6 @@
 'use client'
 
+import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { Plus, ScrollText, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -106,7 +107,7 @@ export function PurchasesManager({
                   <TableCell className="hidden sm:table-cell">{purchase.supplierName ?? '—'}</TableCell>
                   <TableCell className="hidden md:table-cell">{purchase.itemCount}</TableCell>
                   <TableCell className="hidden text-muted-foreground lg:table-cell">
-                    {purchase.receivedAt ? new Date(purchase.receivedAt).toLocaleDateString(locale) : '—'}
+                    {purchase.receivedAt ? <LocalDateTime value={purchase.receivedAt} locale={locale} options={{ dateStyle: 'medium' }} /> : '—'}
                   </TableCell>
                   <TableCell>
                     <Badge variant="success">{purchase.status.toLowerCase()}</Badge>

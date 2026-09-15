@@ -7,7 +7,7 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission } from '@/server/auth/guard'
+import { requirePermission, assertRecordBranch, assertBranchAccess } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
 import {
@@ -342,9 +342,13 @@ export async function assignRole(input: unknown): Promise<ActionResult<{ userId:
 
       const target = await prisma.user.findFirst({
         where: { id: data.userId, restaurantId: admin.restaurantId, deletedAt: null },
-        select: { id: true, role: true, staffRoleId: true, name: true },
+        select: { id: true, role: true, staffRoleId: true, name: true, branchId: true },
       })
       if (!target) throw new ForbiddenError('No such member of staff')
+      // Rank and power were checked; location was not. `updateStaff` and
+      // `credentialTarget` both assert this, for the bug their comment names —
+      // a branch manager re-scoping another site's cashier by id alone.
+      await assertRecordBranch(admin, target, 'member of staff')
 
       // The same rank rule as editing them any other way: an owner's account
       // is not somebody a manager may re-scope.
@@ -387,8 +391,12 @@ export async function assignRole(input: unknown): Promise<ActionResult<{ userId:
         }
         nextRole = role.preset
         // Only when the role pins a location. A role that does not pin one
-        // leaves the person where they already work.
-        if (role.branchId) nextBranchId = role.branchId
+        // leaves the person where they already work — and the location it
+        // pins has to be one the admin reaches.
+        if (role.branchId) {
+          await assertBranchAccess(admin, role.branchId)
+          nextBranchId = role.branchId
+        }
       }
 
       await prisma.user.update({

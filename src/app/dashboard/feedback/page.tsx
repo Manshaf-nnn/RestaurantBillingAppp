@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 
+import { LocalDateTime } from '@/components/local-time'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
@@ -88,7 +89,7 @@ export default async function FeedbackPage() {
                       <p className="text-sm">{f.comment}</p>
                       <p className="text-xs text-muted-foreground">
                         {f.tableNumber ? `Table ${f.tableNumber} · ` : ''}
-                        {new Date(f.createdAt).toLocaleDateString()}
+                        <LocalDateTime value={f.createdAt} options={{ dateStyle: 'medium' }} />
                       </p>
                     </div>
                   </li>

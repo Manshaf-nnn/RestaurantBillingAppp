@@ -83,6 +83,7 @@ export function KitchenBoard({
   sections = [],
   restaurantName,
   paperWidth,
+  timeZone,
   branchIds,
 }: {
   initialTickets: KitchenTicket[]
@@ -107,6 +108,8 @@ export function KitchenBoard({
   }>
   restaurantName: string
   paperWidth: PaperWidth
+  /** The restaurant's IANA zone, so a printed ticket carries ITS clock. */
+  timeZone: string
   /**
    * The locations this rail is showing. Null means every one of them — an
    * owner deliberately watching the whole business.
@@ -435,6 +438,7 @@ export function KitchenBoard({
                       onPrioritise={prioritise}
                       restaurantName={restaurantName}
                       paperWidth={paperWidth}
+                      timeZone={timeZone}
                     />
                   ))}
                 </AnimatePresence>
@@ -457,6 +461,7 @@ function TicketCard({
   onPrioritise,
   restaurantName,
   paperWidth,
+  timeZone,
 }: {
   ticket: KitchenTicket
   accent: string
@@ -467,6 +472,7 @@ function TicketCard({
   onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
   restaurantName: string
   paperWidth: PaperWidth
+  timeZone: string
 }) {
   const [elapsed, setElapsed] = React.useState(() => minutesSince(ticket.placedAt))
 
@@ -594,7 +600,7 @@ function TicketCard({
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => printKitchenTicket(ticket, restaurantName, paperWidth)}
+          onClick={() => printKitchenTicket({ ...ticket, timeZone }, restaurantName, paperWidth)}
           aria-label="Print ticket"
           title="Print ticket"
         >
