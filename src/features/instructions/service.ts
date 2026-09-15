@@ -77,28 +77,116 @@ export async function listInstructions(params: {
       { createdAt: 'asc' },
     ],
     take: params.limit ?? 100,
-    include: { branch: { select: { id: true, name: true } } },
+    include: {
+      branch: { select: { id: true, name: true } },
+      // The assignee's own location, not the task's: §2 asks for "assignee +
+      // branch", and an owner reading the list wants to know where the person
+      // is, which for a group-wide task is the only location on the row.
+      assignee: { select: { id: true, name: true, branch: { select: { name: true } } } },
+    },
   })
 }
 
-/** How many are still open for this person — for the nav badge. */
+/**
+ * How many are still open for this person — for the nav badge.
+ *
+ * "For this person" got narrower with assignment (correctionA.md §2). A task
+ * addressed to somebody by name is theirs; a task addressed to a location is
+ * everybody-at-that-location's, as it always was. So the badge counts what is
+ * assigned to me plus what is assigned to nobody in particular, and stops
+ * counting the ones sitting on a colleague's plate — a number that included
+ * other people's work is a number nobody acts on.
+ */
 export async function countOpenInstructions(params: {
   restaurantId: string
-  user: InstructionScope
+  user: InstructionScope & { id: string }
 }): Promise<number> {
   const allowed = visibleBranchIds(params.user)
   const visible =
     allowed === null ? {} : { OR: [{ branchId: { in: allowed } }, { branchId: null }] }
 
   return prisma.branchInstruction.count({
-    where: { restaurantId: params.restaurantId, status: 'OPEN', ...visible },
+    where: {
+      restaurantId: params.restaurantId,
+      status: 'OPEN',
+      AND: [visible, { OR: [{ assigneeId: null }, { assigneeId: params.user.id }] }],
+    },
   })
+}
+
+/**
+ * The staff this person may hand a task to (correctionA.md §2).
+ *
+ * Only an unrestricted user writes an instruction at all — see the check in
+ * `createInstruction` — so in practice this is "everyone active in the
+ * restaurant". It is still filtered by `visibleBranchIds` rather than assumed,
+ * because that is the rule the rest of the module obeys and because the day
+ * somebody loosens the write check, this must not silently become a directory
+ * of every branch's staff.
+ *
+ * Their location comes back with them: §2 asks for the assignee and their
+ * branch shown together, and an owner picking between two people called Nuwan
+ * needs to know which site each one is at.
+ */
+export async function listAssignableStaff(params: {
+  restaurantId: string
+  user: InstructionScope
+}) {
+  const allowed = visibleBranchIds(params.user)
+  return prisma.user.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      isActive: true,
+      deletedAt: null,
+      ...(allowed === null ? {} : { branchId: { in: allowed } }),
+    },
+    select: {
+      id: true,
+      name: true,
+      role: true,
+      branch: { select: { id: true, name: true } },
+    },
+    orderBy: { name: 'asc' },
+  })
+}
+
+/**
+ * Check an assignee before it is written, and return the name to store.
+ *
+ * Never trust the posted id. The same rule `rememberBranch` follows for a
+ * branch: the row must be in the caller's own restaurant, active, and at a
+ * location the caller may reach. Without the restaurant clause this is a way
+ * to attach another tenant's user to your task and learn their name back out
+ * of the list.
+ */
+async function resolveAssignee(params: {
+  restaurantId: string
+  user: InstructionScope
+  assigneeId: string
+}): Promise<{ id: string; name: string }> {
+  const allowed = visibleBranchIds(params.user)
+  const assignee = await prisma.user.findFirst({
+    where: {
+      id: params.assigneeId,
+      restaurantId: params.restaurantId,
+      isActive: true,
+      deletedAt: null,
+      ...(allowed === null ? {} : { branchId: { in: allowed } }),
+    },
+    select: { id: true, name: true },
+  })
+  if (!assignee) {
+    throw new NotFoundError('That person is not someone you can assign a task to')
+  }
+  return assignee
 }
 
 export async function createInstruction(params: {
   restaurantId: string
   user: { id: string; name: string; role: UserRole; branchId?: string | null }
   branchId: string | null
+  /** Null keeps the original meaning: the task is for the location. */
+  assigneeId?: string | null
   title: string
   body: string | null
   priority: InstructionPriority
@@ -122,10 +210,20 @@ export async function createInstruction(params: {
     if (!branch) throw new NotFoundError('Location')
   }
 
+  const assignee = params.assigneeId
+    ? await resolveAssignee({
+        restaurantId: params.restaurantId,
+        user: params.user,
+        assigneeId: params.assigneeId,
+      })
+    : null
+
   const instruction = await prisma.branchInstruction.create({
     data: {
       restaurantId: params.restaurantId,
       branchId: params.branchId,
+      assigneeId: assignee?.id ?? null,
+      assigneeName: assignee?.name ?? null,
       title: params.title,
       body: params.body,
       priority: params.priority,
@@ -133,16 +231,40 @@ export async function createInstruction(params: {
       createdById: params.user.id,
       createdByName: params.user.name,
     },
-    include: { branch: { select: { id: true, name: true } } },
+    include: {
+      branch: { select: { id: true, name: true } },
+      assignee: { select: { id: true, name: true, branch: { select: { name: true } } } },
+    },
   })
 
-  await notifyLocation({
-    restaurantId: params.restaurantId,
-    branchId: params.branchId,
-    title: params.priority === 'URGENT' ? `Urgent: ${params.title}` : params.title,
-    body: `${params.user.name} left an instruction${instruction.branch ? ` for ${instruction.branch.name}` : ''}.`,
-    data: { instructionId: instruction.id, href: '/dashboard/tasks' },
-  })
+  const urgent = params.priority === 'URGENT'
+  const title = urgent ? `Urgent: ${params.title}` : params.title
+
+  if (assignee) {
+    /*
+     * Addressed to one person, so it goes to that person and to nobody else.
+     * Sending it to the location as well would put "you have been asked to do
+     * this" in front of everybody at the site, which is both noise and, for a
+     * task about somebody's own till, none of their colleagues' business.
+     */
+    await notify({
+      restaurantId: params.restaurantId,
+      userId: assignee.id,
+      branchId: params.branchId,
+      type: 'SYSTEM',
+      title,
+      body: `${params.user.name} assigned this to you.`,
+      data: { instructionId: instruction.id, href: '/dashboard/tasks' },
+    })
+  } else {
+    await notifyLocation({
+      restaurantId: params.restaurantId,
+      branchId: params.branchId,
+      title,
+      body: `${params.user.name} left an instruction${instruction.branch ? ` for ${instruction.branch.name}` : ''}.`,
+      data: { instructionId: instruction.id, href: '/dashboard/tasks' },
+    })
+  }
 
   return instruction
 }

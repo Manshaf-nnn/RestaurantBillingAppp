@@ -82,6 +82,7 @@ export function KitchenBoard({
   exit,
   sections = [],
   restaurantName,
+  branchName,
   paperWidth,
   timeZone,
   branchIds,
@@ -107,6 +108,8 @@ export function KitchenBoard({
     ready: number
   }>
   restaurantName: string
+  /** Which kitchen this screen is for (correctionA.md §6). */
+  branchName?: string | null
   paperWidth: PaperWidth
   /** The restaurant's IANA zone, so a printed ticket carries ITS clock. */
   timeZone: string
@@ -335,6 +338,7 @@ export function KitchenBoard({
     <OpsShell
       title="Kitchen display"
       subtitle={restaurantName}
+      branch={branchName}
       user={user}
       actions={exit}
       soundEnabled={soundEnabled}

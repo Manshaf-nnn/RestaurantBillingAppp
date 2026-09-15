@@ -20,6 +20,9 @@ import { cancelInstruction, completeInstruction, createInstruction } from './ser
  */
 const instructionSchema = z.object({
   branchId: z.string().min(1).optional().or(z.literal('')),
+  // Empty means "for the location", the original meaning of an instruction
+  // and still the right one for a group-wide notice (correctionA.md §2).
+  assigneeId: z.string().min(1).optional().or(z.literal('')),
   title: z.string().trim().min(3, 'Say what needs doing').max(120),
   body: z.string().trim().max(1000).optional().or(z.literal('')),
   priority: z.enum(['NORMAL', 'URGENT']).default('NORMAL'),
@@ -51,6 +54,7 @@ export async function createInstructionAction(
         restaurantId: user.restaurantId,
         user,
         branchId: data.branchId || null,
+        assigneeId: data.assigneeId || null,
         title: data.title,
         body: data.body || null,
         priority: data.priority,
@@ -64,7 +68,13 @@ export async function createInstructionAction(
         action: AUDIT_ACTIONS.INSTRUCTION_CREATED,
         entity: 'BranchInstruction',
         entityId: instruction.id,
-        after: { title: instruction.title, branch: instruction.branch?.name ?? 'All locations' },
+        after: {
+          title: instruction.title,
+          branch: instruction.branch?.name ?? 'All locations',
+          // Who it was given to, recorded at the time. The row's own
+          // `assigneeName` can be edited later; an audit entry cannot.
+          assignee: instruction.assigneeName ?? 'Anyone at the location',
+        },
       })
 
       touch()

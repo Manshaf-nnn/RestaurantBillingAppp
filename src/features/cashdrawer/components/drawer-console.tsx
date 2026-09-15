@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Coins, Lock, ShieldCheck } from 'lucide-react'
+import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Lock, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +24,8 @@ import {
 import { requestHandoverAction } from '@/features/handover/cash-actions'
 import { MANUAL_MOVEMENT_TYPES, MOVEMENT_TYPES } from '../movement-types'
 import type { DrawerPageData } from '../queries'
+import type { DrawerClosure } from '../closure'
+import { ClosurePreview } from './closure-preview'
 import { callAction } from '@/lib/use-action'
 
 /**
@@ -194,65 +196,65 @@ function OpenDrawerPanel({
 }) {
   const open = data.open!
   const router = useRouter()
-  const factor = minorUnitFactor(data.currency)
 
-  const [counted, setCounted] = React.useState('')
-  const [varianceReason, setVarianceReason] = React.useState('')
+  const [counts, setCounts] = React.useState<Record<string, string>>({})
   const [closeNote, setCloseNote] = React.useState('')
   const [busy, setBusy] = React.useState(false)
-
-  // Live variance while the cashier counts, so a slip is caught before closing.
-  const countedMinor = Number(counted) * factor
-  const variance =
-    counted.trim() && Number.isFinite(countedMinor)
-      ? Math.round(countedMinor) - open.expectedCash
-      : null
+  /** The closure, once it exists. Nothing above it is revealed before then. */
+  const [closure, setClosure] = React.useState<DrawerClosure | null>(null)
 
   /*
-   * Only a difference big enough to matter has to be explained.
+   * ── What this form deliberately does not compute (correctionA.md §4) ─────
    *
-   * This used to be `variance !== 0`, so a drawer two rupees light disabled
-   * the Close button until the cashier wrote a sentence about it. The
-   * restaurant already sets the figure that counts as a real difference
-   * (Settings, Cash) and it now governs both the explanation and the sign-off,
-   * so there is one number rather than an invisible second rule at zero.
+   * There used to be a live variance here, recalculated on every keystroke,
+   * with a comment saying it was "so a slip is caught before closing". It is
+   * gone, and so is the expected figure it was measured against — the server
+   * no longer sends either to the person closing their own drawer.
+   *
+   * The reasoning is the whole of §4: a cashier who can see the gap can close
+   * it. Not by stealing, necessarily — by counting again, and again, until the
+   * number agrees, which destroys the only evidence the count was ever there
+   * to produce. The physical total below is the sum of what they say they are
+   * holding, and nothing on this screen tells them whether it is right.
+   *
+   * The server multiplies the counts too, and its answer is the one recorded.
+   * This total exists so somebody can see they typed 4 where they meant 14.
    */
-  const threshold = data.varianceThreshold
-  const needsReason =
-    variance !== null && threshold > 0 && Math.abs(variance) >= threshold
-  const reasonMissing = needsReason && varianceReason.trim().length < 2
+  const physicalTotal = data.denominations.reduce((sum, d) => {
+    const n = Number(counts[String(d.value)] ?? '')
+    return sum + (Number.isFinite(n) && n > 0 ? Math.trunc(n) * d.value : 0)
+  }, 0)
+  const anyCounted = Object.values(counts).some((v) => Number(v) > 0)
 
   const close = async () => {
-    const value = Number(counted)
-    if (!counted.trim() || !Number.isFinite(value) || value < 0) {
-      toast.error('Enter the cash you counted')
+    if (!anyCounted) {
+      toast.error('Count the drawer first')
       return
     }
     setBusy(true)
+    const numeric: Record<string, number> = {}
+    for (const [value, raw] of Object.entries(counts)) {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n > 0) numeric[value] = Math.trunc(n)
+    }
     const result = await callAction(() =>
-      closeDrawerAction({
-        sessionId: open.session.id,
-        countedCash: value,
-        varianceReason,
-        note: closeNote,
-      }),
+      closeDrawerAction({ sessionId: open.session.id, counts: numeric, note: closeNote }),
     )
     setBusy(false)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
-    const v = result.data.variance
-    if (result.data.needsReview) {
-      toast.warning(
-        `Drawer counted — ${v > 0 ? 'over' : 'short'} by ${money(Math.abs(v))}. A manager has to sign it off.`,
-      )
-    } else if (v === 0) {
-      toast.success('Drawer closed and balanced exactly')
-    } else {
-      toast.warning(`Drawer closed — ${v > 0 ? 'over' : 'short'} by ${money(Math.abs(v))}`)
-    }
-    router.refresh()
+    /*
+     * The figures arrive now and are shown now (§4): a printable closure
+     * preview with the totals and the variance on it. The count is committed
+     * and unchangeable at this point, so there is nothing left to tune.
+     *
+     * `router.refresh()` waits until the preview is dismissed. Refreshing
+     * here would replace the page underneath the one thing the cashier is
+     * supposed to print.
+     */
+    setClosure(result.data)
   }
 
   return (
@@ -265,39 +267,32 @@ function OpenDrawerPanel({
           <LocalDateTime value={open.session.openedAt} />
         </p>
 
+        {/*
+          Cash sales and expected cash are absent for the person closing this
+          drawer (correctionA.md §4) — absent from the payload, not merely
+          unrendered. `maySeeReconciliation` says which of the two readers this
+          is; a manager reconciling the floor sees all of it.
+        */}
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Figure label="Opening float" value={money(open.openingFloat)} />
-          <Figure label="Cash sales" value={money(open.cashSales)} />
+          {data.maySeeReconciliation ? (
+            <Figure label="Cash sales" value={money(open.cashSales)} />
+          ) : null}
           <Figure label="Cash in" value={money(open.cashIn)} />
           <Figure label="Cash out" value={money(open.cashOut)} />
           <Figure label="Card takings" value={money(open.cardSales)} muted />
           <Figure label="Other takings" value={money(open.otherSales)} muted />
-          <Figure label="Expected in drawer" value={money(open.expectedCash)} emphasis />
+          {data.maySeeReconciliation ? (
+            <Figure label="Expected in drawer" value={money(open.expectedCash)} emphasis />
+          ) : null}
         </dl>
 
         {/*
-          The tin, shown next to the drawer but never added to it. Two figures
-          side by side is the clearest possible statement that they are two
-          different piles of money.
+          The petty cash tin used to sit here, beside the drawer (correctionA.md
+          §4 retires it — all cash movements belong to the drawer now). A cash
+          expense is a CASH_OUT movement below; the tin's history is still on
+          the petty cash screen for anybody reconciling an older close.
         */}
-        <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3">
-          <p className="flex items-center gap-2 text-sm font-medium">
-            <Coins className="size-4 text-muted-foreground" /> Petty cash tin
-          </p>
-          <dl className="mt-2 grid gap-3 sm:grid-cols-4">
-            <Figure label="Opening" value={money(open.openingPettyCash)} />
-            <Figure label="Topped up" value={money(open.pettyCashToppedUp)} muted />
-            <Figure label="Spent" value={money(open.pettyCashSpent)} muted />
-            <Figure label="Left in the tin" value={money(open.pettyCashBalance)} emphasis />
-          </dl>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Separate from the drawer. Only an expense paid <em>from the drawer</em> changes the
-            figure above.{' '}
-            <Link href="/dashboard/petty-cash" className="underline underline-offset-2">
-              Petty cash
-            </Link>
-          </p>
-        </div>
       </SectionCard>
 
       <MovementForm sessionId={open.session.id} />
@@ -331,96 +326,88 @@ function OpenDrawerPanel({
         </SectionCard>
       )}
 
-      <HandoverForm data={data} money={money} variance={variance} />
+      <HandoverForm data={data} money={money} variance={null} />
 
       <SectionCard
         title="Close drawer"
-        description="Count the cash physically in the drawer and enter it. The difference is recorded, not corrected."
+        description="Count what is physically in the drawer, note by note. The system works out the rest."
       >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="counted">Counted cash</Label>
-            <Input
-              id="counted"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={counted}
-              onChange={(e) => setCounted(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Variance</Label>
-            {/*
-              Three tones, not two. A couple of rupees of change rounding is
-              normal life and reads calmly; only a gap past the restaurant's own
-              tolerance turns amber — the same line at which a written reason
-              and a sign-off start being asked for. One rule, one colour change.
-            */}
-            <div
-              className={`flex h-10 items-center rounded-lg border px-3 text-sm tabular-nums ${
-                variance === null
-                  ? 'border-input text-muted-foreground'
-                  : variance === 0
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                    : needsReason
-                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                      : 'border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400'
-              }`}
-            >
-              {variance === null
-                ? 'Enter your count'
-                : variance === 0
-                  ? 'Balanced exactly'
-                  : `${variance > 0 ? 'Over' : 'Short'} by ${money(Math.abs(variance))}${
-                      needsReason ? '' : ' — close enough, no explanation needed'
-                    }`}
-            </div>
-          </div>
+        {/*
+          A grid of counts, not a total box (correctionA.md §4).
 
-          {/*
-            Appears only when the gap crosses the restaurant's tolerance, and
-            then the close button waits for it. It used to appear at ANY
-            non-zero variance, so a drawer two rupees light demanded a sentence
-            — most of what made closing feel like paperwork.
-          */}
-          {needsReason && (
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="variancereason">
-                Why is it {variance! > 0 ? 'over' : 'short'}? <span className="text-destructive">*</span>
-              </Label>
+          Two things follow from counting this way rather than typing a sum.
+          The arithmetic stops being the cashier's — "six 500s and four 100s"
+          is a fact about the drawer, where "3,400" is a fact plus a sum, and
+          the sum is where the mistakes live. And a disputed close becomes
+          checkable afterwards: "the drawer was 2,000 short" is an accusation,
+          "there were four 500s where the count says six" is a conversation.
+        */}
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {data.denominations.map((d) => (
+            <div key={d.value} className="flex items-center gap-2">
+              <span className="w-20 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
+                {d.label}
+                <span className="ml-1 text-[10px] uppercase">{d.kind === 'coin' ? 'c' : ''}</span>
+              </span>
+              <span className="text-muted-foreground">×</span>
               <Input
-                id="variancereason"
-                placeholder="e.g. gave change from the wrong note on table 4"
-                value={varianceReason}
-                onChange={(e) => setVarianceReason(e.target.value)}
+                inputMode="numeric"
+                placeholder="0"
+                aria-label={`How many ${d.label} ${d.kind}s`}
+                value={counts[String(d.value)] ?? ''}
+                onChange={(e) =>
+                  setCounts((c) => ({ ...c, [String(d.value)]: e.target.value.replace(/\D/g, '') }))
+                }
+                className="h-9"
               />
-              <p className="text-xs text-muted-foreground">
-                Write it now. Nobody remembers this tomorrow.
-              </p>
+              <span className="w-24 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
+                {money(d.value * (Number(counts[String(d.value)] ?? '') || 0))}
+              </span>
             </div>
-          )}
-
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="closenote">Anything else (optional)</Label>
-            <Textarea
-              id="closenote"
-              rows={2}
-              placeholder="Notes for whoever reads this later"
-              value={closeNote}
-              onChange={(e) => setCloseNote(e.target.value)}
-            />
-          </div>
+          ))}
         </div>
-        <Button
-          className="mt-4"
-          variant="destructive"
-          onClick={close}
-          disabled={busy || reasonMissing}
-        >
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-4 py-3">
+          <span className="text-sm font-medium">Cash counted</span>
+          <span className="text-xl font-bold tabular-nums">{money(physicalTotal)}</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {/*
+            Said out loud, because a cashier who expects to see a variance and
+            does not will assume the screen is broken and go looking for it.
+          */}
+          The difference against what the system expected is worked out when you close, and shown
+          on the closure slip.
+        </p>
+
+        <div className="mt-4 space-y-1.5">
+          <Label htmlFor="closenote">Anything else (optional)</Label>
+          <Textarea
+            id="closenote"
+            rows={2}
+            placeholder="Notes for whoever reads this later"
+            value={closeNote}
+            onChange={(e) => setCloseNote(e.target.value)}
+          />
+        </div>
+        <Button className="mt-4" variant="destructive" onClick={close} disabled={busy || !anyCounted}>
           <Lock className="mr-2 h-4 w-4" />
           {busy ? 'Closing…' : 'Close drawer'}
         </Button>
       </SectionCard>
+
+      <ClosurePreview
+        closure={closure}
+        currency={data.currency}
+        denominations={data.denominations}
+        branchName={data.openBranchName}
+        registerName={data.openRegisterName}
+        money={money}
+        onClose={() => {
+          setClosure(null)
+          router.refresh()
+        }}
+      />
     </>
   )
 }

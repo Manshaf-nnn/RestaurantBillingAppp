@@ -146,6 +146,18 @@ export const FEATURES: Feature[] = [
         permission: PERMISSIONS.PURCHASE_APPROVE,
         hint: 'Lets them settle a request rather than only raise one.',
       },
+      {
+        key: 'edit',
+        label: 'Set who may approve',
+        permission: PERMISSIONS.APPROVALS_MANAGE,
+        hint: 'Choose which staff can sign off requests at each location.',
+      },
+      {
+        key: 'submit',
+        label: 'Override',
+        permission: PERMISSIONS.APPROVALS_FORCE,
+        hint: 'Sign their own request, or one for a location they do not approve for. Every override is recorded as one.',
+      },
     ],
     routes: ['/dashboard/approvals'],
   },
@@ -167,21 +179,30 @@ export const FEATURES: Feature[] = [
   },
   {
     key: 'pettyCash',
-    label: 'Petty cash',
+    label: 'Petty cash (retired)',
     group: 'Overview',
-    description: 'The small-expenses fund: raising a request, approving it, paying it.',
+    /*
+     * Retired by correctionA.md §4 — all cash movements belong to the drawer.
+     * The feature stays in this registry, and that is deliberate: the rows are
+     * financial records with ledger and audit entries behind them, and a past
+     * reconciliation that cannot explain its own numbers is worse than a
+     * feature switched off. So the history stays readable and gateable, and
+     * only the ability to start something new is gone.
+     *
+     * `create` has no switch any more because the action refuses regardless —
+     * a control that cannot change an outcome is a lie about what an owner is
+     * deciding. `approve` stays so anything already in flight can be finished
+     * rather than stranded on somebody's expense claim.
+     */
+    description:
+      'Retired. Cash expenses are recorded on the drawer now; this is the history and the requests still in flight.',
     actions: [
-      { key: 'view', permission: PERMISSIONS.PETTY_CASH_VIEW },
-      {
-        key: 'create',
-        label: 'Raise a request',
-        permission: PERMISSIONS.PETTY_CASH_REQUEST,
-      },
+      { key: 'view', label: 'See the history', permission: PERMISSIONS.PETTY_CASH_VIEW },
       {
         key: 'approve',
-        label: 'Approve and pay',
+        label: 'Settle what is left',
         permission: PERMISSIONS.PETTY_CASH_APPROVE,
-        hint: 'The control. Giving it to whoever can raise a request removes it.',
+        hint: 'Finish requests raised before petty cash was retired. No new ones can be raised.',
       },
     ],
     routes: ['/dashboard/petty-cash'],

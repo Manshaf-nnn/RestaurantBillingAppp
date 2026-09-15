@@ -229,6 +229,17 @@ export const AUDIT_ACTIONS = {
   RECIPE_CHANGED: 'recipe.changed',
   APPROVAL_REQUESTED: 'approval.requested',
   APPROVAL_DECIDED: 'approval.decided',
+  /**
+   * A decision that broke the two-person rule (correctionA.md §9).
+   *
+   * Its own action, not a flag on `approval.decided`, so "show me every
+   * override" is a filter on this log rather than a reading of every approval
+   * ever made. An override that is only distinguishable by inspecting each row
+   * is an override nobody will find.
+   */
+  APPROVAL_FORCED: 'approval.forced',
+  /** An owner changed who may sign off requests at a location (§9). */
+  APPROVAL_ACCESS_SET: 'approval.accessSet',
 
   /*
    * Platform-operator actions (production.md §8–§14).

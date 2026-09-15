@@ -5,7 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getReconciliationReport } from '@/features/reports/reconciliation'
-import { resolveRange } from '@/features/reports/range'
+import { describeRange, resolveRange } from '@/features/reports/range'
+import { PeriodPicker } from '@/features/dashboard/components/period-picker'
 import { listSwitchableLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -32,8 +33,24 @@ export default async function ReconciliationPage({
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
   const params = await searchParams
-  const preset = typeof params.range === 'string' ? params.range : 'THIS_MONTH'
-  const range = resolveRange({ preset: preset as never, timeZone: restaurant.timezone })
+  const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
+
+  /*
+   * `?preset=`, with `?range=` still read (correctionA.md §3).
+   *
+   * This page spoke `?range=` in SCREAMING_CASE while the dashboard spoke
+   * `?preset=` in the same casing and the reports hub spoke `?range=` in
+   * lowercase — three spellings of one idea, which is what §3 is really about.
+   * It reads the shared one now and keeps honouring its own, because the four
+   * links it used to render are in people's bookmarks.
+   */
+  const range = resolveRange({
+    preset: str('preset') || str('range') || 'THIS_MONTH',
+    from: str('from'),
+    to: str('to'),
+    timeZone: restaurant.timezone,
+  })
+  const periodLabel = describeRange(range)
 
   /*
    * Resolved through the shared helper so the top-bar switcher and this page's
@@ -52,9 +69,19 @@ export default async function ReconciliationPage({
     branchId,
   })
 
-  const href = (next: { range?: string; branch?: string | null }) => {
+  /*
+   * Only the location links use this now, and it has to carry the period
+   * forward or changing branch silently resets the window to this month —
+   * which is exactly the kind of quiet reset the shared picker exists to stop.
+   * `from`/`to` go too, since a CUSTOM range is meaningless without them.
+   */
+  const href = (next: { branch?: string | null }) => {
     const q = new URLSearchParams()
-    q.set('range', next.range ?? preset)
+    q.set('preset', range.preset)
+    if (range.preset === 'CUSTOM') {
+      if (str('from')) q.set('from', str('from'))
+      if (str('to')) q.set('to', str('to'))
+    }
     const b = next.branch === undefined ? branchId : next.branch
     if (b) q.set('branch', b)
     return `/dashboard/reports/reconciliation?${q.toString()}`
@@ -67,18 +94,12 @@ export default async function ReconciliationPage({
         description="What you started with, everything that came in and went out, and what should be left. If the books balance, every stock figure in the system can be trusted."
       />
 
-      <div className="mb-5 flex flex-wrap gap-2">
-        {(['TODAY', 'THIS_WEEK', 'THIS_MONTH', 'LAST_MONTH'] as const).map((p) => (
-          <Link
-            key={p}
-            href={href({ range: p })}
-            className={`rounded-lg border px-3 py-1.5 text-sm ${
-              preset === p ? 'border-primary bg-primary/5 font-medium' : 'border-border hover:bg-muted'
-            }`}
-          >
-            {p.replace(/_/g, ' ').toLowerCase()}
-          </Link>
-        ))}
+      {/*
+        Four hand-built links became the shared picker, which also brings the
+        five presets they never offered and a custom range.
+      */}
+      <div className="mb-5">
+        <PeriodPicker preset={range.preset} from={str('from')} to={str('to')} label={periodLabel} />
       </div>
 
       {locations.length > 1 && (

@@ -10,6 +10,7 @@ import {
   listStationBranches,
   scopeToOne,
   selectedBranch,
+  branchNameFor,
 } from '@/features/dashboard/selected-branch'
 import { StationBranchPicker } from '@/features/dashboard/components/station-branch-picker'
 import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
@@ -76,8 +77,10 @@ export default async function KitchenPage({
   const branchIds = branchId ? [branchId] : selection.branchIds
 
 
-  const [restaurant, queue, stats, workload, mine] = await Promise.all([
+  const [restaurant, branchName, queue, stats, workload, mine] = await Promise.all([
     requireRestaurant(user.restaurantId),
+    // correctionA.md §6 — the rail says which kitchen it is for.
+    branchNameFor(user.restaurantId, branchId),
     getKitchenQueue(user.restaurantId, branchIds),
     getKitchenStats(user.restaurantId, branchIds),
     /*
@@ -108,6 +111,7 @@ export default async function KitchenPage({
   return (
     <KitchenBoard
       restaurantName={restaurant.name}
+      branchName={branchName}
       paperWidth={readPaperWidths(restaurant.printerConfig).kitchen}
       timeZone={restaurant.timezone}
       branchIds={branchIds}

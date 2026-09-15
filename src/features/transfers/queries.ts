@@ -469,7 +469,15 @@ export async function getTransferDetail(params: {
 
 /** Locations and items for the "new transfer" form. */
 export async function getTransferBuilderData(restaurantId: string) {
-  const [locations, items, storage] = await Promise.all([
+  /*
+   * Shelves are no longer fetched here (correctionA.md §7). The form used to
+   * offer "From storage area" and "To storage area", which let a transfer mean
+   * a shelf-to-shelf move inside one location; a transfer now always moves
+   * stock between two locations. The service still accepts the storage ids and
+   * the columns are still on the row — historical transfers reference them —
+   * so nothing below the form changed.
+   */
+  const [locations, items] = await Promise.all([
     prisma.branch.findMany({
       where: { restaurantId, deletedAt: null, isActive: true },
       select: { id: true, name: true, type: true },
@@ -479,21 +487,10 @@ export async function getTransferBuilderData(restaurantId: string) {
       where: { restaurantId, available: { gt: 0 } },
       include: { item: { select: { id: true, name: true, unit: true } } },
     }),
-    // Shelves, so a move within one location — Main Store to Cold Room — can be
-    // expressed. The service always supported it; the form had no way to say it.
-    prisma.storageLocation.findMany({
-      where: { restaurantId, deletedAt: null },
-      select: { id: true, name: true, branchId: true },
-      orderBy: { name: 'asc' },
-    }),
   ])
 
   return {
     locations,
-    storageByBranch: locations.map((l) => ({
-      branchId: l.id,
-      shelves: storage.filter((s) => s.branchId === l.id).map((s) => ({ id: s.id, name: s.name })),
-    })),
     // Only what a location actually holds can be sent from it.
     stockByBranch: locations.map((l) => ({
       branchId: l.id,

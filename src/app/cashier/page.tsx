@@ -10,6 +10,7 @@ import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
+  branchNameFor,
   scopeToOne,
   selectedBranch,
 } from '@/features/dashboard/selected-branch'
@@ -78,7 +79,9 @@ export default async function CashierPage({
 
   const branchIds = chosen ? [chosen] : selection.branchIds
 
-  const [menu, bills, tables, today] = await Promise.all([
+  const [branchName, menu, bills, tables, today] = await Promise.all([
+    // correctionA.md §6 — the till says which drawer's location it is on.
+    branchNameFor(user.restaurantId, chosen),
     /*
      * The till sells its own branch's menu at its own branch's prices. A
      * cashier confined to Kandy must not be able to ring up a Colombo-only
@@ -125,6 +128,7 @@ export default async function CashierPage({
       // Which locations this screen shows, so live events for another
       // branch are ignored rather than chiming here.
       branchIds={branchIds}
+      branchName={branchName}
       menu={menu}
       startInTakeaway={startInTakeaway}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}

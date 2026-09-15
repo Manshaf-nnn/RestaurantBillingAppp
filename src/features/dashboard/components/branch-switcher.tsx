@@ -111,10 +111,30 @@ export function BranchSwitcher({
    * nothing.
    *
    * With one location and no all-sites row there is no choice left to make, so
-   * the whole control hides — same rule as before, one line further down.
+   * the control stops being a control — but it does not disappear.
+   *
+   * It used to return null here, and that was the wrong half of the idea
+   * (correctionA.md §6). Hiding the *menu* is right: there is nothing to pick.
+   * Hiding the *name* meant a branch manager pinned to one site — the person
+   * with the least context about which site they are looking at, and the most
+   * to lose by guessing — saw no location anywhere on the screen. The chip
+   * below is the same shape as the trigger, minus the chevron and the click.
    */
   const rows = locations.length + (seesEverything ? 1 : 0)
-  if (rows < 2) return null
+  if (rows < 2) {
+    const only = locations[0]
+    if (!only) return null
+    const OnlyIcon = ICONS[only.type] ?? Building2
+    return (
+      <span
+        className="flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground"
+        title={`${TYPE_LABEL[only.type] ?? 'Location'} · ${only.name}`}
+      >
+        <OnlyIcon className="size-4 shrink-0" />
+        <span className="truncate">{only.name}</span>
+      </span>
+    )
+  }
 
   /*
    * One server call, and nothing else.

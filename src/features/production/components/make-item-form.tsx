@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ChefHat, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChefHat, Plus, Timer, Trash2 } from 'lucide-react'
 import type { StockUnit } from '@prisma/client'
 
 import { Alert } from '@/components/ui/feedback'
@@ -11,12 +11,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { ItemPicker } from '@/components/ui/item-picker'
 import { UNIT_LABELS, formatQuantity, toBaseUnits } from '@/features/inventory/units'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { roundQty } from '@/lib/quantity'
 import { newRequestKey } from '@/lib/request-key'
 import { useAction } from '@/lib/use-action'
-import { produceItemAction } from '../actions'
+import { produceItemAction, startBatchAction } from '../actions'
 import type { ProduceItemResult, WorkspaceItem } from '../types'
 
 /**
@@ -97,6 +98,24 @@ export function MakeItemForm({
     [items, trimmed],
   )
   const nameIsRaw = matched !== null && !matched.isPrepared
+
+  /*
+   * The ingredient list (correctionA.md §8, and redesignkitchenjob.md's
+   * "Ingredient field MUST be a dropdown/search").
+   *
+   * The item being made is disabled rather than hidden: seeing it greyed out
+   * says "not this one, you are making it", where hiding it just looks like
+   * the search is broken.
+   */
+  const ingredientOptions = React.useMemo(
+    () =>
+      items.map((i) => ({
+        value: i.id,
+        label: i.isPrepared ? `${i.name} (prepared)` : i.name,
+        disabled: matched?.id === i.id,
+      })),
+    [items, matched],
+  )
   const outputUnits: StockUnit[] = matched ? matched.units : ALL_UNITS
   React.useEffect(() => {
     if (matched && !matched.units.includes(unit)) setUnit(matched.unit)
@@ -177,7 +196,7 @@ export function MakeItemForm({
     requestKey.current = newRequestKey('prod')
   }
 
-  const submit = async () => {
+  const submit = async (mode: 'now' | 'batch' = 'now') => {
     if (!ready) return
     const payload = {
       clientRequestId: requestKey.current,
@@ -191,6 +210,29 @@ export function MakeItemForm({
         .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit, note: r.note || undefined })),
       notes: notes || undefined,
     }
+    /*
+     * Two ways out of one form (correctionA.md §10).
+     *
+     * "Make it now" is the flow redesignkitchenjob.md settled on and is
+     * unchanged: one transaction, ingredients out and the prepared item in.
+     *
+     * "Start a batch" writes the same plan and moves nothing. It is for the
+     * things whose yield is not knowable when you begin — a pot that reduces,
+     * dough that proves — where stating the output up front means recording a
+     * guess as measured fact and quietly losing the shortfall from the
+     * costing. The quantity above becomes what you are AIMING for, and the
+     * real figure is entered on Mark Done.
+     */
+    if (mode === 'batch') {
+      await run(() => startBatchAction(payload), {
+        onDone: () => {
+          reset()
+          router.refresh()
+        },
+      })
+      return
+    }
+
     await run(() => produceItemAction(payload), {
       onDone: (data) => {
         setResult(data)
@@ -327,14 +369,15 @@ export function MakeItemForm({
             </div>
             {preview.lines.map(({ row, item, base, value, error, short }) => (
               <div key={row.key} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_6rem_6rem_7rem_7rem_2.5rem]">
-                <select className={`${SELECT} col-span-2 sm:col-span-1`} value={row.itemId} onChange={(e) => pickItem(row.key, e.target.value)}>
-                  <option value="">Choose a stock item…</option>
-                  {items.map((i) => (
-                    <option key={i.id} value={i.id} disabled={matched?.id === i.id}>
-                      {i.name}{i.isPrepared ? ' (prepared)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <div className="col-span-2 sm:col-span-1">
+                  <ItemPicker
+                    options={ingredientOptions}
+                    value={row.itemId}
+                    onChange={(next) => pickItem(row.key, next)}
+                    placeholder="Choose a stock item…"
+                    searchPlaceholder="Search stock items…"
+                  />
+                </div>
                 <Input type="number" inputMode="decimal" min={0} step="any" value={row.quantity} onChange={(e) => setRow(row.key, { quantity: e.target.value })} placeholder="0" aria-invalid={Boolean(error) || short} />
                 <select className={SELECT} value={row.unit} onChange={(e) => setRow(row.key, { unit: e.target.value as StockUnit })} disabled={!item}>
                   {(item ? item.units : ALL_UNITS).map((u) => <option key={u} value={u}>{UNIT_LABELS[u]}</option>)}
@@ -414,12 +457,27 @@ export function MakeItemForm({
                 Production never takes a shelf below zero.
               </Alert>
             ) : null}
-            <Button className="w-full" size="lg" onClick={submit} disabled={!ready} loading={busy}>
-              Complete production
+            <Button className="w-full" size="lg" onClick={() => submit('now')} disabled={!ready} loading={busy}>
+              Make it now
+            </Button>
+            <Button
+              className="w-full"
+              size="lg"
+              variant="outline"
+              onClick={() => submit('batch')}
+              disabled={!ready}
+              loading={busy}
+            >
+              <Timer /> Start a batch
             </Button>
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              One step, one transaction: ingredients leave stock and the prepared item arrives carrying exactly their value. Nothing is expensed until a dish is sold.
+              <span>
+                <strong>Make it now</strong> — one transaction: ingredients leave stock and the
+                prepared item arrives carrying exactly their value.{' '}
+                <strong>Start a batch</strong> — nothing moves yet; come back and enter what
+                actually came out. Either way, nothing is expensed until a dish is sold.
+              </span>
             </p>
           </CardContent>
         </Card>

@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 import { listTransfers } from '@/features/transfers/queries'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -43,11 +44,14 @@ export default async function TransfersPage({
   const params = await searchParams
   const search = (typeof params.search === 'string' ? params.search : '').trim()
   const selection = await selectedBranch(user, params)
-  const transfers = await listTransfers({
-    restaurantId: user.restaurantId,
-    branchId: scopeToOne(selection),
-    search,
-  })
+  const [transfers, branchName] = await Promise.all([
+    listTransfers({
+      restaurantId: user.restaurantId,
+      branchId: scopeToOne(selection),
+      search,
+    }),
+    branchNameFor(user.restaurantId, selection.branchId),
+  ])
 
   const open = transfers.filter((t) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(t.status))
 
@@ -55,13 +59,17 @@ export default async function TransfersPage({
     <>
       <PageHeader
         title="Transfers"
+        branch={branchName}
         description="Stock moving between locations. It leaves on dispatch and arrives on receipt — never both at once."
         actions={
-          can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
-            <Button asChild>
-              <Link href="/dashboard/transfers/new">New transfer</Link>
-            </Button>
-          ) : null
+          <>
+            {can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="transfers" /> : null}
+            {can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
+              <Button asChild>
+                <Link href="/dashboard/transfers/new">New transfer</Link>
+              </Button>
+            ) : null}
+          </>
         }
       />
 

@@ -1,13 +1,23 @@
 import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 import { CentralApprovals, type ApprovalRow } from '@/features/approvals/components/central-approvals'
 import { ApprovalQueue, type ApprovalRow as DecidedRow } from '@/features/approvals/components/approval-queue'
 import { getApprovalsInbox } from '@/features/accounting/inbox'
-import { listApprovals } from '@/features/approvals/service'
+import {
+  RESTAURANT_WIDE,
+  getApprovalPolicy,
+  listApprovals,
+} from '@/features/approvals/service'
+import { ApprovalFilters } from '@/features/approvals/components/approval-filters'
+import { ApprovalAccess } from '@/features/approvals/components/approval-access'
+import { listSwitchableLocations } from '@/features/transfers/queries'
+import { permissionsFor, visibleBranchIds } from '@/lib/rbac'
+import { prisma } from '@/server/db/prisma'
 import { PERMISSIONS, can, type Permission } from '@/lib/rbac'
 import { localeForCurrency, type CurrencyCode } from '@/lib/money'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { branchNameFor, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -46,14 +56,45 @@ export default async function ApprovalsPage({
 
   // Someone confined to a location only sees requests raised there — plus the
   // restaurant-wide ones, which concern everybody.
-  const selection = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const selection = await selectedBranch(user, params)
+  const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
 
-  const [waiting, decided] = await Promise.all([
+  const manages = can(user, PERMISSIONS.APPROVALS_MANAGE)
+
+  const [waiting, decided, branchName, locations, policy, staff] = await Promise.all([
     getApprovalsInbox(user.restaurantId, selection.branchIds),
     listApprovals({
       restaurantId: user.restaurantId,
       branchIds: selection.branchIds,
       limit: 40,
+      // correctionA.md §9. Every one is validated or ignored by the service;
+      // an unknown status or kind simply does not narrow anything.
+      status: (str('status') || undefined) as never,
+      kind: (str('kind') || undefined) as never,
+      requestedById: str('requestedBy') || undefined,
+      fromBranchId: str('fromBranch') || undefined,
+      toBranchId: str('toBranch') || undefined,
+    }),
+    branchNameFor(user.restaurantId, selection.branchId),
+    listSwitchableLocations(user.restaurantId, visibleBranchIds(user)),
+    manages ? getApprovalPolicy(user.restaurantId) : Promise.resolve(null),
+    /*
+     * Everyone who could be named as an approver, or who could have raised a
+     * request. Same list for both filters, because "who asked" and "who may
+     * answer" are drawn from the same staff.
+     */
+    prisma.user.findMany({
+      where: { restaurantId: user.restaurantId, isActive: true, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        permissions: true,
+        branch: { select: { name: true } },
+        staffRole: { select: { permissions: true, isActive: true } },
+      },
+      orderBy: { name: 'asc' },
     }),
   ])
 
@@ -96,16 +137,60 @@ export default async function ApprovalsPage({
       branchName: row.branch?.name ?? null,
       requestedAt: row.requestedAt.toISOString(),
       decisionNote: row.decisionNote,
+      forcedAt: row.forcedAt?.toISOString() ?? null,
     }))
 
   const locale =
     restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
 
+  /*
+   * Only people who can open the queue can be named as approvers. The action
+   * checks this again on write — this list is a convenience, never the gate —
+   * but offering somebody who cannot open the screen would build a location
+   * whose approver list is full and whose queue nobody can clear.
+   */
+  const canApproveHere = staff.filter((member) =>
+    permissionsFor({
+      role: member.role,
+      permissions: member.permissions,
+      rolePermissions:
+        member.staffRole && member.staffRole.isActive ? member.staffRole.permissions : null,
+    }).has(PERMISSIONS.APPROVALS_VIEW),
+  )
+  const nameOf = new Map(staff.map((m) => [m.id, m.name]))
+
+  const accessRows = policy
+    ? [
+        {
+          branchId: '',
+          branchName: 'All locations',
+          approvers: (policy.approvers?.[RESTAURANT_WIDE] ?? [])
+            .filter((id) => nameOf.has(id))
+            .map((id) => ({ id, name: nameOf.get(id)! })),
+        },
+        ...locations.map((l) => ({
+          branchId: l.id,
+          branchName: l.name,
+          approvers: (policy.approvers?.[l.id] ?? [])
+            .filter((id) => nameOf.has(id))
+            .map((id) => ({ id, name: nameOf.get(id)! })),
+        })),
+      ]
+    : []
+
   return (
     <>
       <PageHeader
         title="Approvals"
-        description="Everything from every branch that needs a decision. Nothing goes ahead until somebody signs it off."
+        // Only when the view is narrowed to one location; unset it reads
+        // "from every branch", which is what the description says.
+        branch={branchName}
+        description={
+          branchName
+            ? 'Everything raised at this location that needs a decision. Nothing goes ahead until somebody signs it off.'
+            : 'Everything from every branch that needs a decision. Nothing goes ahead until somebody signs it off.'
+        }
+        actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="approvals" /> : null}
       />
       <div className="space-y-5">
         <CentralApprovals
@@ -114,7 +199,38 @@ export default async function ApprovalsPage({
           timeZone={restaurant.timezone}
           locale={locale}
         />
-        <ApprovalQueue rows={history} currency={restaurant.currency} />
+        {manages ? (
+          <ApprovalAccess
+            rows={accessRows}
+            staff={canApproveHere.map((m) => ({
+              id: m.id,
+              name: m.name,
+              branchName: m.branch?.name ?? null,
+            }))}
+          />
+        ) : null}
+
+        <div>
+          <ApprovalFilters
+            locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+            staff={staff.map((m) => ({ id: m.id, name: m.name }))}
+            kinds={[
+              { value: 'REFUND', label: 'Refund' },
+              { value: 'DISCOUNT', label: 'Discount' },
+              { value: 'STOCK_ADJUSTMENT', label: 'Stock adjustment' },
+              { value: 'PURCHASE_ORDER', label: 'Purchase order' },
+              { value: 'STOCK_TRANSFER', label: 'Transfer' },
+              { value: 'PRICE_OVERRIDE', label: 'Price override' },
+            ]}
+            statuses={[
+              { value: 'PENDING', label: 'Waiting' },
+              { value: 'APPROVED', label: 'Approved' },
+              { value: 'REJECTED', label: 'Rejected' },
+              { value: 'WITHDRAWN', label: 'Cancelled' },
+            ]}
+          />
+          <ApprovalQueue rows={history} currency={restaurant.currency} locale={locale} />
+        </div>
       </div>
     </>
   )

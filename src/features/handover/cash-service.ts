@@ -127,6 +127,41 @@ export async function requestHandover(params: {
     )
   }
 
+  /*
+   * ── No two handovers in flight at once (correctionA.md §11) ─────────────
+   *
+   * Nothing stopped a second one being raised, and both failure shapes are
+   * bad in the same way — two people each believing the till is coming to
+   * them:
+   *
+   *   · the same session offered twice, so whichever cashier accepts first
+   *     takes the drawer and the other is left holding a request that will
+   *     refuse when they press accept, after they have walked over;
+   *   · the same person offered two different tills, and accepting either
+   *     opens a session in their name that blocks the other.
+   *
+   * Checked before the counts are computed so the refusal is cheap, and the
+   * accept path still re-checks under its own guards — this is the message,
+   * not the lock.
+   */
+  const conflicting = await prisma.cashHandover.findFirst({
+    where: {
+      restaurantId: params.restaurantId,
+      status: 'PENDING',
+      OR: [{ fromSessionId: session.id }, { toUserId: params.toUserId }],
+    },
+    include: { toUser: { select: { name: true } } },
+  })
+  if (conflicting) {
+    throw new AppError(
+      conflicting.fromSessionId === session.id
+        ? `This till is already being handed to ${conflicting.toUser?.name ?? 'somebody'}. Cancel that first.`
+        : 'That person already has a till waiting for them to accept.',
+      409,
+      'HANDOVER_ALREADY_PENDING',
+    )
+  }
+
   const totals = await computeDrawerTotals(session.id)
   const variance = params.countedAmount - totals.expectedCash
 
@@ -348,11 +383,29 @@ export async function listHandovers(params: {
   from?: Date | null
   to?: Date | null
   limit?: number
+  /**
+   * Narrow to the handovers this person was part of (correctionA.md §11).
+   *
+   * §11 asks that "both users and authorized managers see the correct
+   * handover history according to permissions". A manager reconciling a floor
+   * needs everybody's; a cashier needs their own, and showing them the whole
+   * branch's would publish who was short and by how much to everyone who
+   * works there — which is a colleague's disciplinary matter, not shift
+   * information.
+   *
+   * Undefined means no narrowing, which is the manager's view. The caller
+   * decides, because whether somebody may see all of it is a permission
+   * question and services do not read permissions.
+   */
+  participantId?: string
 }) {
   return prisma.cashHandover.findMany({
     where: {
       restaurantId: params.restaurantId,
       ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      ...(params.participantId
+        ? { OR: [{ fromUserId: params.participantId }, { toUserId: params.participantId }] }
+        : {}),
       ...(params.branchId ? { branchId: params.branchId } : {}),
       ...(params.from || params.to
         ? {

@@ -127,3 +127,27 @@ export async function listStationBranches(
     orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
   })
 }
+
+/**
+ * What to call the location a station screen is showing (correctionA.md §6).
+ *
+ * Scoped to the caller's restaurant, so a branch id copied from another tenant
+ * resolves to nothing rather than leaking that tenant's location name — the id
+ * reaching here has already been through `selectedBranch`, and this is the
+ * second lock on the same door.
+ *
+ * `'__none__'` is the sentinel `scopeToOne` returns for somebody confined to no
+ * branch at all; there is no name for that and it must not be looked up.
+ */
+export async function branchNameFor(
+  restaurantId: string,
+  branchId: string | null,
+): Promise<string | null> {
+  if (!branchId || branchId === '__none__') return null
+  const { prisma } = await import('@/server/db/prisma')
+  const branch = await prisma.branch.findFirst({
+    where: { id: branchId, restaurantId },
+    select: { name: true },
+  })
+  return branch?.name ?? null
+}

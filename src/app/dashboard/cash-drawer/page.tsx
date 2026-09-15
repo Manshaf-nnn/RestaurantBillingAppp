@@ -11,7 +11,7 @@ import { PettyCashConsole } from '@/features/pettycash/components/petty-cash-con
 import { getPettyCashPageData } from '@/features/pettycash/queries'
 import { resolveRange } from '@/features/reports/range'
 import { PERMISSIONS, can} from '@/lib/rbac'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePageAnyPermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -56,6 +56,8 @@ export default async function CashDrawerPage({
       timezone: restaurant.timezone,
     }).catch(() => {})
   }
+
+  const branchName = await branchNameFor(user.restaurantId, selection.branchId)
 
   const data = await getDrawerPageData({
     restaurantId: user.restaurantId,
@@ -107,6 +109,7 @@ export default async function CashDrawerPage({
     <>
       <PageHeader
         title="Cash drawer"
+        branch={branchName}
         description="Open with a float, log cash in and out, and close against a physical count."
       />
       <DrawerConsole data={data} />

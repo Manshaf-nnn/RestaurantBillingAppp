@@ -5,9 +5,11 @@ import { PageHeader } from '@/features/dashboard/components/page-header'
 import { HandoverBoard } from '@/features/handover/components/handover-board'
 import { CashHandoverLog } from '@/features/handover/components/cash-handover-log'
 import { listShiftNotes } from '@/features/handover/queries'
+import { OutstandingTasks } from '@/features/handover/components/outstanding-tasks'
+import { listInstructions } from '@/features/instructions/service'
 import { listHandovers } from '@/features/handover/cash-service'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
-import { PERMISSIONS } from '@/lib/rbac'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -31,7 +33,7 @@ export default async function HandoverPage({
    */
   const selection = await selectedBranch(user, await searchParams)
 
-  const [notes, restaurant, handovers] = await Promise.all([
+  const [notes, restaurant, handovers, tasks] = await Promise.all([
     listShiftNotes(user.restaurantId, selection.branchIds),
     requireRestaurant(user.restaurantId),
     /*
@@ -44,6 +46,28 @@ export default async function HandoverPage({
       restaurantId: user.restaurantId,
       branchIds: selection.branchIds,
       limit: 30,
+      /*
+       * correctionA.md §11 — the history each reader is entitled to. A
+       * manager reconciling the floor sees every handover; a cashier sees the
+       * ones they were part of. Showing a cashier the whole branch's would
+       * publish who was short and by how much to everybody who works there.
+       */
+      participantId: can(user, PERMISSIONS.CASH_DRAWER_MANAGE) ? undefined : user.id,
+    }),
+    /*
+     * What is still open here (correctionA.md §11).
+     *
+     * `listInstructions` already filters by what this person may see, so the
+     * handover cannot become a way to read another location's instructions —
+     * the same list, on the one screen where somebody about to go home will
+     * actually read it.
+     */
+    listInstructions({
+      restaurantId: user.restaurantId,
+      user,
+      branchId: scopeToOne(selection),
+      status: 'OPEN',
+      limit: 20,
     }),
   ])
 
@@ -55,6 +79,21 @@ export default async function HandoverPage({
         description="Leave notes for the next shift, and pass the till on with both counts recorded."
       />
       <div className="space-y-6">
+        {/*
+          Above the till log: the things somebody has to SAY before they leave
+          come before the record of what was counted.
+        */}
+        <OutstandingTasks
+          tasks={tasks.map((task) => ({
+            id: task.id,
+            title: task.title,
+            priority: task.priority,
+            dueAt: task.dueAt?.toISOString() ?? null,
+            branchName: task.branch?.name ?? null,
+            assigneeName: task.assigneeName,
+            mine: task.assigneeId === user.id,
+          }))}
+        />
         <CashHandoverLog
           currency={restaurant.currency}
           rows={handovers.map((h) => ({

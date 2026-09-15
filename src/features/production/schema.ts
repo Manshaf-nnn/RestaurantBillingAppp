@@ -42,3 +42,44 @@ export const produceItemSchema = z.object({
 })
 
 export type ProduceItemInput = z.infer<typeof produceItemSchema>
+
+/**
+ * Starting a batch (correctionA.md §10).
+ *
+ * The same shape as `produceItemSchema` minus the certainty: `quantity` is
+ * what the cook INTENDS to make. What actually came out is supplied later, by
+ * `completeBatchSchema`, and the gap between the two is the yield variance
+ * that the one-step flow has no way to express.
+ */
+export const startBatchSchema = z.object({
+  clientRequestId: z.string().min(8).max(64),
+  branchId: z.string().min(1, 'Choose where this is being made'),
+  output: z.object({
+    itemId: z.string().min(1).nullable().optional(),
+    name: z.string().trim().min(2, 'Name what you are making').max(80),
+    quantity: z.coerce.number().positive('Say how much you are aiming for').max(1_000_000_000),
+    unit: z.enum(STOCK_UNITS),
+  }),
+  ingredients: z.array(line).min(1, 'Add at least one ingredient').max(60),
+  waste: z
+    .array(line.extend({ note: z.string().trim().max(200).optional() }))
+    .max(20)
+    .default([]),
+  notes: z.string().trim().max(500).optional(),
+})
+
+export const completeBatchSchema = z.object({
+  clientRequestId: z.string().min(8).max(64),
+  batchId: z.string().min(1),
+  /** What actually came out. Zero is a real answer — the batch failed. */
+  actualQuantity: z.coerce.number().min(0, 'How much came out?').max(1_000_000_000),
+  varianceReason: z
+    // The enum the database already has, not a parallel vocabulary.
+    .enum(['PRODUCTION_LOSS', 'DAMAGED', 'INGREDIENT_SHORTAGE', 'QUALITY_ISSUE', 'OTHER'])
+    .nullable()
+    .optional(),
+  varianceNote: z.string().trim().max(300).optional(),
+  notes: z.string().trim().max(500).optional(),
+})
+
+export const cancelBatchSchema = z.object({ batchId: z.string().min(1) })

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 
 import { runAction, type ActionResult } from '@/lib/action'
+import { AppError } from '@/lib/errors'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
@@ -57,6 +58,27 @@ async function toMinor(restaurantId: string, value: number): Promise<number> {
   return Math.round(value * minorUnitFactor(restaurant.currency))
 }
 
+/**
+ * ── Petty cash is retired (correctionA.md §4) ──────────────────────────────
+ *
+ * "Remove PETTY CASH completely. All cash movements belong to the drawer."
+ *
+ * Retired rather than deleted, and the distinction is the whole design. These
+ * rows are financial records: they have ledger entries and audit entries
+ * behind them, they explain drawer reconciliations that people signed, and
+ * this repo forbids a destructive migration for exactly that reason. A past
+ * close that cannot explain its own numbers is worse than a feature that is
+ * switched off.
+ *
+ * So: nothing new can be raised, anything already in flight can still be
+ * decided and paid — stranding a colleague's approved expense would be a way
+ * of making the removal somebody else's problem — and the history stays
+ * readable. A cash expense is now a CASH_OUT movement on the drawer, which is
+ * where §4 says it belongs.
+ */
+const RETIRED =
+  'Petty cash has been retired. Record a cash expense on the drawer instead — Cash drawer, Cash out.'
+
 export async function createPettyRequestAction(
   input: unknown,
 ): Promise<ActionResult<{ id: string }>> {
@@ -64,6 +86,10 @@ export async function createPettyRequestAction(
     pettyRequestSchema,
     input,
     async (data) => {
+      // Refused at the action, not hidden in the UI: a form somebody has open
+      // in another tab, or a bookmarked URL, must not be able to raise one.
+      throw new AppError(RETIRED, 410, 'PETTY_CASH_RETIRED')
+
       const user = await requirePermission(PERMISSIONS.PETTY_CASH_REQUEST)
       await assertBranchAccess(user, data.branchId || null)
 

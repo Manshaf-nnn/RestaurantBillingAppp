@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ItemPicker } from '@/components/ui/item-picker'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
@@ -74,6 +75,13 @@ export function WastageBoard({
   const [busy, setBusy] = React.useState(false)
 
   const item = items.find((i) => i.id === itemId)
+  // correctionA.md §8 — with the quantity in hand on the second line, so the
+  // person recording waste can see whether the number they are about to type
+  // is even possible.
+  const itemOptions = React.useMemo(
+    () => items.map((i) => ({ value: i.id, label: i.name, hint: `${i.quantity} ${i.unit.toLowerCase()} on hand` })),
+    [items],
+  )
   React.useEffect(() => { if (item) setUnit(item.unit) }, [item])
 
   const requestKey = React.useRef(newRequestKey('waste'))
@@ -121,17 +129,13 @@ export function WastageBoard({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5 lg:col-span-2">
             <Label htmlFor="w-item">Item</Label>
-            <select
+            <ItemPicker
               id="w-item"
-              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+              options={itemOptions}
               value={itemId}
-              onChange={(e) => setItemId(e.target.value)}
-            >
-              <option value="">Choose…</option>
-              {items.map((i) => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
-            </select>
+              onChange={setItemId}
+              searchPlaceholder="Search items…"
+            />
             {item && (
               <p className="text-xs text-muted-foreground">
                 {item.quantity} {item.unit.toLowerCase()} in stock

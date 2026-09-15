@@ -213,9 +213,12 @@ export function InventoryManager({
     <>
       <PageHeader
         title="Inventory"
+        // The location moves into the badge (correctionA.md §6), so the
+        // description stops repeating a name the header now carries.
+        branch={branchName}
         description={
           branchName
-            ? `Quantities shown are what is on the shelf at ${branchName}.`
+            ? 'Quantities shown are what is on the shelf at this location.'
             : 'Track stock, get low-stock alerts, watch expiries'
         }
         actions={

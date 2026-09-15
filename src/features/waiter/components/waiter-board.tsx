@@ -94,6 +94,7 @@ export function WaiterBoard({
   user,
   exit,
   restaurantName,
+  branchName,
   currency,
   locale,
   branchIds,
@@ -116,6 +117,8 @@ export function WaiterBoard({
   branchIds: string[] | null
 
   restaurantName: string
+  /** Which floor this station is serving (correctionA.md §6). */
+  branchName?: string | null
   currency: string
   locale: string
 }) {
@@ -293,6 +296,7 @@ export function WaiterBoard({
     <OpsShell
       title="Waiter station"
       subtitle={restaurantName}
+      branch={branchName}
       user={user}
       actions={exit}
       soundEnabled={soundEnabled}

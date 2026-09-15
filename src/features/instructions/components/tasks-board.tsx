@@ -2,9 +2,10 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, Check, Plus, Undo2 } from 'lucide-react'
+import { AlertTriangle, Check, Plus, Undo2, UserRound } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { ItemPicker } from '@/components/ui/item-picker'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -41,6 +42,11 @@ export interface TaskView {
   dueAt: string | null
   branchId: string | null
   branchName: string | null
+  /** Null means the task is for the location rather than one person (§2). */
+  assigneeId: string | null
+  assigneeName: string | null
+  /** Where that person works — two people share a name more often than not. */
+  assigneeBranchName: string | null
   createdByName: string
   createdAt: string
   doneByName: string | null
@@ -59,10 +65,16 @@ export interface TaskView {
 export function TasksBoard({
   initial,
   locations,
+  staff,
   canInstruct,
 }: {
   initial: TaskView[]
   locations: Array<{ id: string; name: string }>
+  /**
+   * Who a task may be given to (correctionA.md §2). Empty for anyone who
+   * cannot write one — the server decides this list, not the form.
+   */
+  staff: Array<{ id: string; name: string; branchName: string | null }>
   /** True for an owner or group manager — the only people who may write one. */
   canInstruct: boolean
 }) {
@@ -76,6 +88,7 @@ export function TasksBoard({
 
   const [form, setForm] = React.useState({
     branchId: '',
+    assigneeId: '',
     title: '',
     body: '',
     priority: 'NORMAL' as 'NORMAL' | 'URGENT',
@@ -91,7 +104,7 @@ export function TasksBoard({
       success: 'Instruction sent.',
       onDone: () => {
         setOpen(false)
-        setForm({ branchId: '', title: '', body: '', priority: 'NORMAL', dueAt: '' })
+        setForm({ branchId: '', assigneeId: '', title: '', body: '', priority: 'NORMAL', dueAt: '' })
         router.refresh()
       },
     })
@@ -155,6 +168,22 @@ export function TasksBoard({
                     ) : null}
                     <span className="font-medium">{task.title}</span>
                     <Badge variant="secondary">{task.branchName ?? 'All locations'}</Badge>
+                    {/*
+                      Who it is for, when it is for somebody in particular
+                      (correctionA.md §2). Their own location is appended only
+                      when it differs from the task's, so the ordinary case —
+                      Kandy's task given to Kandy's manager — does not print
+                      "Kandy" twice on one row.
+                    */}
+                    {task.assigneeName ? (
+                      <Badge variant="outline">
+                        <UserRound />
+                        {task.assigneeName}
+                        {task.assigneeBranchName && task.assigneeBranchName !== task.branchName
+                          ? ` · ${task.assigneeBranchName}`
+                          : ''}
+                      </Badge>
+                    ) : null}
                   </div>
                   {task.body ? (
                     <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
@@ -205,6 +234,22 @@ export function TasksBoard({
                     </Badge>
                     <span className="text-sm font-medium">{task.title}</span>
                     <Badge variant="secondary">{task.branchName ?? 'All locations'}</Badge>
+                    {/*
+                      Who it is for, when it is for somebody in particular
+                      (correctionA.md §2). Their own location is appended only
+                      when it differs from the task's, so the ordinary case —
+                      Kandy's task given to Kandy's manager — does not print
+                      "Kandy" twice on one row.
+                    */}
+                    {task.assigneeName ? (
+                      <Badge variant="outline">
+                        <UserRound />
+                        {task.assigneeName}
+                        {task.assigneeBranchName && task.assigneeBranchName !== task.branchName
+                          ? ` · ${task.assigneeBranchName}`
+                          : ''}
+                      </Badge>
+                    ) : null}
                   </div>
                   {task.status === 'DONE' ? (
                     <p className="mt-1 text-xs text-muted-foreground">
@@ -255,6 +300,38 @@ export function TasksBoard({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/*
+              Optional on purpose (correctionA.md §2). "Anyone at the location"
+              is the original meaning of an instruction and the right one for a
+              notice — making a name mandatory would force an owner to pick
+              somebody arbitrary for "prices go up on the 1st", and a task
+              addressed to a person nobody chose is worse than one addressed to
+              the site.
+
+              The branch is shown beside each name because two members of staff
+              sharing a first name is the ordinary case, not the edge one.
+            */}
+            <div>
+              <label className="mb-1 block text-sm font-medium">
+                Assign to <span className="font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <ItemPicker
+                options={[
+                  ...staff.map((m) => ({
+                    value: m.id,
+                    label: m.name,
+                    hint: m.branchName ?? 'No location set',
+                  })),
+                ]}
+                value={form.assigneeId}
+                onChange={(v) => setForm((f) => ({ ...f, assigneeId: v }))}
+                placeholder="Anyone at the location"
+                searchPlaceholder="Search staff…"
+                emptyMessage="Nobody matches that."
+                clearable
+              />
             </div>
 
             <div>

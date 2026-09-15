@@ -269,11 +269,30 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
       ? { paymentStatus: filter.paymentStatus as never }
       : {}),
     ...(filter.type && filter.type !== 'ALL' ? { type: filter.type as never } : {}),
+    /*
+     * `to` arrives in one of two shapes, and both have to work.
+     *
+     * The orders screen sends a date off an `<input type="date">` —
+     * "2026-09-15", meaning the whole of that day — so the end of the day has
+     * to be appended or the filter excludes everything after midnight.
+     *
+     * The export route sends a full instant, already resolved to the
+     * restaurant's end-of-day by `resolveRange`. Appending to THAT produced
+     * "2026-09-15T18:29:59.999ZT23:59:59.999", which is an Invalid Date, which
+     * Prisma refuses — so every Orders export returned a 500. It had been
+     * doing so silently: nothing rendered the error, and no test asked the
+     * route for a file until `export-coverage-test`.
+     *
+     * A date-only string is ten characters and carries no `T`. That is the
+     * distinction, and it is checked rather than assumed.
+     */
     ...(filter.from || filter.to
       ? {
           placedAt: {
             ...(filter.from ? { gte: new Date(filter.from) } : {}),
-            ...(filter.to ? { lte: new Date(`${filter.to}T23:59:59.999`) } : {}),
+            ...(filter.to
+              ? { lte: new Date(filter.to.includes('T') ? filter.to : `${filter.to}T23:59:59.999`) }
+              : {}),
           },
         }
       : {}),

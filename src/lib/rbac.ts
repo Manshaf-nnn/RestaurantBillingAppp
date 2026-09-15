@@ -109,6 +109,18 @@ export const PERMISSIONS = {
    */
   TASKS_VIEW: 'tasks.view',
   APPROVALS_VIEW: 'approvals.view',
+  /**
+   * Break the two-person rule, on the record (correctionA.md §9).
+   *
+   * Lets somebody sign a request they raised themselves, or one for a location
+   * whose approver list does not name them. Deliberately its own switch rather
+   * than something OWNER simply has: the whole point of an override is that it
+   * is a decision to grant, visible in the role builder beside everything else
+   * an owner can hand out — and revocable without taking the queue away.
+   */
+  APPROVALS_FORCE: 'approvals.force',
+  /** Choose which staff may sign off requests at each location (§9). */
+  APPROVALS_MANAGE: 'approvals.manage',
   HANDOVER_VIEW: 'handover.view',
   RECIPE_VIEW: 'recipe.view',
   LOYALTY_VIEW: 'loyalty.view',

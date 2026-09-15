@@ -1,7 +1,17 @@
+'use client'
+
+import * as React from 'react'
+import { ShieldAlert } from 'lucide-react'
+
 import { Badge } from '@/components/ui/badge'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
-import { formatMoney } from '@/lib/money'
+import { Button } from '@/components/ui/button'
+import { formatMoney, type CurrencyCode } from '@/lib/money'
+import { callAction } from '@/lib/use-action'
+import { approvalDetailAction } from '../actions'
+import { ApprovalDetail } from './approval-detail'
+import type { ApprovalDetailPayload } from '../types'
 
 export interface ApprovalRow {
   id: string
@@ -15,6 +25,8 @@ export interface ApprovalRow {
   branchName: string | null
   requestedAt: string
   decisionNote: string | null
+  /** Set when the two-person rule was overridden to decide it (§9). */
+  forcedAt: string | null
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -46,10 +58,29 @@ const KIND_LABELS: Record<string, string> = {
 export function ApprovalQueue({
   rows,
   currency,
+  locale,
 }: {
   rows: ApprovalRow[]
   currency: string
+  locale: string
 }) {
+  /*
+   * A client component now, and only for one reason: §9 asks that a request
+   * can be opened and read in full before anybody rules on it, and the detail
+   * — the payload plus the audit trail of the record it concerns — is far too
+   * much to load for every row of a fifty-row history when at most one gets
+   * opened. So it is fetched on click, through a guarded read action.
+   */
+  const [detail, setDetail] = React.useState<ApprovalDetailPayload | null>(null)
+  const [loading, setLoading] = React.useState<string | null>(null)
+
+  const open = async (id: string) => {
+    setLoading(id)
+    const result = await callAction(() => approvalDetailAction({ approvalId: id }))
+    setLoading(null)
+    if (result.ok) setDetail(result.data)
+  }
+
   if (rows.length === 0) return null
   const money = (minor: number) => formatMoney(minor, currency)
 
@@ -74,14 +105,44 @@ export function ApprovalQueue({
             {row.decisionNote && (
               <span className="text-xs text-muted-foreground">— {row.decisionNote}</span>
             )}
+            {/*
+              An override stays visible for as long as the record does (§9).
+              A decision that broke the two-person rule and looks identical to
+              one that did not is a control nobody can audit.
+            */}
+            {row.forcedAt ? (
+              <Badge variant="destructive">
+                <ShieldAlert /> overridden
+              </Badge>
+            ) : null}
             <span className="ml-auto text-xs text-muted-foreground">
               {row.requestedByName ?? 'Unknown'} · <LocalDateTime value={row.requestedAt} />
               {row.branchName ? ` · ${row.branchName}` : ''}
               {row.decidedByName ? ` · decided by ${row.decidedByName}` : ''}
             </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={loading === row.id}
+              onClick={() => void open(row.id)}
+            >
+              Details
+            </Button>
           </li>
         ))}
       </ul>
+
+      <ApprovalDetail
+        request={
+          detail
+            ? { ...detail, kindLabel: KIND_LABELS[detail.kind] ?? detail.kind }
+            : null
+        }
+        currency={currency as CurrencyCode}
+        locale={locale}
+        open={detail !== null}
+        onClose={() => setDetail(null)}
+      />
     </SectionCard>
   )
 }

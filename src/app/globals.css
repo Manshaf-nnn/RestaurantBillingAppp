@@ -504,3 +504,36 @@
 .dark .guest-divider {
   background: rgba(255, 255, 255, 0.15);
 }
+
+/*
+ * The drawer closure slip (correctionA.md §4).
+ *
+ * A dialog is a portalled overlay, so printing the page prints the dashboard
+ * behind it and the dialog on top. This hides everything and then un-hides the
+ * slip's own ancestors, which is the only way to lift one node out of a tree
+ * for print without moving it in the DOM.
+ *
+ * A till has a receipt printer and often no keyboard, so the slip is sized for
+ * roll paper rather than A4.
+ */
+@media print {
+  body:has(.print-slip) * {
+    visibility: hidden !important;
+  }
+  body:has(.print-slip) .print-slip,
+  body:has(.print-slip) .print-slip * {
+    visibility: visible !important;
+  }
+  .print-slip {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    width: 100%;
+    max-width: 80mm;
+    padding: 4mm;
+    font-size: 11px;
+    color: #000;
+  }
+  .print-slip .text-muted-foreground {
+    color: #000 !important;
+  }
+}

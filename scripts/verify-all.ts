@@ -51,6 +51,10 @@ const STATIC = [
   // athu.md — only a credential or deactivation event may write `revokedAt`.
   // A feature-flag edit once logged a whole restaurant out by copying six lines.
   'no-collateral-session-revocation',
+  // correctionA.md §3 — one vocabulary for "which period": no third
+  // resolveRange, no page starting its window at the current instant, and a
+  // selector on every screen that shows figures for a range.
+  'range-convergence-test',
   // sidebar.md §7 — a favorite or a recent page is only ever an href resolved
   // through the sidebar's own permission filter, so revoking a permission
   // removes the shortcut and no second permission system exists to drift.
@@ -72,6 +76,11 @@ const SERVICE = [
   // idempotent completion, and production → recipe → sale → COGS exactly once.
   // Replaces production-flow-test and production-spec-test (recipe-driven jobs).
   'prepared-items-test',
+  // correctionA.md §10 — a batch can be started before its yield is known:
+  // starting moves nothing, finishing runs the same atomic transaction against
+  // the same reference number, and the planned figure survives so the variance
+  // is real.
+  'production-yield-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',
@@ -162,7 +171,28 @@ const SERVICE = [
   'kitchen-routing-test',
   'menu-station-test',
   'cash-drawer-flow-test',
+  // correctionA.md §4 — the cashier counts notes and is shown neither the
+  // expected cash nor the gap until the close is committed; the total is
+  // derived on the server from face values the currency actually has.
+  'drawer-denomination-test',
+  // correctionA.md §11 — a till is offered to one person at a time, and the
+  // handover history is shown to the people entitled to read it: a manager
+  // sees the floor's, a cashier only the ones they were part of.
+  'handover-flow-test',
   'feature-access-test',
+  // correctionA.md §5/§6/§7 — every screen names the location it is acting on
+  // (including the one-location case, where the switcher renders no menu), and
+  // a transfer moves stock between two locations rather than between shelves.
+  'branch-context-test',
+  // correctionA.md §9 — an empty approver list means "the permission decides",
+  // not "nobody"; an override only counts when a rule was actually in the way,
+  // and the row says so afterwards; From/To filter both directions and neither
+  // can widen what somebody may see.
+  'approval-access-test',
+  // correctionA.md §2 — a task can name a person, the posted id is checked
+  // against the caller's own restaurant before it is stored, and the nav badge
+  // counts what is mine rather than what is on a colleague's plate.
+  'task-assignment-test',
   // sidebar.md §1/§9 — favorites are per user and per restaurant, refused on
   // write for a page the person may not open, and carried on the select the
   // session already runs so the sidebar costs no query to draw.
@@ -195,6 +225,10 @@ const RUNTIME = [
   'session-runtime-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
+  // correctionA.md §1 — every type the UI offers is one the route answers, in
+  // both formats, and report.export alone opens none of them: each still needs
+  // the permission that guards the screen it comes from.
+  'export-coverage-test',
   // sidebar.md §5/§8 — the rail, the drawer and the collapse measured in a real
   // browser at three widths. Both surfaces render the same component, so the
   // markup is identical at every size and only computed CSS can tell them apart.

@@ -12,6 +12,7 @@ import { notify } from '@/server/notifications'
 import { ensureDefaultBranch, resolveBranchId } from '@/features/branches/service'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import { MOVEMENT_TYPES, directionOf } from './movement-types'
+import { sanitiseCounts, totalFromCounts } from './denominations'
 import { nextSessionNumber, resolveRegisterId } from './registers'
 
 /**
@@ -611,7 +612,25 @@ export async function getDrawerSummary(
 export async function closeDrawer(params: {
   restaurantId: string
   sessionId: string
-  countedCash: number
+  /**
+   * Face value in minor units → how many were counted (correctionA.md §4).
+   *
+   * What the close FORM sends, and the only thing the action accepts. The
+   * trust boundary is there, not here: a browser that can post a total can
+   * post one that matches expected, which would make hiding the variance
+   * theatre.
+   */
+  counts?: Record<string, number>
+  /**
+   * The total, for callers that are not a browser.
+   *
+   * `forceCloseDrawer` has a manager entering a figure for a till nobody
+   * counted, and the suites that pin this drawer's arithmetic — 119
+   * assertions across five files — say "close with 5,000 in it" because that
+   * is the fact under test. Making them each build a bag of notes to express
+   * it would change what they are about. Ignored when `counts` is given.
+   */
+  countedCash?: number
   varianceReason?: string | null
   note?: string | null
   userId: string
@@ -619,12 +638,10 @@ export async function closeDrawer(params: {
 }): Promise<{
   session: CashDrawerSession
   totals: DrawerTotals
+  countedCash: number
   variance: number
   needsReview: boolean
 }> {
-  if (params.countedCash < 0) {
-    throw new AppError('Counted cash cannot be negative', 400, 'DRAWER_BAD_COUNT')
-  }
 
   await requireOpenSession(params.restaurantId, params.sessionId, params.actor)
 
@@ -649,7 +666,29 @@ export async function closeDrawer(params: {
   }
 
   const totals = await computeDrawerTotals(params.sessionId, tx)
-  const variance = params.countedCash - totals.expectedCash
+
+  /*
+   * The physical total is computed here, from the counts, against the face
+   * values this restaurant's currency actually has (correctionA.md §4).
+   *
+   * Not taken from the browser, and that is the point rather than caution: a
+   * client that can post the total can post one that matches expected, and
+   * hiding the variance from the close screen would then be theatre. The
+   * cashier says how many of each note they are holding; the arithmetic is
+   * the server's.
+   */
+  const restaurant = await tx.restaurant.findUniqueOrThrow({
+    where: { id: params.restaurantId },
+    select: { currency: true },
+  })
+  const counted = params.counts ? sanitiseCounts(restaurant.currency, params.counts) : null
+  const countedCash = counted
+    ? totalFromCounts(restaurant.currency, counted)
+    : (params.countedCash ?? 0)
+  if (countedCash < 0) {
+    throw new AppError('Counted cash cannot be negative', 400, 'DRAWER_BAD_COUNT')
+  }
+  const variance = countedCash - totals.expectedCash
 
   /*
    * One number decides both questions.
@@ -668,14 +707,24 @@ export async function closeDrawer(params: {
    */
   const needsReview = await varianceNeedsReview(params.restaurantId, variance)
 
+  /*
+   * The cashier is no longer asked to explain the gap (correctionA.md §4).
+   *
+   * This used to refuse the close until they typed a reason once the gap
+   * crossed the threshold. Under §4 they cannot see the gap, so that prompt
+   * would be the leak: "that is a big enough difference to explain" tells
+   * somebody their count is wrong and roughly by how much, and a cashier who
+   * can re-count until the prompt stops appearing has been handed the
+   * expected figure one bit at a time.
+   *
+   * The drawer still stops at PENDING_REVIEW, and the explanation is now the
+   * reviewer's — `reviewDrawer` has always taken one, and a manager looking
+   * at both numbers is who should be writing it anyway.
+   *
+   * A reason supplied by a non-browser caller is still recorded; what is gone
+   * is the refusal to close without one.
+   */
   const reason = params.varianceReason?.trim() || null
-  if (needsReview && (!reason || reason.length < 2)) {
-    throw new AppError(
-      'That is a big enough difference to explain. What happened?',
-      400,
-      'DRAWER_NO_VARIANCE_REASON',
-    )
-  }
 
   const flipped = await tx.cashDrawerSession.updateMany({
     where: { id: params.sessionId, status: 'OPEN' },
@@ -683,7 +732,8 @@ export async function closeDrawer(params: {
       status: needsReview ? 'PENDING_REVIEW' : 'CLOSED',
       closedAt: new Date(),
       closedById: params.userId,
-      countedCash: params.countedCash,
+      countedCash,
+      closingCounts: (counted ?? undefined) as unknown as Prisma.InputJsonValue,
       expectedCash: totals.expectedCash,
       variance,
       varianceReason: reason,
@@ -699,7 +749,7 @@ export async function closeDrawer(params: {
   }
   const session = await tx.cashDrawerSession.findUniqueOrThrow({ where: { id: params.sessionId } })
 
-  return { session, totals, variance, needsReview }
+  return { session, totals, countedCash, variance, needsReview }
   })
 }
 
