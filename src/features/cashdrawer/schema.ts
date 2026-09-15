@@ -51,10 +51,32 @@ export const cashMovementSchema = z.object({
  * only ever check the shape, and a client that skipped the field would still
  * have to be refused server-side. One rule, in the place that can enforce it.
  */
+/**
+ * Closing a drawer (correctionA.md §4).
+ *
+ * ── The cashier sends counts, not a total ─────────────────────────────────
+ *
+ * `countedCash` is gone from this schema on purpose. The whole point of §4 is
+ * that the physical total is arrived at by counting notes and coins, and a
+ * client that can post the total can post one that happens to match expected
+ * — which is the precise thing hiding the variance is meant to prevent. The
+ * server multiplies the counts by the face values the currency actually has.
+ *
+ * ── And no variance reason here ───────────────────────────────────────────
+ *
+ * It used to ask the cashier for one whenever the gap crossed the threshold.
+ * That cannot survive §4: telling somebody "your count differs, explain it"
+ * before they have committed IS telling them the variance, near enough to
+ * re-count until the prompt goes away. The explanation belongs to whoever
+ * reviews the difference, and `reviewDrawerSchema` already has a field for it.
+ *
+ * `note` stays: "the till jammed at 3pm" is worth recording and says nothing
+ * about the total.
+ */
 export const closeDrawerSchema = z.object({
   sessionId: z.string().min(1),
-  countedCash: majorAmount,
-  varianceReason: shortText,
+  /** Face value in minor units → how many were counted. */
+  counts: z.record(z.string(), z.number()).default({}),
   note: shortText,
 })
 

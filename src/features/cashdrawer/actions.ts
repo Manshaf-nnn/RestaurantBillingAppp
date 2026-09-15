@@ -30,6 +30,7 @@ import {
   type DrawerActor,
 } from './service'
 import { createRegister, requireRegister, setRegisterActive } from './registers'
+import type { DrawerClosure } from './closure'
 
 /**
  * Who is reaching for the drawer, in the shape the service checks against.
@@ -198,24 +199,23 @@ export async function recordCashMovementAction(
 
 export async function closeDrawerAction(
   input: unknown,
-): Promise<ActionResult<{
-  id: string
-  variance: number
-  expectedCash: number
-  needsReview: boolean
-}>> {
+): Promise<ActionResult<DrawerClosure>> {
   return runAction(
     closeDrawerSchema,
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.CASH_DRAWER_OPERATE)
 
-      const { session, totals, variance, needsReview } = await closeDrawer({
+      const { session, totals, countedCash, variance, needsReview } = await closeDrawer({
         restaurantId: user.restaurantId,
         actor: actorFor(user),
         sessionId: data.sessionId,
-        countedCash: await toMinor(user.restaurantId, data.countedCash),
-        varianceReason: data.varianceReason || null,
+        /*
+         * Counts only. The browser never sends a total (correctionA.md §4) —
+         * one that could would be able to send the expected figure back, and
+         * hiding the variance on the way in would mean nothing.
+         */
+        counts: data.counts,
         note: data.note || null,
         userId: user.id,
       })
@@ -244,7 +244,29 @@ export async function closeDrawerAction(
       })
 
       revalidateDrawer()
-      return { id: session.id, variance, expectedCash: totals.expectedCash, needsReview }
+      /*
+       * The figures come back NOW, and only now (correctionA.md §4).
+       *
+       * Before the close the cashier is shown neither the expected cash nor
+       * the gap, so that a count cannot be tuned to match. Afterwards the
+       * count is committed and unchangeable, and the closure preview they are
+       * asked to print is worth nothing without the numbers on it — so the
+       * response carries the whole reconciliation.
+       */
+      return {
+        id: session.id,
+        sessionNumber: session.sessionNumber,
+        openingFloat: totals.openingFloat,
+        cashSales: totals.cashSales,
+        cashIn: totals.cashIn,
+        cashOut: totals.cashOut,
+        expectedCash: totals.expectedCash,
+        countedCash,
+        counts: data.counts,
+        variance,
+        needsReview,
+        closedAt: (session.closedAt ?? new Date()).toISOString(),
+      }
     },
     'Drawer closed.',
   )

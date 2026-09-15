@@ -904,31 +904,43 @@ async function main() {
   // Bob's till, short by more than the 500.00 default threshold.
   const bobExpected = (await computeDrawerTotals(bobSession.id)).expectedCash
 
-  await refuses(
-    'a gap past the threshold with no reason is refused',
-    () =>
-      closeDrawer({
-        restaurantId: restaurant.id,
-        sessionId: bobSession.id,
-        countedCash: bobExpected - 900_00,
-        userId: bob.id,
-        actor: actorFor(bob),
-      }),
-    /big enough difference/i,
-  )
-
+  /*
+   * DELIBERATE behaviour change, correctionA.md §4, 2026-09.
+   *
+   * This used to refuse the close until the cashier typed a reason for a gap
+   * past the threshold. §4 requires that the cashier cannot see the gap at
+   * all before closing — and that prompt WAS the leak. "That is a big enough
+   * difference to explain" tells somebody their count is wrong and roughly by
+   * how much, and a cashier who can re-count until the prompt stops appearing
+   * has been handed the expected figure one bit at a time.
+   *
+   * So the close now succeeds without a reason and stops at PENDING_REVIEW,
+   * and the explanation belongs to whoever reviews it — which is who should
+   * have been writing it anyway, being the only person looking at both
+   * numbers. The assertion is inverted rather than deleted: the review gate
+   * is the part that must not be lost, and it is checked here.
+   */
   const bigShort = await closeDrawer({
     restaurantId: restaurant.id,
     sessionId: bobSession.id,
     countedCash: bobExpected - 900_00,
-    varianceReason: 'No idea, counted it three times',
     userId: bob.id,
     actor: actorFor(bob),
   })
   check(
-    'a large gap stops for review instead of closing',
-    bigShort.needsReview && bigShort.session.status === 'PENDING_REVIEW',
+    'a gap past the threshold closes without asking the cashier to explain it',
+    bigShort.variance === -900_00,
+    String(bigShort.variance),
+  )
+  check(
+    'but stops for a manager rather than closing outright',
+    bigShort.needsReview === true && bigShort.session.status === 'PENDING_REVIEW',
     bigShort.session.status,
+  )
+  check(
+    'and records no explanation the cashier did not give',
+    bigShort.session.varianceReason === null,
+    String(bigShort.session.varianceReason),
   )
 
   await refuses(

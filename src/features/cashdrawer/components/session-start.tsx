@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Banknote, Coins, LogOut, Wallet } from 'lucide-react'
+import { ArrowRight, Banknote, LogOut, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -91,7 +91,7 @@ export function SessionStart({
   )
   const [registerId, setRegisterId] = React.useState('')
   const [float, setFloat] = React.useState('')
-  const [petty, setPetty] = React.useState('')
+
   const [note, setNote] = React.useState('')
   const [confirming, setConfirming] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -103,9 +103,9 @@ export function SessionStart({
   }, [branchRegisters])
 
   const floatValue = Number(float)
-  const pettyValue = petty.trim() ? Number(petty) : 0
+  const pettyValue = 0
   const amountsValid =
-    Number.isFinite(floatValue) && floatValue >= 0 && Number.isFinite(pettyValue) && pettyValue >= 0
+    Number.isFinite(floatValue) && floatValue >= 0
 
   const branchName = branches.find((b) => b.id === branchId)?.name ?? null
   const registerName = branchRegisters.find((r) => r.id === registerId)?.name ?? null
@@ -237,11 +237,9 @@ export function SessionStart({
                 ¥500,000 immediately before they commit to it.
               */}
               <Line label="Opening cash" value={money(Math.round(floatValue * factor))} strong />
-              <Line label="Opening petty cash" value={money(Math.round(pettyValue * factor))} />
             </dl>
             <p className="mt-3 text-xs text-muted-foreground">
-              These two are counted separately all shift. The float is the drawer; the petty cash is
-              the tin you buy small things from.
+              Everything that goes in or out of the drawer today is measured against this.
             </p>
             <div className="mt-4 flex gap-2">
               <Button className="flex-1" disabled={busy} onClick={start}>
@@ -306,21 +304,15 @@ export function SessionStart({
                 />
                 <p className="text-xs text-muted-foreground">The change float in the drawer.</p>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="petty" className="flex items-center gap-1.5">
-                  <Coins className="size-3.5 text-muted-foreground" /> Opening petty cash
-                </Label>
-                <Input
-                  id="petty"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={petty}
-                  onChange={(e) => setPetty(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  The separate tin. Leave blank if there is none.
-                </p>
-              </div>
+              {/*
+                The opening petty cash box is gone (correctionA.md §4). There
+                is one pile of cash now — the drawer — and a cash expense is a
+                movement out of it, so a second float to count at the start of
+                every shift was asking for a number nothing downstream would
+                use. `openingPettyCash` stays on the row at 0 for new sessions
+                and keeps its value on old ones, which is what lets a close
+                from last month still add up.
+              */}
             </div>
 
             <div className="space-y-1.5">

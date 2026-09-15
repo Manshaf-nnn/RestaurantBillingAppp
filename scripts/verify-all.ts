@@ -166,6 +166,10 @@ const SERVICE = [
   'kitchen-routing-test',
   'menu-station-test',
   'cash-drawer-flow-test',
+  // correctionA.md §4 — the cashier counts notes and is shown neither the
+  // expected cash nor the gap until the close is committed; the total is
+  // derived on the server from face values the currency actually has.
+  'drawer-denomination-test',
   'feature-access-test',
   // correctionA.md §5/§6/§7 — every screen names the location it is acting on
   // (including the one-location case, where the switcher renders no menu), and

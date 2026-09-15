@@ -6,6 +6,7 @@ import { listBranches, type BranchSummary } from '@/features/branches/service'
 import { getFundBalance, listRequests } from '@/features/pettycash/service'
 import { listHandoverCandidates, listPendingForUser } from '@/features/handover/cash-service'
 import { getApprovalPolicy } from '@/features/approvals/service'
+import { denominationsFor } from './denominations'
 import { prisma } from '@/server/db/prisma'
 import {
   computeDrawerTotals,
@@ -120,6 +121,14 @@ export interface DrawerPageData {
   varianceThreshold: number
   /** May sign off a large difference — owner/admin, not manager, by default. */
   canReview: boolean
+  /**
+   * Whether this viewer was sent the expected cash and the sales that make it
+   * up (correctionA.md §4). False for the cashier operating the drawer: those
+   * fields are null on `open`, not merely unrendered.
+   */
+  maySeeReconciliation: boolean
+  /** The notes and coins to count, derived from the restaurant's currency. */
+  denominations: Array<{ value: number; label: string; kind: 'note' | 'coin' }>
 }
 
 function toSessionRow(s: Awaited<ReturnType<typeof listDrawerSessions>>[number]): DrawerSessionRow {
@@ -281,10 +290,47 @@ export async function getDrawerPageData(params: {
       : Promise.resolve([]),
   ])
 
+  /*
+   * ── What the person closing the drawer is NOT told (correctionA.md §4) ──
+   *
+   * "Before drawer closure, the cashier MUST NOT see the variance amount. Do
+   * not expose expected-vs-actual difference to the cashier."
+   *
+   * Hiding the variance alone would not do it. Expected cash is
+   *
+   *     openingFloat + cashSales + cashIn − cashOut
+   *
+   * so anybody shown those four can compute it, and a count tuned to match is
+   * exactly what the count exists to detect. `cashSales` is the term a cashier
+   * cannot otherwise know to the rupee, so it goes with `expectedCash`.
+   *
+   * What stays is everything they entered themselves — the float they opened
+   * with, the cash in and out they logged — because that is the other half of
+   * what this screen is for, and hiding a number somebody typed an hour ago
+   * teaches them the screen is lying rather than that it is careful.
+   *
+   * Redacted HERE, at the boundary where the object crosses to the browser,
+   * rather than in the component: a field that reaches the client is a field
+   * that is in the page source whether or not anything renders it.
+   *
+   * A manager reconciling the floor keeps all of it — §4 asks for exactly that.
+   */
+  const maySeeReconciliation = (params.canSeeAll ?? false) || (params.canReview ?? false)
+  const openForViewer =
+    open && !maySeeReconciliation
+      ? { ...open, expectedCash: null as unknown as number, cashSales: null as unknown as number }
+      : open
+
   return {
     canReview: params.canReview ?? false,
+    /**
+     * Whether the figures above were sent at all. The close form reads this
+     * to decide between "count and close" and the full reconciliation.
+     */
+    maySeeReconciliation,
     varianceThreshold: (await getApprovalPolicy(params.restaurantId)).cashVarianceAbove,
-    open,
+    denominations: denominationsFor(params.currency),
+    open: openForViewer,
     openBranchName: openNames?.branch?.name ?? null,
     openRegisterName: openNames?.register?.name ?? null,
     branches,

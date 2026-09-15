@@ -3122,6 +3122,13 @@ model CashDrawerSession {
   countedCash    Int?
   /// What the system says should be there. Snapshotted at close for the record.
   expectedCash   Int?
+  /// How many of each note and coin were counted at close (correctionA.md §4).
+  /// Keyed by face value in minor units. The physical total is DERIVED from
+  /// this on the server, never sent by the browser — the one number in the
+  /// close that must come from counting is the one worth not trusting.
+  /// Null for a drawer closed before denomination counting existed, or
+  /// force-closed by a manager with nobody to count it.
+  closingCounts  Json?
   /// countedCash - expectedCash. Negative is short, positive is over.
   variance       Int?
   /// Required whenever the variance is not zero. A difference nobody explained
