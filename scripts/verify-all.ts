@@ -163,6 +163,10 @@ const SERVICE = [
   'menu-station-test',
   'cash-drawer-flow-test',
   'feature-access-test',
+  // correctionA.md §5/§6/§7 — every screen names the location it is acting on
+  // (including the one-location case, where the switcher renders no menu), and
+  // a transfer moves stock between two locations rather than between shelves.
+  'branch-context-test',
   // sidebar.md §1/§9 — favorites are per user and per restaurant, refused on
   // write for a page the person may not open, and carried on the select the
   // session already runs so the sidebar costs no query to draw.

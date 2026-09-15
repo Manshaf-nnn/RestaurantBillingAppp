@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ItemPicker } from '@/components/ui/item-picker'
 import { useAction } from '@/lib/use-action'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { requestTransferAction } from '../actions'
@@ -25,18 +26,14 @@ interface Line { key: string; itemId: string; quantity: string }
 export function TransferBuilder({
   locations,
   stockByBranch,
-  storageByBranch = [],
 }: {
   locations: Array<{ id: string; name: string; type: string }>
   stockByBranch: Array<{ branchId: string; items: Array<{ itemId: string; name: string; unit: string; free: number }> }>
-  storageByBranch?: Array<{ branchId: string; shelves: Array<{ id: string; name: string }> }>
 }) {
   const router = useRouter()
   const [fromId, setFromId] = React.useState('')
   const [toId, setToId] = React.useState('')
   const [notes, setNotes] = React.useState('')
-  const [fromStorageId, setFromStorageId] = React.useState('')
-  const [toStorageId, setToStorageId] = React.useState('')
   const [lines, setLines] = React.useState<Line[]>([])
   const { busy, run } = useAction()
 
@@ -46,17 +43,44 @@ export function TransferBuilder({
   )
   const itemById = React.useMemo(() => new Map(available.map((i) => [i.itemId, i])), [available])
 
-  const shelvesFor = React.useCallback(
-    (branchId: string) => storageByBranch.find((s) => s.branchId === branchId)?.shelves ?? [],
-    [storageByBranch],
+  // Free stock on the second line, because "can I send 20 of these" is the
+  // question being asked while the list is open (correctionA.md §8).
+  const itemOptions = React.useMemo(
+    () =>
+      available.map((i) => ({
+        value: i.itemId,
+        label: i.name,
+        hint: `${i.free} ${i.unit.toLowerCase()} free`,
+      })),
+    [available],
   )
-  const fromShelves = shelvesFor(fromId)
-  const toShelves = shelvesFor(toId)
-  // Moving within one location is only meaningful between two different shelves.
-  const sameBranch = Boolean(fromId) && fromId === toId
+
+  /*
+   * A transfer moves stock between locations (correctionA.md §7).
+   *
+   * There used to be two more selects here, "From storage area" and "To storage
+   * area", and picking the same location on both sides turned the form into a
+   * shelf-to-shelf move inside one site. That second meaning is gone: the
+   * destination list below excludes the source, so a transfer always changes
+   * which location holds the stock.
+   *
+   * The service still takes `fromStorageId`/`toStorageId` and the columns are
+   * still on the row — historical transfers reference them, and shelf-level
+   * stock is still a real thing everywhere else. This form simply no longer
+   * asks.
+   */
+  const destinations = React.useMemo(
+    () => locations.filter((l) => l.id !== fromId),
+    [locations, fromId],
+  )
 
   // Changing the source invalidates any line chosen from the old one.
   React.useEffect(() => { setLines([]) }, [fromId])
+
+  // ...and can strand the destination on the location just chosen as source.
+  React.useEffect(() => {
+    if (toId && toId === fromId) setToId('')
+  }, [fromId, toId])
 
   const submit = async () => {
     const payload = lines
@@ -64,10 +88,7 @@ export function TransferBuilder({
       .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity) }))
 
     if (!fromId || !toId) { toast.error('Choose both locations'); return }
-    if (sameBranch && (!fromStorageId || !toStorageId || fromStorageId === toStorageId)) {
-      toast.error('Moving within one location needs two different storage areas')
-      return
-    }
+    if (fromId === toId) { toast.error('Choose two different locations'); return }
     if (payload.length === 0) { toast.error('Add at least one item'); return }
 
     const over = payload.find((p) => (itemById.get(p.itemId)?.free ?? 0) < p.quantity)
@@ -79,7 +100,6 @@ export function TransferBuilder({
     await run(
       () => requestTransferAction({
         fromBranchId: fromId, toBranchId: toId, notes, lines: payload,
-        fromStorageId, toStorageId,
       }),
       {
         success: (data) => `${data.number} requested`,
@@ -115,9 +135,10 @@ export function TransferBuilder({
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
               value={toId}
               onChange={(e) => setToId(e.target.value)}
+              disabled={!fromId}
             >
-              <option value="">Choose…</option>
-              {locations.map((l) => (
+              <option value="">{fromId ? 'Choose…' : 'Choose a source first'}</option>
+              {destinations.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name} · {l.type.replace(/_/g, ' ').toLowerCase()}
                 </option>
@@ -125,56 +146,6 @@ export function TransferBuilder({
             </select>
           </div>
         </div>
-
-        {/*
-          Only shown when the location has shelves. A restaurant that keeps
-          everything in one place should not have to answer a question that has
-          one possible answer.
-        */}
-        {(fromShelves.length > 0 || toShelves.length > 0) && (
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="from-shelf">
-                From storage area {sameBranch ? '' : '(optional)'}
-              </Label>
-              <select
-                id="from-shelf"
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
-                value={fromStorageId}
-                onChange={(e) => setFromStorageId(e.target.value)}
-                disabled={fromShelves.length === 0}
-              >
-                <option value="">{fromShelves.length ? 'Anywhere in this location' : 'None set up'}</option>
-                {fromShelves.map((sh) => (
-                  <option key={sh.id} value={sh.id}>{sh.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="to-shelf">
-                To storage area {sameBranch ? '' : '(optional)'}
-              </Label>
-              <select
-                id="to-shelf"
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
-                value={toStorageId}
-                onChange={(e) => setToStorageId(e.target.value)}
-                disabled={toShelves.length === 0}
-              >
-                <option value="">{toShelves.length ? 'Anywhere in this location' : 'None set up'}</option>
-                {toShelves.map((sh) => (
-                  <option key={sh.id} value={sh.id}>{sh.name}</option>
-                ))}
-              </select>
-            </div>
-            {sameBranch && (
-              <p className="sm:col-span-2 text-xs text-muted-foreground">
-                Same location on both sides — this moves stock between two storage areas, so the
-                location&apos;s total is unchanged. Choose a different area for each.
-              </p>
-            )}
-          </div>
-        )}
       </SectionCard>
 
       <SectionCard
@@ -194,16 +165,13 @@ export function TransferBuilder({
                   <li key={line.key} className="grid grid-cols-12 items-end gap-2">
                     <div className="col-span-12 space-y-1 sm:col-span-6">
                       <Label className="text-xs">Item</Label>
-                      <select
-                        className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                      <ItemPicker
+                        options={itemOptions}
                         value={line.itemId}
-                        onChange={(e) => setLines((c) => c.map((l) => l.key === line.key ? { ...l, itemId: e.target.value } : l))}
-                      >
-                        <option value="">Choose…</option>
-                        {available.map((i) => (
-                          <option key={i.itemId} value={i.itemId}>{i.name}</option>
-                        ))}
-                      </select>
+                        onChange={(next) => setLines((c) => c.map((l) => l.key === line.key ? { ...l, itemId: next } : l))}
+                        searchPlaceholder="Search items…"
+                        emptyMessage="No item here matches that."
+                      />
                     </div>
                     <div className="col-span-8 space-y-1 sm:col-span-4">
                       <Label className="text-xs">Quantity {item ? `(${item.free} ${item.unit.toLowerCase()} free)` : ''}</Label>

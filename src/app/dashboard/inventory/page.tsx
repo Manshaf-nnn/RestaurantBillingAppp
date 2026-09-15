@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 
 import { InventoryManager } from '@/features/inventory/components/inventory-manager'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { activeUnits, listStockCategories } from '@/features/catalog/service'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'

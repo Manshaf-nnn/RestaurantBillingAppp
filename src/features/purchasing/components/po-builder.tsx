@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ItemPicker } from '@/components/ui/item-picker'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { LocalDateTime } from '@/components/local-time'
@@ -70,6 +71,11 @@ export function PoBuilder({
   const factor = minorUnitFactor(data.currency)
   const money = (minor: number) => formatMoney(minor, data.currency)
   const itemById = React.useMemo(() => new Map(data.items.map((i) => [i.id, i])), [data.items])
+  // correctionA.md §8 — a catalogue is searched, not scrolled.
+  const itemOptions = React.useMemo(
+    () => data.items.map((i) => ({ value: i.id, label: i.name })),
+    [data.items],
+  )
 
   /** A new line, priced from the item's preferred supplier where there is one. */
   const lineFor = (itemId: string, quantity = '', key?: string): Line => {
@@ -288,16 +294,12 @@ export function PoBuilder({
                 <li key={line.key} className="grid grid-cols-12 items-end gap-2">
                   <div className="col-span-12 space-y-1 sm:col-span-4">
                     <Label className="text-xs">Item</Label>
-                    <select
-                      className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                    <ItemPicker
+                      options={itemOptions}
                       value={line.itemId}
-                      onChange={(e) => update(line.key, { itemId: e.target.value })}
-                    >
-                      <option value="">Choose…</option>
-                      {data.items.map((i) => (
-                        <option key={i.id} value={i.id}>{i.name}</option>
-                      ))}
-                    </select>
+                      onChange={(next) => update(line.key, { itemId: next })}
+                      searchPlaceholder="Search items…"
+                    />
                   </div>
 
                   <div className="col-span-4 space-y-1 sm:col-span-2">

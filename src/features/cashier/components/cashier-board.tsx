@@ -124,6 +124,7 @@ export function CashierBoard({
   menu,
   startInTakeaway = false,
   branchIds,
+  branchName,
   tables = [],
 }: {
   initialBills: CashierBill[]
@@ -141,6 +142,8 @@ export function CashierBoard({
   exit?: React.ReactNode
   /** Locations this screen is showing. Null means all of them. */
   branchIds: string[] | null
+  /** Which location this till is standing in (correctionA.md §6). */
+  branchName?: string | null
   menu: PublicMenu
   startInTakeaway?: boolean
   /** Free tables, so the dialog can take a dine-in order. */
@@ -446,7 +449,7 @@ export function CashierBoard({
   const outstanding = bills.reduce((sum, bill) => sum + outstandingOn(bill), 0)
 
   return (
-    <OpsShell title="Cashier" subtitle={restaurant.name} user={user} actions={exit}>
+    <OpsShell title="Cashier" subtitle={restaurant.name} branch={branchName} user={user} actions={exit}>
       <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[

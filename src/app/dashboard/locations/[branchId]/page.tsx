@@ -10,7 +10,6 @@ import { getLocationDetail, listTransfers } from '@/features/transfers/queries'
 import { LocationFeatures } from '@/features/branches/components/location-features'
 import { StorageForm } from '@/features/branches/components/storage-form'
 import { LocationEditForm } from '@/features/branches/components/location-edit-form'
-import { AddStockForm } from '@/features/branches/components/add-stock-form'
 import { ManagerCredentials } from '@/features/branches/components/manager-credentials'
 import { LocalDateTime } from '@/components/local-time'
 import { formatMoney } from '@/lib/money'
@@ -62,14 +61,12 @@ export default async function LocationPage({
 
   const restaurant = await requireRestaurant(user.restaurantId)
   const canManage = can(user, PERMISSIONS.BRANCH_MANAGE)
-  const [detail, transfers, items, staff, managerRole] = await Promise.all([
+  // The item catalogue used to be loaded here for the "Add stock" form. That
+  // form is gone (correctionA.md §5), and with it a findMany over every active
+  // inventory item on every load of every location page.
+  const [detail, transfers, staff, managerRole] = await Promise.all([
     getLocationDetail({ restaurantId: user.restaurantId, branchId }),
     listTransfers({ restaurantId: user.restaurantId, branchId, limit: 10 }),
-    prisma.inventoryItem.findMany({
-      where: { restaurantId: user.restaurantId, isActive: true },
-      select: { id: true, name: true, unit: true },
-      orderBy: { name: 'asc' },
-    }),
     // Only fetched for the edit form, which nobody else sees.
     canManage
       ? prisma.user.findMany({
@@ -153,18 +150,17 @@ export default async function LocationPage({
         </div>
       )}
 
-      {can(user, PERMISSIONS.INVENTORY_MANAGE) && (
-        <div className="mb-5">
-          <AddStockForm
-            branchId={branch.id}
-            branchName={branch.name}
-            items={items}
-            shelves={branch.storageLocations}
-            currency={restaurant.currency}
-          />
-        </div>
-      )}
+      {/*
+        Stock is not added here any more (correctionA.md §5).
 
+        A location page is where you describe a site — its name, its manager,
+        its opening hours, the stores inside it. Receiving stock is a different
+        job with its own paper trail: a purchase and a goods-received note, or a
+        transfer, or a production run. This form wrote a movement straight into
+        the ledger with none of that behind it, which made stock appear with no
+        document to check it against. Inventory → Stock, Purchasing → Goods
+        received, and Transfers are the ways in.
+      */}
       {canManage && (
         <div className="mb-5">
           <LocationFeatures

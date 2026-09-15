@@ -7,6 +7,7 @@ import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
 import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
+  branchNameFor,
   scopeToOne,
   selectedBranch,
 } from '@/features/dashboard/selected-branch'
@@ -89,8 +90,10 @@ export default async function WaiterPage({
   const branchIds = branchId ? [branchId] : selection.branchIds
 
 
-  const [restaurant, board] = await Promise.all([
+  const [restaurant, branchName, board] = await Promise.all([
     requireRestaurant(user.restaurantId),
+    // correctionA.md §6 — the station says which floor it is serving.
+    branchNameFor(user.restaurantId, branchId),
     getWaiterBoard(user.restaurantId, branchIds),
   ])
 
@@ -100,6 +103,7 @@ export default async function WaiterPage({
       // branch are ignored rather than chiming here.
       branchIds={branchIds}
       restaurantName={restaurant.name}
+      branchName={branchName}
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}

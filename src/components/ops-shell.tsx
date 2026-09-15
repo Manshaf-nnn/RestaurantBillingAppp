@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ChefHat, LayoutDashboard, LogOut, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
+import { ChefHat, LayoutDashboard, LogOut, MapPin, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,7 @@ import { initials } from '@/lib/utils'
 export function OpsShell({
   title,
   subtitle,
+  branch,
   user,
   soundEnabled,
   onToggleSound,
@@ -37,6 +38,17 @@ export function OpsShell({
 }: {
   title: string
   subtitle?: string
+  /**
+   * Which location this screen is for (correctionA.md §6).
+   *
+   * These screens had no branch anywhere on them, which is the worst place for
+   * that gap to be: a kitchen rail and a till are physical screens in physical
+   * rooms, they are *always* scoped to exactly one location — `StationBranchPicker`
+   * makes people choose before the screen will load — and the consequence of
+   * being wrong is food cooked in the wrong building or cash counted against
+   * the wrong drawer. The dashboard at least carries the branch switcher.
+   */
+  branch?: string | null
   user: { name: string; role: string }
   soundEnabled?: boolean
   onToggleSound?: () => void
@@ -68,8 +80,21 @@ export function OpsShell({
 
           <div className="min-w-0">
             <h1 className="truncate text-sm font-bold leading-tight">{title}</h1>
-            {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : null}
+            {subtitle ? <p className="truncate text-xs text-muted-foreground">{subtitle}</p> : null}
           </div>
+
+          {/*
+            Its own badge rather than more text in the subtitle: on a
+            wall-mounted screen read from across a kitchen, the location is the
+            one thing somebody checks at a glance, and a second grey line does
+            not survive that distance.
+          */}
+          {branch ? (
+            <Badge variant="secondary" className="shrink-0 gap-1">
+              <MapPin />
+              <span className="max-w-[9rem] truncate">{branch}</span>
+            </Badge>
+          ) : null}
 
           {realtimeOff ? (
             <Badge variant="secondary" className="ml-2 shrink-0">

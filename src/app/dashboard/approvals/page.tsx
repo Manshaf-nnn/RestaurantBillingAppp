@@ -7,7 +7,7 @@ import { getApprovalsInbox } from '@/features/accounting/inbox'
 import { listApprovals } from '@/features/approvals/service'
 import { PERMISSIONS, can, type Permission } from '@/lib/rbac'
 import { localeForCurrency, type CurrencyCode } from '@/lib/money'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { branchNameFor, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -48,13 +48,14 @@ export default async function ApprovalsPage({
   // restaurant-wide ones, which concern everybody.
   const selection = await selectedBranch(user, await searchParams)
 
-  const [waiting, decided] = await Promise.all([
+  const [waiting, decided, branchName] = await Promise.all([
     getApprovalsInbox(user.restaurantId, selection.branchIds),
     listApprovals({
       restaurantId: user.restaurantId,
       branchIds: selection.branchIds,
       limit: 40,
     }),
+    branchNameFor(user.restaurantId, selection.branchId),
   ])
 
   const rows: ApprovalRow[] = waiting.map((item) => ({
@@ -105,7 +106,14 @@ export default async function ApprovalsPage({
     <>
       <PageHeader
         title="Approvals"
-        description="Everything from every branch that needs a decision. Nothing goes ahead until somebody signs it off."
+        // Only when the view is narrowed to one location; unset it reads
+        // "from every branch", which is what the description says.
+        branch={branchName}
+        description={
+          branchName
+            ? 'Everything raised at this location that needs a decision. Nothing goes ahead until somebody signs it off.'
+            : 'Everything from every branch that needs a decision. Nothing goes ahead until somebody signs it off.'
+        }
       />
       <div className="space-y-5">
         <CentralApprovals

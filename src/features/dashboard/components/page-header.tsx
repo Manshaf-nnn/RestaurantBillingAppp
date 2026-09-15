@@ -1,24 +1,46 @@
 import * as React from 'react'
 import Link from 'next/link'
-import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, MapPin, Minus } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
 export function PageHeader({
   title,
   description,
+  branch,
   actions,
   className,
 }: {
   title: string
   description?: string
+  /**
+   * Which location this page is showing (correctionA.md §6).
+   *
+   * The branch switcher in the top bar already answers this for the dashboard
+   * as a whole, so most pages do not need it and should not set it — a badge
+   * on all 104 headers is noise, and noise is what people stop reading. It is
+   * for the pages where acting on the wrong location costs money or stock:
+   * the cash drawer, transfers, approvals, inventory.
+   *
+   * Pass the resolved name, not the id. `branchNameFor` in
+   * `selected-branch.ts` turns one into the other, scoped to the tenant.
+   */
+  branch?: string | null
   actions?: React.ReactNode
   className?: string
 }) {
   return (
     <div className={cn('mb-6 flex flex-wrap items-start justify-between gap-4', className)}>
       <div className="min-w-0">
-        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+          {branch ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+              <MapPin className="size-3" />
+              {branch}
+            </span>
+          ) : null}
+        </div>
         {description ? (
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         ) : null}

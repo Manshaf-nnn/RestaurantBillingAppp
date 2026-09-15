@@ -38,9 +38,14 @@ export function StorageForm({
     })
 
   return (
+    /*
+      The description pointed at an "Add stock here" button above this card
+      until correctionA.md §5 removed it. Naming the real ways stock arrives
+      is more use than naming a button that is gone.
+    */
     <SectionCard
       title="Storage areas (shelves, not stock)"
-      description="Name the places inside this location where stock sits — Cold room, Dry store, Bar. This does not add any stock; use “Add stock here” above for that."
+      description="Name the places inside this location where stock sits — Cold room, Dry store, Bar. This only names the places; stock itself arrives through Purchasing, Transfers or Production."
     >
       {existing.length > 0 && (
         <ul className="mb-4 space-y-1.5">
