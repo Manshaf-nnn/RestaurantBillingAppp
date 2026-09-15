@@ -7,7 +7,7 @@ import { CashHandoverLog } from '@/features/handover/components/cash-handover-lo
 import { listShiftNotes } from '@/features/handover/queries'
 import { listHandovers } from '@/features/handover/cash-service'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -44,6 +44,13 @@ export default async function HandoverPage({
       restaurantId: user.restaurantId,
       branchIds: selection.branchIds,
       limit: 30,
+      /*
+       * correctionA.md §11 — the history each reader is entitled to. A
+       * manager reconciling the floor sees every handover; a cashier sees the
+       * ones they were part of. Showing a cashier the whole branch's would
+       * publish who was short and by how much to everybody who works there.
+       */
+      participantId: can(user, PERMISSIONS.CASH_DRAWER_MANAGE) ? undefined : user.id,
     }),
   ])
 

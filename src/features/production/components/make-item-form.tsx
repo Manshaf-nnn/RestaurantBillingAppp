@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ChefHat, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChefHat, Plus, Timer, Trash2 } from 'lucide-react'
 import type { StockUnit } from '@prisma/client'
 
 import { Alert } from '@/components/ui/feedback'
@@ -17,7 +17,7 @@ import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { roundQty } from '@/lib/quantity'
 import { newRequestKey } from '@/lib/request-key'
 import { useAction } from '@/lib/use-action'
-import { produceItemAction } from '../actions'
+import { produceItemAction, startBatchAction } from '../actions'
 import type { ProduceItemResult, WorkspaceItem } from '../types'
 
 /**
@@ -196,7 +196,7 @@ export function MakeItemForm({
     requestKey.current = newRequestKey('prod')
   }
 
-  const submit = async () => {
+  const submit = async (mode: 'now' | 'batch' = 'now') => {
     if (!ready) return
     const payload = {
       clientRequestId: requestKey.current,
@@ -210,6 +210,29 @@ export function MakeItemForm({
         .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit, note: r.note || undefined })),
       notes: notes || undefined,
     }
+    /*
+     * Two ways out of one form (correctionA.md §10).
+     *
+     * "Make it now" is the flow redesignkitchenjob.md settled on and is
+     * unchanged: one transaction, ingredients out and the prepared item in.
+     *
+     * "Start a batch" writes the same plan and moves nothing. It is for the
+     * things whose yield is not knowable when you begin — a pot that reduces,
+     * dough that proves — where stating the output up front means recording a
+     * guess as measured fact and quietly losing the shortfall from the
+     * costing. The quantity above becomes what you are AIMING for, and the
+     * real figure is entered on Mark Done.
+     */
+    if (mode === 'batch') {
+      await run(() => startBatchAction(payload), {
+        onDone: () => {
+          reset()
+          router.refresh()
+        },
+      })
+      return
+    }
+
     await run(() => produceItemAction(payload), {
       onDone: (data) => {
         setResult(data)
@@ -434,12 +457,27 @@ export function MakeItemForm({
                 Production never takes a shelf below zero.
               </Alert>
             ) : null}
-            <Button className="w-full" size="lg" onClick={submit} disabled={!ready} loading={busy}>
-              Complete production
+            <Button className="w-full" size="lg" onClick={() => submit('now')} disabled={!ready} loading={busy}>
+              Make it now
+            </Button>
+            <Button
+              className="w-full"
+              size="lg"
+              variant="outline"
+              onClick={() => submit('batch')}
+              disabled={!ready}
+              loading={busy}
+            >
+              <Timer /> Start a batch
             </Button>
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              One step, one transaction: ingredients leave stock and the prepared item arrives carrying exactly their value. Nothing is expensed until a dish is sold.
+              <span>
+                <strong>Make it now</strong> — one transaction: ingredients leave stock and the
+                prepared item arrives carrying exactly their value.{' '}
+                <strong>Start a batch</strong> — nothing moves yet; come back and enter what
+                actually came out. Either way, nothing is expensed until a dish is sold.
+              </span>
             </p>
           </CardContent>
         </Card>

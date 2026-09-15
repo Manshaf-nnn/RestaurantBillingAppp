@@ -1,6 +1,7 @@
 import 'server-only'
 
-import type { InventoryItem, StockUnit } from '@prisma/client'
+import type { InventoryItem, Prisma, StockUnit } from '@prisma/client'
+import type { ProductionVarianceReason } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { roundQty } from '@/lib/quantity'
@@ -68,6 +69,21 @@ export interface ProduceItemParams {
   ingredients: Array<{ itemId: string; quantity: number; unit: StockUnit }>
   waste?: Array<{ itemId: string; quantity: number; unit: StockUnit; note?: string | null }>
   notes?: string | null
+  /**
+   * Finish a batch that was started earlier (correctionA.md §10).
+   *
+   * When set, this run fills in that IN_PROGRESS order instead of creating a
+   * new one — same transaction, same ledger writes, same reference number.
+   * The alternative was a second order for one batch, which would mean two
+   * job numbers for one pot of mayonnaise and a report that counts it twice.
+   *
+   * `output.quantity` is then the ACTUAL yield, and the planned figure stays
+   * on the row beside it so the variance is the difference between the two.
+   */
+  batchId?: string | null
+  /** Why the yield differed. Only meaningful when finishing a batch. */
+  varianceReason?: ProductionVarianceReason | null
+  varianceNote?: string | null
 }
 
 export async function produceItem(params: ProduceItemParams): Promise<ProduceItemResult> {
@@ -119,28 +135,79 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
 
       /*
        * The record exists before anything moves, so every movement can point
-       * at it. Created COMPLETED: there is no other state a run can be in.
-       * Totals are filled in once the ledger has said what they are.
+       * at it.
+       *
+       * One step: created COMPLETED, planned and actual the same, no variance
+       * — there is no other state a run made in one go can be in.
+       *
+       * Finishing a batch (correctionA.md §10): the IN_PROGRESS row started
+       * earlier is filled in rather than a second one created, so one pot of
+       * mayonnaise keeps one job number. Its `plannedQty` is left exactly as
+       * it was and the variance is measured against it; overwriting the plan
+       * with the actual would make every batch look like it yielded precisely
+       * what was intended, which is the one thing this flow exists to notice.
        */
-      const order = await tx.productionOrder.create({
-        data: {
-          restaurantId: params.restaurantId,
-          branchId: params.branchId,
-          number,
-          status: 'COMPLETED',
-          clientRequestId: params.clientRequestId,
-          outputItemId: resolved.item.id,
-          recipeName: resolved.item.name,
-          unit: resolved.item.unit,
-          plannedQty: producedBase,
-          actualQty: producedBase,
-          variance: 0,
-          notes: params.notes?.trim() || null,
-          requestedById: params.userId,
-          productionDate: now,
-          completedAt: now,
-        },
-      })
+      const order = params.batchId
+        ? await (async () => {
+            const claimed = await tx.productionOrder.updateMany({
+              // `updateMany` with the status in the WHERE, not `update`: two
+              // cooks pressing Mark Done on the same batch would otherwise
+              // both pass and both deduct the ingredients.
+              where: {
+                id: params.batchId!,
+                restaurantId: params.restaurantId,
+                status: 'IN_PROGRESS',
+              },
+              data: {
+                status: 'COMPLETED',
+                clientRequestId: params.clientRequestId,
+                outputItemId: resolved.item.id,
+                recipeName: resolved.item.name,
+                unit: resolved.item.unit,
+                actualQty: producedBase,
+                varianceReason: params.varianceReason ?? null,
+                varianceNote: params.varianceNote?.trim() || null,
+                notes: params.notes?.trim() || null,
+                productionDate: now,
+                completedAt: now,
+              },
+            })
+            if (claimed.count === 0) {
+              throw new AppError(
+                'That batch was finished a moment ago',
+                409,
+                'PRODUCTION_ALREADY_DONE',
+              )
+            }
+            const row = await tx.productionOrder.findUniqueOrThrow({
+              where: { id: params.batchId! },
+            })
+            // Measured against what was planned when the batch was started.
+            await tx.productionOrder.update({
+              where: { id: row.id },
+              data: { variance: producedBase - row.plannedQty },
+            })
+            return { ...row, variance: producedBase - row.plannedQty }
+          })()
+        : await tx.productionOrder.create({
+            data: {
+              restaurantId: params.restaurantId,
+              branchId: params.branchId,
+              number,
+              status: 'COMPLETED',
+              clientRequestId: params.clientRequestId,
+              outputItemId: resolved.item.id,
+              recipeName: resolved.item.name,
+              unit: resolved.item.unit,
+              plannedQty: producedBase,
+              actualQty: producedBase,
+              variance: 0,
+              notes: params.notes?.trim() || null,
+              requestedById: params.userId,
+              productionDate: now,
+              completedAt: now,
+            },
+          })
 
       const reason = `Made ${resolved.item.name} (${number})`
       const reference = { referenceType: 'ProductionOrder', referenceId: order.id }
@@ -522,5 +589,190 @@ async function loadResult(
     totalValue: order.totalCost,
     unitCost: order.unitCost,
     completedAt: (order.completedAt ?? order.createdAt).toISOString(),
+  }
+}
+
+// ── batches: plan now, finish when the yield is known (correctionA.md §10) ──
+
+/**
+ * The plan a batch is started with.
+ *
+ * Stored as JSON on the order, not as consumption rows: those mean stock has
+ * left the shelf, and a kitchen whose ingredients read as spent before anybody
+ * opened a bag would take every report down with it.
+ */
+export interface BatchPlan {
+  name: string
+  quantity: number
+  unit: StockUnit
+  itemId?: string | null
+  ingredients: Array<{ itemId: string; quantity: number; unit: StockUnit }>
+  waste?: Array<{ itemId: string; quantity: number; unit: StockUnit; note?: string | null }>
+}
+
+/**
+ * Start a batch (correctionA.md §10).
+ *
+ * ── Why this exists alongside the one-step flow ────────────────────────────
+ *
+ * `redesignkitchenjob.md` replaced a confusing two-phase "Kitchen Jobs" screen
+ * with one-step Make Item, and that was right: for chopping vegetables you
+ * know the answer before you start, and a second click is friction with no
+ * information in it.
+ *
+ * It is wrong for the things it is wrong for. A pot of stock reduces; dough
+ * proves; a bag of flour becomes fewer rolls than the recipe promised. The
+ * cook cannot honestly state the yield at the moment they start, and the
+ * one-step flow makes them guess — which records a number nobody measured and
+ * quietly erases yield loss from the costing. So both paths exist and the
+ * kitchen picks: "Make it now" when the answer is known, "Start a batch" when
+ * it is not.
+ *
+ * Nothing moves here. No stock is deducted, no ledger is written, no cost is
+ * computed — the plan is a note about intent, and every figure comes from the
+ * single atomic transaction that runs on Mark Done.
+ */
+export async function startBatch(params: {
+  restaurantId: string
+  branchId: string
+  userId: string | null
+  clientRequestId: string
+  plan: BatchPlan
+  notes?: string | null
+}): Promise<{ id: string; number: string }> {
+  if (!params.plan.name.trim()) throw new AppError('Name what is being made', 400, 'PRODUCTION_NO_NAME')
+  if (!(params.plan.quantity > 0)) {
+    throw new AppError('How much are you making?', 400, 'PRODUCTION_NO_QUANTITY')
+  }
+  if (params.plan.ingredients.length === 0) {
+    throw new AppError('Add at least one ingredient', 400, 'PRODUCTION_NO_INGREDIENTS')
+  }
+
+  await requireBranch(params.restaurantId, params.branchId)
+
+  return prisma.$transaction(async (tx) => {
+    await guardLocks(tx)
+
+    // Same replay guard as `produceItem`: a double tap starts one batch.
+    const already = await tx.productionOrder.findFirst({
+      where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+      select: { id: true, number: true },
+    })
+    if (already) return already
+
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.restaurantId}))`
+    const number = await nextJobNumber(tx, params.restaurantId)
+
+    const order = await tx.productionOrder.create({
+      data: {
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
+        number,
+        status: 'IN_PROGRESS',
+        clientRequestId: params.clientRequestId,
+        recipeName: params.plan.name.trim(),
+        outputItemId: params.plan.itemId || null,
+        unit: params.plan.unit,
+        plannedQty: params.plan.quantity,
+        notes: params.notes?.trim() || null,
+        requestedById: params.userId,
+        productionDate: new Date(),
+        plan: params.plan as unknown as Prisma.InputJsonValue,
+      },
+      select: { id: true, number: true },
+    })
+    return order
+  })
+}
+
+/**
+ * Mark a batch done, with what it actually produced.
+ *
+ * Runs the ordinary production transaction — the one `prepared-items-test`
+ * pins — against the batch's own row, so the ingredients are deducted, the
+ * prepared item is stocked at its real cost, and the reference number is the
+ * one the batch has carried since it was started.
+ *
+ * ── The ingredients are what was planned, and that is not a shortcut ───────
+ *
+ * A yield variance is not an ingredient variance. Five eggs went into the
+ * mayonnaise whether it made 1kg or 950g, and pretending less went in because
+ * less came out would silently write the loss off the books — which is the
+ * opposite of what measuring yield is for. The value of the missing 50g stays
+ * in the prepared item's cost per gram, exactly where an owner can see it.
+ *
+ * A cook who genuinely used different amounts can say so: `overrides` replaces
+ * the planned lines.
+ */
+export async function completeBatch(params: {
+  restaurantId: string
+  batchId: string
+  userId: string | null
+  clientRequestId: string
+  actualQuantity: number
+  varianceReason?: ProductionVarianceReason | null
+  varianceNote?: string | null
+  overrides?: BatchPlan['ingredients']
+  notes?: string | null
+}): Promise<ProduceItemResult> {
+  const batch = await prisma.productionOrder.findFirst({
+    where: { id: params.batchId, restaurantId: params.restaurantId },
+  })
+  if (!batch) throw new NotFoundError('Batch')
+  if (batch.status !== 'IN_PROGRESS') {
+    throw new AppError('That batch is not in progress', 409, 'PRODUCTION_NOT_IN_PROGRESS')
+  }
+
+  const plan = batch.plan as unknown as BatchPlan | null
+  if (!plan) throw new AppError('That batch has no plan to finish', 409, 'PRODUCTION_NO_PLAN')
+
+  return produceItem({
+    restaurantId: params.restaurantId,
+    branchId: batch.branchId,
+    userId: params.userId,
+    clientRequestId: params.clientRequestId,
+    batchId: batch.id,
+    output: {
+      itemId: plan.itemId ?? batch.outputItemId,
+      name: plan.name,
+      quantity: params.actualQuantity,
+      unit: plan.unit,
+    },
+    ingredients: params.overrides ?? plan.ingredients,
+    waste: plan.waste,
+    varianceReason: params.varianceReason ?? null,
+    varianceNote: params.varianceNote ?? null,
+    notes: params.notes ?? batch.notes,
+  })
+}
+
+/** Batches started and not yet finished, for the Prepared Items tab. */
+export async function listOpenBatches(params: {
+  restaurantId: string
+  branchId?: string | null
+}) {
+  return prisma.productionOrder.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      status: 'IN_PROGRESS',
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
+    orderBy: { productionDate: 'desc' },
+    take: 50,
+    include: { branch: { select: { name: true } } },
+  })
+}
+
+/** Abandon a batch that was never made. Nothing to reverse: nothing moved. */
+export async function cancelBatch(params: {
+  restaurantId: string
+  batchId: string
+}): Promise<void> {
+  const cancelled = await prisma.productionOrder.updateMany({
+    where: { id: params.batchId, restaurantId: params.restaurantId, status: 'IN_PROGRESS' },
+    data: { status: 'CANCELLED' },
+  })
+  if (cancelled.count === 0) {
+    throw new AppError('That batch is not in progress', 409, 'PRODUCTION_NOT_IN_PROGRESS')
   }
 }

@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/primit
 import { MakeItemForm } from './make-item-form'
 import { PreparedItemsTable } from './prepared-items-table'
 import { ProductionHistory } from './production-history'
+import { OpenBatches } from './open-batches'
 import type { ProductionWorkspaceData } from '../types'
 
 /**
@@ -37,7 +38,18 @@ export function ProductionWorkspace({
   const [prefillName, setPrefillName] = React.useState<string | null>(null)
 
   return (
-    <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+    <>
+      {/*
+        Above the tabs, not inside one. A batch waiting to be finished is not
+        one of three things somebody might choose to look at — it is stock
+        that has been promised and not yet recorded, and burying it behind a
+        tab is how a kitchen ends up with three open batches nobody closed.
+      */}
+      <div className="mb-5">
+        <OpenBatches batches={data.openBatches} canManage={canManage} />
+      </div>
+
+      <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
       <TabsList>
         {canManage ? <TabsTrigger value="make">Make Item</TabsTrigger> : null}
         <TabsTrigger value="prepared">Prepared Items ({data.prepared.length})</TabsTrigger>
@@ -84,5 +96,6 @@ export function ProductionWorkspace({
         />
       </TabsContent>
     </Tabs>
+    </>
   )
 }

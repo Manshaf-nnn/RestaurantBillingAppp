@@ -30,7 +30,7 @@ export async function getProductionWorkspace(params: {
   const dayStart = startOfToday(params.timeZone ?? 'UTC')
   const branchWhere = branchId ? { branchId } : {}
 
-  const [items, onHand, runsByItem, recent, today] = await Promise.all([
+  const [items, onHand, runsByItem, recent, today, openBatches] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId, isActive: true },
       orderBy: { name: 'asc' },
@@ -66,6 +66,14 @@ export async function getProductionWorkspace(params: {
       _count: { _all: true },
       _sum: { totalCost: true },
     }),
+    // correctionA.md §10 — batches started and not finished. Nothing in them
+    // has moved yet, so they are deliberately NOT part of `history`.
+    prisma.productionOrder.findMany({
+      where: { restaurantId, status: 'IN_PROGRESS', ...branchWhere },
+      orderBy: { productionDate: 'desc' },
+      take: 50,
+      include: { branch: { select: { name: true } } },
+    })
   ])
 
   const available = new Map<string, number>()
@@ -127,6 +135,15 @@ export async function getProductionWorkspace(params: {
     items: workspaceItems,
     prepared,
     history,
+    openBatches: openBatches.map((b) => ({
+      id: b.id,
+      number: b.number,
+      name: b.recipeName ?? 'Unnamed batch',
+      plannedQty: b.plannedQty,
+      unit: b.unit,
+      branchName: b.branch?.name ?? null,
+      startedAt: (b.productionDate ?? b.createdAt).toISOString(),
+    })),
     stats: {
       runsToday: today._count._all,
       valueToday: today._sum.totalCost ?? 0,

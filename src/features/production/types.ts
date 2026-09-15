@@ -62,6 +62,16 @@ export interface ProductionWorkspaceData {
   items: WorkspaceItem[]
   prepared: PreparedItemRow[]
   history: ProductionHistoryRow[]
+  /** Started and not yet finished (correctionA.md §10). */
+  openBatches: Array<{
+    id: string
+    number: string
+    name: string
+    plannedQty: number
+    unit: StockUnit | null
+    branchName: string | null
+    startedAt: string
+  }>
   stats: {
     runsToday: number
     /** Value moved from raw stock into prepared stock today, minor units. */

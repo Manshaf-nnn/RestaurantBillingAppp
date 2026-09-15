@@ -4121,6 +4121,13 @@ model ProductionOrder {
   /// The form's request key: the same batch submitted twice is recorded once.
   clientRequestId String?
 
+  /// What a batch INTENDS to consume, while it is still IN_PROGRESS
+  /// (correctionA.md §10). Not `ProductionConsumption`: those rows mean stock
+  /// has actually left the shelf, and a plan that wrote them would show
+  /// ingredients as gone before anybody had touched them. Replaced by real
+  /// consumption rows the moment the batch is marked done.
+  plan Json?
+
   number      String
   batchNumber String?
   status      ProductionStatus @default(DRAFT)

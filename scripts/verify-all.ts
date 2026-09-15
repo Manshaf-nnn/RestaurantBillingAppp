@@ -76,6 +76,11 @@ const SERVICE = [
   // idempotent completion, and production → recipe → sale → COGS exactly once.
   // Replaces production-flow-test and production-spec-test (recipe-driven jobs).
   'prepared-items-test',
+  // correctionA.md §10 — a batch can be started before its yield is known:
+  // starting moves nothing, finishing runs the same atomic transaction against
+  // the same reference number, and the planned figure survives so the variance
+  // is real.
+  'production-yield-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',
@@ -170,6 +175,10 @@ const SERVICE = [
   // expected cash nor the gap until the close is committed; the total is
   // derived on the server from face values the currency actually has.
   'drawer-denomination-test',
+  // correctionA.md §11 — a till is offered to one person at a time, and the
+  // handover history is shown to the people entitled to read it: a manager
+  // sees the floor's, a cashier only the ones they were part of.
+  'handover-flow-test',
   'feature-access-test',
   // correctionA.md §5/§6/§7 — every screen names the location it is acting on
   // (including the one-location case, where the switcher renders no menu), and
