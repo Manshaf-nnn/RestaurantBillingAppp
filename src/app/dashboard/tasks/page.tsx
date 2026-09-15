@@ -4,7 +4,7 @@ import { AutoRefresh } from '@/components/auto-refresh'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { TasksBoard, type TaskView } from '@/features/instructions/components/tasks-board'
-import { listInstructions } from '@/features/instructions/service'
+import { listAssignableStaff, listInstructions } from '@/features/instructions/service'
 import { listLocations } from '@/features/transfers/queries'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -31,13 +31,17 @@ export default async function TasksPage({
   const selection = await selectedBranch(user, await searchParams)
   const canInstruct = visibleBranchIds(user) === null
 
-  const [instructions, locations] = await Promise.all([
+  const [instructions, locations, staff] = await Promise.all([
     listInstructions({
       restaurantId: user.restaurantId,
       user,
       branchId: scopeToOne(selection),
     }),
     canInstruct ? listLocations(user.restaurantId, visibleBranchIds(user)) : Promise.resolve([]),
+    // Only for the person who can write one; everybody else reads the list.
+    canInstruct
+      ? listAssignableStaff({ restaurantId: user.restaurantId, user })
+      : Promise.resolve([]),
   ])
 
   const tasks: TaskView[] = instructions.map((i) => ({
@@ -49,6 +53,9 @@ export default async function TasksPage({
     dueAt: i.dueAt?.toISOString() ?? null,
     branchId: i.branchId,
     branchName: i.branch?.name ?? null,
+    assigneeId: i.assigneeId,
+    assigneeName: i.assigneeName,
+    assigneeBranchName: i.assignee?.branch?.name ?? null,
     createdByName: i.createdByName,
     createdAt: i.createdAt.toISOString(),
     doneByName: i.doneByName,
@@ -70,6 +77,11 @@ export default async function TasksPage({
       <TasksBoard
         initial={tasks}
         locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+        staff={staff.map((m) => ({
+          id: m.id,
+          name: m.name,
+          branchName: m.branch?.name ?? null,
+        }))}
         canInstruct={canInstruct}
       />
     </>

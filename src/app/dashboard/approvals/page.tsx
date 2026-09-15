@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 import { CentralApprovals, type ApprovalRow } from '@/features/approvals/components/central-approvals'
 import { ApprovalQueue, type ApprovalRow as DecidedRow } from '@/features/approvals/components/approval-queue'
 import { getApprovalsInbox } from '@/features/accounting/inbox'
@@ -114,6 +115,7 @@ export default async function ApprovalsPage({
             ? 'Everything raised at this location that needs a decision. Nothing goes ahead until somebody signs it off.'
             : 'Everything from every branch that needs a decision. Nothing goes ahead until somebody signs it off.'
         }
+        actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="approvals" /> : null}
       />
       <div className="space-y-5">
         <CentralApprovals

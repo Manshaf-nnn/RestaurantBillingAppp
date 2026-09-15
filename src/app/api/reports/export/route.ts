@@ -7,8 +7,11 @@ import { AppError, toAppError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { getReportSummary } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
-import { buildReportWorkbook, toCsv, toExcel } from '@/features/reports/export'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { listTransfers } from '@/features/transfers/queries'
+import { listApprovals } from '@/features/approvals/service'
+import { prisma } from '@/server/db/prisma'
+import { buildReportWorkbook, toCsv, toExcel, type ExportColumn } from '@/features/reports/export'
 import { getCashDrawerReport, getPettyCashReport } from '@/features/reports/cash'
 import {
   resolveRange as canonicalResolveRange,
@@ -17,6 +20,15 @@ import {
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
+
+/**
+ * The most rows any one export will produce.
+ *
+ * It lived inside the orders branch, where it was the only thing that paged.
+ * correctionA.md §1 gives five more types a reason to need it, and a cap that
+ * each of them picks for itself is a cap that differs between them.
+ */
+const EXPORT_LIMIT = 10_000
 
 /**
  * Report export endpoint.
@@ -122,6 +134,354 @@ export async function GET(request: NextRequest) {
      * module's own permission, per-type, exactly as the cash reports are —
      * a download must never be the way around a screen's gate.
      */
+
+    /*
+     * ── Everything else that has records worth taking away (§1) ────────────
+     *
+     * Each one pairs REPORT_EXPORT, already checked at the top, with the same
+     * permission that guards the screen it comes from. That two-step is the
+     * rule the cash and accounting types below already follow, and it is what
+     * stops "may export something" becoming "may export anything": a download
+     * must never be a way around a screen somebody cannot open.
+     *
+     * Branch scope is `branchIds`, resolved from the same `?branch=` the
+     * screens use and validated against what this user may see.
+     */
+    if (type === 'analytics') {
+      await requirePermission(PERMISSIONS.ANALYTICS_VIEW)
+      /*
+       * What the Analytics screen plots: revenue per bucket, for the same
+       * range and the same locations. The chart and the file are built from
+       * one query so they cannot disagree — a download that quietly rounds
+       * differently is worse than no download.
+       */
+      const { getRevenueSeries } = await import('@/features/analytics/queries')
+      const series = await getRevenueSeries({
+        restaurantId: user.restaurantId,
+        range: canonicalRange,
+        branchIds,
+      })
+      return respond(
+        'Analytics',
+        [
+          { header: 'Period', key: 'period' },
+          { header: 'Orders', key: 'orders' },
+          { header: 'Net sales', key: 'net' },
+        ],
+        series.map((point) => ({
+          period: point.label,
+          orders: point.orders,
+          net: money(point.revenue),
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'variance') {
+      await requirePermission(PERMISSIONS.REPORT_VARIANCE)
+      const { getVarianceReport } = await import('@/features/inventory/variance-report')
+      // The report counts back in whole days; the span comes from the resolved
+      // range so the file covers exactly what the screen above it showed.
+      const days = Math.max(
+        1,
+        Math.round((canonicalRange.to.getTime() - canonicalRange.from.getTime()) / 86_400_000),
+      )
+      const report = await getVarianceReport({
+        restaurantId: user.restaurantId,
+        days,
+        branchId: scopeToOne(selection),
+        timeZone: restaurant.timezone,
+      })
+      return respond(
+        'Stock variance',
+        [
+          { header: 'Item', key: 'item' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'Expected', key: 'expected' },
+          { header: 'Counted', key: 'actual' },
+          { header: 'Difference', key: 'variance' },
+          { header: 'Value', key: 'value' },
+          { header: 'Count', key: 'reference' },
+          { header: 'Counted at', key: 'countedAt' },
+          { header: 'Approved by', key: 'approvedBy' },
+          // Whether wastage on the same day accounts for the shortfall. The
+          // screen shows this and it is the first thing anybody asks of a
+          // variance, so a file without it invites the same question again.
+          { header: 'Explained by wastage', key: 'explained' },
+        ],
+        report.lines.map((row) => ({
+          item: row.name,
+          unit: row.unit,
+          expected: row.expected,
+          actual: row.actual,
+          variance: row.variance,
+          value: money(row.varianceValue),
+          reference: row.countReference,
+          countedAt: row.countedAt,
+          approvedBy: row.approvedByName ?? '',
+          explained: row.likelyExplained ? 'Yes' : 'No',
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'transfers') {
+      await requirePermission(PERMISSIONS.TRANSFER_VIEW)
+      const transfers = await listTransfers({
+        restaurantId: user.restaurantId,
+        branchId: scopeToOne(selection),
+        limit: EXPORT_LIMIT,
+      })
+      return respond(
+        'Transfers',
+        [
+          { header: 'Transfer #', key: 'number' },
+          { header: 'Status', key: 'status' },
+          { header: 'From', key: 'from' },
+          { header: 'To', key: 'to' },
+          { header: 'Lines', key: 'lines' },
+          { header: 'Requested', key: 'requested' },
+          { header: 'Requested by', key: 'by' },
+          { header: 'Variance', key: 'variance' },
+        ],
+        transfers.map((t) => ({
+          number: t.number,
+          status: t.status,
+          from: t.fromName,
+          to: t.toName,
+          lines: t.lineCount,
+          requested: t.requestedAt,
+          by: t.requestedByName ?? '',
+          variance: t.hasVariance ? 'Yes' : 'No',
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'approvals') {
+      await requirePermission(PERMISSIONS.APPROVALS_VIEW)
+      const rows = await listApprovals({
+        restaurantId: user.restaurantId,
+        branchIds,
+        limit: EXPORT_LIMIT,
+      })
+      return respond(
+        'Approvals',
+        [
+          { header: 'Type', key: 'kind' },
+          { header: 'Status', key: 'status' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Requested by', key: 'requestedBy' },
+          { header: 'Requested', key: 'requestedAt' },
+          { header: 'Reason', key: 'reason' },
+          { header: 'Decided by', key: 'decidedBy' },
+          { header: 'Decided', key: 'decidedAt' },
+        ],
+        rows.map((r) => ({
+          kind: r.kind,
+          status: r.status,
+          // Null is a restaurant-wide request, not a missing value.
+          branch: r.branch?.name ?? 'All locations',
+          requestedBy: r.requestedBy?.name ?? '',
+          requestedAt: r.requestedAt.toISOString(),
+          reason: r.reason ?? '',
+          decidedBy: r.decidedBy?.name ?? '',
+          decidedAt: r.decidedAt?.toISOString() ?? '',
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'inventory') {
+      await requirePermission(PERMISSIONS.INVENTORY_VIEW)
+      const levels = await prisma.inventoryStock.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+        },
+        include: {
+          item: { select: { name: true, sku: true, unit: true, costPerUnit: true } },
+          branch: { select: { name: true } },
+        },
+        orderBy: { item: { name: 'asc' } },
+        take: EXPORT_LIMIT,
+      })
+      return respond(
+        'Inventory',
+        [
+          { header: 'Item', key: 'item' },
+          { header: 'SKU', key: 'sku' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'Available', key: 'available' },
+          { header: 'Reserved', key: 'reserved' },
+          { header: 'Average cost', key: 'cost' },
+          { header: 'Value', key: 'value' },
+        ],
+        levels.map((l) => ({
+          item: l.item.name,
+          sku: l.item.sku ?? '',
+          branch: l.branch?.name ?? 'All locations',
+          unit: l.item.unit,
+          available: l.available,
+          reserved: l.reserved,
+          cost: money(l.item.costPerUnit),
+          // The same multiplication the stock screens do, so the file and the
+          // screen add up to the same number.
+          value: money(Math.round(l.available * l.item.costPerUnit)),
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'purchases') {
+      await requirePermission(PERMISSIONS.PURCHASE_VIEW)
+      const purchases = await prisma.purchase.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          createdAt: { gte: range.from, lte: range.to },
+        },
+        include: {
+          supplier: { select: { name: true } },
+          branch: { select: { name: true } },
+          createdBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: EXPORT_LIMIT,
+      })
+      return respond(
+        'Purchases',
+        [
+          { header: 'Order #', key: 'number' },
+          { header: 'Status', key: 'status' },
+          { header: 'Supplier', key: 'supplier' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Raised', key: 'created' },
+          { header: 'Raised by', key: 'by' },
+          { header: 'Total', key: 'total' },
+        ],
+        purchases.map((po) => ({
+          number: po.number,
+          status: po.status,
+          supplier: po.supplier?.name ?? '',
+          branch: po.branch?.name ?? '',
+          created: po.createdAt.toISOString(),
+          by: po.createdBy?.name ?? '',
+          total: money(po.total),
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'production') {
+      await requirePermission(PERMISSIONS.PRODUCTION_VIEW)
+      const runs = await prisma.productionOrder.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          createdAt: { gte: range.from, lte: range.to },
+        },
+        include: {
+          branch: { select: { name: true } },
+          outputItem: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: EXPORT_LIMIT,
+      })
+      return respond(
+        'Production',
+        [
+          // The reference number §10 asks for. It already exists on the row;
+          // this surfaces it rather than inventing a second one.
+          { header: 'Reference', key: 'number' },
+          { header: 'Status', key: 'status' },
+          { header: 'Item', key: 'item' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Planned', key: 'planned' },
+          { header: 'Actual', key: 'actual' },
+          { header: 'Variance', key: 'variance' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'When', key: 'when' },
+        ],
+        runs.map((r) => ({
+          number: r.number,
+          status: r.status,
+          item: r.outputItem?.name ?? r.recipeName ?? '',
+          branch: r.branch?.name ?? '',
+          planned: r.plannedQty,
+          // Blank, not zero: a run that has not finished has no actual yield,
+          // and printing 0 would read as "it produced nothing".
+          actual: r.actualQty ?? '',
+          variance: r.variance ?? '',
+          unit: r.unit ?? '',
+          when: r.createdAt.toISOString(),
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'invoices') {
+      await requirePermission(PERMISSIONS.INVOICE_VIEW)
+      /*
+       * An invoice row is a number, a date and a frozen snapshot — the
+       * customer, the location and the money all live on the order it was
+       * issued for. So the branch filter goes through `order` too: filtering
+       * the invoice on a column it does not have would have silently scoped
+       * nothing and handed a confined manager the whole group's invoices.
+       */
+      const invoices = await prisma.invoice.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          issuedAt: { gte: range.from, lte: range.to },
+          ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
+        },
+        include: {
+          order: {
+            select: {
+              orderNumber: true,
+              customerName: true,
+              grandTotal: true,
+              paymentStatus: true,
+              branch: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: { issuedAt: 'desc' },
+        take: EXPORT_LIMIT,
+      })
+      return respond(
+        'Invoices',
+        [
+          { header: 'Invoice #', key: 'number' },
+          { header: 'Issued', key: 'issued' },
+          { header: 'Order #', key: 'order' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Customer', key: 'customer' },
+          { header: 'Payment', key: 'payment' },
+          { header: 'Total', key: 'total' },
+        ],
+        invoices.map((i) => ({
+          number: i.number,
+          issued: i.issuedAt.toISOString(),
+          order: i.order?.orderNumber ?? '',
+          branch: i.order?.branch?.name ?? '',
+          customer: i.order?.customerName ?? '',
+          payment: i.order?.paymentStatus ?? '',
+          total: money(i.order?.grandTotal ?? 0),
+        })),
+        format,
+        stamp,
+      )
+    }
+
     if (type === 'outgoing' || type === 'expenses') {
       await requirePermission(PERMISSIONS.ACCOUNTING_VIEW)
       const { listOutgoingPayments } = await import('@/features/outgoing-payments/queries')
@@ -361,7 +721,6 @@ export async function GET(request: NextRequest) {
 
       // Paged through rather than truncated. The cap is a safety limit on the
       // size of a single download, not a silent horizon.
-      const EXPORT_LIMIT = 10_000
       const PER_PAGE = 500
       const collected: Awaited<ReturnType<typeof listOrders>>['orders'] = []
       let result = await listOrders(user.restaurantId, {
@@ -454,6 +813,34 @@ export async function GET(request: NextRequest) {
 }
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+/**
+ * A file, in whichever format was asked for.
+ *
+ * This eleven-line pair — build a workbook if xlsx, otherwise a CSV, and wrap
+ * it in a response — was copy-pasted once per export type. correctionA.md §1
+ * adds eight more types; nineteen copies of a decision is nineteen chances to
+ * get the content type wrong on one of them, and one of them is the one
+ * nobody opens until the auditor asks.
+ */
+async function respond(
+  name: string,
+  columns: ExportColumn[],
+  rows: Array<Record<string, unknown>>,
+  format: string,
+  stamp: string,
+) {
+  if (format === 'xlsx') {
+    const buffer = await toExcel(name, columns, rows)
+    return fileResponse(buffer, `${name.toLowerCase().replace(/\s+/g, '-')}-${stamp}.xlsx`, XLSX_TYPE)
+  }
+  return fileResponse(
+    Buffer.from(toCsv(columns, rows)),
+    `${name.toLowerCase().replace(/\s+/g, '-')}-${stamp}.csv`,
+    'text/csv',
+  )
+}
+
 
 /**
  * The two cash reports, exported with every active filter applied.

@@ -957,6 +957,7 @@ model User {
   branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
   supplierPayments    SupplierPayment[]   @relation("SupplierPaymentBy")
   instructionsGiven   BranchInstruction[] @relation("InstructionAuthor")
+  instructionsAssigned BranchInstruction[] @relation("InstructionAssignee")
   instructionsDone    BranchInstruction[] @relation("InstructionCompleter")
   drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
   drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
@@ -2666,6 +2667,17 @@ model BranchInstruction {
   status   InstructionStatus   @default(OPEN)
   dueAt    DateTime?
 
+  /// Who it is for (correctionA.md §2). Null means the location rather than a
+  /// person — the original meaning of an instruction, and still the right one
+  /// for "prices go up on the 1st".
+  ///
+  /// The name is denormalised beside the id for the same reason `createdByName`
+  /// is: a task that outlives the account it was given to should still say who
+  /// it was given to, and `onDelete: SetNull` would otherwise erase that.
+  assigneeId   String?
+  assignee     User?   @relation("InstructionAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assigneeName String?
+
   createdById   String?
   createdBy     User?   @relation("InstructionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   createdByName String
@@ -2681,6 +2693,7 @@ model BranchInstruction {
 
   @@index([restaurantId, status, createdAt])
   @@index([restaurantId, branchId, status])
+  @@index([restaurantId, assigneeId, status])
   @@map("branch_instructions")
 }
 

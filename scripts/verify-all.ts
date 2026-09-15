@@ -51,6 +51,10 @@ const STATIC = [
   // athu.md — only a credential or deactivation event may write `revokedAt`.
   // A feature-flag edit once logged a whole restaurant out by copying six lines.
   'no-collateral-session-revocation',
+  // correctionA.md §3 — one vocabulary for "which period": no third
+  // resolveRange, no page starting its window at the current instant, and a
+  // selector on every screen that shows figures for a range.
+  'range-convergence-test',
   // sidebar.md §7 — a favorite or a recent page is only ever an href resolved
   // through the sidebar's own permission filter, so revoking a permission
   // removes the shortcut and no second permission system exists to drift.
@@ -167,6 +171,10 @@ const SERVICE = [
   // (including the one-location case, where the switcher renders no menu), and
   // a transfer moves stock between two locations rather than between shelves.
   'branch-context-test',
+  // correctionA.md §2 — a task can name a person, the posted id is checked
+  // against the caller's own restaurant before it is stored, and the nav badge
+  // counts what is mine rather than what is on a colleague's plate.
+  'task-assignment-test',
   // sidebar.md §1/§9 — favorites are per user and per restaurant, refused on
   // write for a page the person may not open, and carried on the select the
   // session already runs so the sidebar costs no query to draw.
@@ -199,6 +207,10 @@ const RUNTIME = [
   'session-runtime-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
+  // correctionA.md §1 — every type the UI offers is one the route answers, in
+  // both formats, and report.export alone opens none of them: each still needs
+  // the permission that guards the screen it comes from.
+  'export-coverage-test',
   // sidebar.md §5/§8 — the rail, the drawer and the collapse measured in a real
   // browser at three widths. Both surfaces render the same component, so the
   // markup is identical at every size and only computed CSS can tell them apart.

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 import { listTransfers } from '@/features/transfers/queries'
 import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS, can } from '@/lib/rbac'
@@ -61,11 +62,14 @@ export default async function TransfersPage({
         branch={branchName}
         description="Stock moving between locations. It leaves on dispatch and arrives on receipt — never both at once."
         actions={
-          can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
-            <Button asChild>
-              <Link href="/dashboard/transfers/new">New transfer</Link>
-            </Button>
-          ) : null
+          <>
+            {can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="transfers" /> : null}
+            {can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
+              <Button asChild>
+                <Link href="/dashboard/transfers/new">New transfer</Link>
+              </Button>
+            ) : null}
+          </>
         }
       />
 

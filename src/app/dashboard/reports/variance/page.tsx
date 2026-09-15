@@ -5,10 +5,13 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
+import { PeriodPicker } from '@/features/dashboard/components/period-picker'
+import { ExportMenu } from '@/features/reports/components/export-menu'
+import { describeRange, resolveRange } from '@/features/reports/range'
 import { getVarianceReport } from '@/features/inventory/variance-report'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -25,8 +28,43 @@ export default async function VarianceReportPage({
   const money = (m: number) => formatMoney(m, restaurant.currency)
 
   const params = await searchParams
-  const raw = Number(typeof params.days === 'string' ? params.days : '')
-  const days = Number.isFinite(raw) && raw > 0 && raw <= 365 ? raw : 30
+  const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
+
+  /*
+   * One vocabulary for periods (correctionA.md §3).
+   *
+   * This page spoke `?days=<int>` through three hand-built links — the fourth
+   * convention for "which period" in an app that already had three, and the
+   * only one that could not express "yesterday" or a custom range. It reads
+   * `?preset=` now, like the dashboard and the reports, and resolves through
+   * the canonical `resolveRange` so its boundaries land on the restaurant's
+   * midnight.
+   *
+   * `?days=` is still honoured. Those three links have been in people's
+   * bookmarks and in the report's own paging since it shipped, and a dead
+   * bookmark is a worse outcome than a line of translation.
+   */
+  const legacyDays = Number(str('days'))
+  const legacyPreset =
+    Number.isFinite(legacyDays) && legacyDays > 0
+      ? legacyDays <= 7
+        ? 'LAST_7'
+        : legacyDays <= 30
+          ? 'LAST_30'
+          : 'LAST_90'
+      : ''
+
+  const range = resolveRange({
+    preset: str('preset') || legacyPreset || 'LAST_30',
+    from: str('from'),
+    to: str('to'),
+    timeZone: restaurant.timezone,
+  })
+  const periodLabel = describeRange(range)
+
+  // The report still counts back in whole days; it is given the span the
+  // resolved range actually covers rather than a second, separate number.
+  const days = Math.max(1, Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000))
 
   /*
    * Every other report scopes to the chosen location; this one did not, and it
@@ -51,27 +89,17 @@ export default async function VarianceReportPage({
       <PageHeader
         title="Stock variance"
         description="The gap between what the system held and what was actually on the shelf, from approved stock counts."
+        actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="variance" /> : null}
       />
 
       {/*
-        <Link>, not <a>. A bare anchor here tore down the whole application and
-        rebuilt it — socket, shell and all — to change one number in the query
-        string. That is the "it reloads by itself" people report.
+        The shared picker, in place of three hand-built links. It pushes with
+        the client router rather than navigating — the note those links carried
+        was that a bare <a> here tore down the whole application, socket and
+        shell included, to change one number in the query string.
       */}
-      <div className="mb-5 flex gap-2">
-        {[7, 30, 90].map((d) => (
-          <Link
-            key={d}
-            href={`/dashboard/reports/variance?days=${d}${
-              selection.branchId ? `&branch=${selection.branchId}` : ''
-            }`}
-            className={`rounded-lg border px-3 py-1.5 text-sm ${
-              days === d ? 'border-primary bg-primary text-primary-foreground' : 'border-border hover:bg-muted'
-            }`}
-          >
-            {d} days
-          </Link>
-        ))}
+      <div className="mb-5">
+        <PeriodPicker preset={range.preset} from={str('from')} to={str('to')} label={periodLabel} />
       </div>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

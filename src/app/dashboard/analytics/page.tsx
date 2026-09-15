@@ -15,12 +15,14 @@ import {
 } from '@/features/analytics/queries'
 import { getBranchStaffPerformance } from '@/features/staff/performance'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
-import { ROLE_LABELS, PERMISSIONS } from '@/lib/rbac'
+import { ROLE_LABELS, PERMISSIONS, can } from '@/lib/rbac'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
-import { resolveRange } from '@/features/reports/range'
+import { describeRange, resolveRange } from '@/features/reports/range'
+import { PeriodPicker } from '@/features/dashboard/components/period-picker'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,16 +36,39 @@ export default async function AnalyticsPage({
   const user = await requirePagePermission(PERMISSIONS.ANALYTICS_VIEW, '/dashboard/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
   const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
-  const branchId = scopeToOne(await selectedBranch(user, await searchParams))
+  const params = await searchParams
+  const branchId = scopeToOne(await selectedBranch(user, params))
+  const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
 
-  // This page keeps its fixed 30-day window; only the dashboard is selectable.
-  // It moves to the shared resolver anyway so its days are the restaurant's,
-  // not the server's — the same correction the trend chart just got.
-  const range = resolveRange({ preset: 'LAST_30', timeZone: restaurant.timezone })
+  /*
+   * Selectable, at last (correctionA.md §3).
+   *
+   * This window was hardcoded to the last 30 days with a comment saying only
+   * the dashboard was selectable — so a page called Analytics could answer
+   * exactly one question. It resolves from the URL now, through the same
+   * `resolveRange` the dashboard and the reports use, which keeps the
+   * boundaries on the restaurant's midnight rather than the server's.
+   *
+   * LAST_30 stays the default, so an existing bookmark lands where it always did.
+   */
+  const range = resolveRange({
+    preset: str('preset') || 'LAST_30',
+    from: str('from'),
+    to: str('to'),
+    timeZone: restaurant.timezone,
+  })
+  const periodLabel = describeRange(range, locale)
+
+  // Peak hours still counts back in whole days, so it is given the span the
+  // range actually covers rather than a second, differently-shaped 30.
+  const rangeDays = Math.max(
+    1,
+    Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000),
+  )
 
   const [series, peak, popular, staff] = await Promise.all([
     getRevenueSeries({ restaurantId: user.restaurantId, range, branchIds: branchId ? [branchId] : null }),
-    getPeakHours(user.restaurantId, 30, branchId, restaurant.timezone),
+    getPeakHours(user.restaurantId, rangeDays, branchId, restaurant.timezone),
     getPopularItems({
       restaurantId: user.restaurantId,
       range,
@@ -71,13 +96,21 @@ export default async function AnalyticsPage({
 
   return (
     <>
-      <PageHeader title="Analytics" description="Trends across the last 30 days" />
+      <PageHeader
+        title="Analytics"
+        description={`Trends across ${periodLabel}`}
+        actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="analytics" /> : null}
+      />
+
+      <div className="mb-5">
+        <PeriodPicker preset={range.preset} from={str('from')} to={str('to')} label={periodLabel} />
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard title="Revenue" description="Daily, last 30 days" bodyClassName="p-3 pt-5">
+        <SectionCard title="Revenue" description={`Daily · ${periodLabel}`} bodyClassName="p-3 pt-5">
           <RevenueTrendChart data={series} currency={restaurant.currency} locale={locale} />
         </SectionCard>
-        <SectionCard title="Order volume" description="Daily, last 30 days" bodyClassName="p-3 pt-5">
+        <SectionCard title="Order volume" description={`Daily · ${periodLabel}`} bodyClassName="p-3 pt-5">
           <OrdersTrendChart data={series} currency={restaurant.currency} locale={locale} />
         </SectionCard>
       </div>

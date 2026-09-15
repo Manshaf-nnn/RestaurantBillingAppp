@@ -4,6 +4,8 @@ import { PhoneCall } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
+import { PeriodPicker } from '@/features/dashboard/components/period-picker'
+import { describeRange, resolveRange } from '@/features/reports/range'
 import { ReportTable } from '@/features/reports/components/report-table'
 import { getCustomerAnalytics } from '@/features/customers/analytics'
 import { formatMoney } from '@/lib/money'
@@ -14,12 +16,38 @@ import { requireRestaurant } from '@/server/db/tenant'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Customer analytics' }
 
-export default async function CustomerAnalyticsPage() {
+export default async function CustomerAnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await requirePagePermission(PERMISSIONS.CUSTOMER_ANALYTICS, '/dashboard/customers/analytics')
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (m: number) => formatMoney(m, restaurant.currency)
+
+  const params = await searchParams
+  const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
+
+  /*
+   * Selectable (correctionA.md §3).
+   *
+   * The window was a bare `Date.now() - 30 days` inside the query, which put
+   * the boundary at whatever time of day the page happened to be opened — so
+   * "the last 30 days" quietly meant something different each visit, and every
+   * figure on the page moved with it. Resolving through the shared helper puts
+   * it on the restaurant's midnight and lets somebody ask a different question.
+   */
+  const range = resolveRange({
+    preset: str('preset') || 'LAST_30',
+    from: str('from'),
+    to: str('to'),
+    timeZone: restaurant.timezone,
+  })
+  const periodLabel = describeRange(range)
+
   const data = await getCustomerAnalytics({
     restaurantId: user.restaurantId,
+    since: range.from,
     // Each branch reads its own guests. See `customersAtBranch`.
     branchIds: visibleBranchIds(user),
   })
@@ -32,8 +60,12 @@ export default async function CustomerAnalyticsPage() {
     <>
       <PageHeader
         title="Customers"
-        description="Who comes back, who spends, and who has stopped coming."
+        description={`Who comes back, who spends, and who has stopped coming · ${periodLabel}`}
       />
+
+      <div className="mb-5">
+        <PeriodPicker preset={range.preset} from={str('from')} to={str('to')} label={periodLabel} />
+      </div>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Customers" value={String(data.totalCustomers)} />
