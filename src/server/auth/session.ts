@@ -137,6 +137,15 @@ export interface AuthUser {
    * owner.
    */
   availablePermissions: string[]
+  /**
+   * The sidebar shortcuts this person pinned, in their order (sidebar.md §1).
+   *
+   * Carried on the session rather than fetched by the shell, because it comes
+   * free with the user row that resolving the session already reads — and §9
+   * asks for a sidebar that costs no database request to draw. Hrefs only; what
+   * they are allowed to see is decided by `favoriteItems`, not by this list.
+   */
+  navFavorites: string[]
   sessionId: string
 }
 
@@ -154,8 +163,16 @@ export async function requestContext(): Promise<RequestContext> {
   }
 }
 
-/** Everything about the user a session needs to resolve, in one select. */
-const USER_SELECT = {
+/**
+ * Everything about the user a session needs to resolve, in one select.
+ *
+ * Exported so `sidebar-favorites-test` can assert that the sidebar's favorites
+ * are still on it. That is a performance guarantee (sidebar.md §9 — no database
+ * request per sidebar render) which nothing else would notice being dropped:
+ * moving the column to its own fetch would work perfectly and cost a round trip
+ * on every page in the product.
+ */
+export const USER_SELECT = {
   id: true,
   email: true,
   name: true,
@@ -164,6 +181,10 @@ const USER_SELECT = {
   branchId: true,
   avatarUrl: true,
   permissions: true,
+  // sidebar.md §9 — on the query that was already loading the session, for the
+  // same reason `enabledFeatures` is below: the sidebar draws on every single
+  // page and must not pay a round trip for the shortcuts at the top of it.
+  navFavorites: true,
   isActive: true,
   deletedAt: true,
   staffRole: { select: { permissions: true, isActive: true } },
@@ -197,6 +218,7 @@ function toAuthUser(user: SessionUser, sessionId: string): AuthUser {
      * is what every restaurant that has never been scoped should get.
      */
     availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
+    navFavorites: user.navFavorites,
     sessionId,
   }
 }

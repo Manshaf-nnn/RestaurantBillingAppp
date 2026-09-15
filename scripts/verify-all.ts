@@ -51,6 +51,10 @@ const STATIC = [
   // athu.md — only a credential or deactivation event may write `revokedAt`.
   // A feature-flag edit once logged a whole restaurant out by copying six lines.
   'no-collateral-session-revocation',
+  // sidebar.md §7 — a favorite or a recent page is only ever an href resolved
+  // through the sidebar's own permission filter, so revoking a permission
+  // removes the shortcut and no second permission system exists to drift.
+  'sidebar-nav-test',
 ]
 
 const SERVICE = [
@@ -159,6 +163,10 @@ const SERVICE = [
   'menu-station-test',
   'cash-drawer-flow-test',
   'feature-access-test',
+  // sidebar.md §1/§9 — favorites are per user and per restaurant, refused on
+  // write for a page the person may not open, and carried on the select the
+  // session already runs so the sidebar costs no query to draw.
+  'sidebar-favorites-test',
   // production.md §4 — cold single-call latency against 20k orders, thresholded.
   // It existed and was never registered, so `npm run verify` never ran it.
   'phase11-perf',
@@ -187,6 +195,10 @@ const RUNTIME = [
   'session-runtime-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
+  // sidebar.md §5/§8 — the rail, the drawer and the collapse measured in a real
+  // browser at three widths. Both surfaces render the same component, so the
+  // markup is identical at every size and only computed CSS can tell them apart.
+  'sidebar-responsive-test',
 ]
 
 interface Outcome {

@@ -1,6 +1,8 @@
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 
 import { DashboardShell } from '@/features/dashboard/components/dashboard-shell'
+import { SIDEBAR_COOKIE } from '@/features/dashboard/sidebar-preference'
 import { appUrl } from '@/lib/env'
 import { prisma } from '@/server/db/prisma'
 import { listSwitchableLocations } from '@/features/transfers/queries'
@@ -128,6 +130,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
     listSwitchableLocations(user.restaurantId, reach),
   ])
 
+  /*
+   * Read here rather than in the browser, so the rail is already the right
+   * width in the HTML. `localStorage` cannot be reached while this renders, and
+   * correcting the width after hydration means a visible snap on every single
+   * page load. Not a security boundary — see `sidebar-preference.ts`.
+   */
+  const sidebarCollapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === 'collapsed'
+
   const locations = allLocations
     .map((l) => ({
       id: l.id,
@@ -167,6 +177,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       // case where a blank dashboard is correct and needs saying out loud.
       unassignedToLocation={reach !== null && reach.length === 0}
       openTasks={openTasks}
+      initialCollapsed={sidebarCollapsed}
       user={{
         id: user.id,
         name: user.name,
@@ -175,6 +186,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
         permissions: user.permissions,
         rolePermissions: user.rolePermissions,
         avatarUrl: user.avatarUrl,
+        /*
+         * Off the session's own user row — no query of its own, which is what
+         * sidebar.md §9 asks for. Hrefs only; `favoriteItems` decides which of
+         * them this person may still see.
+         */
+        navFavorites: user.navFavorites,
       }}
       initialNotifications={notifications.map((notification) => ({
         id: notification.id,
