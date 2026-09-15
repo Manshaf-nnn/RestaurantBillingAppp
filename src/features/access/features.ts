@@ -146,6 +146,18 @@ export const FEATURES: Feature[] = [
         permission: PERMISSIONS.PURCHASE_APPROVE,
         hint: 'Lets them settle a request rather than only raise one.',
       },
+      {
+        key: 'edit',
+        label: 'Set who may approve',
+        permission: PERMISSIONS.APPROVALS_MANAGE,
+        hint: 'Choose which staff can sign off requests at each location.',
+      },
+      {
+        key: 'submit',
+        label: 'Override',
+        permission: PERMISSIONS.APPROVALS_FORCE,
+        hint: 'Sign their own request, or one for a location they do not approve for. Every override is recorded as one.',
+      },
     ],
     routes: ['/dashboard/approvals'],
   },

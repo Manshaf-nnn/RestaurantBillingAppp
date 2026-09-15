@@ -63,7 +63,28 @@ export interface ApprovalPolicy {
    * the gate would be a locked door with nothing behind it.
    */
   requireCashierSession: boolean
+
+  /**
+   * Who may sign off requests, per location (correctionA.md §9).
+   *
+   * Keyed by branch id, with {@link RESTAURANT_WIDE} for the requests that
+   * belong to no single site. A location with no entry — or an empty one —
+   * falls back to "anyone holding `approvals.view` who can see it", which is
+   * how every restaurant behaves today and must keep behaving until an owner
+   * decides otherwise. An opt-in control that silently locks the queue the
+   * moment it ships is a control nobody survives enabling.
+   *
+   * Stored here rather than as a new table or a new permission: the owner is
+   * already on this screen setting thresholds, the restaurant row is already
+   * loaded to read them, and a per-branch list of people is not a *permission*
+   * — it is a routing rule. `permissionsFor` stays the one answer to "what may
+   * this person do"; this answers "and is this particular queue theirs".
+   */
+  approvers?: Record<string, string[]>
 }
+
+/** The key under {@link ApprovalPolicy.approvers} for restaurant-wide requests. */
+export const RESTAURANT_WIDE = '__all__'
 
 const DEFAULT_POLICY: ApprovalPolicy = {
   enabled: true,
@@ -155,11 +176,89 @@ export async function requestApproval(params: {
 }
 
 /**
+ * Whether this person is on the approver list for the location a request
+ * belongs to (correctionA.md §9).
+ *
+ * `null` means "no list configured here", which is not the same as "nobody" —
+ * it is the state every restaurant starts in and most will stay in, and it
+ * must read as "the permission alone is enough".
+ */
+export function approversFor(
+  policy: ApprovalPolicy,
+  branchId: string | null,
+): string[] | null {
+  const list = policy.approvers?.[branchId ?? RESTAURANT_WIDE]
+  return list && list.length > 0 ? list : null
+}
+
+/**
+ * May this person rule on this request?
+ *
+ * Two independent gates, and they answer different questions:
+ *
+ *   · the permission — `approvals.view` — says they may work this queue at all,
+ *     and is checked by the action before this is reached;
+ *   · the approver list says this location's decisions are theirs.
+ *
+ * Returns the reason it is refused rather than a bare false, because "you are
+ * not an approver for Kandy" and "you cannot approve your own request" send
+ * somebody to two completely different people to fix it.
+ */
+export function whyCannotApprove(params: {
+  policy: ApprovalPolicy
+  request: Pick<ApprovalRequest, 'branchId' | 'requestedById'>
+  userId: string
+  /** Holder of `approvals.force` — an owner or main admin. */
+  mayForce: boolean
+}): { code: 'APPROVAL_SELF' | 'APPROVAL_NOT_APPROVER'; message: string } | null {
+  const { policy, request, userId, mayForce } = params
+
+  /*
+   * Force does not skip the list and the self-rule separately; it skips both,
+   * because the two together are "somebody else must sign this" and an owner
+   * overriding it is overriding that one idea. What it does NOT skip is the
+   * permission, or the tenant check, or the record of having done it.
+   */
+  if (mayForce) return null
+
+  if (request.requestedById && request.requestedById === userId) {
+    return {
+      code: 'APPROVAL_SELF',
+      message: 'You cannot approve your own request',
+    }
+  }
+
+  const approvers = approversFor(policy, request.branchId)
+  if (approvers && !approvers.includes(userId)) {
+    return {
+      code: 'APPROVAL_NOT_APPROVER',
+      message: 'You are not an approver for this location',
+    }
+  }
+
+  return null
+}
+
+/**
  * Rule on a request.
  *
  * The approver must not be the requester. Self-approval turns a two-person
  * control into a formality, and it is the single thing this whole mechanism
  * exists to prevent.
+ *
+ * ── Except when somebody has to break the glass (correctionA.md §9) ────────
+ *
+ * There is a real operational case the rule above cannot survive: the owner is
+ * the only person on site, raises a request, and there is nobody else to sign
+ * it. Refusing outright does not produce a second pair of eyes — it produces a
+ * workaround, which is worse than a recorded override because nothing records
+ * a workaround.
+ *
+ * So `force` exists, it is gated on its own permission, and it never happens
+ * quietly: `forcedBy` is written on the row, the caller audits it as its own
+ * action, and the queue and the detail view both mark the decision as forced
+ * for as long as the record exists. An override nobody can see afterwards is
+ * indistinguishable from no control at all.
  */
 export async function decideApproval(params: {
   restaurantId: string
@@ -167,9 +266,13 @@ export async function decideApproval(params: {
   approve: boolean
   userId: string
   note?: string | null
+  /** Holder of `approvals.force`. Checked by the action, honoured here. */
+  mayForce?: boolean
+  /** Whether they actually asked to override, rather than merely being able to. */
+  force?: boolean
   // `previousStatus` rides along so the caller can audit what changed; the
   // row itself cannot say what it used to be once it has been written.
-}): Promise<ApprovalRequest & { previousStatus: ApprovalStatus }> {
+}): Promise<ApprovalRequest & { previousStatus: ApprovalStatus; forced: boolean }> {
   const request = await prisma.approvalRequest.findFirst({
     where: { id: params.approvalId, restaurantId: params.restaurantId },
   })
@@ -177,13 +280,36 @@ export async function decideApproval(params: {
   if (request.status !== 'PENDING') {
     throw new AppError('That request has already been decided', 409, 'APPROVAL_DECIDED')
   }
-  if (request.requestedById && request.requestedById === params.userId) {
-    throw new AppError(
-      'You cannot approve your own request',
-      403,
-      'APPROVAL_SELF',
-    )
-  }
+  /*
+   * The approver list and the self-rule, in one place (correctionA.md §9).
+   *
+   * `force` only counts when the caller actually holds the permission AND
+   * asked for it. Being able to override is not the same as overriding — an
+   * owner working the queue normally must still be refused their own request,
+   * or the override becomes the default and stops being visible.
+   */
+  const policy = await getApprovalPolicy(params.restaurantId)
+
+  /*
+   * Was a rule actually in the way? Asked FIRST, with the override ignored,
+   * because "forced" has to mean "this broke a rule" and not "somebody passed
+   * a flag".
+   *
+   * The first cut of this set `forcedAt` whenever the flag arrived from
+   * somebody who held the permission — so an owner ticking Override on a
+   * request they could already decide got a permanent red "overridden" badge
+   * on an ordinary approval. A badge that appears on decisions that broke
+   * nothing is a badge people learn to skip, which costs exactly the ones that
+   * did.
+   */
+  const blocked = whyCannotApprove({
+    policy,
+    request,
+    userId: params.userId,
+    mayForce: false,
+  })
+  const forced = Boolean(blocked && params.force && params.mayForce)
+  if (blocked && !forced) throw new AppError(blocked.message, 403, blocked.code)
   /*
    * Saying no has to say why (bill.md §3).
    *
@@ -216,6 +342,9 @@ export async function decideApproval(params: {
       decidedById: params.userId,
       decidedAt: new Date(),
       decisionNote: params.note?.trim() || null,
+      // Stamped on the row, not left to the audit log, so the queue and the
+      // detail view can mark it for as long as the record exists.
+      forcedAt: forced ? new Date() : null,
     },
   })
   if (decided.count === 0) {
@@ -224,8 +353,10 @@ export async function decideApproval(params: {
 
   const after = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })
   // Both rows, because the caller audits before/after and cannot reconstruct
-  // `before` once the write has happened (bill.md §4).
-  return Object.assign(after, { previousStatus: request.status })
+  // `before` once the write has happened (bill.md §4). `forced` rides along so
+  // the caller can audit the override as its own action rather than as an
+  // ordinary approval that happens to have an unusual approver.
+  return Object.assign(after, { previousStatus: request.status, forced })
 }
 
 /** Withdraw your own request before anyone rules on it. */
@@ -286,32 +417,137 @@ export async function assertApproved(params: {
   }
 }
 
+export interface ApprovalFilters {
+  status?: ApprovalStatus
+  kind?: ApprovalKind
+  requestedById?: string
+  /** Where the request originates. For a transfer, the source location. */
+  fromBranchId?: string
+  /** Where it is going. Only a transfer has one. */
+  toBranchId?: string
+  from?: Date
+  to?: Date
+}
+
 export async function listApprovals(params: {
   restaurantId: string
-  status?: ApprovalStatus
   branchIds?: string[] | null
   limit?: number
-}) {
+} & ApprovalFilters) {
   return prisma.approvalRequest.findMany({
     where: {
       restaurantId: params.restaurantId,
       ...(params.status ? { status: params.status } : {}),
-      /*
-       * A restaurant-wide request has `branchId: null`, and filtering on
-       * `branchId: { in: [...] }` alone dropped every one of them — so a
-       * branch manager could never see the requests that concern everybody.
-       * `inbox.ts` already had this right.
-       */
-      ...(params.branchIds
-        ? { OR: [{ branchId: { in: params.branchIds } }, { branchId: null }] }
+      ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.requestedById ? { requestedById: params.requestedById } : {}),
+      ...(params.from || params.to
+        ? {
+            requestedAt: {
+              ...(params.from ? { gte: params.from } : {}),
+              ...(params.to ? { lte: params.to } : {}),
+            },
+          }
         : {}),
+      /*
+       * Everything narrowing this query goes in one AND, not several keys
+       * competing for `OR`. The visibility clause below is already an OR, and
+       * a second one written as a sibling key would replace it rather than
+       * combine with it — which is how a filter turns into a way to see more
+       * rather than fewer rows.
+       */
+      AND: [
+        /*
+         * A restaurant-wide request has `branchId: null`, and filtering on
+         * `branchId: { in: [...] }` alone dropped every one of them — so a
+         * branch manager could never see the requests that concern everybody.
+         * `inbox.ts` already had this right.
+         */
+        ...(params.branchIds
+          ? [{ OR: [{ branchId: { in: params.branchIds } }, { branchId: null }] }]
+          : []),
+
+        /*
+         * ── From and To, and why they are not symmetrical ─────────────────
+         *
+         * §9 wants both directions filterable and combinable: From = Kandy
+         * shows what Kandy is giving up, To = Jaffna what Jaffna is receiving,
+         * and the two together the single lane between them.
+         *
+         * `branchId` IS the origin — `transfers/actions.ts` sets it to the
+         * source branch deliberately, "because approval reserves the source's
+         * stock and it is the source that gives something up". So From is a
+         * plain indexed column.
+         *
+         * The destination exists only inside the transfer's payload. Filtering
+         * it as JSON rather than adding a column is the deliberate choice: the
+         * rows already carry it, so history filters correctly from the first
+         * deploy with no backfill, and this is a decision queue — bounded by
+         * how much a human can rule on — not a ledger that needs the index.
+         */
+        ...(params.fromBranchId ? [{ branchId: params.fromBranchId }] : []),
+        ...(params.toBranchId
+          ? [{ payload: { path: ['toBranchId'], equals: params.toBranchId } }]
+          : []),
+      ],
     },
     orderBy: { requestedAt: 'desc' },
     take: params.limit ?? 50,
     include: {
-      requestedBy: { select: { name: true } },
+      requestedBy: { select: { id: true, name: true } },
       decidedBy: { select: { name: true } },
-      branch: { select: { name: true } },
+      branch: { select: { id: true, name: true } },
     },
   })
+}
+
+/**
+ * One request, with everything needed to rule on it (correctionA.md §9).
+ *
+ * §9 asks that nobody approve or reject before they can open and inspect the
+ * whole thing, which means this has to carry the audit trail as well as the
+ * row: the payload says what *would* happen, and the audit says what has
+ * already been done to it and by whom. A decision made from a one-line summary
+ * is the two-person control performed rather than exercised.
+ */
+export async function getApprovalDetail(params: {
+  restaurantId: string
+  approvalId: string
+}) {
+  const request = await prisma.approvalRequest.findFirst({
+    where: { id: params.approvalId, restaurantId: params.restaurantId },
+    include: {
+      requestedBy: { select: { id: true, name: true, email: true } },
+      decidedBy: { select: { id: true, name: true } },
+      branch: { select: { id: true, name: true } },
+    },
+  })
+  if (!request) throw new NotFoundError('Approval request')
+
+  /*
+   * The trail for this request AND for the record it is about. An approval on
+   * its own says "somebody said yes"; the entity's history says what that yes
+   * did, which is the question a reader actually has.
+   */
+  const history = await prisma.auditLog.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      OR: [
+        { entity: 'ApprovalRequest', entityId: request.id },
+        ...(request.entityId
+          ? [{ entity: request.entity, entityId: request.entityId }]
+          : []),
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+    select: {
+      id: true,
+      action: true,
+      actorName: true,
+      createdAt: true,
+      entity: true,
+    },
+  })
+
+  return { request, history }
 }

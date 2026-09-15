@@ -171,6 +171,11 @@ const SERVICE = [
   // (including the one-location case, where the switcher renders no menu), and
   // a transfer moves stock between two locations rather than between shelves.
   'branch-context-test',
+  // correctionA.md §9 — an empty approver list means "the permission decides",
+  // not "nobody"; an override only counts when a rule was actually in the way,
+  // and the row says so afterwards; From/To filter both directions and neither
+  // can widen what somebody may see.
+  'approval-access-test',
   // correctionA.md §2 — a task can name a person, the posted id is checked
   // against the caller's own restaurant before it is stored, and the nav badge
   // counts what is mine rather than what is on a colleague's plate.

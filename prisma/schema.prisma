@@ -4250,6 +4250,12 @@ model ApprovalRequest {
   /// discount or refund approval used to be re-applicable indefinitely.
   consumedAt   DateTime?
   decisionNote String?
+  /// Set when the decision overrode the two-person rule (correctionA.md §9) —
+  /// a main admin signing their own request, or one outside this location's
+  /// approver list. `decidedById` already says who; this says that they had to
+  /// break the glass to do it, which is the part a reader needs to see for as
+  /// long as the record exists.
+  forcedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
