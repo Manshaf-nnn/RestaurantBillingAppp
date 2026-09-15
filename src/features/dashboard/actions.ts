@@ -4,11 +4,15 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 
-import { runSafe } from '@/lib/action'
+import { z } from 'zod'
+
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ForbiddenError } from '@/lib/errors'
 import { visibleBranchIds } from '@/lib/rbac'
 import { BRANCH_COOKIE } from './selected-branch'
+import { sanitiseFavorites } from './nav'
 import { requireTenantUser } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { markAllNotificationsRead, markNotificationRead } from '@/server/notifications'
 
 export async function markAllRead() {
@@ -25,6 +29,61 @@ export async function markRead(id: string) {
     await markNotificationRead(id, user.restaurantId, user.id)
     return { id }
   })
+}
+
+/*
+ * A generous cap on what may be POSTED, separate from MAX_FAVORITES, which is
+ * the cap on what may be STORED. The schema's job is only to stop somebody
+ * posting a megabyte; `sanitiseFavorites` decides what is actually kept.
+ */
+const favoritesSchema = z.object({ hrefs: z.array(z.string().max(120)).max(50) })
+
+/**
+ * Save this person's sidebar shortcuts (sidebar.md §1, §2).
+ *
+ * ── Why the whole list, rather than add/remove ──────────────────────────────
+ *
+ * Starring, unstarring and dragging are then one code path with one race
+ * outcome: last write wins, and the list that wins is a list that was actually
+ * on somebody's screen. An add/remove pair would need the server to merge two
+ * concurrent edits of an *ordered* list, which is the kind of thing that works
+ * until two tabs are open. It also self-heals — a shortcut left behind by a
+ * permission change is filtered out on the next save rather than needing a
+ * cleanup job.
+ *
+ * ── Why `requireTenantUser` and not `requirePermission` ─────────────────────
+ *
+ * This writes the caller's own row and grants nothing; there is no permission
+ * called "may have favorites". The per-item check is `sanitiseFavorites`, which
+ * is the same filter the sidebar renders through — so a hand-made request
+ * naming a page this person may not open stores nothing, and a saved shortcut
+ * can never become a way in. The page guard would refuse the click anyway; this
+ * stops the row existing in the first place.
+ *
+ * No `revalidatePath`: the client already has the new order on screen, and the
+ * next full load reads it from the user row the session query fetches anyway.
+ * Revalidating the dashboard layout on every star would re-render every screen
+ * in the product to move one row.
+ */
+export async function setNavFavorites(
+  input: unknown,
+): Promise<ActionResult<{ hrefs: string[] }>> {
+  return runAction(favoritesSchema, input, async (data) => {
+    const user = await requireTenantUser()
+
+    /*
+     * The server's own filter, and deliberately the stricter one: `user` here
+     * carries `availablePermissions`, which the shell's copy does not, so a
+     * page the restaurant's plan has not sold is refused even though the client
+     * would have offered it.
+     */
+    const hrefs = sanitiseFavorites(user, data.hrefs)
+
+    await prisma.user.update({ where: { id: user.id }, data: { navFavorites: hrefs } })
+    return { hrefs }
+  })
+  // No success message. Starring is its own feedback, and a toast per click
+  // would be intolerable — the same reasoning as `globalSearchAction`.
 }
 
 /**

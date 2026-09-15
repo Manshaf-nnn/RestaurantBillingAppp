@@ -456,3 +456,173 @@ export function firstReachablePath(user: PermissionSubject): string | null {
   if (items.some((item) => item.href === home)) return home
   return items[0]?.href ?? null
 }
+
+/*
+ * ── Favorites, Recent and page search ───────────────────────────────────────
+ *
+ * All of it lives here, beside `visibleSections`, because every one of these
+ * answers is "which of the sidebar's own entries applies", and there is exactly
+ * one list of those. sidebar.md §7 asks for no second permission system; the
+ * way to honour that is for none of what follows to look at a permission
+ * directly. Each helper composes `reachableNavItems`, so whatever the server
+ * guards would refuse is already absent before these functions see it.
+ */
+
+/**
+ * How many shortcuts one person may pin.
+ *
+ * Twelve, because a favorites list longer than the screen is a second sidebar,
+ * and the whole point of §10 is opening TableFlow and seeing today's work
+ * without scrolling. The cap is enforced on write, so a longer list cannot be
+ * saved rather than being saved and then truncated on the way out.
+ */
+export const MAX_FAVORITES = 12
+
+/** How many recently-visited pages are kept. §3: "keep only a small number." */
+export const MAX_RECENT = 5
+
+/** Every href the sidebar declares, for rejecting anything invented. */
+const KNOWN_HREFS = new Set(NAV_SECTIONS.flatMap((section) => section.items.map((i) => i.href)))
+
+/** Is this a real sidebar destination at all? */
+export function isNavHref(href: string): boolean {
+  return KNOWN_HREFS.has(href)
+}
+
+/** href → item, for the ones this person may open. Built once per caller. */
+function reachableByHref(user: PermissionSubject): Map<string, NavItem> {
+  return new Map(reachableNavItems(user).map((item) => [item.href, item]))
+}
+
+/**
+ * Turn a saved list of hrefs into the sidebar entries this person may open.
+ *
+ * The one function behind both Favorites and Recent, because both are the same
+ * problem: a list of strings somebody's browser or database is holding, which
+ * has to be re-checked against what they are allowed to see *now*.
+ *
+ * Anything they may not open is dropped silently, and that is the whole of
+ * sidebar.md §7 — take `inventory.view` away and Stock leaves their Favorites
+ * on their next page load, with no migration, no cleanup job and no second
+ * place where permissions are decided. A dropped href stays in the column: it
+ * is inert there, and it comes back if the permission does, which is kinder
+ * than deleting a list somebody arranged because their role changed for an
+ * afternoon.
+ */
+export function resolveNavHrefs(
+  user: PermissionSubject,
+  hrefs: string[],
+  limit: number,
+): NavItem[] {
+  const reachable = reachableByHref(user)
+  const seen = new Set<string>()
+  const items: NavItem[] = []
+
+  for (const href of hrefs) {
+    if (items.length >= limit) break
+    if (seen.has(href)) continue
+    const item = reachable.get(href)
+    if (!item) continue
+    seen.add(href)
+    items.push(item)
+  }
+
+  return items
+}
+
+/** The shortcuts this person gets, in the order they arranged them. */
+export function favoriteItems(user: PermissionSubject, hrefs: string[]): NavItem[] {
+  return resolveNavHrefs(user, hrefs, MAX_FAVORITES)
+}
+
+/** The pages they opened last, most recent first. */
+export function recentItems(user: PermissionSubject, hrefs: string[]): NavItem[] {
+  return resolveNavHrefs(user, hrefs, MAX_RECENT)
+}
+
+/**
+ * The same filter, applied on the way in.
+ *
+ * Deduped, capped and permission-checked before anything is written, so the
+ * column cannot hold a shortcut to a page this person may not open even if the
+ * request was hand-made. On the server the subject carries
+ * `availablePermissions` as well, so this also refuses a page the restaurant's
+ * plan does not include.
+ */
+export function sanitiseFavorites(user: PermissionSubject, hrefs: string[]): string[] {
+  return favoriteItems(user, hrefs).map((item) => item.href)
+}
+
+/**
+ * Which sidebar entry owns this pathname — the question "Recent" has to answer.
+ *
+ * Longest match wins, and that is the entire subtlety. Several entries are
+ * prefixes of others: `/dashboard/inventory` is a prefix of
+ * `/dashboard/inventory/counts`, `/dashboard/purchases` of
+ * `/dashboard/purchases/receive`, `/dashboard/reports` of six report screens.
+ * Take the first entry that matches and Recent fills with "Stock" and "Reports"
+ * however many different screens somebody actually opened. Sorting by href
+ * length first gives the most specific entry, which is the one whose name the
+ * person would use for where they are.
+ *
+ * `exact` entries still match only themselves, the same rule the sidebar
+ * highlight uses — that is what keeps `/dashboard` from claiming the whole
+ * product and `/cashier` from claiming `/cashier/pos`.
+ */
+export function navItemForPath(user: PermissionSubject, pathname: string): NavItem | null {
+  const candidates = reachableNavItems(user)
+    .filter((item) => {
+      // A nav href may carry a query string of its own; compare paths only.
+      const path = item.href.split('?')[0]
+      if (item.exact) return pathname === path
+      return pathname === path || pathname.startsWith(`${path}/`)
+    })
+    .sort((a, b) => b.href.length - a.href.length)
+
+  return candidates[0] ?? null
+}
+
+/**
+ * Pages matching what somebody typed (sidebar.md §4).
+ *
+ * Searches the section title as well as the label, so "inventory" finds Stock
+ * and Wastage — entries filed under Inventory whose own names never say the
+ * word. Case-insensitive, and substring rather than prefix, because people
+ * search for "waste" and mean "Wastage".
+ *
+ * There is no permission check in here and there must not be: the list it walks
+ * is already `visibleSections`, so "search must respect RBAC" is true by
+ * construction rather than by a second filter somebody has to remember.
+ */
+export function searchNavItems(
+  user: PermissionSubject,
+  term: string,
+): Array<{ item: NavItem; section: string }> {
+  const needle = term.trim().toLowerCase()
+  if (!needle) return []
+
+  const matches: Array<{ item: NavItem; section: string }> = []
+  for (const section of visibleSections(user)) {
+    const sectionMatches = section.title.toLowerCase().includes(needle)
+    for (const item of section.items) {
+      if (sectionMatches || item.label.toLowerCase().includes(needle)) {
+        matches.push({ item, section: section.title })
+      }
+    }
+  }
+
+  /*
+   * A label that starts with the term first. Typing "stock" should offer Stock
+   * before Stock ledger, and both before "Kitchen sections" — which matches only
+   * because its section is called Inventory, and is the least likely thing meant.
+   */
+  return matches.sort((a, b) => rank(a.item.label, needle) - rank(b.item.label, needle))
+}
+
+function rank(label: string, needle: string): number {
+  const lower = label.toLowerCase()
+  if (lower === needle) return 0
+  if (lower.startsWith(needle)) return 1
+  if (lower.includes(needle)) return 2
+  return 3
+}

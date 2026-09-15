@@ -32,6 +32,13 @@ import { prisma } from '@/server/db/prisma'
  */
 
 export type ResultGroup =
+  /*
+   * Pages are matched in the browser, not here — the sidebar's own entries are
+   * already on that side of the wire and already permission-filtered, so
+   * answering "where is wastage" costs no round trip. The name lives in this
+   * union so both halves of the box speak about groups in one vocabulary.
+   */
+  | 'Pages'
   | 'Stock items'
   | 'Suppliers'
   | 'Purchase orders'

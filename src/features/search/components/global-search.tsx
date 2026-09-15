@@ -37,11 +37,18 @@ import type { SearchHit } from '../service'
  *   still in flight is the single most common way a working search gets
  *   reported as broken.
  */
-export function GlobalSearch() {
+export interface SearchablePage {
+  href: string
+  label: string
+  /** The sidebar group it sits under, shown as the subtitle. */
+  section: string
+}
+
+export function GlobalSearch({ pages = [] }: { pages?: SearchablePage[] }) {
   const router = useRouter()
   const [open, setOpen] = React.useState(false)
   const [term, setTerm] = React.useState('')
-  const [hits, setHits] = React.useState<SearchHit[]>([])
+  const [records, setRecords] = React.useState<SearchHit[]>([])
   const [truncated, setTruncated] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [active, setActive] = React.useState(0)
@@ -63,16 +70,51 @@ export function GlobalSearch() {
   React.useEffect(() => {
     if (!open) {
       setTerm('')
-      setHits([])
+      setRecords([])
       setTruncated(false)
       setActive(0)
     }
   }, [open])
 
+  /*
+   * Pages, matched here in the browser.
+   *
+   * Two things follow from that and both matter. They need no round trip, so
+   * they are on screen while the record search is still in flight — and
+   * navigation is the likeliest thing somebody opening a search box wants, so
+   * they are ranked above everything the server returns. And the list came from
+   * `visibleSections`, so a page this person may not open cannot appear here,
+   * which is the same rule `service.ts` enforces for records.
+   */
+  const pageHits = React.useMemo<SearchHit[]>(() => {
+    const query = term.trim().toLowerCase()
+    if (query.length < 2) return []
+    return pages
+      .filter(
+        (page) =>
+          page.label.toLowerCase().includes(query) ||
+          page.section.toLowerCase().includes(query),
+      )
+      .slice(0, 6)
+      .map((page) => ({
+        id: `page:${page.href}`,
+        group: 'Pages' as const,
+        title: page.label,
+        subtitle: page.section,
+        href: page.href,
+      }))
+  }, [pages, term])
+
+  // Flat and in display order, because the arrow keys walk this array.
+  const hits = React.useMemo(() => [...pageHits, ...records], [pageHits, records])
+
+  // A shorter list must not leave the highlight past the end of it.
+  React.useEffect(() => setActive(0), [pageHits.length])
+
   React.useEffect(() => {
     const query = term.trim()
     if (query.length < 2) {
-      setHits([])
+      setRecords([])
       setTruncated(false)
       setBusy(false)
       return
@@ -88,10 +130,10 @@ export function GlobalSearch() {
 
       setBusy(false)
       if (!result.ok) {
-        setHits([])
+        setRecords([])
         return
       }
-      setHits(result.data.hits)
+      setRecords(result.data.hits)
       setTruncated(result.data.truncated)
       setActive(0)
     }, 250)
@@ -170,7 +212,7 @@ export function GlobalSearch() {
               value={term}
               onChange={(e) => setTerm(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Items, suppliers, orders, deliveries, customers, staff…"
+              placeholder="Pages, items, suppliers, orders, customers, staff…"
               startIcon={<Search className="size-4" />}
               endIcon={busy ? <Loader2 className="size-4 animate-spin" /> : null}
             />
@@ -179,8 +221,9 @@ export function GlobalSearch() {
           <div className="max-h-[60vh] overflow-y-auto p-2">
             {term.trim().length < 2 ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                Type at least two characters. Item names and codes, supplier names, order and GRN
-                numbers, invoice references, customer names and phone numbers.
+                Type at least two characters. Any page in the menu, plus item names and codes,
+                supplier names, order and GRN numbers, invoice references, customer names and
+                phone numbers.
               </p>
             ) : busy && hits.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">Searching…</p>

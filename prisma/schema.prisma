@@ -888,6 +888,12 @@ model User {
   /// extra permission keys granted on top of whatever the role gives
   permissions  String[] @default([])
 
+  /// Sidebar shortcuts, in the order this person arranged them (sidebar.md §1/§2).
+  /// Plain hrefs from NAV_SECTIONS, re-filtered through `permissionsFor` on every
+  /// render — so a revoked permission removes the shortcut without this column
+  /// needing to be touched, and a saved shortcut can never widen access.
+  navFavorites String[] @default([])
+
   /// The restaurant's own role, when this person holds one. Its permission
   /// list REPLACES the preset defaults — see `permissionsFor` in lib/rbac.ts.
   staffRoleId String?

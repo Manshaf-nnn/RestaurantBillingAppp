@@ -13,6 +13,8 @@ import {
   ExternalLink,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Settings,
   Sparkles,
@@ -34,7 +36,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Avatar, AvatarFallback, Popover, PopoverContent, PopoverTrigger, ScrollArea } from '@/components/ui/primitives'
+import {
+  Avatar,
+  AvatarFallback,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ScrollArea,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/primitives'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { EVENTS, type NotificationPayload } from '@/lib/realtime/events'
 import { cn, initials } from '@/lib/utils'
@@ -44,9 +56,19 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { logout } from '@/features/auth/actions'
 import { LocalTime } from '@/components/local-time'
-import { markAllRead, markRead } from '../actions'
+import { markAllRead, markRead, setNavFavorites } from '../actions'
 import { GlobalSearch } from '@/features/search/components/global-search'
-import { visibleSections } from '../nav'
+import {
+  favoriteItems,
+  navItemForPath,
+  recentItems,
+  sanitiseFavorites,
+  visibleSections,
+  type NavItem,
+} from '../nav'
+import { SidebarNav } from './sidebar-nav'
+import { writeSidebarCookie } from '../sidebar-preference'
+import { useRecentPages } from '../use-recent-pages'
 import { callAction } from '@/lib/use-action'
 
 export interface ShellUser {
@@ -67,6 +89,14 @@ export interface ShellUser {
    */
   rolePermissions: string[] | null
   avatarUrl: string | null
+  /**
+   * Sidebar shortcuts, in this person's own order (sidebar.md §1).
+   *
+   * Hrefs, not items — an icon is a React component and does not survive the
+   * trip from the server. They are resolved against `visibleSections` here, so
+   * a shortcut to a page this person may no longer open simply stops appearing.
+   */
+  navFavorites: string[]
 }
 
 export interface ShellNotification {
@@ -89,6 +119,7 @@ export function DashboardShell({
   unassignedToLocation,
   initialNotifications,
   openTasks = 0,
+  initialCollapsed = false,
   children,
 }: {
   user: ShellUser
@@ -118,6 +149,12 @@ export function DashboardShell({
    * and people stop seeing furniture.
    */
   openTasks?: number
+  /**
+   * Whether this browser last left the sidebar collapsed, read from a cookie on
+   * the server so the rail is the right width in the first painted frame rather
+   * than snapping after hydration. See `sidebar-preference.ts`.
+   */
+  initialCollapsed?: boolean
   children: React.ReactNode
 }) {
   const pathname = usePathname()
@@ -125,12 +162,142 @@ export function DashboardShell({
   const { connected } = useSocket()
   const [mobileOpen, setMobileOpen] = React.useState(false)
   const [notifications, setNotifications] = React.useState(initialNotifications)
+  const [collapsed, setCollapsed] = React.useState(initialCollapsed)
   const { play } = useNotificationSound()
 
   // `visibleSections` in nav.ts, not a second copy of the same filter — the
   // station screens and /forbidden ask the same question and have to get the
   // same answer.
   const sections = React.useMemo(() => visibleSections(user), [user])
+
+  /*
+   * ── Favorites ─────────────────────────────────────────────────────────────
+   *
+   * Held as hrefs and resolved on render, so `favoriteItems` — which filters
+   * through the same permission list as the sidebar — is the only thing that
+   * decides what appears. sidebar.md §7: take a permission away and the
+   * shortcut goes with it, with nothing extra to remember.
+   */
+  const [favoriteHrefs, setFavoriteHrefs] = React.useState(user.navFavorites)
+
+  // The server is authoritative. A reload after a failed save, or a permission
+  // change made by somebody else, arrives as a new prop and must win over
+  // whatever this tab optimistically believes.
+  React.useEffect(() => setFavoriteHrefs(user.navFavorites), [user.navFavorites])
+
+  const favorites = React.useMemo(
+    () => favoriteItems(user, favoriteHrefs),
+    [user, favoriteHrefs],
+  )
+
+  /** Optimistic, then saved; on failure the previous list comes straight back. */
+  const saveFavorites = React.useCallback(
+    async (next: string[]) => {
+      const previous = favoriteHrefs
+      setFavoriteHrefs(next)
+      const result = await callAction(() => setNavFavorites({ hrefs: next }))
+      if (!result.ok) {
+        setFavoriteHrefs(previous)
+        toast.error(result.error)
+        return
+      }
+      // What the server kept, which may be shorter than what was sent if a
+      // permission changed between the click and the write.
+      setFavoriteHrefs(result.data.hrefs)
+    },
+    [favoriteHrefs],
+  )
+
+  const toggleFavorite = React.useCallback(
+    (href: string) => {
+      const current = sanitiseFavorites(user, favoriteHrefs)
+      if (current.includes(href)) {
+        void saveFavorites(current.filter((entry) => entry !== href))
+        return
+      }
+      // Appended, not prepended: a new pin should not push the shortcut
+      // somebody reaches for every morning out from under their cursor.
+      void saveFavorites([...current, href])
+    },
+    [user, favoriteHrefs, saveFavorites],
+  )
+
+  const moveFavorite = React.useCallback(
+    (from: number, to: number) => {
+      const current = favorites.map((item) => item.href)
+      if (from === to || to < 0 || to >= current.length) return
+      const next = [...current]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      void saveFavorites(next)
+    },
+    [favorites, saveFavorites],
+  )
+
+  /*
+   * ── Recent ────────────────────────────────────────────────────────────────
+   *
+   * Recorded in two places, and both are needed. The effect below catches deep
+   * links, the back button and anything opened from inside a page. The sidebar's
+   * own click handler catches POS, the kitchen display and the waiter station —
+   * those leave this layout entirely for `OpsShell`, which has no sidebar, so a
+   * pathname effect here would never see the most-used screen in the product.
+   * The list dedupes, so the overlap costs nothing.
+   */
+  const { recent: recentHrefs, record } = useRecentPages(user.id)
+
+  React.useEffect(() => {
+    const item = navItemForPath(user, pathname)
+    if (item) record(item.href)
+  }, [pathname, user, record])
+
+  const recent = React.useMemo(() => {
+    const starred = new Set(favorites.map((item) => item.href))
+    const here = navItemForPath(user, pathname)?.href
+    /*
+     * Two things are left out, both for §6's "keep the sidebar clean".
+     *
+     * Favorites, because they already own the rows above and listing POS twice
+     * in six inches helps nobody.
+     *
+     * And the page being looked at right now, because a shortcut to where you
+     * already are is not a shortcut — and it is also the one row the full menu
+     * below is highlighting, so leaving it in draws the same name in the same
+     * colour twice and makes the sidebar look like it has lost its place.
+     */
+    return recentItems(
+      user,
+      recentHrefs.filter((href) => !starred.has(href) && href !== here),
+    )
+  }, [user, recentHrefs, favorites, pathname])
+
+  const isActive = React.useCallback(
+    (item: NavItem) =>
+      item.exact
+        ? pathname === item.href
+        : pathname === item.href || pathname.startsWith(`${item.href}/`),
+    [pathname],
+  )
+
+  const searchablePages = React.useMemo(
+    () =>
+      sections.flatMap((section) =>
+        section.items.map((item) => ({
+          href: item.href,
+          label: item.label,
+          section: section.title,
+        })),
+      ),
+    [sections],
+  )
+
+  const toggleCollapsed = React.useCallback(() => {
+    setCollapsed((current) => {
+      const next = !current
+      writeSidebarCookie(next)
+      return next
+    })
+  }, [])
 
   useSocketEvent(EVENTS.NOTIFICATION, (payload: NotificationPayload) => {
     setNotifications((current) => [
@@ -173,75 +340,99 @@ export function DashboardShell({
     [branchParam],
   )
 
-  const nav = (
-    <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
-      {sections.map((section) => (
-        <div key={section.title}>
-          <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            {section.title}
-          </p>
-          <ul className="space-y-0.5">
-            {section.items.map((item) => {
-              const active = item.exact
-                ? pathname === item.href
-                : pathname === item.href || pathname.startsWith(`${item.href}/`)
-
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={withBranch(item.href)}
-                    className={cn(
-                      'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                      active
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                    )}
-                  >
-                    <item.icon className="size-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                    {item.href === '/dashboard/tasks' && openTasks > 0 ? (
-                      <span className="ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-                        {openTasks > 9 ? '9+' : openTasks}
-                      </span>
-                    ) : null}
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-      ))}
-    </nav>
+  /*
+   * One component, two surfaces — the desktop rail and the mobile sheet render
+   * the same `SidebarNav` with different props, as they shared one JSX fragment
+   * before it grew Favorites, Recent and search. The sheet is never collapsed:
+   * a phone has no room to spare, and an icon rail inside a bottom sheet is a
+   * menu with the words taken out for no gain.
+   */
+  const nav = (options: { collapsed: boolean }) => (
+    <SidebarNav
+      user={user}
+      sections={sections}
+      favorites={favorites}
+      recent={recent}
+      collapsed={options.collapsed}
+      openTasks={openTasks}
+      isActive={isActive}
+      withBranch={withBranch}
+      onToggleFavorite={toggleFavorite}
+      onMoveFavorite={moveFavorite}
+      onVisit={record}
+      onExpand={() => {
+        setCollapsed(false)
+        writeSidebarCookie(false)
+      }}
+    />
   )
 
   return (
     <div className="flex min-h-dvh">
       {/* ── desktop sidebar ─────────────────────────────────────── */}
-      <aside className="glass-chrome sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r lg:flex">
+      <aside
+        className={cn(
+          'glass-chrome sticky top-0 hidden h-dvh shrink-0 flex-col border-r transition-[width] duration-200 lg:flex',
+          collapsed ? 'w-16' : 'w-64',
+        )}
+      >
         {/*
           Carries the branch like every other link. Clicking the logo used to
           drop it, landing on a bare /dashboard where the cookie decided — so
           the switcher read "All locations" while the figures were still one
           branch's, or the other way about.
         */}
-        <Link href={withBranch('/dashboard')} className="flex h-16 items-center gap-2.5 border-b px-5">
+        <Link
+          href={withBranch('/dashboard')}
+          className={cn(
+            'flex h-16 items-center gap-2.5 border-b',
+            collapsed ? 'justify-center px-2' : 'px-5',
+          )}
+        >
           <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-soft">
             <Image src="/logo-mark.png" alt="" width={512} height={512} className="size-full object-contain p-0.5" />
           </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-bold leading-tight">{restaurantName}</span>
-            <span className="block text-[11px] text-muted-foreground">TableFlow</span>
-          </span>
+          {collapsed ? null : (
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold leading-tight">{restaurantName}</span>
+              <span className="block text-[11px] text-muted-foreground">TableFlow</span>
+            </span>
+          )}
         </Link>
 
-        {nav}
+        {nav({ collapsed })}
 
-        <div className="border-t p-3">
-          <Button variant="outline" size="sm" className="w-full" asChild>
-            <a href={orderUrl} target="_blank" rel="noreferrer">
-              <ExternalLink /> Guest menu
-            </a>
+        <div className={cn('flex items-center gap-2 border-t p-3', collapsed && 'flex-col')}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Expand' : 'Collapse'}
+            className="shrink-0"
+          >
+            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </Button>
+
+          {collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="icon-sm" asChild>
+                  <a href={orderUrl} target="_blank" rel="noreferrer" aria-label="Guest menu">
+                    <ExternalLink />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Guest menu</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Button variant="outline" size="sm" className="flex-1" asChild>
+              <a href={orderUrl} target="_blank" rel="noreferrer">
+                <ExternalLink /> Guest menu
+              </a>
+            </Button>
+          )}
         </div>
       </aside>
 
@@ -254,7 +445,7 @@ export function DashboardShell({
               <X />
             </Button>
           </div>
-          {nav}
+          {nav({ collapsed: false })}
         </SheetContent>
       </Dialog>
 
@@ -290,7 +481,14 @@ export function DashboardShell({
             <BranchSwitcher locations={locations} seesEverything={seesEverything} />
           ) : null}
 
-          <GlobalSearch />
+          {/*
+            The pages this person may open, handed to the ⌘K box so it can
+            answer "where is wastage" as well as "where is that invoice".
+            Computed here because `sections` is already on this side of the
+            wire and already permission-filtered — so the Pages group needs no
+            request of its own and cannot offer a screen the sidebar would not.
+          */}
+          <GlobalSearch pages={searchablePages} />
 
           {isRealtimeEnabled() ? (
             <Badge variant={connected ? 'success' : 'destructive'} className="hidden sm:inline-flex">
