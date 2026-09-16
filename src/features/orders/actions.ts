@@ -17,8 +17,12 @@ import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenan
 import { getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
 import { tableStatesFor } from '@/features/floor/table-state-server'
+import {
+  acknowledgeServiceRequest as acknowledgeServiceRequestRecord,
+  openServiceRequest,
+  resolveServiceRequestRecord,
+} from '@/features/floor/service-requests'
 import { resolvePublicTenant } from '@/server/db/tenant'
-import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import {
@@ -27,6 +31,7 @@ import {
   placeOrderSchema,
   quoteCartSchema,
   serviceRequestSchema,
+  serviceRequestIdSchema,
   staffOrderSchema,
   tableEntrySchema,
   updateGuestOrderItemsSchema,
@@ -626,48 +631,18 @@ export async function createServiceRequest(
       })
       if (!table) throw new NotFoundError('Table')
 
-      // Collapse repeat taps within a short window into one open request.
-      const existing = await prisma.serviceRequest.findFirst({
-        where: {
-          restaurantId: restaurant.id,
-          tableId: table.id,
-          type: data.type,
-          status: 'OPEN',
-          createdAt: { gt: new Date(Date.now() - 3 * 60 * 1000) },
-        },
-      })
-      if (existing) return { id: existing.id }
-
-      const request = await prisma.serviceRequest.create({
-        data: {
-          restaurantId: restaurant.id,
-          tableId: table.id,
-          type: data.type,
-          note: data.note || null,
-        },
-      })
-
-      realtime.serviceRequest(restaurant.id, {
-        id: request.id,
-        tableId: table.id,
-        // From the table, which is the only thing that knows — a service
-        // request has no branch column of its own.
-        branchId: table.branchId,
-        tableNumber: table.number,
-        type: request.type,
-        note: request.note,
-        createdAt: request.createdAt.toISOString(),
-      })
-
-      await notify({
+      /*
+       * One door for every call (abc.md §7). The duplicate rule is the
+       * database's partial unique index — a second tap gets the call that is
+       * already open — and the waiters' popup, the management bell and the
+       * audit trail all hang off that one function.
+       */
+      const { request } = await openServiceRequest({
         restaurantId: restaurant.id,
-        // The table knows which building it is in.
-        branchId: table.branchId,
-        type: 'SERVICE_REQUEST',
-        title: `Table ${table.number} needs ${data.type.toLowerCase().replace('_', ' ')}`,
-        body: data.note || null,
-        audience: 'WAITER',
-        data: { tableId: table.id, tableNumber: table.number, requestId: request.id },
+        tableId: table.id,
+        type: data.type,
+        note: data.note || null,
+        requestedByName: `Table ${table.number}`,
       })
 
       return { id: request.id }
@@ -1238,25 +1213,72 @@ export async function resolveServiceRequest(requestId: string): Promise<ActionRe
 
     const request = await prisma.serviceRequest.findFirst({
       where: { id: requestId, restaurantId: user.restaurantId },
-      include: { table: { select: { branchId: true } } },
+      include: { table: { select: { branchId: true, number: true } } },
     })
     if (!request) throw new NotFoundError('Request')
 
     /*
-     * And it must be their own floor. `ServiceRequest` has no branch column —
-     * it reaches one through the table, which is how `getWaiterBoard` already
-     * scopes the list. Without this a Branch 02 waiter could clear Main's bell
-     * and the guest at Main would wait for someone who was never coming.
+     * And it must be their own floor. `ServiceRequest` reaches its branch
+     * through the table, which is how `getWaiterBoard` already scopes the
+     * list. Without this a Branch 02 waiter could clear Main's bell and the
+     * guest at Main would wait for someone who was never coming.
      */
     await assertRecordBranch(user, request.table, 'service request')
 
-    await prisma.serviceRequest.update({
-      where: { id: request.id },
-      data: { status: 'RESOLVED', resolvedAt: new Date(), handledById: user.id },
+    const resolved = await resolveServiceRequestRecord({
+      restaurantId: user.restaurantId,
+      requestId: request.id,
+      userId: user.id,
     })
-
-    realtime.serviceRequestResolved(user.restaurantId, request.id)
+    await audit({
+      restaurantId: user.restaurantId,
+      branchId: request.table.branchId,
+      userId: user.id,
+      actorName: user.name,
+      action: AUDIT_ACTIONS.SERVICE_REQUEST_RESOLVED,
+      entity: 'ServiceRequest',
+      entityId: request.id,
+      after: { table: request.table.number, type: request.type, resolvedAt: resolved.resolvedAt },
+    })
     revalidatePath('/waiter')
+    revalidatePath('/dashboard/tables')
     return { id: request.id }
   }, 'Request cleared.')
+}
+
+/**
+ * "On my way" (abc.md §7): stamps who is going and when, and tells every
+ * other station so two waiters do not converge on one table.
+ */
+export async function acknowledgeServiceRequestAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  return runAction(serviceRequestIdSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
+    const request = await prisma.serviceRequest.findFirst({
+      where: { id: data.requestId, restaurantId: user.restaurantId },
+      include: { table: { select: { branchId: true, number: true } } },
+    })
+    if (!request) throw new NotFoundError('Request')
+    await assertRecordBranch(user, request.table, 'service request')
+
+    const acknowledged = await acknowledgeServiceRequestRecord({
+      restaurantId: user.restaurantId,
+      requestId: request.id,
+      userId: user.id,
+      userName: user.name,
+    })
+    await audit({
+      restaurantId: user.restaurantId,
+      branchId: request.table.branchId,
+      userId: user.id,
+      actorName: user.name,
+      action: AUDIT_ACTIONS.SERVICE_REQUEST_ACKNOWLEDGED,
+      entity: 'ServiceRequest',
+      entityId: request.id,
+      after: { table: request.table.number, type: request.type, acknowledgedAt: acknowledged.acknowledgedAt },
+    })
+    revalidatePath('/waiter')
+    return { id: request.id }
+  })
 }

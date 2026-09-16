@@ -193,6 +193,10 @@ const SERVICE = [
   // and counts until the cashier accepts it (one gate in the service), reject
   // is a cancellation with a reason, the cashier is told on placement.
   'cashier-accept-test',
+  // abc.md §7 — a waiter call is one event per table and need (a partial
+  // unique index, not a timer), acknowledged then resolved with who and
+  // when, waiters and management told at the table's branch, history per site.
+  'waiter-call-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',

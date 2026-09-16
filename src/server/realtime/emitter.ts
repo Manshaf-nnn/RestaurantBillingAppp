@@ -97,6 +97,13 @@ export const realtime = {
     emit(roomsFor(restaurantId, ['waiter', 'management']), EVENTS.SERVICE_REQUEST_CREATED, payload)
   },
 
+  serviceRequestAcknowledged(
+    restaurantId: string,
+    payload: Parameters<ServerToClientEvents['service-request:acknowledged']>[0],
+  ) {
+    emit(roomsFor(restaurantId, ['waiter', 'management']), EVENTS.SERVICE_REQUEST_ACKNOWLEDGED, payload)
+  },
+
   serviceRequestResolved(restaurantId: string, id: string) {
     emit(roomsFor(restaurantId, ['waiter', 'management']), EVENTS.SERVICE_REQUEST_RESOLVED, { id })
   },

@@ -196,9 +196,18 @@ export type ProgressItemsInput = z.infer<typeof progressItemsSchema>
 
 export const serviceRequestSchema = z.object({
   tableId: z.string().cuid(),
-  type: z.enum(['WATER', 'PLATES', 'BILL', 'HELP', 'CLEAN_TABLE']),
+  // CALL_WAITER is the guest's "call waiter" button (abc.md §7).
+  type: z.enum(['CALL_WAITER', 'WATER', 'PLATES', 'BILL', 'HELP', 'CLEAN_TABLE']),
   note: z.string().trim().max(160).optional().or(z.literal('')),
 })
+
+/** A colleague calling a waiter to a table from the till, the KDS or the floor. */
+export const callWaiterSchema = z.object({
+  tableId: z.string().cuid(),
+  note: z.string().trim().max(160).optional().or(z.literal('')),
+})
+
+export const serviceRequestIdSchema = z.object({ requestId: z.string().min(1) })
 export type ServiceRequestInput = z.infer<typeof serviceRequestSchema>
 
 export const orderFilterSchema = z.object({

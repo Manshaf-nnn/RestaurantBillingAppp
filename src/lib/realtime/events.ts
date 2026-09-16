@@ -31,6 +31,7 @@ export const EVENTS = {
   PAYMENT_RECEIVED: 'payment:received',
   PAYMENT_PENDING: 'payment:pending',
   SERVICE_REQUEST_CREATED: 'service-request:created',
+  SERVICE_REQUEST_ACKNOWLEDGED: 'service-request:acknowledged',
   SERVICE_REQUEST_RESOLVED: 'service-request:resolved',
   TABLE_UPDATED: 'table:updated',
   NOTIFICATION: 'notification',
@@ -149,6 +150,17 @@ export interface ServiceRequestPayload {
   type: ServiceRequestType
   note: string | null
   createdAt: string
+  /** Who called: "Table 4" for a guest, a colleague's name from the till or KDS (abc.md §7). */
+  requestedByName: string
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED'
+}
+
+/** Somebody said "on my way", so the other stations can stop (abc.md §7). */
+export interface ServiceRequestAcknowledgedPayload {
+  id: string
+  branchId: string
+  acknowledgedByName: string
+  acknowledgedAt: string
 }
 
 export interface TablePayload {
@@ -185,6 +197,7 @@ export interface ServerToClientEvents {
   [EVENTS.PAYMENT_RECEIVED]: (payload: PaymentPayload) => void
   [EVENTS.PAYMENT_PENDING]: (payload: PaymentPayload) => void
   [EVENTS.SERVICE_REQUEST_CREATED]: (payload: ServiceRequestPayload) => void
+  [EVENTS.SERVICE_REQUEST_ACKNOWLEDGED]: (payload: ServiceRequestAcknowledgedPayload) => void
   [EVENTS.SERVICE_REQUEST_RESOLVED]: (payload: { id: string }) => void
   [EVENTS.TABLE_UPDATED]: (payload: TablePayload) => void
   [EVENTS.NOTIFICATION]: (payload: NotificationPayload) => void

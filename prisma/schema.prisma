@@ -305,6 +305,8 @@ enum ServiceRequestType {
   BILL
   HELP
   CLEAN_TABLE
+  /// "Call waiter" from the guest, the till, the KDS or the floor (abc.md §7).
+  CALL_WAITER
 }
 
 enum ServiceRequestStatus {
@@ -958,6 +960,8 @@ model User {
   shifts              StaffShift[]
   shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
   handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
+  createdRequests     ServiceRequest[]    @relation("RequestCreatedBy")
+  acknowledgedRequests ServiceRequest[]   @relation("RequestAcknowledgedBy")
   createdInvites      Invite[]
   accessLinks         Invite[]            @relation("InviteForUser")
   staffRolesCreated   StaffRole[]         @relation("StaffRoleCreatedBy")
@@ -1826,7 +1830,27 @@ model ServiceRequest {
   resolvedAt  DateTime?
   createdAt   DateTime             @default(now())
 
+  /// ── a waiter call is an event (abc.md §7) ────────────────────────────────
+  ///
+  /// The table's branch, stored so the queue and the history filter without
+  /// a join; who called ("Table 4", or a colleague's name) and which account,
+  /// if any; who said "on my way" and when. One ACTIVE call per table and
+  /// need: `service_requests_one_active_per_table_need`, a partial unique
+  /// index on (tableId, type) WHERE status <> 'RESOLVED', written in SQL
+  /// because Prisma cannot express the predicate.
+  branchId         String?
+  branch           Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  requestedByName  String?
+  createdById      String?
+  createdBy        User?    @relation("RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  acknowledgedBy   User?    @relation("RequestAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
   @@index([restaurantId, status, createdAt])
+  @@index([restaurantId, branchId, status, createdAt])
+  @@index([createdById])
+  @@index([acknowledgedById])
   @@map("service_requests")
 }
 
@@ -3098,6 +3122,7 @@ model Branch {
   shiftNotes       ShiftNote[]
   notifications    Notification[]
   purchaseReturns  PurchaseReturn[]
+  serviceRequests  ServiceRequest[]
   staffRoles       StaffRole[]
   accessLinks      Invite[]
   cashRegisters    CashRegister[]

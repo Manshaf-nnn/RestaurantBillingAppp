@@ -7,6 +7,8 @@ import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { upsertReservation } from './reservations'
+import { openServiceRequest } from './service-requests'
+import { callWaiterSchema } from '@/features/orders/schema'
 import { swapTableSchema, swapTargetsSchema } from './schema'
 import { swapTable } from './service'
 import { tableStatesFor } from './table-state-server'
@@ -531,4 +533,50 @@ export async function deleteReservation(id: string): Promise<ActionResult<{ id: 
     revalidatePath('/dashboard/reservations')
     return { id }
   }, 'Reservation removed.')
+}
+
+// ── a colleague calls a waiter to a table (abc.md §7) ───────────────────────
+
+/**
+ * From the till, the KDS, the live floor or the tables page: "somebody go
+ * to table 4". Same door as the guest's button, so the duplicate rule, the
+ * popup, the bell and the history are one thing. Gated on ORDER_VIEW —
+ * everybody on the floor stack holds it — and scoped to the table's site.
+ */
+export async function callWaiterAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; created: boolean; tableNumber: string }>> {
+  return runAction(callWaiterSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.ORDER_VIEW)
+    const table = await prisma.restaurantTable.findFirst({
+      where: { id: data.tableId, restaurantId: user.restaurantId },
+      select: { id: true, number: true, branchId: true },
+    })
+    if (!table) throw new NotFoundError('Table')
+    await assertRecordBranch(user, table, 'table')
+
+    const { request, created } = await openServiceRequest({
+      restaurantId: user.restaurantId,
+      tableId: table.id,
+      type: 'CALL_WAITER',
+      note: data.note || null,
+      requestedByName: user.name,
+      createdById: user.id,
+    })
+    if (created) {
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: table.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SERVICE_REQUEST_CREATED,
+        entity: 'ServiceRequest',
+        entityId: request.id,
+        after: { table: table.number, type: 'CALL_WAITER', note: data.note || null },
+      })
+    }
+    revalidatePath('/waiter')
+    revalidatePath('/dashboard/live')
+    return { id: request.id, created, tableNumber: table.number }
+  })
 }

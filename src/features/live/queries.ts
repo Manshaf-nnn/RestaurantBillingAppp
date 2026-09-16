@@ -172,14 +172,22 @@ export async function getLiveBoard(params: {
      * call-waiter requests on this floor's board.
      */
     prisma.$queryRaw<
-      Array<{ id: string; tableId: string; number: string; type: string; createdAt: Date }>
+      Array<{
+        id: string
+        tableId: string
+        number: string
+        type: string
+        status: string
+        requestedByName: string | null
+        createdAt: Date
+      }>
     >`
-      SELECT sr.id, sr."tableId", sr.type::text, sr."createdAt", t.number
+      SELECT sr.id, sr."tableId", sr.type::text, sr.status::text, sr."requestedByName", sr."createdAt", t.number
         FROM service_requests sr
         JOIN restaurant_tables t ON t.id = sr."tableId"
        WHERE sr."restaurantId" = ${restaurantId}
          AND t."branchId" = ${branchId}
-         AND sr.status = 'OPEN'
+         AND sr.status IN ('OPEN', 'ACKNOWLEDGED')
        ORDER BY sr."createdAt" ASC
     `,
   ])
@@ -240,6 +248,8 @@ export async function getLiveBoard(params: {
       tableId: row.tableId,
       tableNumber: row.number,
       type: row.type,
+      status: row.status,
+      requestedByName: row.requestedByName,
       createdAt: row.createdAt.toISOString(),
     })),
     tables: floor.map((row) => ({

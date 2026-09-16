@@ -4,7 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { OrderItemStatus, OrderStatus } from '@prisma/client'
-import { Check, ChefHat, Clock, Flame, Hand, Printer, Timer, Utensils, X } from 'lucide-react'
+import { Bell, Check, ChefHat, Clock, Flame, Hand, Printer, Timer, Utensils, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -26,6 +26,7 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { progressItemsAction, updateOrderStatus } from '@/features/orders/actions'
 import { awaitsCashier, isGuestChannel } from '@/features/orders/channels'
+import { callWaiterAction } from '@/features/floor/actions'
 import { rejectOrderAction } from '@/features/kitchen/actions'
 import { acceptOrderAction, setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
@@ -36,6 +37,8 @@ export interface KitchenTicket {
   orderNumber: string
   type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
   status: OrderStatus
+  /** So the kitchen can call a waiter to the table (abc.md §7). */
+  tableId: string | null
   tableNumber: string | null
   customerName: string
   customerPhone: string
@@ -186,6 +189,7 @@ export function KitchenBoard({
     orderNumber: payload.orderNumber,
     type: payload.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
     status: payload.status,
+    tableId: payload.tableId,
     tableNumber: payload.tableNumber,
     customerName: payload.customerName,
     customerPhone: payload.customerPhone,
@@ -304,6 +308,23 @@ export function KitchenBoard({
    * derives the order's status from its lines, and tells the floor and the
    * guest. The card is updated from the answer, not from hope.
    */
+  // abc.md §7: one call per table; a repeat says so instead of ringing twice.
+  const callWaiter = async (ticket: KitchenTicket) => {
+    if (!ticket.tableId) return
+    const result = await callAction(() =>
+      callWaiterAction({ tableId: ticket.tableId, note: `From the kitchen · order ${ticket.orderNumber}` }),
+    )
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(
+      result.data.created
+        ? `A waiter has been called to table ${result.data.tableNumber}`
+        : `Table ${result.data.tableNumber} already has a waiter on the way`,
+    )
+  }
+
   const progress = async (ticket: KitchenTicket, updates: ProgressUpdate[]) => {
     if (updates.length === 0) return
     setPendingId(ticket.id)
@@ -547,6 +568,7 @@ export function KitchenBoard({
                       onAdvance={advance}
                       onAccept={accept}
                       onProgress={progress}
+                      onCallWaiter={callWaiter}
                       onPrioritise={prioritise}
                       restaurantName={restaurantName}
                       paperWidth={paperWidth}
@@ -571,6 +593,7 @@ function TicketCard({
   onAdvance,
   onAccept,
   onProgress,
+  onCallWaiter,
   onPrioritise,
   restaurantName,
   paperWidth,
@@ -583,6 +606,7 @@ function TicketCard({
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
   onAccept: (ticket: KitchenTicket) => void
   onProgress: (ticket: KitchenTicket, updates: ProgressUpdate[]) => void
+  onCallWaiter: (ticket: KitchenTicket) => void
   onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
   restaurantName: string
   paperWidth: PaperWidth
@@ -778,6 +802,20 @@ function TicketCard({
         >
           <Printer />
         </Button>
+
+        {/* abc.md §7: the pass can call a waiter to the table — food is up,
+            or a question for the guest — through the same door as the guest. */}
+        {ticket.tableId ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onCallWaiter(ticket)}
+            aria-label={`Call a waiter to table ${ticket.tableNumber ?? ''}`}
+            title="Call a waiter to this table"
+          >
+            <Bell />
+          </Button>
+        ) : null}
 
         {ticket.status === 'PENDING' ? (
           <Button

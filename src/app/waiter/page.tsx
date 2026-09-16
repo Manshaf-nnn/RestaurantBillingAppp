@@ -118,6 +118,9 @@ export default async function WaiterPage({
         type: request.type,
         note: request.note,
         createdAt: request.createdAt.toISOString(),
+        status: request.status === 'ACKNOWLEDGED' ? 'ACKNOWLEDGED' : 'OPEN',
+        requestedByName: request.requestedByName,
+        acknowledgedAt: request.acknowledgedAt?.toISOString() ?? null,
       }))}
       initialTables={board.tables.map((table) => ({
         id: table.id,

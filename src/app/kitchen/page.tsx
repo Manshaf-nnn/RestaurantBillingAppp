@@ -124,6 +124,7 @@ export default async function KitchenPage({
         orderNumber: order.orderNumber,
         type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
         status: order.status,
+        tableId: order.tableId,
         tableNumber: order.tableNumber ?? order.table?.number ?? null,
         customerName: order.customerName,
         customerPhone: order.customerPhone,

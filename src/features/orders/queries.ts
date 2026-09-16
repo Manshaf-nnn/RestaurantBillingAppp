@@ -237,7 +237,9 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
       // table the guest is sitting at, which is required and always set.
       where: {
         restaurantId,
-        status: 'OPEN',
+        // Acknowledged calls stay on the board until somebody marks them done
+        // (abc.md §7) — the acknowledgement says who is going, not that it is over.
+        status: { in: ['OPEN', 'ACKNOWLEDGED'] },
         ...(branchIds ? { table: { branchId: { in: branchIds } } } : {}),
       },
       include: { table: { select: { id: true, number: true } } },

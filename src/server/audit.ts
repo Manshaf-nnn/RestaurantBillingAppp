@@ -100,6 +100,10 @@ export const AUDIT_ACTIONS = {
   ORDER_CANCELLED: 'order.cancelled',
   /** A QR / online order accepted at the till (abc.md §5). */
   ORDER_ACCEPTED_AT_TILL: 'order.accepted_at_till',
+  /** A waiter call raised, answered, and closed (abc.md §7). */
+  SERVICE_REQUEST_CREATED: 'serviceRequest.created',
+  SERVICE_REQUEST_ACKNOWLEDGED: 'serviceRequest.acknowledged',
+  SERVICE_REQUEST_RESOLVED: 'serviceRequest.resolved',
   OUTGOING_CREATED: 'outgoingPayment.created',
   OUTGOING_SUBMITTED: 'outgoingPayment.submitted',
   OUTGOING_APPROVED: 'outgoingPayment.approved',

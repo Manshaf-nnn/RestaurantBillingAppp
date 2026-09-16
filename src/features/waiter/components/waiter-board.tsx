@@ -24,13 +24,32 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/primit
 import { OrderStatusBadge, TableStatusBadge, VegIndicator } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
 import { AutoRefresh } from '@/components/auto-refresh'
-import { EVENTS, type OrderStatusPayload, type ServiceRequestPayload } from '@/lib/realtime/events'
+import {
+  EVENTS,
+  type OrderStatusPayload,
+  type ServiceRequestAcknowledgedPayload,
+  type ServiceRequestPayload,
+} from '@/lib/realtime/events'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { progressItemsAction, resolveServiceRequest, serveOrder, updateOrderStatus } from '@/features/orders/actions'
+import {
+  acknowledgeServiceRequestAction,
+  progressItemsAction,
+  resolveServiceRequest,
+  serveOrder,
+  updateOrderStatus,
+} from '@/features/orders/actions'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { setServiceTableStatus } from '@/features/floor/actions'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { SettableTableState, TableState } from '@/features/floor/table-state'
@@ -70,6 +89,11 @@ export interface WaiterRequest {
   type: ServiceRequestType
   note: string | null
   createdAt: string
+  /** Acknowledged = somebody is on their way (abc.md §7). */
+  status: 'OPEN' | 'ACKNOWLEDGED'
+  /** "Table 4", or the colleague who called on the table's behalf. */
+  requestedByName: string | null
+  acknowledgedAt: string | null
 }
 
 export interface WaiterTable {
@@ -85,6 +109,7 @@ export interface WaiterTable {
 }
 
 const REQUEST_META: Record<ServiceRequestType, { label: string; emoji: string }> = {
+  CALL_WAITER: { label: 'Calling a waiter', emoji: '🔔' },
   WATER: { label: 'Water', emoji: '💧' },
   PLATES: { label: 'Extra plates', emoji: '🍽️' },
   BILL: { label: 'Bill requested', emoji: '🧾' },
@@ -165,11 +190,21 @@ export function WaiterBoard({
   // polling (fresh props). Chime here so waiters are alerted with sound too.
   const seenRequestIds = React.useRef<Set<string>>(new Set(initialRequests.map((r) => r.id)))
   const seenReadyIds = React.useRef<Set<string>>(new Set(initialReady.map((o) => o.id)))
+  /*
+   * The popup (abc.md §7): a call is not a row to notice, it is a table
+   * waiting. Whoever is holding this station sees it in the middle of the
+   * screen with the table number and who called, hears the bell, and either
+   * says "on my way" or puts it aside for a colleague.
+   */
+  const [incomingCall, setIncomingCall] = React.useState<WaiterRequest | null>(null)
   React.useEffect(() => {
     if (isRealtimeEnabled()) return
-    const hasNew = initialRequests.some((r) => !seenRequestIds.current.has(r.id))
+    const fresh = initialRequests.filter((r) => !seenRequestIds.current.has(r.id))
     seenRequestIds.current = new Set(initialRequests.map((r) => r.id))
-    if (hasNew) play('alert')
+    if (fresh.length > 0) {
+      play('alert')
+      setIncomingCall(fresh[fresh.length - 1])
+    }
   }, [initialRequests, play])
   React.useEffect(() => {
     if (isRealtimeEnabled()) return
@@ -216,26 +251,41 @@ export function WaiterBoard({
 
   useSocketEvent(EVENTS.SERVICE_REQUEST_CREATED, (payload: ServiceRequestPayload) => {
     if (!isOurs(payload)) return
+    const request: WaiterRequest = {
+      id: payload.id,
+      tableNumber: payload.tableNumber,
+      type: payload.type,
+      note: payload.note,
+      createdAt: payload.createdAt,
+      status: payload.status === 'ACKNOWLEDGED' ? 'ACKNOWLEDGED' : 'OPEN',
+      requestedByName: payload.requestedByName,
+      acknowledgedAt: null,
+    }
     setRequests((current) =>
-      current.some((request) => request.id === payload.id)
-        ? current
-        : [
-            ...current,
-            {
-              id: payload.id,
-              tableNumber: payload.tableNumber,
-              type: payload.type,
-              note: payload.note,
-              createdAt: payload.createdAt,
-            },
-          ],
+      current.some((entry) => entry.id === payload.id) ? current : [...current, request],
     )
     play('alert')
-    toast.warning(`Table ${payload.tableNumber} · ${REQUEST_META[payload.type].label}`)
+    setIncomingCall(request)
+    toast.warning(`Table ${payload.tableNumber} · ${REQUEST_META[payload.type].label}`, {
+      description: payload.requestedByName !== `Table ${payload.tableNumber}` ? `Called by ${payload.requestedByName}` : undefined,
+    })
+  })
+
+  useSocketEvent(EVENTS.SERVICE_REQUEST_ACKNOWLEDGED, (payload: ServiceRequestAcknowledgedPayload) => {
+    setRequests((current) =>
+      current.map((request) =>
+        request.id === payload.id
+          ? { ...request, status: 'ACKNOWLEDGED', acknowledgedAt: payload.acknowledgedAt }
+          : request,
+      ),
+    )
+    // A colleague is going: no need for this station to keep asking.
+    setIncomingCall((current) => (current?.id === payload.id ? null : current))
   })
 
   useSocketEvent(EVENTS.SERVICE_REQUEST_RESOLVED, (payload: { id: string }) => {
     setRequests((current) => current.filter((request) => request.id !== payload.id))
+    setIncomingCall((current) => (current?.id === payload.id ? null : current))
   })
 
   /*
@@ -315,6 +365,26 @@ export function WaiterBoard({
       return
     }
     setRequests((current) => current.filter((entry) => entry.id !== request.id))
+    setIncomingCall((current) => (current?.id === request.id ? null : current))
+  }
+
+  // "On my way" (abc.md §7): stamps who is going, and tells the other stations.
+  const acknowledge = async (request: WaiterRequest) => {
+    setBusyId(request.id)
+    const result = await callAction(() => acknowledgeServiceRequestAction({ requestId: request.id }))
+    setBusyId(null)
+
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    const at = new Date().toISOString()
+    setRequests((current) =>
+      current.map((entry) =>
+        entry.id === request.id ? { ...entry, status: 'ACKNOWLEDGED', acknowledgedAt: at } : entry,
+      ),
+    )
+    setIncomingCall((current) => (current?.id === request.id ? null : current))
   }
 
   const occupied = tables.filter((table) => table.status === 'OCCUPIED').length
@@ -338,6 +408,37 @@ export function WaiterBoard({
           { label: 'Tables occupied', value: `${occupied}/${tables.length}` },
         ]}
       />
+
+      {/* ── a table is calling (abc.md §7) ──────────────────────── */}
+      <Dialog open={incomingCall !== null} onOpenChange={(open) => { if (!open) setIncomingCall(null) }}>
+        <DialogContent size="sm" data-testid="waiter-call-popup">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-2xl">
+              <Bell className="size-6 text-warning" />
+              Table {incomingCall?.tableNumber}
+            </DialogTitle>
+            <DialogDescription className="text-base">
+              {incomingCall ? REQUEST_META[incomingCall.type].label : ''}
+              {incomingCall?.requestedByName && incomingCall.requestedByName !== `Table ${incomingCall.tableNumber}`
+                ? ` · called by ${incomingCall.requestedByName}`
+                : ''}
+              {incomingCall?.note ? ` · ${incomingCall.note}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIncomingCall(null)}>
+              Someone else will
+            </Button>
+            <Button
+              variant="warning"
+              loading={busyId === incomingCall?.id}
+              onClick={() => incomingCall && acknowledge(incomingCall)}
+            >
+              <Check /> On my way
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Tabs defaultValue="serve" className="p-4">
         <TabsList className="w-full sm:w-auto">
@@ -485,22 +586,41 @@ export function WaiterBoard({
                       <span className="text-3xl">{REQUEST_META[request.type].emoji}</span>
                       <div className="min-w-0 flex-1">
                         <p className="font-bold leading-tight">{REQUEST_META[request.type].label}</p>
+                        {request.requestedByName && request.requestedByName !== `Table ${request.tableNumber}` ? (
+                          <p className="truncate text-xs text-muted-foreground">Called by {request.requestedByName}</p>
+                        ) : null}
                         {request.note ? (
                           <p className="truncate text-xs text-muted-foreground">{request.note}</p>
                         ) : null}
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {minutesSince(request.createdAt)}m ago
+                          {request.status === 'ACKNOWLEDGED' ? (
+                            <Badge variant="info" size="sm" className="ml-1.5">on the way</Badge>
+                          ) : (
+                            <Badge variant="warning" size="sm" className="ml-1.5">new</Badge>
+                          )}
                         </p>
                       </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="shrink-0"
-                        loading={busyId === request.id}
-                        onClick={() => clearRequest(request)}
-                      >
-                        <Check /> Done
-                      </Button>
+                      <div className="flex shrink-0 flex-col gap-1.5">
+                        {request.status === 'OPEN' ? (
+                          <Button
+                            size="sm"
+                            variant="warning"
+                            loading={busyId === request.id}
+                            onClick={() => acknowledge(request)}
+                          >
+                            On my way
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          loading={busyId === request.id}
+                          onClick={() => clearRequest(request)}
+                        >
+                          <Check /> Done
+                        </Button>
+                      </div>
                     </div>
                   </motion.div>
                 ))}

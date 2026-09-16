@@ -6,8 +6,12 @@ import {
   Clock, Flame, HandPlatter, Receipt, Star, Timer, Users, UtensilsCrossed,
 } from 'lucide-react'
 
+import { toast } from 'sonner'
+
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/primitives'
+import { callWaiterAction } from '@/features/floor/actions'
+import { callAction } from '@/lib/use-action'
 import { SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
@@ -696,11 +700,30 @@ function CustomerPanel({
       </dl>
 
       {table.serviceCalls.length > 0 ? (
-        <p className="mt-3 flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning [&_svg]:size-3.5">
-          <BellRing />
-          Called for service <Elapsed since={table.serviceCalls[0].createdAt} /> ago
-        </p>
+        <ul className="mt-3 space-y-1">
+          {table.serviceCalls.map((call) => (
+            <li
+              key={call.id}
+              className="flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning [&_svg]:size-3.5"
+            >
+              <BellRing />
+              <span className="min-w-0 flex-1 truncate">
+                {call.type === 'CALL_WAITER' ? 'Waiter called' : 'Called for service'}
+                {call.requestedByName && call.requestedByName !== `Table ${table.tableNumber}`
+                  ? ` by ${call.requestedByName}`
+                  : ''}{' '}
+                <Elapsed since={call.createdAt} /> ago
+              </span>
+              {call.status === 'ACKNOWLEDGED' ? (
+                <span className="shrink-0 font-semibold">on the way</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
+
+      {/* abc.md §7: a manager sends a waiter to the table from here. */}
+      {table.tableId ? <CallWaiterButton tableId={table.tableId} /> : null}
 
       <button
         type="button"
@@ -716,6 +739,33 @@ function CustomerPanel({
         {table.orderIds.length > 1 ? 'View newest order' : 'View order details'}
       </button>
     </SectionCard>
+  )
+}
+
+function CallWaiterButton({ tableId }: { tableId: string }) {
+  const [pending, startTransition] = React.useTransition()
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() =>
+        startTransition(async () => {
+          const result = await callAction(() => callWaiterAction({ tableId, note: 'From the live floor' }))
+          if (!result.ok) {
+            toast.error(result.error)
+            return
+          }
+          toast.success(
+            result.data.created
+              ? `A waiter has been called to table ${result.data.tableNumber}`
+              : `Table ${result.data.tableNumber} already has a waiter on the way`,
+          )
+        })
+      }
+      className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-warning/40 bg-warning/5 py-2 text-sm font-semibold text-warning transition hover:bg-warning/10 disabled:opacity-60 [&_svg]:size-4"
+    >
+      <BellRing /> Call a waiter
+    </button>
   )
 }
 

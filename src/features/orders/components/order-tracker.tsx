@@ -506,14 +506,14 @@ function CallWaiter({ tableId, branchCode }: { tableId: string; branchCode: stri
       onClick={() =>
         startTransition(async () => {
           const result = await callAction(() =>
-            createServiceRequest({ tableId, type: 'HELP' }, undefined, branchCode),
+            createServiceRequest({ tableId, type: 'CALL_WAITER' }, undefined, branchCode),
           )
           if (result.ok) toast.success('A waiter is on the way')
           else toast.error(result.error)
         })
       }
     >
-      <Bell className="size-3.5" /> Help
+      <Bell className="size-3.5" /> Call waiter
     </Button>
   )
 }

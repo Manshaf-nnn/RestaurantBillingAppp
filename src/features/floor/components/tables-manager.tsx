@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import {
-  ArrowRightLeft, Building2, ClipboardList, LayoutGrid, Pencil, Plus, Replace, Trash2, Users,
+  ArrowRightLeft, Bell, Building2, ClipboardList, LayoutGrid, Pencil, Plus, Replace, Trash2, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -32,6 +32,7 @@ import { SwapTableDialog } from './swap-table-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { cn, groupBy } from '@/lib/utils'
 import {
+  callWaiterAction,
   createTablesBulk,
   deleteTable,
   moveTable,
@@ -71,6 +72,7 @@ export function TablesManager({
   tables: initial,
   canManage,
   canSwap,
+  canCall = false,
   branches,
   selectedBranchId,
 }: {
@@ -78,6 +80,8 @@ export function TablesManager({
   canManage: boolean
   /** May move a sitting to an empty table (abc.md §3). */
   canSwap: boolean
+  /** May send a waiter to a table (abc.md §7). */
+  canCall?: boolean
   /** Locations this user may put a table at. */
   branches: TableBranch[]
   /** What the top-bar switcher is showing. Null means "All locations". */
@@ -90,6 +94,23 @@ export function TablesManager({
   const [deleteId, setDeleteId] = React.useState<string | null>(null)
   const [moving, setMoving] = React.useState<ManagedTable | null>(null)
   const [swapping, setSwapping] = React.useState<ManagedTable | null>(null)
+  const [callingId, setCallingId] = React.useState<string | null>(null)
+
+  // abc.md §7: one call per table — a repeat says a waiter is already coming.
+  const callWaiter = async (table: ManagedTable) => {
+    setCallingId(table.id)
+    const result = await callAction(() => callWaiterAction({ tableId: table.id, note: 'From the tables page' }))
+    setCallingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(
+      result.data.created
+        ? `A waiter has been called to table ${result.data.tableNumber}`
+        : `Table ${result.data.tableNumber} already has a waiter on the way`,
+    )
+  }
 
   /*
    * Whether to name the branch on each card.
@@ -216,6 +237,18 @@ export function TablesManager({
                         aria-label={`Move the sitting at table ${table.number} to an empty table`}
                       >
                         <Replace /> Swap table
+                      </Button>
+                    ) : null}
+                    {canCall && table.status === 'OCCUPIED' ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 w-full"
+                        loading={callingId === table.id}
+                        onClick={() => callWaiter(table)}
+                        aria-label={`Call a waiter to table ${table.number}`}
+                      >
+                        <Bell /> Call waiter
                       </Button>
                     ) : null}
 

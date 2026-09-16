@@ -8,6 +8,13 @@ import { prisma } from '@/server/db/prisma'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { tableStatesFor } from '@/features/floor/table-state-server'
 import { AutoRefresh } from '@/components/auto-refresh'
+import { ReportFilters } from '@/features/reports/components/report-filters'
+import { resolveRange, type RangePreset } from '@/features/reports/range'
+import { listSwitchableLocations } from '@/features/transfers/queries'
+import { listServiceRequests } from '@/features/floor/service-requests'
+import { WaiterCallsHistory } from '@/features/floor/components/waiter-calls-history'
+import { requireRestaurant } from '@/server/db/tenant'
+import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,8 +37,21 @@ export default async function TablesPage({
    * Every row now has a branch and the column is NOT NULL, so the fallback is
    * not just unnecessary — it would be a lie.
    */
-  const selection = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const selection = await selectedBranch(user, params)
   const branchId = scopeToOne(selection)
+  const restaurant = await requireRestaurant(user.restaurantId)
+
+  /*
+   * Waiter calls (abc.md §7) over a period, in the one vocabulary every
+   * report screen uses — `?preset=`, `?from=`, `?to=` — opening on today.
+   */
+  const range = resolveRange({
+    preset: (typeof params.preset === 'string' ? params.preset : 'TODAY') as RangePreset,
+    from: typeof params.from === 'string' ? params.from : undefined,
+    to: typeof params.to === 'string' ? params.to : undefined,
+    timeZone: restaurant.timezone,
+  })
 
   /*
    * The form needs to know where it is adding.
@@ -79,6 +99,15 @@ export default async function TablesPage({
 
   const branches = allBranches
 
+  const [calls, locations] = await Promise.all([
+    listServiceRequests({
+      restaurantId: user.restaurantId,
+      branchIds: branchId ? [branchId] : selection.branchIds,
+      range: { start: range.from, end: range.to },
+    }),
+    listSwitchableLocations(user.restaurantId, reach),
+  ])
+
   // The derived three-state value (abc.md §3): Occupied when an order is open
   // or the column says so, Reserved during a booking's window, else Empty.
   const states = await tableStatesFor(prisma, {
@@ -90,9 +119,17 @@ export default async function TablesPage({
   return (
     <>
       <AutoRefresh scope="catalog" intervalMs={10000} />
+    <ReportFilters
+      preset={range.preset}
+      from={range.from.toISOString().slice(0, 10)}
+      to={range.to.toISOString().slice(0, 10)}
+      locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+      branchId={branchId ?? ''}
+    />
     <TablesManager
       canManage={can(user, PERMISSIONS.TABLE_MANAGE)}
       canSwap={can(user, PERMISSIONS.TABLE_SWAP)}
+      canCall={can(user, PERMISSIONS.ORDER_VIEW)}
       branches={branches}
       // What the switcher is showing, so the form opens on the right location.
       // Null means "All locations", and then the form makes the owner choose.
@@ -110,6 +147,13 @@ export default async function TablesPage({
         branchName: table.branch.name,
         openOrders: table._count.orders,
       }))}
+    />
+    <WaiterCallsHistory
+      rows={calls}
+      timeZone={restaurant.timezone}
+      locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+      showBranch={branchId === null && allBranches.length > 1}
+      branchNames={Object.fromEntries(allBranches.map((b) => [b.id, b.name]))}
     />
     </>
   )

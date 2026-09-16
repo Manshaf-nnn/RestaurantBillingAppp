@@ -74,6 +74,10 @@ export interface ServiceCallRow {
   tableId: string
   tableNumber: string
   type: string
+  /** OPEN, or ACKNOWLEDGED once a waiter said they are on their way (abc.md §7). */
+  status: string
+  /** "Table 4", or the colleague who called on the table's behalf. */
+  requestedByName: string | null
   createdAt: string
 }
 

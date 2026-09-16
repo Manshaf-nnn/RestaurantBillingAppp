@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Banknote,
+  Bell,
   Check,
   CreditCard,
   Download,
@@ -63,6 +64,7 @@ import {
 } from '@/features/cashier/actions'
 import { awaitsCashier, channelLabel } from '@/features/orders/channels'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
+import { callWaiterAction } from '@/features/floor/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
 import {
@@ -966,6 +968,26 @@ function BillingDetailPanel({
   const [mergeOpen, setMergeOpen] = React.useState(false)
   const [swapOpen, setSwapOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
+  const [calling, setCalling] = React.useState(false)
+
+  // abc.md §7: one call per table — a repeat says a waiter is already coming.
+  const callWaiter = async () => {
+    if (!bill.tableId) return
+    setCalling(true)
+    const result = await callAction(() =>
+      callWaiterAction({ tableId: bill.tableId, note: `From the till · bill ${bill.orderNumber}` }),
+    )
+    setCalling(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(
+      result.data.created
+        ? `A waiter has been called to table ${result.data.tableNumber}`
+        : `Table ${result.data.tableNumber} already has a waiter on the way`,
+    )
+  }
 
   const print = async () => {
     /*
@@ -1058,9 +1080,15 @@ function BillingDetailPanel({
                 {bill.heldAt ? 'Resume' : 'Hold'}
               </Button>
               {bill.type === 'DINE_IN' && bill.tableId ? (
-                <Button variant="outline" size="sm" onClick={() => setSwapOpen(true)}>
-                  <ArrowRightLeft /> Swap table
-                </Button>
+                <>
+                  <Button variant="outline" size="sm" onClick={() => setSwapOpen(true)}>
+                    <ArrowRightLeft /> Swap table
+                  </Button>
+                  {/* abc.md §7: the till sends a waiter to the table. */}
+                  <Button variant="outline" size="sm" loading={calling} onClick={callWaiter}>
+                    <Bell /> Call waiter
+                  </Button>
+                </>
               ) : null}
             </>
           ) : null}
