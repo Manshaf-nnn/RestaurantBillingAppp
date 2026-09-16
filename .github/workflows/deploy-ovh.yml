@@ -119,6 +119,20 @@ jobs:
             set -euo pipefail
             cd ~/RestaurantBillingAppp
 
+            # Disk FIRST. On 2026-09-16 three deploys in a row died at `git
+            # fetch` with "No space left on device": every deploy pulls a new
+            # image, and old tags were only ever pruned AFTER a successful
+            # pull, so a server that filled up could never deploy its way
+            # out. Prune what nothing runs before anything is written — the
+            # serving container's image is in use and stays; a rollback
+            # re-pulls its tag from GHCR anyway. `|| true`: a prune that finds
+            # nothing must not stop the deploy.
+            echo "disk before: $(df -h / | tail -1)"
+            docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
+            docker container prune -f >/dev/null 2>&1 || true
+            docker builder prune -af >/dev/null 2>&1 || true
+            echo "disk after:  $(df -h / | tail -1)"
+
             # The compose file and Caddyfile are read from the repo, so a
             # change to either ships with the deploy.
             git fetch --all --quiet
