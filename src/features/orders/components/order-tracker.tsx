@@ -24,7 +24,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/primitives'
 import { VegIndicator } from '@/components/ui/status'
-import { EVENTS, type OrderStatusPayload } from '@/lib/realtime/events'
+import { EVENTS, type OrderItemProgressPayload, type OrderStatusPayload } from '@/lib/realtime/events'
+import { progressLabel } from '../progress'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
@@ -74,9 +75,15 @@ export interface TrackedOrder {
     notes: string | null
     isVeg: boolean
     status: OrderItemStatus
+    /** How many of `quantity` are made / at the table (abc.md §6). */
+    preparedQty: number
+    servedQty: number
     optionsLabel: string
   }>
 }
+
+/** What the guest's screen knows about one line right now. */
+type LiveItem = { status: OrderItemStatus; preparedQty: number; servedQty: number }
 
 export function OrderTracker({
   order: initial,
@@ -135,6 +142,46 @@ export function OrderTracker({
   }, [initial.status, play])
 
   useOrderRoom(initial.id)
+
+  /*
+   * Item-level live updates (abc.md §6).
+   *
+   * Each line the kitchen ticks or the floor carries out arrives on the
+   * order's own room with its counters, so "2 of 3 ready" is drawn from the
+   * event and not from a refetch. Fresh props (a poll on a host with no
+   * socket) reset the map, so the two sources never disagree for long.
+   */
+  const [liveItems, setLiveItems] = React.useState<Record<string, LiveItem>>({})
+  React.useEffect(() => {
+    setLiveItems({})
+  }, [initial.items])
+
+  useSocketEvent(EVENTS.ORDER_ITEM_STATUS, (payload: OrderItemProgressPayload) => {
+    if (payload.orderId !== initial.id) return
+    const item = initial.items.find((entry) => entry.id === payload.itemId)
+    setLiveItems((current) => {
+      const before = current[payload.itemId] ?? item
+      const next: LiveItem = {
+        status: payload.status as OrderItemStatus,
+        preparedQty: payload.preparedQty,
+        servedQty: payload.servedQty,
+      }
+      if (item && before) {
+        if (next.status === 'READY' && before.status !== 'READY' && before.status !== 'SERVED') {
+          toast.success(`${item.name} is ready`)
+        } else if (next.preparedQty > before.preparedQty && next.status !== 'READY') {
+          toast.message(`${next.preparedQty} of ${payload.quantity} × ${item.name} ready`)
+        } else if (next.servedQty > before.servedQty) {
+          toast.success(
+            next.status === 'SERVED'
+              ? `${item.name} has been served`
+              : `${next.servedQty} of ${payload.quantity} × ${item.name} served`,
+          )
+        }
+      }
+      return { ...current, [payload.itemId]: next }
+    })
+  })
 
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
     if (payload.orderId !== initial.id) return
@@ -318,7 +365,10 @@ export function OrderTracker({
           </div>
 
           <ul className="space-y-3">
-            {initial.items.map((item) => (
+            {initial.items.map((item) => {
+              const live = liveItems[item.id] ?? item
+              const partial = progressLabel({ ...live, quantity: item.quantity })
+              return (
               <li key={item.id} className="flex items-start justify-between gap-3 text-sm">
                 <div className="min-w-0">
                   <p className="flex items-center gap-1.5 font-medium">
@@ -335,10 +385,14 @@ export function OrderTracker({
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="font-medium">{formatMoney(item.lineTotal, currency, locale)}</span>
-                  <ItemStatusPill status={item.status} />
+                  <ItemStatusPill status={live.status} />
+                  {partial ? (
+                    <span className="text-[11px] tabular-nums text-muted-foreground">{partial}</span>
+                  ) : null}
                 </div>
               </li>
-            ))}
+              )
+            })}
           </ul>
 
           <Separator className="my-3" />

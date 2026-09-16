@@ -69,6 +69,8 @@ export default async function TrackOrderPage({
             notes: item.notes,
             isVeg: item.isVeg,
             status: item.status,
+            preparedQty: item.preparedQty,
+            servedQty: item.servedQty,
             optionsLabel: readOptions(item.options)
               .map((option) => option.name)
               .join(' · '),

@@ -183,6 +183,13 @@ export function StationBoard({
                                 {item.quantity}
                               </span>
                               {item.name}
+                              {/* abc.md §6: three burgers with two made read as such,
+                                  wherever the other one was ticked. */}
+                              {item.preparedQty > 0 && item.preparedQty < item.quantity ? (
+                                <span className="text-xs font-normal tabular-nums text-muted-foreground">
+                                  {item.preparedQty} of {item.quantity} ready
+                                </span>
+                              ) : null}
                             </p>
                             {item.optionsLabel ? (
                               <p className="mt-1 text-xs text-muted-foreground">{item.optionsLabel}</p>

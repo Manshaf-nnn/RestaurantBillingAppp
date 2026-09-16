@@ -64,12 +64,17 @@ export const realtime = {
     )
   },
 
-  orderItemStatus(restaurantId: string, orderId: string, itemId: string, status: string) {
-    emit([...roomsFor(restaurantId, ['kitchen', 'waiter']), ROOM.order(orderId)], EVENTS.ORDER_ITEM_STATUS, {
-      orderId,
-      itemId,
-      status,
-    })
+  /**
+   * A line's counters moved (abc.md §6). Every staff board and the guest's own
+   * room: the live floor and the cashier's bill read the same figures the
+   * kitchen and the waiter write.
+   */
+  orderItemStatus(restaurantId: string, payload: Parameters<ServerToClientEvents['order:item-status']>[0]) {
+    emit(
+      [...roomsFor(restaurantId, ['kitchen', 'waiter', 'cashier', 'management']), ROOM.order(payload.orderId)],
+      EVENTS.ORDER_ITEM_STATUS,
+      payload,
+    )
   },
 
   orderCancelled(restaurantId: string, payload: Parameters<ServerToClientEvents['order:cancelled']>[0]) {

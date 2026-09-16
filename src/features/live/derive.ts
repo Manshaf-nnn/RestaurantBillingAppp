@@ -43,11 +43,18 @@ export interface OpenOrderRow {
   grandTotal: number
   tipAmount: number
   paidTotal: number
+  /** Σ quantity over the lines still on the bill (abc.md §6). */
   ordered: number
+  /** Plates still to make on lines the kitchen has not started. */
   queued: number
+  /** Plates still to make on lines the kitchen is cooking. */
   preparing: number
+  /** "Prepared": made and waiting to go out — never counting the served. */
   ready: number
+  /** Carried out, by quantity. */
   served: number
+  /** Not yet made: ordered − ready − served, by construction. */
+  remaining: number
   cancelled: number
 }
 
@@ -245,8 +252,11 @@ export interface LiveTable {
   ordered: number
   queued: number
   preparing: number
+  /** Prepared and waiting to go out (abc.md §6's "Prepared"). */
   ready: number
   served: number
+  /** Ordered − Prepared − Served: what the kitchen still has to make. */
+  remaining: number
   cancelled: number
   outstanding: number
   paymentStatus: string
@@ -314,6 +324,7 @@ export function foldOrdersToTables(params: {
         preparing: row.preparing,
         ready: row.ready,
         served: row.served,
+        remaining: row.remaining,
         cancelled: row.cancelled,
         outstanding: Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal),
         paymentStatus: row.paymentStatus,
@@ -331,6 +342,7 @@ export function foldOrdersToTables(params: {
       existing.preparing += row.preparing
       existing.ready += row.ready
       existing.served += row.served
+      existing.remaining += row.remaining
       existing.cancelled += row.cancelled
       existing.outstanding += Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal)
       // A party is only fully paid when every one of its bills is.
@@ -626,8 +638,11 @@ export interface LiveKpis {
   delayedTables: number
   ordered: number
   preparing: number
+  /** Prepared, waiting to go out. */
   ready: number
   served: number
+  /** Ordered − Prepared − Served (abc.md §6). */
+  remaining: number
   servedPct: number
 }
 
@@ -649,6 +664,7 @@ export function kpis(params: {
   let preparing = 0
   let ready = 0
   let served = 0
+  let remaining = 0
   let waiting = 0
   let delayed = 0
 
@@ -657,6 +673,7 @@ export function kpis(params: {
     preparing += table.preparing
     ready += table.ready
     served += table.served
+    remaining += table.remaining
 
     const outstanding = table.ordered - table.served
     if (outstanding > 0) {
@@ -675,6 +692,7 @@ export function kpis(params: {
     preparing,
     ready,
     served,
+    remaining,
     servedPct: ordered > 0 ? Math.round((served / ordered) * 100) : 0,
   }
 }

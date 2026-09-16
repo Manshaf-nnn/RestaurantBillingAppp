@@ -370,6 +370,35 @@ async function main() {
     check('no payment survives its restaurant', orphanPayments === 0, `${orphanPayments}`)
   }
 
+  console.log('\n── 7. A line cannot be served before it is made, nor made beyond its quantity (abc.md §6) ──')
+  {
+    const order = await newOrder()
+    const burger = (extra: Record<string, unknown>) =>
+      prisma.orderItem.create({
+        data: {
+          orderId: order.id, name: 'Burger', unitPrice: 1_000, quantity: 3, lineTotal: 3_000,
+          ...extra,
+        },
+      })
+    await refuses(
+      'served beyond prepared is refused',
+      () => burger({ preparedQty: 1, servedQty: 2 }),
+      /order_items_progress_check/,
+    )
+    await refuses(
+      'prepared beyond the quantity is refused',
+      () => burger({ preparedQty: 4, servedQty: 0 }),
+      /order_items_progress_check/,
+    )
+    await refuses(
+      'a negative count is refused',
+      () => burger({ preparedQty: 0, servedQty: -1 }),
+      /order_items_progress_check/,
+    )
+    await allows('all made and all served is the ceiling', () => burger({ preparedQty: 3, servedQty: 3 }))
+    await allows('two made, one out, is inside it', () => burger({ preparedQty: 2, servedQty: 1 }))
+  }
+
   await prisma.restaurant.delete({ where: { id: restaurant.id } })
 
   console.log(`\n${passed} passed, ${failed} failed`)

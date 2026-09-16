@@ -142,6 +142,8 @@ export const AUDIT_ACTIONS = {
   REPORT_EXPORTED: 'report.exported',
 
   ORDER_ITEM_VOIDED: 'order.item_voided',
+  /** A line's prepared / served counters moved (abc.md §6). */
+  ORDER_ITEM_PROGRESS: 'order.item_progress',
   ORDER_PRICE_OVERRIDE: 'order.price_override',
   INVOICE_REPRINTED: 'invoice.reprinted',
 

@@ -184,6 +184,11 @@ const SERVICE = [
   // customer intact; the target must be free (no sitting, no order, no
   // booking in window, same site, in service); the source is Empty after.
   'table-swap-test',
+  // abc.md §6 — a line's prepared / served counters by quantity: forward
+  // only, served ≤ prepared ≤ quantity, the order follows its lines, the
+  // cascades carry the counters, a split keeps made plates with the
+  // original, and the floor reads Ordered / Prepared / Served / Remaining.
+  'item-progress-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',

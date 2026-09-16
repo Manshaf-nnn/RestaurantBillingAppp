@@ -75,7 +75,27 @@ export interface OrderSummaryPayload {
     notes: string | null
     isVeg: boolean
     options: Array<{ groupName: string; name: string }>
+    /** Where the line is, so a pushed ticket shows the same boxes as a polled one. */
+    status: string
+    preparedQty: number
+    servedQty: number
   }>
+}
+
+/**
+ * One line moved (abc.md §6): the kitchen ticked it prepared, or the floor
+ * served some of it. Carries the counters so every listener — the KDS, the
+ * waiter's card, the guest's tracker — can draw "2 of 3 ready" without a
+ * round trip, and the branch so the boards can ignore other sites.
+ */
+export interface OrderItemProgressPayload {
+  orderId: string
+  itemId: string
+  branchId: string
+  status: string
+  quantity: number
+  preparedQty: number
+  servedQty: number
 }
 
 export interface OrderStatusPayload {
@@ -156,7 +176,7 @@ export interface ServerToClientEvents {
   [EVENTS.ORDER_CREATED]: (payload: OrderSummaryPayload) => void
   [EVENTS.ORDER_UPDATED]: (payload: OrderSummaryPayload) => void
   [EVENTS.ORDER_STATUS]: (payload: OrderStatusPayload) => void
-  [EVENTS.ORDER_ITEM_STATUS]: (payload: { orderId: string; itemId: string; status: string }) => void
+  [EVENTS.ORDER_ITEM_STATUS]: (payload: OrderItemProgressPayload) => void
   [EVENTS.ORDER_CANCELLED]: (payload: OrderStatusPayload) => void
   [EVENTS.PAYMENT_RECEIVED]: (payload: PaymentPayload) => void
   [EVENTS.PAYMENT_PENDING]: (payload: PaymentPayload) => void

@@ -4,6 +4,7 @@ import type { Order } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { computeTotals, derivePaymentStatus } from '@/features/orders/pricing'
+import { rowStatusFromCounters } from '@/features/orders/progress'
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { reconcileIfDepleted, reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { nextCounterValue } from '@/server/db/counters'
@@ -310,9 +311,35 @@ export async function splitBill(
       const movedQty = selection.quantity
       const keptQty = item.quantity - movedQty
 
+      /*
+       * The plates already made stay with the original, first (abc.md §6).
+       *
+       * Three burgers with two prepared and one of those served, one burger
+       * moving: the original keeps both prepared plates and the served one,
+       * the moved line starts from nothing. Kept-first is what keeps
+       * `served ≤ prepared ≤ quantity` true on BOTH rows whatever the split —
+       * the database would refuse the write otherwise — and each row's status
+       * is re-read from its own counters, so a split never shows a plate as
+       * ready that has not been made.
+       */
+      const keptPrepared = Math.min(item.preparedQty, keptQty)
+      const keptServed = Math.min(item.servedQty, keptPrepared)
+      const movedPrepared = item.preparedQty - keptPrepared
+      const movedServed = item.servedQty - keptServed
+      const keptStatus = rowStatusFromCounters({
+        quantity: keptQty, preparedQty: keptPrepared, servedQty: keptServed, status: item.status,
+      })
+      const movedStatus = rowStatusFromCounters({
+        quantity: movedQty, preparedQty: movedPrepared, servedQty: movedServed,
+        status: item.status === 'SERVED' || item.status === 'READY' ? 'PREPARING' : item.status,
+      })
+
       await tx.orderItem.update({
         where: { id: item.id },
-        data: { quantity: keptQty, lineTotal: unit * keptQty },
+        data: {
+          quantity: keptQty, lineTotal: unit * keptQty,
+          preparedQty: keptPrepared, servedQty: keptServed, status: keptStatus,
+        },
       })
 
       await tx.orderItem.create({
@@ -327,7 +354,9 @@ export async function splitBill(
           options: item.options ?? undefined,
           optionsTotal: item.optionsTotal,
           notes: item.notes,
-          status: item.status,
+          status: movedStatus,
+          preparedQty: movedPrepared,
+          servedQty: movedServed,
           costPrice: item.costPrice,
           /*
            * The pinned recipe follows the food.

@@ -1748,6 +1748,14 @@ model OrderItem {
   costPrice       Int             @default(0)
   notes           String?
   status          OrderItemStatus @default(QUEUED)
+  /// ── progress by quantity (abc.md §6) ─────────────────────────────────────
+  ///
+  /// How many of `quantity` the kitchen has marked prepared, and how many of
+  /// those the floor has served. `status` stays the one flag everything else
+  /// reads; these say how far along a line of three burgers is. The database
+  /// holds `servedQty ≤ preparedQty ≤ quantity` (`order_items_progress_check`).
+  preparedQty     Int             @default(0)
+  servedQty       Int             @default(0)
   isVeg           Boolean         @default(false)
   prepTimeMinutes Int             @default(0)
 

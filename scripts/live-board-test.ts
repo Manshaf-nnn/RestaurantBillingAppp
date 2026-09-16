@@ -68,6 +68,8 @@ function table(over: Partial<LiveTable> = {}): LiveTable {
     outstanding: 5000, paymentStatus: 'UNPAID', customer: null,
     walkInName: 'Walk-in', serviceCalls: [],
     ...over,
+    // abc.md §6: Remaining = Ordered − Prepared − Served, by construction.
+    remaining: over.remaining ?? (over.ordered ?? 5) - (over.ready ?? 0) - (over.served ?? 0),
   }
 }
 

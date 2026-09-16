@@ -41,6 +41,8 @@ function toWaiterOrder(order: BoardOrder): WaiterOrder {
         isVeg: item.isVeg,
         notes: item.notes,
         status: item.status,
+        preparedQty: item.preparedQty,
+        servedQty: item.servedQty,
       })),
   }
 }

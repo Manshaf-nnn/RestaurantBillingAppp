@@ -97,6 +97,7 @@ export async function getLiveBoard(params: {
         preparing: number | null
         ready: number | null
         served: number | null
+        remaining: number | null
         cancelled: number | null
       }>
     >`
@@ -106,14 +107,26 @@ export async function getLiveBoard(params: {
            AND o."branchId" = ${branchId}
            AND o.status IN ${OPEN_STATUSES}
       ),
+      /*
+       * By quantity, from the counters (abc.md §6):
+       *   ordered   = Σ quantity
+       *   ready     = Σ (prepared − served)   — "Prepared": made, not carried out
+       *   served    = Σ served
+       *   remaining = Σ (quantity − prepared) = ordered − ready − served
+       * so Served is never counted as Prepared, and "3 ordered, 2 prepared,
+       * 1 served" reads Remaining 0. queued / preparing are the plates still
+       * to be made on lines in each of those states — what the kitchen has in
+       * front of it, not what it has finished.
+       */
       rollup AS (
         SELECT oi."orderId",
-               SUM(oi.quantity) FILTER (WHERE oi.status <> 'CANCELLED') AS ordered,
-               SUM(oi.quantity) FILTER (WHERE oi.status = 'QUEUED')     AS queued,
-               SUM(oi.quantity) FILTER (WHERE oi.status = 'PREPARING')  AS preparing,
-               SUM(oi.quantity) FILTER (WHERE oi.status = 'READY')      AS ready,
-               SUM(oi.quantity) FILTER (WHERE oi.status = 'SERVED')     AS served,
-               SUM(oi.quantity) FILTER (WHERE oi.status = 'CANCELLED')  AS cancelled
+               SUM(oi.quantity) FILTER (WHERE oi.status <> 'CANCELLED')                            AS ordered,
+               SUM(oi.quantity - oi."preparedQty") FILTER (WHERE oi.status = 'QUEUED')             AS queued,
+               SUM(oi.quantity - oi."preparedQty") FILTER (WHERE oi.status = 'PREPARING')          AS preparing,
+               SUM(oi."preparedQty" - oi."servedQty") FILTER (WHERE oi.status <> 'CANCELLED')      AS ready,
+               SUM(oi."servedQty") FILTER (WHERE oi.status <> 'CANCELLED')                         AS served,
+               SUM(oi.quantity - oi."preparedQty") FILTER (WHERE oi.status <> 'CANCELLED')         AS remaining,
+               SUM(oi.quantity) FILTER (WHERE oi.status = 'CANCELLED')                             AS cancelled
           FROM order_items oi
          WHERE oi."orderId" IN (SELECT id FROM open_orders)
          GROUP BY oi."orderId"
@@ -130,6 +143,7 @@ export async function getLiveBoard(params: {
              COALESCE(r.preparing, 0)::int AS preparing,
              COALESCE(r.ready, 0)::int     AS ready,
              COALESCE(r.served, 0)::int    AS served,
+             COALESCE(r.remaining, 0)::int AS remaining,
              COALESCE(r.cancelled, 0)::int AS cancelled
         FROM open_orders o
         LEFT JOIN rollup r ON r."orderId" = o.id
@@ -217,6 +231,7 @@ export async function getLiveBoard(params: {
       preparing: row.preparing ?? 0,
       ready: row.ready ?? 0,
       served: row.served ?? 0,
+      remaining: row.remaining ?? 0,
       cancelled: row.cancelled ?? 0,
     })),
     history,

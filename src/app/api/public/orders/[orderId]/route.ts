@@ -40,6 +40,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         name: item.name,
         quantity: item.quantity,
         status: item.status,
+        preparedQty: item.preparedQty,
+        servedQty: item.servedQty,
         options: readOptions(item.options).map((option) => option.name),
       })),
     })

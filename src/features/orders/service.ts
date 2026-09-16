@@ -23,6 +23,8 @@ import { realtime } from '@/server/realtime/emitter'
 import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { seatReservation } from '@/features/floor/reservations'
+import { utc } from '@/server/db/sql-time'
+import { applyProgress, type ProgressUpdate } from './progress'
 import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import type { OrderSummaryPayload } from '@/lib/realtime/events'
@@ -1097,6 +1099,162 @@ export async function serveWholeOrder(params: {
   return updated ?? (await prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
 }
 
+// ── item-level progress (abc.md §6) ─────────────────────────────────────────
+
+export interface ProgressedItem {
+  itemId: string
+  name: string
+  quantity: number
+  before: { preparedQty: number; servedQty: number; status: OrderItem['status'] }
+  after: { preparedQty: number; servedQty: number; status: OrderItem['status'] }
+}
+
+/**
+ * Move a line's prepared / served counters forward.
+ *
+ * ── One writer for progress ─────────────────────────────────────────────────
+ *
+ * The KDS checkbox (prepared: all of it), the "+1" for three burgers of which
+ * two are done, the section's Ready button, the waiter's Serve — every one of
+ * them comes here. The arithmetic and the refusals live in `progress.ts`, pure;
+ * this adds the lock, the stamps, the order catching up and the broadcast.
+ *
+ * ── Rules ───────────────────────────────────────────────────────────────────
+ *
+ *   - the order is locked for the duration; PENDING (nobody has taken it on),
+ *     CANCELLED and COMPLETED orders refuse;
+ *   - a cancelled line refuses; counters only ever go up; `served ≤ prepared
+ *     ≤ quantity` (the database holds the same rule, `order_items_progress_check`);
+ *   - the line's status is a readout of its counters, and each stamp is set
+ *     the first time the line gets there — bouncing counters is impossible,
+ *     so a stamp is never rewritten;
+ *   - the order's own status follows its lines through `deriveOrderStatus`,
+ *     after commit, as it always has;
+ *   - each moved line is broadcast to every board and to the guest's room,
+ *     with its counters, after commit. No `Notification` row per tick: the
+ *     socket event IS the customer's item-level update; the order-level
+ *     READY / SERVED notification still arrives from `notifyStatusChange`.
+ *
+ * Returns what moved, before and after, for the caller's audit row.
+ */
+export async function progressItems(params: {
+  restaurantId: string
+  orderId: string
+  updates: Array<{ itemId: string } & ProgressUpdate>
+  actorId?: string | null
+  actorName?: string | null
+}): Promise<{ order: Order; branchId: string; changed: ProgressedItem[] }> {
+  const { changed, branchId } = await prisma.$transaction(async (tx) => {
+    await guardLocks(tx)
+    const locked = await tx.$queryRaw<Array<{ id: string; status: OrderStatus; branchId: string }>>`
+      SELECT id, status, "branchId" FROM orders
+       WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}
+       FOR UPDATE
+    `
+    const order = locked[0]
+    if (!order) throw new NotFoundError('Order')
+    if (order.status === 'PENDING') {
+      throw new AppError(
+        'This order has not been accepted yet — accept it before marking food prepared',
+        409,
+        'ORDER_NOT_ACCEPTED',
+      )
+    }
+    if (order.status === 'CANCELLED' || order.status === 'COMPLETED') {
+      throw new AppError(`This order is ${order.status.toLowerCase()}`, 409, 'ORDER_CLOSED')
+    }
+
+    const ids = [...new Set(params.updates.map((update) => update.itemId))]
+    const rows = await tx.orderItem.findMany({
+      where: { id: { in: ids }, orderId: order.id },
+      select: {
+        id: true, name: true, quantity: true, status: true,
+        preparedQty: true, servedQty: true,
+        preparingAt: true, readyAt: true, servedAt: true,
+      },
+    })
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    const now = new Date()
+    const moved: ProgressedItem[] = []
+
+    for (const update of params.updates) {
+      const item = byId.get(update.itemId)
+      if (!item) throw new NotFoundError('Order item')
+      if (item.status === 'CANCELLED') {
+        throw new AppError(`${item.name} was taken off this order`, 409, 'ITEM_CANCELLED')
+      }
+
+      const outcome = applyProgress(item, update)
+      if (!outcome.ok) {
+        throw new AppError(
+          outcome.refusal.message,
+          outcome.refusal.code === 'PROGRESS_OVER_QUANTITY' ? 400 : 409,
+          outcome.refusal.code,
+        )
+      }
+      if (!outcome.changed) continue
+
+      const reached = (status: OrderItem['status']) =>
+        ['QUEUED', 'PREPARING', 'READY', 'SERVED'].indexOf(outcome.status) >=
+        ['QUEUED', 'PREPARING', 'READY', 'SERVED'].indexOf(status)
+      const updated = await tx.orderItem.update({
+        where: { id: item.id },
+        data: {
+          preparedQty: outcome.preparedQty,
+          servedQty: outcome.servedQty,
+          status: outcome.status,
+          ...(reached('PREPARING') && item.preparingAt === null ? { preparingAt: now } : {}),
+          ...(reached('READY') && item.readyAt === null ? { readyAt: now } : {}),
+          ...(reached('SERVED') && item.servedAt === null ? { servedAt: now } : {}),
+        },
+        select: { preparingAt: true, readyAt: true, servedAt: true },
+      })
+
+      moved.push({
+        itemId: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        before: { preparedQty: item.preparedQty, servedQty: item.servedQty, status: item.status },
+        after: { preparedQty: outcome.preparedQty, servedQty: outcome.servedQty, status: outcome.status },
+      })
+      // The same line twice in one call builds on the first write.
+      byId.set(item.id, {
+        ...item,
+        ...updated,
+        preparedQty: outcome.preparedQty,
+        servedQty: outcome.servedQty,
+        status: outcome.status,
+      })
+    }
+
+    return { changed: moved, branchId: order.branchId }
+  })
+
+  if (changed.length > 0) {
+    // Let the order catch up with its lines — one direction, see `deriveOrderStatus`.
+    await deriveOrderStatus({
+      restaurantId: params.restaurantId,
+      orderId: params.orderId,
+      actorId: params.actorId ?? null,
+      actorName: params.actorName ?? null,
+    })
+    for (const item of changed) {
+      realtime.orderItemStatus(params.restaurantId, {
+        orderId: params.orderId,
+        itemId: item.itemId,
+        branchId,
+        status: item.after.status,
+        quantity: item.quantity,
+        preparedQty: item.after.preparedQty,
+        servedQty: item.after.servedQty,
+      })
+    }
+  }
+
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: params.orderId } })
+  return { order, branchId, changed }
+}
+
 export async function updateOrderStatus(params: {
   restaurantId: string
   orderId: string
@@ -1184,34 +1342,6 @@ export async function updateOrderStatus(params: {
         ...(params.estimatedMinutes !== undefined
           ? { estimatedMinutes: params.estimatedMinutes }
           : {}),
-        // Accepting an order implies its items have entered the queue —
-        // unless the sections own them, in which case they say when.
-        ...(params.status === 'PREPARING' && !routed
-          ? { items: { updateMany: { where: { status: 'QUEUED' }, data: { status: 'PREPARING' } } } }
-          : {}),
-        ...(params.status === 'READY' && !routed
-          ? {
-              items: {
-                updateMany: {
-                  where: { status: { in: ['QUEUED', 'PREPARING'] } },
-                  data: { status: 'READY' },
-                },
-              },
-            }
-          : {}),
-        /*
-         * SERVED still cascades in both modes. It is not progress — it is a
-         * waiter closing the whole table out at once, which stays a legitimate
-         * bulk action however the food was cooked. Cancellation likewise, in
-         * `cancelOrder`.
-         */
-        ...(params.status === 'SERVED'
-          ? {
-              items: {
-                updateMany: { where: { status: { not: 'CANCELLED' } }, data: { status: 'SERVED' } },
-              },
-            }
-          : {}),
         events: {
           create: {
             status: params.status,
@@ -1222,6 +1352,42 @@ export async function updateOrderStatus(params: {
         },
       },
     })
+
+    /*
+     * Cascade the order's status down to its lines — with their counters.
+     *
+     * Accepting an order implies its items have entered the queue, unless the
+     * sections own them, in which case they say when. READY likewise. SERVED
+     * cascades in both modes: it is not progress, it is a waiter closing the
+     * whole table out at once, which stays a legitimate bulk action however
+     * the food was cooked (cancellation likewise, in `cancelOrder`).
+     *
+     * Raw SQL because the counters follow the line's own `quantity`
+     * (`preparedQty = quantity`), which `updateMany` cannot express — and a
+     * READY line with `preparedQty` 0 would make the floor's Remaining wrong
+     * and the guest's "3 of 3 ready" impossible (abc.md §6).
+     */
+    const cascadeAt = utc(new Date())
+    if (params.status === 'PREPARING' && !routed) {
+      await tx.$executeRaw`
+        UPDATE order_items SET status = 'PREPARING', "updatedAt" = ${cascadeAt}
+         WHERE "orderId" = ${order.id} AND status = 'QUEUED'
+      `
+    }
+    if (params.status === 'READY' && !routed) {
+      await tx.$executeRaw`
+        UPDATE order_items
+           SET status = 'READY', "preparedQty" = quantity, "updatedAt" = ${cascadeAt}
+         WHERE "orderId" = ${order.id} AND status IN ('QUEUED', 'PREPARING')
+      `
+    }
+    if (params.status === 'SERVED') {
+      await tx.$executeRaw`
+        UPDATE order_items
+           SET status = 'SERVED', "preparedQty" = quantity, "servedQty" = quantity, "updatedAt" = ${cascadeAt}
+         WHERE "orderId" = ${order.id} AND status <> 'CANCELLED'
+      `
+    }
 
     // Ingredients leave stock once the kitchen commits to cooking, and go back
     // if the order is later cancelled. Reconciliation is declarative — it posts
@@ -1551,6 +1717,9 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
         groupName: option.groupName,
         name: option.name,
       })),
+      status: item.status,
+      preparedQty: item.preparedQty,
+      servedQty: item.servedQty,
     })),
   }
 }

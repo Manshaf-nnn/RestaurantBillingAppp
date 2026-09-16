@@ -1,6 +1,6 @@
 'use server'
 
-import type { OrderItemStatus, OrderStatus } from '@prisma/client'
+import type { OrderStatus } from '@prisma/client'
 
 import { revalidatePath } from 'next/cache'
 
@@ -32,6 +32,7 @@ import {
   updateGuestOrderItemsSchema,
   updateItemStatusSchema,
   updateOrderStatusSchema,
+  progressItemsSchema,
   serveOrderSchema,
 } from './schema'
 import {
@@ -39,8 +40,10 @@ import {
   cancelOrder as cancelOrderService,
   deriveOrderStatus,
   placeOrder as placeOrderService,
+  progressItems,
   updateOrderStatus as updateOrderStatusService,
   serveWholeOrder,
+  type ProgressedItem,
 } from './service'
 import { computeTotals, estimatePrepMinutes } from './pricing'
 import { readOptions } from './queries'
@@ -555,6 +558,9 @@ export async function updateGuestOrderItems(
               groupName: option.groupName,
               name: option.name,
             })),
+            status: item.status,
+            preparedQty: item.preparedQty,
+            servedQty: item.servedQty,
           })),
         }
         realtime.orderUpdated(restaurant.id, payload)
@@ -728,12 +734,18 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
  * the FIRST section starts, so a second section beginning twenty minutes later
  * inherited the older clock and looked instantly overdue.
  */
-const ITEM_TIMESTAMP: Partial<Record<OrderItemStatus, 'preparingAt' | 'readyAt' | 'servedAt'>> = {
-  PREPARING: 'preparingAt',
-  READY: 'readyAt',
-  SERVED: 'servedAt',
-}
-
+/**
+ * A single line's status, from a board that thinks in statuses.
+ *
+ * ── Now a thin face over `progressItems` (abc.md §6) ───────────────────────
+ *
+ * The section board's Start / Ready and the waiter's Serve still send a
+ * status; here it becomes counters: READY is "all of it prepared", SERVED is
+ * "all of it prepared and served". PREPARING is the one status that is not a
+ * counter — a cook pressing Start on three burgers has finished none of them
+ * — so it stays a plain flip, first-time stamped, and the order catches up
+ * as before. Going backwards is not a thing any board sends.
+ */
 export async function updateItemStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(updateItemStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
@@ -741,40 +753,110 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
 
     const item = await prisma.orderItem.findFirst({
       where: { id: data.itemId, order: { id: data.orderId, restaurantId: user.restaurantId } },
-      include: { order: { select: { status: true } } },
+      select: {
+        id: true, status: true, quantity: true, preparedQty: true, servedQty: true, preparingAt: true,
+        order: { select: { status: true, branchId: true } },
+      },
     })
     if (!item) throw new NotFoundError('Order item')
 
-    const stampField = ITEM_TIMESTAMP[data.status]
-    await prisma.orderItem.update({
-      where: { id: item.id },
-      data: {
-        status: data.status,
-        // Only the first time it reaches a state. Bouncing an item back and
-        // forth must not rewrite when it was actually cooked.
-        ...(stampField && item[stampField] === null ? { [stampField]: new Date() } : {}),
-      },
-    })
-    realtime.orderItemStatus(user.restaurantId, data.orderId, data.itemId, data.status)
+    if (data.status === 'PREPARING') {
+      // Only from the queue: a line with plates already made is past "started".
+      if (item.status === 'QUEUED') {
+        await prisma.orderItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'PREPARING',
+            // Only the first time it reaches a state — never rewrite when it
+            // was actually started.
+            ...(item.preparingAt === null ? { preparingAt: new Date() } : {}),
+          },
+        })
+        realtime.orderItemStatus(user.restaurantId, {
+          orderId: data.orderId,
+          itemId: item.id,
+          branchId: item.order.branchId,
+          status: 'PREPARING',
+          quantity: item.quantity,
+          preparedQty: item.preparedQty,
+          servedQty: item.servedQty,
+        })
+        // Let the order catch up with its items — `deriveOrderStatus` owns
+        // that, one direction only; read it before changing this.
+        await deriveOrderStatus({
+          restaurantId: user.restaurantId,
+          orderId: data.orderId,
+          actorId: user.id,
+          actorName: user.name,
+        })
+      }
+      return { id: item.id }
+    }
 
-    /*
-     * Let the order catch up with its items.
-     *
-     * `deriveOrderStatus` owns this now — it used to be an inline block here
-     * that only fired on the last SERVE. With kitchen sections, an order's
-     * status is a readout of its items in every direction: one section starting
-     * makes the order PREPARING, and the last section finishing makes it READY.
-     * The reasoning behind walking the ladder rather than jumping moved with the
-     * code; read it there before changing this.
-     */
-    await deriveOrderStatus({
+    const { changed } = await progressItems({
       restaurantId: user.restaurantId,
       orderId: data.orderId,
+      updates: [
+        data.status === 'READY'
+          ? { itemId: item.id, preparedQty: item.quantity }
+          : { itemId: item.id, preparedQty: item.quantity, servedQty: item.quantity },
+      ],
       actorId: user.id,
       actorName: user.name,
     })
-
+    await auditProgress(user, data.orderId, changed)
     return { id: item.id }
+  })
+}
+
+/**
+ * Item-level progress by quantity (abc.md §6): the KDS checkboxes and
+ * Select all, the "+1" on a line of three, the waiter serving what is ready.
+ *
+ * Every update in the call is one transaction: Select all either ticks the
+ * whole ticket or none of it. The service refuses anything backwards, over
+ * the quantity, or served before prepared; the order's status follows its
+ * lines; every board and the guest hear about each line that moved.
+ */
+export async function progressItemsAction(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; status: OrderStatus; moved: number }>> {
+  return runAction(progressItemsSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
+    await assertRecordBranch(user, await orderBranch(user.restaurantId, data.orderId), 'order')
+
+    const { order, changed } = await progressItems({
+      restaurantId: user.restaurantId,
+      orderId: data.orderId,
+      updates: data.updates,
+      actorId: user.id,
+      actorName: user.name,
+    })
+    await auditProgress(user, data.orderId, changed)
+
+    revalidatePath('/kitchen')
+    revalidatePath('/waiter')
+    revalidatePath('/dashboard/live')
+    return { orderId: order.id, status: order.status, moved: changed.length }
+  })
+}
+
+/** One audit row per call, listing every line that moved, before and after. */
+async function auditProgress(
+  user: { restaurantId: string; id: string; name: string },
+  orderId: string,
+  changed: ProgressedItem[],
+) {
+  if (changed.length === 0) return
+  await audit({
+    restaurantId: user.restaurantId,
+    userId: user.id,
+    actorName: user.name,
+    action: AUDIT_ACTIONS.ORDER_ITEM_PROGRESS,
+    entity: 'Order',
+    entityId: orderId,
+    before: Object.fromEntries(changed.map((c) => [c.itemId, { name: c.name, ...c.before }])),
+    after: Object.fromEntries(changed.map((c) => [c.itemId, { name: c.name, quantity: c.quantity, ...c.after }])),
   })
 }
 

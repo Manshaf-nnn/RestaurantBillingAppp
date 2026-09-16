@@ -165,9 +165,34 @@ export const updateItemStatusSchema = z.object({
   itemId: z.string().cuid(),
   // No CANCELLED: taking a line off a bill is `voidOrderItem` — a reason, a
   // recalculated total and returned stock — not a status flip that leaves the
-  // guest charged for food the kitchen stopped cooking.
-  status: z.enum(['QUEUED', 'PREPARING', 'READY', 'SERVED']),
+  // guest charged for food the kitchen stopped cooking. No QUEUED either:
+  // progress only moves forward (abc.md §6), and nothing ever sent it.
+  status: z.enum(['PREPARING', 'READY', 'SERVED']),
 })
+
+/**
+ * Item-level progress by quantity (abc.md §6): each update moves a line's
+ * prepared and/or served counter to the given value. Counters only go up and
+ * `served ≤ prepared ≤ quantity`; the service refuses anything else.
+ */
+export const progressItemsSchema = z.object({
+  orderId: z.string().cuid(),
+  updates: z
+    .array(
+      z
+        .object({
+          itemId: z.string().cuid(),
+          preparedQty: z.number().int().min(0).max(1000).optional(),
+          servedQty: z.number().int().min(0).max(1000).optional(),
+        })
+        .refine((u) => u.preparedQty !== undefined || u.servedQty !== undefined, {
+          message: 'Say what moved: prepared, served, or both',
+        }),
+    )
+    .min(1)
+    .max(100),
+})
+export type ProgressItemsInput = z.infer<typeof progressItemsSchema>
 
 export const serviceRequestSchema = z.object({
   tableId: z.string().cuid(),

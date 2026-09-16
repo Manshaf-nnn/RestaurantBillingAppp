@@ -169,15 +169,20 @@ function Board({
           icon={<Flame />} tone={tiles.delayedTables > 0 ? 'destructive' : 'success'}
           label="Delayed" value={`${tiles.delayedTables}`} hint={`over ${policy.delayedMax} min`}
         />
-        <StatCard icon={<ClipboardList />} tone="default" label="Ordered" value={`${tiles.ordered}`} hint="items" />
-        <StatCard icon={<ChefHat />} tone="warning" label="Preparing" value={`${tiles.preparing}`} hint="items" />
+        {/* abc.md §6: Ordered / Prepared / Served / Remaining, by quantity,
+            Remaining = Ordered − Prepared − Served. */}
+        <StatCard icon={<ClipboardList />} tone="default" label="Ordered" value={`${tiles.ordered}`} hint="items, by quantity" />
         <StatCard
           icon={<HandPlatter />} tone={tiles.ready > 0 ? 'warning' : 'default'}
-          label="Ready" value={`${tiles.ready}`} hint="waiting to go out"
+          label="Prepared" value={`${tiles.ready}`} hint="ready, waiting to go out"
         />
         <StatCard
-          icon={<UtensilsCrossed />} tone="success" label="Food out"
-          value={`${tiles.servedPct}%`} hint={`${tiles.served} of ${tiles.ordered} items`}
+          icon={<UtensilsCrossed />} tone="success" label="Served"
+          value={`${tiles.served}`} hint={`${tiles.servedPct}% of ordered`}
+        />
+        <StatCard
+          icon={<ChefHat />} tone={tiles.remaining > 0 ? 'warning' : 'success'}
+          label="Remaining" value={`${tiles.remaining}`} hint={`${tiles.preparing} cooking now`}
         />
       </div>
 
@@ -469,18 +474,20 @@ function TableCard({
         </span>
       </div>
 
-      <div className="mt-2.5 grid grid-cols-3 gap-1 text-center">
+      <div className="mt-2.5 grid grid-cols-4 gap-1 text-center">
         <Count icon={<ClipboardList />} value={table.ordered} label="ordered" />
-        <Count icon={<ChefHat />} value={table.preparing} label="preparing"
-          tone={table.preparing > 0 ? 'text-warning' : undefined} />
+        <Count icon={<HandPlatter />} value={table.ready} label="prepared"
+          tone={table.ready > 0 ? 'text-warning' : undefined} />
         <Count icon={<UtensilsCrossed />} value={table.served} label="served"
           tone={table.served > 0 ? 'text-success' : undefined} />
+        <Count icon={<ChefHat />} value={table.remaining} label="remaining"
+          tone={table.remaining > 0 ? 'text-muted-foreground' : 'text-success'} />
       </div>
 
       {table.ready > 0 ? (
         <p className="mt-1.5 flex items-center justify-center gap-1 rounded-md bg-warning/15 py-0.5 text-[11px] font-semibold text-warning [&_svg]:size-3">
           <HandPlatter />
-          {table.ready} ready to go out
+          {table.ready} prepared, waiting to go out
         </p>
       ) : null}
 
@@ -666,10 +673,11 @@ function CustomerPanel({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-3 gap-2 border-t border-border pt-3 text-center">
+      <div className="grid grid-cols-4 gap-2 border-t border-border pt-3 text-center">
         <Summary value={table.ordered} label="ordered" />
-        <Summary value={table.preparing} label="preparing" tone="text-warning" />
+        <Summary value={table.ready} label="prepared" tone="text-warning" />
         <Summary value={table.served} label="served" tone="text-success" />
+        <Summary value={table.remaining} label="remaining" />
       </div>
 
       <div className="mt-3 flex items-center gap-2">
@@ -681,7 +689,7 @@ function CustomerPanel({
       <dl className="mt-3 space-y-1.5 border-t border-border pt-3 text-sm">
         <Row label="At the table" value={<Elapsed since={table.seatedAt} />} />
         {table.guestCount ? <Row label="Guests" value={`${table.guestCount}`} /> : null}
-        {table.ready > 0 ? <Row label="Ready to go out" value={`${table.ready}`} /> : null}
+        {table.preparing > 0 ? <Row label="Cooking now" value={`${table.preparing}`} /> : null}
         {table.cancelled > 0 ? <Row label="Cancelled" value={`${table.cancelled}`} /> : null}
         {table.outstanding > 0 ? <Row label="Still to pay" value={money(table.outstanding)} /> : null}
         {table.orderIds.length > 1 ? <Row label="Rounds" value={`${table.orderIds.length}`} /> : null}

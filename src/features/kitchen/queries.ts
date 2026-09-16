@@ -30,6 +30,9 @@ export interface StationTicketItem {
   notes: string | null
   isVeg: boolean
   status: string
+  /** How many of `quantity` are done / carried out (abc.md §6). */
+  preparedQty: number
+  servedQty: number
   optionsLabel: string
   priority: string
   /** When this dish reached the section — the clock a cook is judged on. */
@@ -63,6 +66,8 @@ export async function getStationQueue(params: {
       notes: true,
       isVeg: true,
       status: true,
+      preparedQty: true,
+      servedQty: true,
       options: true,
       routedAt: true,
       preparingAt: true,
@@ -116,6 +121,8 @@ export async function getStationQueue(params: {
       notes: item.notes,
       isVeg: item.isVeg,
       status: item.status as string,
+      preparedQty: item.preparedQty,
+      servedQty: item.servedQty,
       optionsLabel: readOptionNames(item.options).join(' · '),
       priority: item.order.priority as string,
       routedAt: item.routedAt?.toISOString() ?? null,

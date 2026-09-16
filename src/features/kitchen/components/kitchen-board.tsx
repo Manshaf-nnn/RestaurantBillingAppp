@@ -10,15 +10,21 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
+import { Checkbox } from '@/components/ui/primitives'
 import { VegIndicator } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
 import { AutoRefresh } from '@/components/auto-refresh'
-import { EVENTS, type OrderStatusPayload, type OrderSummaryPayload } from '@/lib/realtime/events'
+import {
+  EVENTS,
+  type OrderItemProgressPayload,
+  type OrderStatusPayload,
+  type OrderSummaryPayload,
+} from '@/lib/realtime/events'
 import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { updateOrderStatus } from '@/features/orders/actions'
+import { progressItemsAction, updateOrderStatus } from '@/features/orders/actions'
 import { rejectOrderAction } from '@/features/kitchen/actions'
 import { acceptOrderAction, setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
@@ -45,9 +51,15 @@ export interface KitchenTicket {
     notes: string | null
     isVeg: boolean
     status: OrderItemStatus
+    /** How many of `quantity` are made / carried out (abc.md §6). */
+    preparedQty: number
+    servedQty: number
     optionsLabel: string
   }>
 }
+
+/** One line's progress, as the checkbox and the "+1" send it. */
+type ProgressUpdate = { itemId: string; preparedQty: number }
 
 export interface KitchenStats {
   pending: number
@@ -185,7 +197,9 @@ export function KitchenBoard({
       quantity: item.quantity,
       notes: item.notes,
       isVeg: item.isVeg,
-      status: 'PREPARING' as OrderItemStatus,
+      status: item.status as OrderItemStatus,
+      preparedQty: item.preparedQty,
+      servedQty: item.servedQty,
       optionsLabel: item.options.map((option) => option.name).join(' · '),
     })),
   })
@@ -235,6 +249,75 @@ export function KitchenBoard({
     setTickets((current) => current.filter((ticket) => ticket.id !== payload.orderId))
     toast.warning(`Order ${payload.orderNumber} was cancelled`)
   })
+
+  // A section board ticking one of this ticket's lines shows here at once.
+  useSocketEvent(EVENTS.ORDER_ITEM_STATUS, (payload: OrderItemProgressPayload) => {
+    setTickets((current) =>
+      current.map((ticket) =>
+        ticket.id !== payload.orderId
+          ? ticket
+          : {
+              ...ticket,
+              items: ticket.items.map((item) =>
+                item.id === payload.itemId
+                  ? {
+                      ...item,
+                      status: payload.status as OrderItemStatus,
+                      preparedQty: payload.preparedQty,
+                      servedQty: payload.servedQty,
+                    }
+                  : item,
+              ),
+            },
+      ),
+    )
+  })
+
+  /*
+   * Item-level progress (abc.md §6): a checkbox per line, Select all, and a
+   * "+1" on a line of several. One call per gesture, so Select all is one
+   * transaction; the server refuses anything backwards or over the quantity,
+   * derives the order's status from its lines, and tells the floor and the
+   * guest. The card is updated from the answer, not from hope.
+   */
+  const progress = async (ticket: KitchenTicket, updates: ProgressUpdate[]) => {
+    if (updates.length === 0) return
+    setPendingId(ticket.id)
+    const result = await callAction(() => progressItemsAction({ orderId: ticket.id, updates }))
+    setPendingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    const status = result.data.status
+    setTickets((current) =>
+      status === 'SERVED' || status === 'COMPLETED'
+        ? current.filter((entry) => entry.id !== ticket.id)
+        : current.map((entry) =>
+            entry.id !== ticket.id
+              ? entry
+              : {
+                  ...entry,
+                  status,
+                  items: entry.items.map((item) => {
+                    const update = updates.find((u) => u.itemId === item.id)
+                    if (!update) return item
+                    const preparedQty = Math.max(item.preparedQty, update.preparedQty)
+                    return {
+                      ...item,
+                      preparedQty,
+                      status:
+                        item.status === 'SERVED'
+                          ? item.status
+                          : preparedQty >= item.quantity
+                            ? 'READY'
+                            : 'PREPARING',
+                    }
+                  }),
+                },
+          ),
+    )
+  }
 
   /*
    * Taking an order on is its own action now, not a status change.
@@ -439,6 +522,7 @@ export function KitchenBoard({
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
                       onAccept={accept}
+                      onProgress={progress}
                       onPrioritise={prioritise}
                       restaurantName={restaurantName}
                       paperWidth={paperWidth}
@@ -462,6 +546,7 @@ function TicketCard({
   pending,
   onAdvance,
   onAccept,
+  onProgress,
   onPrioritise,
   restaurantName,
   paperWidth,
@@ -473,6 +558,7 @@ function TicketCard({
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
   onAccept: (ticket: KitchenTicket) => void
+  onProgress: (ticket: KitchenTicket, updates: ProgressUpdate[]) => void
   onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
   restaurantName: string
   paperWidth: PaperWidth
@@ -488,6 +574,12 @@ function TicketCard({
   // Colour the timer as the ticket ages against its own estimate.
   const overdue = elapsed > ticket.estimatedMinutes && ticket.status !== 'READY'
   const warning = !overdue && elapsed > ticket.estimatedMinutes * 0.7
+
+  // Boxes appear once the kitchen has taken the ticket on (abc.md §6).
+  const canTick = ticket.status !== 'PENDING'
+  const orderedCount = ticket.items.reduce((sum, item) => sum + item.quantity, 0)
+  const preparedCount = ticket.items.reduce((sum, item) => sum + item.preparedQty, 0)
+  const allPrepared = ticket.items.length > 0 && preparedCount >= orderedCount
 
   return (
     <motion.article
@@ -563,9 +655,45 @@ function TicketCard({
         </div>
       ) : null}
 
+      {/* abc.md §6: a box per line and Select all, once the ticket is taken on.
+          A box only ever gets ticked — progress does not go backwards — and a
+          line of several can be ticked one plate at a time. */}
+      {canTick ? (
+        <label className="flex cursor-pointer items-center gap-2 border-t bg-muted/30 px-3 py-1.5 text-xs font-semibold">
+          <Checkbox
+            checked={allPrepared}
+            disabled={pending || allPrepared}
+            onCheckedChange={() =>
+              onProgress(
+                ticket,
+                ticket.items
+                  .filter((item) => item.preparedQty < item.quantity)
+                  .map((item) => ({ itemId: item.id, preparedQty: item.quantity })),
+              )
+            }
+            aria-label="Select all"
+          />
+          Select all
+          <span className="ml-auto font-normal tabular-nums text-muted-foreground">
+            {preparedCount} of {orderedCount} prepared
+          </span>
+        </label>
+      ) : null}
+
       <ul className="divide-y">
-        {ticket.items.map((item) => (
+        {ticket.items.map((item) => {
+          const done = item.preparedQty >= item.quantity
+          return (
           <li key={item.id} className="flex gap-2.5 px-3 py-2.5">
+            {canTick ? (
+              <Checkbox
+                className="mt-1"
+                checked={done}
+                disabled={pending || done}
+                onCheckedChange={() => onProgress(ticket, [{ itemId: item.id, preparedQty: item.quantity }])}
+                aria-label={`${item.name} prepared`}
+              />
+            ) : null}
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-sm font-bold text-primary">
               {item.quantity}
             </span>
@@ -579,6 +707,21 @@ function TicketCard({
                   <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-success">
                     <Check className="size-3" /> Served
                   </span>
+                ) : done ? (
+                  <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-success">
+                    <Check className="size-3" /> Ready
+                  </span>
+                ) : canTick && item.quantity > 1 ? (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => onProgress(ticket, [{ itemId: item.id, preparedQty: item.preparedQty + 1 }])}
+                    className="ml-auto shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums hover:bg-muted disabled:opacity-50"
+                    aria-label={`One more ${item.name} prepared`}
+                    title="One more plate prepared"
+                  >
+                    {item.preparedQty} of {item.quantity} · +1
+                  </button>
                 ) : null}
               </p>
               {item.optionsLabel ? (
@@ -591,7 +734,8 @@ function TicketCard({
               ) : null}
             </div>
           </li>
-        ))}
+          )
+        })}
       </ul>
 
       {ticket.notes ? (

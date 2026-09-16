@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { resolveServiceRequest, serveOrder, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
+import { progressItemsAction, resolveServiceRequest, serveOrder, updateOrderStatus } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { SettableTableState, TableState } from '@/features/floor/table-state'
@@ -58,6 +58,9 @@ export interface WaiterOrder {
     isVeg: boolean
     notes: string | null
     status: OrderItemStatus
+    /** How many of `quantity` the kitchen has made, and how many are out (abc.md §6). */
+    preparedQty: number
+    servedQty: number
   }>
 }
 
@@ -235,30 +238,49 @@ export function WaiterBoard({
     setRequests((current) => current.filter((request) => request.id !== payload.id))
   })
 
-  // Serve a single item. When it's the last outstanding item the server moves
-  // the whole order to SERVED, so we drop the card once every item is served.
-  const serveItem = async (orderId: string, itemId: string) => {
-    setBusyId(itemId)
-    const result = await callAction(() => updateItemStatus({ orderId, itemId, status: 'SERVED' }))
+  /*
+   * Serve what is ready on one line (abc.md §6): every plate the kitchen has
+   * made and nobody has carried out yet. Two of three burgers ready means
+   * "Serve 2"; the third follows when it is made. The server refuses serving
+   * food that is not prepared, moves the order to SERVED when the last plate
+   * goes out, and tells the floor and the guest. The card goes once every
+   * line is fully served.
+   */
+  const serveItem = async (order: WaiterOrder, item: WaiterOrder['items'][number]) => {
+    setBusyId(item.id)
+    const result = await callAction(() =>
+      progressItemsAction({ orderId: order.id, updates: [{ itemId: item.id, servedQty: item.preparedQty }] }),
+    )
     setBusyId(null)
 
     if (!result.ok) {
       toast.error(result.error)
       return
     }
+    const orderStatus = result.data.status
     setReady((current) =>
       current
-        .map((order) =>
-          order.id === orderId
+        .map((entry) =>
+          entry.id === order.id
             ? {
-                ...order,
-                items: order.items.map((it) =>
-                  it.id === itemId ? { ...it, status: 'SERVED' as OrderItemStatus } : it,
+                ...entry,
+                items: entry.items.map((it) =>
+                  it.id === item.id
+                    ? {
+                        ...it,
+                        servedQty: item.preparedQty,
+                        status: item.preparedQty >= it.quantity ? ('SERVED' as OrderItemStatus) : it.status,
+                      }
+                    : it,
                 ),
               }
-            : order,
+            : entry,
         )
-        .filter((order) => !order.items.every((it) => it.status === 'SERVED')),
+        .filter(
+          (entry) =>
+            !(entry.id === order.id && (orderStatus === 'SERVED' || orderStatus === 'COMPLETED')) &&
+            !entry.items.every((it) => it.servedQty >= it.quantity),
+        ),
     )
   }
 
@@ -393,20 +415,26 @@ export function WaiterBoard({
                           >
                             {item.name}
                           </span>
-                          {item.status === 'SERVED' ? (
+                          {item.servedQty >= item.quantity || item.status === 'SERVED' ? (
                             <span className="flex items-center gap-1 text-xs font-semibold text-success">
                               <Check className="size-3.5" /> Served
                             </span>
-                          ) : (
+                          ) : item.preparedQty > item.servedQty ? (
                             <Button
                               size="sm"
                               variant="outline"
                               className="h-7 shrink-0 px-2.5 text-xs"
                               loading={busyId === item.id}
-                              onClick={() => serveItem(order.id, item.id)}
+                              onClick={() => serveItem(order, item)}
                             >
-                              Serve
+                              {item.preparedQty < item.quantity
+                                ? `Serve ${item.preparedQty - item.servedQty} of ${item.quantity}`
+                                : 'Serve'}
                             </Button>
+                          ) : (
+                            <span className="text-xs tabular-nums text-muted-foreground">
+                              {item.servedQty > 0 ? `${item.servedQty} of ${item.quantity} out · ` : ''}cooking
+                            </span>
                           )}
                         </li>
                       ))}
