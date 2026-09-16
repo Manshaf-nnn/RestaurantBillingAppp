@@ -48,7 +48,7 @@ import { getFundBalance } from '@/features/pettycash/service'
  * field to tamper with.
  */
 
-export interface HandoverActor extends DrawerActor {}
+export type HandoverActor = DrawerActor
 
 /**
  * Who a till can be handed to.
@@ -57,7 +57,7 @@ export interface HandoverActor extends DrawerActor {}
  * posted id — the pair that drifted apart would be a dropdown that filters and
  * a server that does not.
  */
-const HANDOVER_ROLES = new Set<UserRole>(['CASHIER', 'MANAGER', 'ADMIN', 'OWNER'])
+export const HANDOVER_ROLES = new Set<UserRole>(['CASHIER', 'MANAGER', 'ADMIN', 'OWNER'])
 
 /**
  * Count the drawer, close it, and offer it to the next cashier.
@@ -372,8 +372,97 @@ export async function listPendingForUser(restaurantId: string, userId: string) {
       fromUser: { select: { name: true } },
       branch: { select: { name: true } },
       register: { select: { name: true } },
+      // The shift handover this till is part of, when there is one
+      // (recorrection.md §2): those are accepted there, not here.
+      shiftHandover: { select: { id: true } },
     },
   })
+}
+
+/**
+ * Withdraw a handover nobody has accepted (recorrection.md §2).
+ *
+ * ── The cash is never in no session ─────────────────────────────────────────
+ *
+ * Requesting a handover CLOSES the outgoing session — the count is on it and
+ * the till is released. Until now the only ways out of a pending handover
+ * were accept and decline, and a decline left the counted cash belonging to
+ * nobody: session closed, no new one opened, the notes still in the drawer.
+ * The code even told people to "cancel that first" and offered no way to.
+ *
+ * Withdrawing re-opens a drawer for the outgoing cashier with the counted
+ * amount as its float and the tin carried across — exactly what accepting
+ * does for the incoming cashier, pointed the other way. The closed session
+ * keeps its count; the chain of custody reads close → withdraw → re-open.
+ *
+ * The status is in the WHERE, as on accept and decline: a withdraw racing an
+ * accept matches no row and rolls back, so a till cannot be both taken and
+ * given back. The same two open-session keys apply, so a cashier who already
+ * opened another drawer in the meantime is refused rather than made
+ * accountable for two.
+ */
+export async function cancelHandover(params: {
+  restaurantId: string
+  handoverId: string
+  userId: string
+  actor: HandoverActor
+}): Promise<{ handover: CashHandover; reopenedSessionId: string }> {
+  const handover = await requireHandover(params.restaurantId, params.handoverId, params.actor)
+  if (handover.status !== 'PENDING') {
+    throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
+  }
+  if (handover.fromUserId !== params.userId && !params.actor.canManageOthers) {
+    throw new ForbiddenError('Only the person who handed the till over, or a manager, can withdraw it')
+  }
+
+  const now = new Date()
+  const tin = await getFundBalance(params.restaurantId, handover.fromSessionId)
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const settled = await tx.cashHandover.updateMany({
+          where: { id: handover.id, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        })
+        if (settled.count === 0) {
+          throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
+        }
+
+        const session = await tx.cashDrawerSession.create({
+          data: {
+            restaurantId: params.restaurantId,
+            branchId: handover.branchId,
+            registerId: handover.registerId,
+            sessionNumber: await nextSessionNumber(params.restaurantId, now),
+            openedById: handover.fromUserId,
+            openingFloat: handover.countedAmount,
+            openingPettyCash: tin.balance,
+            openingNote: 'Handover withdrawn — re-opened with the counted amount',
+            activeRegisterKey: handover.registerId,
+            activeCashierKey: handover.fromUserId,
+          },
+        })
+
+        const fresh = await tx.cashHandover.findUniqueOrThrow({ where: { id: handover.id } })
+        return { handover: fresh, reopenedSessionId: session.id }
+      })
+    } catch (error) {
+      const e = error as { code?: string; meta?: { target?: unknown } }
+      if (e.code !== 'P2002') throw error
+
+      const target = Array.isArray(e.meta?.target) ? e.meta.target.map(String) : []
+      if (target.includes('sessionNumber')) continue
+
+      throw new AppError(
+        'The till, or the cashier, already has a drawer open, so this handover cannot be withdrawn. Close that drawer first.',
+        409,
+        'HANDOVER_CANNOT_REOPEN',
+      )
+    }
+  }
+
+  throw new AppError('Could not withdraw the handover, try again', 409, 'HANDOVER_RACE')
 }
 
 export async function listHandovers(params: {

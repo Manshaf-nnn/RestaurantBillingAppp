@@ -18,7 +18,7 @@ export interface CashHandoverRow {
   countedAmount: number
   variance: number
   note: string | null
-  status: 'PENDING' | 'ACCEPTED' | 'DECLINED'
+  status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED'
   createdAt: string
   acceptedAt: string | null
 }

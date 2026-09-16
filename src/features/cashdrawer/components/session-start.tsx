@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Banknote, LogOut, Wallet } from 'lucide-react'
@@ -58,6 +59,8 @@ export interface SessionStartRegister {
 
 export interface SessionStartHandover {
   id: string
+  /** Set when the till is part of a shift handover — accepted on that screen, not here. */
+  shiftHandoverId: string | null
   fromName: string
   branchName: string | null
   registerName: string | null
@@ -202,19 +205,32 @@ export function SessionStart({
             {handover.note ? (
               <p className="mt-1 italic text-muted-foreground">“{handover.note}”</p>
             ) : null}
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" disabled={busy} onClick={() => takeOver(handover.id)}>
-                Take it on
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => decline(handover.id)}
-              >
-                It does not match
-              </Button>
-            </div>
+            {handover.shiftHandoverId ? (
+              /*
+               * One accept path (recorrection.md §2). The till came with a
+               * shift, and accepting the till alone would open a drawer in
+               * this person's name while the shift handover sat pending.
+               */
+              <div className="mt-3">
+                <Button size="sm" asChild>
+                  <Link href="/dashboard/handover">Review and accept the shift</Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" disabled={busy} onClick={() => takeOver(handover.id)}>
+                  Take it on
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => decline(handover.id)}
+                >
+                  It does not match
+                </Button>
+              </div>
+            )}
           </div>
         ))}
 

@@ -8,6 +8,9 @@ import { listShiftNotes } from '@/features/handover/queries'
 import { OutstandingTasks } from '@/features/handover/components/outstanding-tasks'
 import { listInstructions } from '@/features/instructions/service'
 import { listHandovers } from '@/features/handover/cash-service'
+import { ShiftHandoverPanel } from '@/features/handover/components/shift-handover'
+import { listShiftHandovers } from '@/features/handover/shift-service'
+import { localeForCurrency } from '@/lib/money'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -33,7 +36,14 @@ export default async function HandoverPage({
    */
   const selection = await selectedBranch(user, await searchParams)
 
-  const [notes, restaurant, handovers, tasks] = await Promise.all([
+  /*
+   * Who may read the whole floor's handovers (correctionA.md §11's rule,
+   * carried to the shift handover): somebody who manages staff or drawers.
+   * Everyone else sees the ones they were part of.
+   */
+  const seesAll = can(user, PERMISSIONS.CASH_DRAWER_MANAGE) || can(user, PERMISSIONS.STAFF_MANAGE)
+
+  const [notes, restaurant, handovers, tasks, shiftHandovers, waiting] = await Promise.all([
     listShiftNotes(user.restaurantId, selection.branchIds),
     requireRestaurant(user.restaurantId),
     /*
@@ -69,16 +79,40 @@ export default async function HandoverPage({
       status: 'OPEN',
       limit: 20,
     }),
+    // recorrection.md §2 — the shift handover for every role.
+    listShiftHandovers({
+      restaurantId: user.restaurantId,
+      branchIds: selection.branchIds,
+      participantId: seesAll ? undefined : user.id,
+      limit: 40,
+    }),
+    // Waiting on THIS person, whatever the switcher says: a handover to you
+    // is yours to answer wherever you are standing.
+    listShiftHandovers({ restaurantId: user.restaurantId, participantId: user.id, status: 'PENDING_ACCEPTANCE', limit: 10 }),
   ])
+  const forMe = waiting.filter((row) => row.toId === user.id)
+  const mine = waiting.find((row) => row.fromId === user.id) ?? null
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
 
   return (
     <>
       <AutoRefresh intervalMs={15000} />
       <PageHeader
         title="Shift handover"
-        description="Leave notes for the next shift, and pass the till on with both counts recorded."
+        description="Hand your shift to whoever is taking over — with your till, if you have one — and leave notes for the next shift."
       />
       <div className="space-y-6">
+        <ShiftHandoverPanel
+          viewerId={user.id}
+          viewerName={user.name}
+          waiting={forMe}
+          mine={mine}
+          history={shiftHandovers}
+          canCancelOthers={seesAll}
+          currency={restaurant.currency}
+          locale={locale}
+          branchId={scopeToOne(selection) === '__none__' ? null : scopeToOne(selection)}
+        />
         {/*
           Above the till log: the things somebody has to SAY before they leave
           come before the record of what was counted.

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ChefHat, LayoutDashboard, LogOut, MapPin, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
+import { ArrowRightLeft, ChefHat, LayoutDashboard, LogOut, MapPin, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -155,6 +155,18 @@ export function OpsShell({
                 <DropdownMenuItem asChild>
                   <Link href="/dashboard">
                     <LayoutDashboard /> Dashboard
+                  </Link>
+                </DropdownMenuItem>
+                {/*
+                  Where somebody going home looks (recorrection.md §2). A
+                  waiter or a cook has no drawer console and no dashboard
+                  sidebar to find the handover from; the account menu, next
+                  to Sign out, is the one place every floor role opens at the
+                  end of a shift.
+                */}
+                <DropdownMenuItem asChild>
+                  <Link href="/dashboard/handover">
+                    <ArrowRightLeft /> Shift handover
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />

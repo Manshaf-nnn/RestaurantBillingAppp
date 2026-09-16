@@ -13,7 +13,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { LocalDateTime } from '@/components/local-time'
-import { formatMoney, minorUnitFactor } from '@/lib/money'
+import { formatMoney } from '@/lib/money'
 import {
   closeDrawerAction,
   forceCloseDrawerAction,
@@ -21,7 +21,6 @@ import {
   recordCashMovementAction,
   reviewDrawerAction,
 } from '../actions'
-import { requestHandoverAction } from '@/features/handover/cash-actions'
 import { MANUAL_MOVEMENT_TYPES, MOVEMENT_TYPES } from '../movement-types'
 import type { DrawerPageData } from '../queries'
 import type { DrawerClosure } from '../closure'
@@ -326,7 +325,7 @@ function OpenDrawerPanel({
         </SectionCard>
       )}
 
-      <HandoverForm data={data} money={money} variance={null} />
+      <HandoverForm data={data} />
 
       <SectionCard
         title="Close drawer"
@@ -508,147 +507,29 @@ function MovementForm({ sessionId }: { sessionId: string }) {
 
 // ── handover ─────────────────────────────────────────────────────────────────
 
-function HandoverForm({
-  data,
-  money,
-  variance,
-}: {
-  data: DrawerPageData
-  money: (m: number) => string
-  variance: number | null
-}) {
-  const open = data.open!
-  const router = useRouter()
-  const [show, setShow] = React.useState(false)
-  const [toUserId, setToUserId] = React.useState('')
-  const [counted, setCounted] = React.useState('')
-  const [reason, setReason] = React.useState('')
-  const [note, setNote] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
-
+function HandoverForm({ data }: { data: DrawerPageData }) {
+  /*
+   * A pointer, not a form (recorrection.md §2).
+   *
+   * Handing the till on is part of handing the SHIFT on — the same moment,
+   * the same person taking over, and the drawer count is one line of the
+   * summary they accept. Keeping a second, cash-only form here meant two
+   * doors to one handover, and the one that skipped the shift summary was
+   * the one people used. The count, the variance rule and the one-in-flight
+   * guard are unchanged; they run from the shift handover now.
+   */
   if (data.handoverCandidates.length === 0) return null
-
-  const factor = minorUnitFactor(data.currency)
-  const countedMinor = Number(counted) * factor
-  const gap =
-    counted.trim() && Number.isFinite(countedMinor)
-      ? Math.round(countedMinor) - open.expectedCash
-      : null
-  // Same rule as closing: only a gap big enough to matter has to be explained.
-  const reasonMissing =
-    gap !== null &&
-    data.varianceThreshold > 0 &&
-    Math.abs(gap) >= data.varianceThreshold &&
-    reason.trim().length < 2
-
-  const submit = async () => {
-    const value = Number(counted)
-    if (!counted.trim() || !Number.isFinite(value) || value < 0) {
-      toast.error('Count the drawer before you hand it on')
-      return
-    }
-    if (!toUserId) {
-      toast.error('Pick who is taking over')
-      return
-    }
-    setBusy(true)
-    const result = await callAction(() =>
-      requestHandoverAction({
-        sessionId: open.session.id,
-        toUserId,
-        countedAmount: value,
-        varianceReason: reason,
-        note,
-      }),
-    )
-    setBusy(false)
-    if (!result.ok) {
-      toast.error(result.error)
-      return
-    }
-    toast.success('Handed over. They confirm it on their own screen.')
-    router.refresh()
-  }
-
   return (
     <SectionCard
       title="Hand over the till"
-      description="Your session closes and theirs opens with what you counted, so only one of you is ever accountable for it."
-      actions={
-        <Button variant="ghost" size="sm" onClick={() => setShow((s) => !s)}>
-          <ArrowRightLeft className="mr-2 h-4 w-4" />
-          {show ? 'Not now' : 'Hand over'}
-        </Button>
-      }
+      description="Done as part of your shift handover: count the drawer there, pick who takes over, and their session opens with what you counted when they accept."
     >
-      {show ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="hto">Taking over</Label>
-            <select
-              id="hto"
-              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
-              value={toUserId}
-              onChange={(e) => setToUserId(e.target.value)}
-            >
-              <option value="">Choose someone</option>
-              {data.handoverCandidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="hcount">You counted</Label>
-            <Input
-              id="hcount"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={counted}
-              onChange={(e) => setCounted(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Expected {money(open.expectedCash)}
-              {gap !== null && gap !== 0
-                ? ` · ${gap > 0 ? 'over' : 'short'} by ${money(Math.abs(gap))}`
-                : ''}
-            </p>
-          </div>
-          {gap !== null && gap !== 0 && (
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="hreason">
-                Why is it {gap > 0 ? 'over' : 'short'}? <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="hreason"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="A handover is a close. It needs the same explanation."
-              />
-            </div>
-          )}
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="hnote">Note for them (optional)</Label>
-            <Input
-              id="hnote"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. table 6 still owes for two drinks"
-            />
-          </div>
-          <div className="sm:col-span-2">
-            <Button onClick={submit} disabled={busy || reasonMissing}>
-              {busy ? 'Handing over…' : 'Hand over the till'}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Going home mid-service? Count the drawer and pass it on rather than leaving it open.
-          {variance !== null ? ' Your count above is not used here — count again for the handover.' : ''}
-        </p>
-      )}
+      <Button variant="outline" asChild>
+        <Link href="/dashboard/handover">
+          <ArrowRightLeft className="mr-2 h-4 w-4" />
+          Hand over your shift
+        </Link>
+      </Button>
     </SectionCard>
   )
 }
@@ -681,7 +562,10 @@ function IncomingHandovers({
             </p>
             {h.note ? <p className="mt-1 italic text-muted-foreground">“{h.note}”</p> : null}
             <Button className="mt-2" size="sm" asChild>
-              <Link href="/cashier/session">Take it on</Link>
+              {/* Part of a shift handover: accepted there. A bare till handover (legacy) still goes through the session screen. */}
+              <Link href={h.shiftHandoverId ? '/dashboard/handover' : '/cashier/session'}>
+                {h.shiftHandoverId ? 'Review and accept the shift' : 'Take it on'}
+              </Link>
             </Button>
           </li>
         ))}

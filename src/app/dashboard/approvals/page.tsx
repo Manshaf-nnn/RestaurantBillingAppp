@@ -74,12 +74,21 @@ export default async function ApprovalsPage({
    * and changed the pending desk not at all. Every one is validated or ignored
    * by the service; an unknown status or kind simply does not narrow anything.
    */
+  // A date from the URL is a calendar day; the window is its whole day.
+  const day = (key: string, end: boolean): Date | undefined => {
+    const value = str(key)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
+    const date = new Date(`${value}T${end ? '23:59:59.999' : '00:00:00.000'}Z`)
+    return Number.isNaN(date.getTime()) ? undefined : date
+  }
   const filters = {
     status: str('status') || undefined,
     kind: str('kind') || undefined,
     requestedById: str('requestedBy') || undefined,
     fromBranchId: str('fromBranch') || undefined,
     toBranchId: str('toBranch') || undefined,
+    from: day('from', false),
+    to: day('to', true),
   }
   const filtered = Object.values(filters).some(Boolean)
 
@@ -95,6 +104,8 @@ export default async function ApprovalsPage({
       requestedById: filters.requestedById,
       fromBranchId: filters.fromBranchId,
       toBranchId: filters.toBranchId,
+      from: filters.from,
+      to: filters.to,
     }),
     branchNameFor(user.restaurantId, selection.branchId),
     listSwitchableLocations(user.restaurantId, visibleBranchIds(user)),

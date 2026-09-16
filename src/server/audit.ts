@@ -152,6 +152,17 @@ export const AUDIT_ACTIONS = {
   DRAWER_HANDED_OVER: 'cashDrawer.handed_over',
   DRAWER_HANDOVER_ACCEPTED: 'cashDrawer.handover_accepted',
   DRAWER_HANDOVER_DECLINED: 'cashDrawer.handover_declined',
+  /** Withdrawn before anyone accepted; the outgoing drawer re-opened (recorrection.md §2). */
+  DRAWER_HANDOVER_CANCELLED: 'cashDrawer.handover_cancelled',
+  /**
+   * The shift handover for every role (recorrection.md §2). Its own keys, not
+   * the drawer's: a waiter's handover has no till in it, and a cashier's is
+   * the drawer keys above PLUS one of these — two records for two things.
+   */
+  SHIFT_HANDOVER_STARTED: 'shiftHandover.started',
+  SHIFT_HANDOVER_COMPLETED: 'shiftHandover.completed',
+  SHIFT_HANDOVER_REJECTED: 'shiftHandover.rejected',
+  SHIFT_HANDOVER_CANCELLED: 'shiftHandover.cancelled',
   REGISTER_CREATED: 'cashRegister.created',
   REGISTER_TOGGLED: 'cashRegister.toggled',
 

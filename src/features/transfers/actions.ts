@@ -125,7 +125,13 @@ export async function requestTransferAction(
           kind: 'STOCK_TRANSFER',
           entity: 'StockTransfer',
           entityId: transfer.id,
-          reason: `${transfer.number}: ${data.lines.length} item${data.lines.length === 1 ? '' : 's'} from ${ends.from} to ${ends.to}`,
+          // The requester's own words (recorrection.md §1: "Reason: Low stock").
+          // The generated line was all the approver ever saw; the reason the
+          // branch typed sat in `notes` on the transfer and never reached the
+          // desk.
+          reason:
+            data.notes?.trim() ||
+            `${transfer.number}: ${data.lines.length} item${data.lines.length === 1 ? '' : 's'} from ${ends.from} to ${ends.to}`,
           payload: {
             number: transfer.number,
             fromBranchId: data.fromBranchId,

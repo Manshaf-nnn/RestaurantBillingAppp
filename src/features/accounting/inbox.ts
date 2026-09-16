@@ -112,6 +112,9 @@ export interface InboxFilters {
   requestedById?: string
   fromBranchId?: string
   toBranchId?: string
+  /** When it was raised — inclusive bounds, already at day start / day end. */
+  from?: Date
+  to?: Date
 }
 
 const categoryFor = (kind: string): InboxCategory =>
@@ -180,6 +183,11 @@ export async function getApprovalsInbox(
   const genericKind = kindFilter && kindFilter !== 'STOCK_WRITEOFF' ? { kind: kindFilter as never } : {}
 
   const byRequester = filters.requestedById ? { requestedById: filters.requestedById } : {}
+  // The same window on every queue, on the field that means "raised at".
+  const raised = (field: string) =>
+    filters.from || filters.to
+      ? { [field]: { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lte: filters.to } : {}) } }
+      : {}
   const fromBranch = filters.fromBranchId ? { branchId: filters.fromBranchId } : {}
   // Only a transfer has a destination; a To filter excludes everything else.
   const toBranch: Prisma.ApprovalRequestWhereInput = filters.toBranchId
@@ -194,6 +202,7 @@ export async function getApprovalsInbox(
             status: 'PENDING',
             ...genericKind,
             ...byRequester,
+            ...raised('createdAt'),
             AND: [atBranchOrGlobal, fromBranch, toBranch],
           },
           select: {
@@ -210,7 +219,7 @@ export async function getApprovalsInbox(
     wantOthers && !filters.toBranchId
       ? prisma.outgoingPayment.findMany({
           where: {
-            restaurantId, status: 'SUBMITTED', ...atBranch, ...fromBranch,
+            restaurantId, status: 'SUBMITTED', ...atBranch, ...fromBranch, ...raised('createdAt'),
             ...(filters.requestedById ? { submittedById: filters.requestedById } : {}),
           },
           select: {
@@ -224,7 +233,7 @@ export async function getApprovalsInbox(
       : Promise.resolve([]),
     wantOthers && !filters.toBranchId
       ? prisma.pettyCashRequest.findMany({
-          where: { restaurantId, status: 'PENDING', ...atBranch, ...fromBranch, ...byRequester },
+          where: { restaurantId, status: 'PENDING', ...atBranch, ...fromBranch, ...byRequester, ...raised('requestedAt') },
           select: {
             id: true, amount: true, description: true, requestedAt: true,
             branchId: true, branch: { select: { name: true } }, requestedById: true,
@@ -237,7 +246,7 @@ export async function getApprovalsInbox(
     wantOthers && !filters.toBranchId
       ? prisma.stockCount.findMany({
           where: {
-            restaurantId, status: 'AWAITING_APPROVAL', ...atBranch, ...fromBranch,
+            restaurantId, status: 'AWAITING_APPROVAL', ...atBranch, ...fromBranch, ...raised('createdAt'),
             ...(filters.requestedById ? { countedById: filters.requestedById } : {}),
           },
           select: {
@@ -252,7 +261,7 @@ export async function getApprovalsInbox(
     wantOthers && !filters.toBranchId
       ? prisma.purchase.findMany({
           where: {
-            restaurantId, status: 'PENDING_APPROVAL', ...atBranch, ...fromBranch,
+            restaurantId, status: 'PENDING_APPROVAL', ...atBranch, ...fromBranch, ...raised('createdAt'),
             ...(filters.requestedById ? { createdById: filters.requestedById } : {}),
           },
           select: {
@@ -276,7 +285,7 @@ export async function getApprovalsInbox(
     wantWastage && !filters.toBranchId
       ? prisma.wastageRecord.findMany({
           where: {
-            restaurantId, status: 'RECORDED', ...atBranch, ...fromBranch,
+            restaurantId, status: 'RECORDED', ...atBranch, ...fromBranch, ...raised('createdAt'),
             ...(filters.requestedById ? { createdById: filters.requestedById } : {}),
           },
           select: {

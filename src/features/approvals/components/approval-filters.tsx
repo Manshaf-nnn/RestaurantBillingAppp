@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { FilterX } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ItemPicker } from '@/components/ui/item-picker'
 
@@ -51,14 +52,38 @@ export function ApprovalFilters({
     router.push(`?${next.toString()}`, { scroll: false })
   }
 
-  const FILTER_KEYS = ['status', 'kind', 'requestedBy', 'fromBranch', 'toBranch']
+  const FILTER_KEYS = ['from', 'to', 'status', 'kind', 'requestedBy', 'fromBranch', 'toBranch']
   const active = FILTER_KEYS.filter((key) => value(key))
 
   const locationOptions = locations.map((l) => ({ value: l.id, label: l.name }))
 
   return (
     <div className="mb-4 space-y-3">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+        {/*
+          A date range (recorrection.md §1) — on both lists: when a request was
+          raised is the first thing anyone narrows a busy desk by.
+        */}
+        <div className="space-y-1">
+          <Label className="text-xs" htmlFor="approvals-from">From date</Label>
+          <Input
+            id="approvals-from"
+            type="date"
+            value={value('from')}
+            max={value('to') || undefined}
+            onChange={(event) => set({ from: event.target.value })}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs" htmlFor="approvals-to">To date</Label>
+          <Input
+            id="approvals-to"
+            type="date"
+            value={value('to')}
+            min={value('from') || undefined}
+            onChange={(event) => set({ to: event.target.value })}
+          />
+        </div>
         <div className="space-y-1">
           <Label className="text-xs">Status</Label>
           <ItemPicker

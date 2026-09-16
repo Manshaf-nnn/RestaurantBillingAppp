@@ -323,6 +323,10 @@ async function main() {
     check('to Kandy drops it', !(await has({ toBranchId: kandy.id })))
     check('status = waiting keeps it', await has({ status: 'PENDING' }))
     check('status = approved empties the pending desk by definition', (await getApprovalsInbox(restaurant.id, null, { status: 'APPROVED' })).length === 0)
+    const dayMs = 86_400_000
+    check('a date range that covers today keeps it', await has({ from: new Date(Date.now() - dayMs), to: new Date(Date.now() + dayMs) }))
+    check('a range ending yesterday drops it', !(await has({ to: new Date(Date.now() - dayMs) })))
+    check('a range starting tomorrow drops it', !(await has({ from: new Date(Date.now() + dayMs) })))
   }
 
   console.log('\n── 6. Write-offs join the desk ──')

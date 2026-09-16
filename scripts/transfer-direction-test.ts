@@ -103,6 +103,9 @@ async function main() {
     // reversed, by name.
     check('requestTransferAction guards the DESTINATION side', /assertTransferSide\([^)]*'DESTINATION'\)/.test(request))
     check('and no longer EITHER', !/assertTransferSide\([^)]*'EITHER'\)/.test(request))
+    // "Reason: Low stock" (recorrection.md §1): what the branch typed is what
+    // the approver reads, not a generated line about item counts.
+    check("the requester's reason is the approval's reason", /reason:\s*\n?\s*data\.notes\?\.trim\(\) \|\|/.test(request))
   }
 
   console.log('\n── 2. The form knows whom it is for ──')

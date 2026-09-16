@@ -56,6 +56,8 @@ export interface PettyRow {
 
 export interface HandoverRow {
   id: string
+  /** Set when this till change is part of a shift handover, which is where it is accepted. */
+  shiftHandoverId: string | null
   fromName: string
   branchName: string | null
   registerName: string | null
@@ -343,6 +345,7 @@ export async function getDrawerPageData(params: {
     petty,
     pendingHandovers: pendingHandovers.map((h) => ({
       id: h.id,
+      shiftHandoverId: h.shiftHandover?.id ?? null,
       fromName: h.fromUser?.name ?? 'A colleague',
       branchName: h.branch?.name ?? null,
       registerName: h.register?.name ?? null,

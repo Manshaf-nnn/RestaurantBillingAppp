@@ -281,6 +281,22 @@ enum CashHandoverStatus {
   PENDING
   ACCEPTED
   DECLINED
+  /// Withdrawn by the outgoing cashier (or a manager) before anyone accepted;
+  /// the outgoing drawer is re-opened with the counted amount so the cash is
+  /// never in no session (recorrection.md §2).
+  CANCELLED
+}
+
+/// A shift handover between two people (recorrection.md §2).
+enum ShiftHandoverStatus {
+  /// Confirmed by the outgoing person; waiting for the receiver.
+  PENDING_ACCEPTANCE
+  /// The receiver accepted. This is the terminal "done" state.
+  COMPLETED
+  /// The receiver refused, with a reason.
+  REJECTED
+  /// Withdrawn before a decision.
+  CANCELLED
 }
 
 enum ServiceRequestType {
@@ -698,6 +714,7 @@ model Restaurant {
   cashRegisters    CashRegister[]
   pettyCash        PettyCashRequest[]
   cashHandovers    CashHandover[]
+  shiftHandovers   ShiftHandover[]
   storageLocations StorageLocation[]
   stockCounts      StockCount[]
   recipes          Recipe[]
@@ -968,6 +985,8 @@ model User {
   pettyPaid           PettyCashRequest[]  @relation("PettyPaidBy")
   handoversGiven      CashHandover[]      @relation("HandoverFrom")
   handoversReceived   CashHandover[]      @relation("HandoverTo")
+  shiftHandoversGiven    ShiftHandover[] @relation("ShiftHandoverFrom")
+  shiftHandoversReceived ShiftHandover[] @relation("ShiftHandoverTo")
   countsCounted       StockCount[]        @relation("CountCountedBy")
   countsApproved      StockCount[]        @relation("CountApprovedBy")
   recipesCreated      Recipe[]            @relation("RecipeCreatedBy")
@@ -3073,6 +3092,7 @@ model Branch {
   cashRegisters    CashRegister[]
   pettyCash        PettyCashRequest[]
   cashHandovers    CashHandover[]
+  shiftHandovers   ShiftHandover[]
   reservations     Reservation[]
   errorLogs        ErrorLog[]
 
@@ -3334,10 +3354,63 @@ model CashHandover {
   status     CashHandoverStatus @default(PENDING)
   createdAt  DateTime           @default(now())
   acceptedAt DateTime?
+  /// The shift handover this till change was part of, when there was one.
+  shiftHandover ShiftHandover?
 
   @@index([restaurantId, branchId, createdAt])
   @@index([toUserId, status])
   @@map("cash_handovers")
+}
+
+/// One shift handing over to the next, for every role (recorrection.md §2).
+///
+/// A cashier's handover has always existed as `CashHandover` — the till going
+/// from one drawer session to the next. Everyone else had nothing but an
+/// unaddressed note. This is the general record: who handed over to whom, at
+/// which site, what the outgoing person's summary said at the moment they
+/// confirmed, and whether the receiver accepted. When the outgoing person had
+/// a drawer, the cash handover is nested inside it by `cashHandoverId`, and the
+/// two move together: confirm requests the till, accept takes it, reject
+/// declines it, cancel withdraws it and re-opens the outgoing drawer.
+///
+/// `summary` is a snapshot, deliberately. What the floor looked like when
+/// somebody went home is a fact about that moment; recomputing it later would
+/// describe a different evening.
+model ShiftHandover {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  fromUserId String
+  fromUser   User   @relation("ShiftHandoverFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUserId   String
+  toUser     User   @relation("ShiftHandoverTo", fields: [toUserId], references: [id], onDelete: Restrict)
+
+  /// The outgoing person's open attendance shift at the time, when they had one.
+  fromShiftId String?
+  /// The till, when the outgoing person had one. One cash handover belongs to
+  /// at most one shift handover.
+  cashHandoverId String?       @unique
+  cashHandover   CashHandover? @relation(fields: [cashHandoverId], references: [id], onDelete: SetNull)
+
+  status ShiftHandoverStatus @default(PENDING_ACCEPTANCE)
+
+  /// Snapshot at confirm: drawer, orders, open tasks, open notes.
+  summary      Json
+  notes        String?
+  rejectReason String?
+
+  createdAt   DateTime  @default(now())
+  decidedAt   DateTime?
+  decidedById String?
+
+  @@index([restaurantId, status])
+  @@index([restaurantId, toUserId, status])
+  @@index([restaurantId, fromUserId, status])
+  @@index([restaurantId, branchId, createdAt])
+  @@map("shift_handovers")
 }
 
 /// A place stock physically sits — main store, bar fridge, kitchen line.

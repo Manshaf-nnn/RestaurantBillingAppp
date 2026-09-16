@@ -68,6 +68,7 @@ export default async function CashierSessionPage({
       registers={registers.map((r) => ({ id: r.id, name: r.name, branchId: r.branchId }))}
       handovers={handovers.map((h) => ({
         id: h.id,
+        shiftHandoverId: h.shiftHandover?.id ?? null,
         fromName: h.fromUser?.name ?? 'A colleague',
         branchName: h.branch?.name ?? null,
         registerName: h.register?.name ?? null,

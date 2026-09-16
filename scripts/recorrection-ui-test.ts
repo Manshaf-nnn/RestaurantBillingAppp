@@ -1,5 +1,5 @@
 /**
- * recorrection.md §1, §3 and §4, in a browser.
+ * recorrection.md §1, §2, §3 and §4, in a browser.
  *
  * ── Why this needs a browser ────────────────────────────────────────────────
  *
@@ -115,6 +115,8 @@ async function cleanup(id: string) {
   await prisma.stockTransferLine.deleteMany({ where: { transfer: { restaurantId: id } } })
   await prisma.stockTransfer.deleteMany({ where: { restaurantId: id } })
   await prisma.approvalRequest.deleteMany({ where: { restaurantId: id } })
+  await prisma.shiftHandover.deleteMany({ where: { restaurantId: id } })
+  await prisma.notification.deleteMany({ where: { restaurantId: id } })
   await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: id } } })
   await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: id } } })
   await prisma.wastageRecord.deleteMany({ where: { restaurantId: id } })
@@ -401,6 +403,59 @@ async function main() {
         (o) => o.status === 'COMPLETED',
       )
       check('marked done from the detail', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
+    }
+
+    console.log('\n── 9. Shift handover: start → select → review → confirm, then accept ──')
+    {
+      await jayPage.goto(`${BASE}/dashboard/handover`, { waitUntil: 'networkidle' })
+      await jayPage.getByRole('button', { name: 'Start handover' }).click()
+      const dialog = jayPage.locator('[role="dialog"]')
+      await dialog.waitFor()
+      await dialog.getByText('Who is taking over?').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      await dialog.getByRole('combobox').click()
+      const listbox = jayPage.locator('[role="listbox"]')
+      await listbox.waitFor()
+      const options = await listbox.innerText()
+      check('the receiver picker shows name, role and location', /Owner/.test(options) && /every location/.test(options))
+      check('and nobody from the wrong role', !/Staff 01/.test(options))
+      await jayPage.getByRole('option', { name: /Owner/ }).click()
+      await dialog.getByRole('button', { name: 'Review', exact: true }).click()
+      await dialog.getByText('Review your shift').waitFor()
+      check('Review shows the server-built summary', (await dialog.locator('[data-testid="handover-summary"]').count()) === 1)
+      check('at the right site', (await dialog.innerText()).includes('Jaffna'))
+      await dialog.getByPlaceholder(/table 6 still owes/).fill('Walk-in door sticks')
+      await dialog.getByRole('button', { name: 'Confirm handover' }).click()
+      await dialog.getByText(/Waiting for Owner to accept/).waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('Confirm hands it over and says who it waits on', await seen(jayPage, /Waiting for Owner to accept/))
+      await dialog.getByRole('button', { name: 'Done' }).click()
+
+      const row = await eventually(
+        () => prisma.shiftHandover.findFirst({ where: { restaurantId: restaurant.id, fromUserId: jay.id }, orderBy: { createdAt: 'desc' } }),
+        (r) => r !== null,
+      )
+      check('the handover is pending acceptance, to the owner', row?.status === 'PENDING_ACCEPTANCE' && row.toUserId === owner.id)
+      check('with the notes', row?.notes === 'Walk-in door sticks')
+      check('and the owner was notified', (await prisma.notification.findFirst({ where: { restaurantId: restaurant.id, userId: owner.id, title: { contains: 'handing their shift to you' } } })) !== null)
+      await jayPage.reload({ waitUntil: 'networkidle' })
+      check('Jay sees it waiting on the owner', await seen(jayPage, /Waiting for .*Owner.* to accept/))
+
+      await ownerPage.goto(`${BASE}/dashboard/handover`, { waitUntil: 'networkidle' })
+      check('the owner sees it waiting for them', await seen(ownerPage, /Waiting for you \(1\)/))
+      await ownerPage.getByRole('button', { name: /Review & accept/ }).click()
+      const review = ownerPage.locator('[role="dialog"]')
+      await review.waitFor()
+      const text = await review.innerText()
+      // The section heading is styled `uppercase`; innerText honours it.
+      check('the review carries the summary and the notes', text.includes('Walk-in door sticks') && /open tasks/i.test(text))
+      await review.getByRole('button', { name: 'Accept', exact: true }).click()
+      const done = await eventually(
+        () => prisma.shiftHandover.findUniqueOrThrow({ where: { id: row!.id } }),
+        (r) => r.status === 'COMPLETED',
+      )
+      check('accepting completes it', done.status === 'COMPLETED' && done.decidedById === owner.id)
+      check('and Jay is told', (await prisma.notification.findFirst({ where: { restaurantId: restaurant.id, userId: jay.id, title: { contains: 'accepted your shift handover' } } })) !== null)
+      await ownerPage.reload({ waitUntil: 'networkidle' })
+      check('it is in the history as completed', (await ownerPage.locator('tr[data-status="COMPLETED"]').count()) >= 1)
     }
   } finally {
     await browser?.close()

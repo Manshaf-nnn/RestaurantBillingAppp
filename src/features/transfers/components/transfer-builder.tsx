@@ -252,8 +252,8 @@ export function TransferBuilder({
         )}
       </SectionCard>
 
-      <SectionCard title="Notes">
-        <Textarea rows={2} placeholder="Anything the sending location should know" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      <SectionCard title="Reason" description="Why you need it. This is what the approver reads.">
+        <Textarea rows={2} placeholder="e.g. Low stock for the weekend" value={notes} onChange={(e) => setNotes(e.target.value)} />
       </SectionCard>
 
       <Button size="lg" onClick={submit} disabled={busy}>

@@ -185,6 +185,12 @@ const SERVICE = [
   // handover history is shown to the people entitled to read it: a manager
   // sees the floor's, a cashier only the ones they were part of.
   'handover-flow-test',
+  // recorrection.md §2 — a shift handover for every role: who may take over
+  // from whom, the guards (self, role, site, one in flight each way, tenant),
+  // accept/reject-with-reason/withdraw, the till nested inside a cashier's
+  // (confirm requests it, accept takes it, reject declines it, withdraw
+  // re-opens the outgoing drawer), notifications, participant-scoped history.
+  'shift-handover-test',
   'feature-access-test',
   // correctionA.md §5/§6/§7 — every screen names the location it is acting on
   // (including the one-location case, where the switcher renders no menu), and
