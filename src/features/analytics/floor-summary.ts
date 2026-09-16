@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import type { DateRange } from '@/features/reports/range'
 import { prisma } from '@/server/db/prisma'
 import { utc } from '@/server/db/sql-time'
+import { RESERVATION_LEAD_MINUTES } from '@/features/floor/table-state'
 
 /**
  * The floor: what it looks like right now, and which tables earn.
@@ -17,26 +18,25 @@ import { utc } from '@/server/db/sql-time'
  * counts ignore the range, and only the takings table uses it. Same split as
  * the dashboard's hero row, for the same reason.
  *
- * ── Why "in use" is more than OCCUPIED ──────────────────────────────────────
+ * ── Three states (abc.md §3) ────────────────────────────────────────────────
  *
- * `TableStatus` has eight values and four of them mean a guest is sitting
- * there: ORDERING, EATING, WAITING_BILL and OCCUPIED. The dashboard's existing
- * tile counts only the last one, so a table whose guests are mid-meal reads as
- * free. That tile is left alone here — changing a number somebody watches
- * daily is its own decision — but this summary counts all four, and labels the
- * figure "in use" rather than "occupied" so the two are not mistaken for the
- * same measurement.
+ * A table is Empty, Occupied or Reserved. Occupied is the stored column, kept
+ * true by the order and payment writers; Reserved is a booking in its window;
+ * out of service is `isActive`. The four legacy "in use" spellings are folded
+ * so a row the backfill missed reads the same here as in the app.
  *
  * This is the first floor analytics in the codebase; `src/features/floor/` has
  * actions and no queries at all.
  */
 export interface FloorSummary {
-  /** Live counts. Not affected by the range. */
+  /** Live counts, in the three-state vocabulary (abc.md §3). Not affected by the range. */
   inUse: number
   free: number
-  cleaning: number
+  /** A booking in its window, nobody seated yet — derived, never stored. */
   reserved: number
+  /** `isActive = false`: a fact about the table, not about who is at it. */
   outOfService: number
+  /** Active tables. */
   total: number
   /** Over the period. */
   topTables: Array<{
@@ -52,7 +52,12 @@ export interface FloorSummary {
   averageTableSpend: number
 }
 
-/** The four statuses that mean a guest is at the table. */
+/**
+ * The stored values that mean a guest is at the table. Only OCCUPIED is
+ * written any more; the other three are folded exactly as
+ * `normalizeTableStatus` folds them, so a row the backfill missed reads the
+ * same in SQL as in the app.
+ */
 const IN_USE = Prisma.sql`('ORDERING', 'EATING', 'WAITING_BILL', 'OCCUPIED')`
 
 export async function getFloorSummary(params: {
@@ -61,6 +66,8 @@ export async function getFloorSummary(params: {
   branchIds?: string[] | null
 }): Promise<FloorSummary> {
   const { restaurantId, range } = params
+  // Timestamps are naive UTC (see sql-time); `now()` would compare in the session zone.
+  const now = new Date()
   const ids = params.branchIds
 
   const scope = (alias: string) =>
@@ -70,26 +77,37 @@ export async function getFloorSummary(params: {
         : Prisma.sql`AND false`
       : Prisma.empty
 
+  /*
+   * Reserved is a booking in its window (`RESERVATION_LEAD_MINUTES` before the
+   * booked time until it ends), asked of the reservations table — the same
+   * rule `tableStatesFor` applies in the app. Out of service is `isActive`.
+   */
   const [counts] = await prisma.$queryRaw<
     Array<{
       in_use: bigint
       free: bigint
-      cleaning: bigint
       reserved: bigint
       out_of_service: bigint
       total: bigint
     }>
   >`
     SELECT
-      COUNT(*) FILTER (WHERE t.status IN ${IN_USE})::bigint      AS in_use,
-      COUNT(*) FILTER (WHERE t.status = 'AVAILABLE')::bigint     AS free,
-      COUNT(*) FILTER (WHERE t.status = 'CLEANING')::bigint      AS cleaning,
-      COUNT(*) FILTER (WHERE t.status = 'RESERVED')::bigint      AS reserved,
-      COUNT(*) FILTER (WHERE t.status = 'OUT_OF_SERVICE')::bigint AS out_of_service,
-      COUNT(*)::bigint                                            AS total
+      COUNT(*) FILTER (WHERE t."isActive" AND t.status IN ${IN_USE})::bigint                        AS in_use,
+      COUNT(*) FILTER (WHERE t."isActive" AND t.status NOT IN ${IN_USE} AND NOT booked.now)::bigint AS free,
+      COUNT(*) FILTER (WHERE t."isActive" AND t.status NOT IN ${IN_USE} AND booked.now)::bigint     AS reserved,
+      COUNT(*) FILTER (WHERE NOT t."isActive")::bigint                                              AS out_of_service,
+      COUNT(*) FILTER (WHERE t."isActive")::bigint                                                  AS total
     FROM restaurant_tables t
+    CROSS JOIN LATERAL (
+      SELECT EXISTS (
+        SELECT 1 FROM reservations r
+         WHERE r."tableId" = t.id
+           AND r.status IN ('PENDING', 'CONFIRMED')
+           AND r."reservedAt" - (${RESERVATION_LEAD_MINUTES} * INTERVAL '1 minute') <= ${utc(now)}
+           AND r."reservedAt" + (r."durationMinutes" * INTERVAL '1 minute') > ${utc(now)}
+      ) AS now
+    ) booked
     WHERE t."restaurantId" = ${restaurantId}
-      AND t."isActive" = true
       ${scope('t')}
   `
 
@@ -148,7 +166,6 @@ export async function getFloorSummary(params: {
   return {
     inUse: Number(counts?.in_use ?? 0),
     free: Number(counts?.free ?? 0),
-    cleaning: Number(counts?.cleaning ?? 0),
     reserved: Number(counts?.reserved ?? 0),
     outOfService: Number(counts?.out_of_service ?? 0),
     total: Number(counts?.total ?? 0),

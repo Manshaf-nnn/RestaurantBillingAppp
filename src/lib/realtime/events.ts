@@ -131,6 +131,8 @@ export interface TablePayload {
   id: string
   number: string
   status: TableStatus
+  /** Rooms are not branch-scoped, so the payload says which site (abc.md §9). */
+  branchId: string | null
 }
 
 export interface NotificationPayload {

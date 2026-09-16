@@ -3,6 +3,8 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
+import { normalizeTableStatus } from '@/features/floor/table-state'
+import { tableStatesFor } from '@/features/floor/table-state-server'
 import type { CustomerHistoryRow, FloorTableRow, OpenOrderRow, ServiceCallRow } from './derive'
 
 /**
@@ -168,6 +170,12 @@ export async function getLiveBoard(params: {
     `,
   ])
 
+  const states = await tableStatesFor(prisma, {
+    restaurantId,
+    branchId,
+    occupiedIds: orders.map((o) => o.tableId).filter((id): id is string => id !== null),
+  })
+
   const customerIds = [
     ...new Set(
       orders
@@ -225,7 +233,9 @@ export async function getLiveBoard(params: {
       label: row.label,
       area: row.area,
       capacity: row.capacity,
-      status: String(row.status),
+      // The derived three-state value (abc.md §3): Reserved while a booking's
+      // window covers now, Occupied when an open order says so, else Empty.
+      status: states.get(row.id)?.state ?? normalizeTableStatus(row.status),
       sortOrder: row.sortOrder,
     })),
   }

@@ -6,6 +6,7 @@ import type {
   TableStatus,
   UserRole,
 } from '@prisma/client'
+import { normalizeTableStatus, type TableState } from '@/features/floor/table-state'
 import {
   ChefHat,
   CheckCircle2,
@@ -44,15 +45,11 @@ export const PAYMENT_STATUS_META: Record<PaymentStatus, { label: string; variant
   FAILED: { label: 'Failed', variant: 'destructive' },
 }
 
-export const TABLE_STATUS_META: Record<TableStatus, { label: string; variant: Variant; dot: string }> = {
+/** Three states (abc.md §3). Anything stored in the old vocabulary is folded by `normalizeTableStatus`. */
+export const TABLE_STATUS_META: Record<TableState, { label: string; variant: Variant; dot: string }> = {
   AVAILABLE: { label: 'Empty', variant: 'secondary', dot: 'bg-muted-foreground' },
-  ORDERING: { label: 'Ordering', variant: 'info', dot: 'bg-chart-2' },
-  EATING: { label: 'Eating', variant: 'success', dot: 'bg-success' },
-  WAITING_BILL: { label: 'Waiting bill', variant: 'warning', dot: 'bg-warning' },
   OCCUPIED: { label: 'Occupied', variant: 'default', dot: 'bg-primary' },
   RESERVED: { label: 'Reserved', variant: 'info', dot: 'bg-chart-2' },
-  CLEANING: { label: 'Cleaning', variant: 'default', dot: 'bg-primary' },
-  OUT_OF_SERVICE: { label: 'Out of service', variant: 'secondary', dot: 'bg-muted-foreground' },
 }
 
 export const RESERVATION_STATUS_META: Record<ReservationStatus, { label: string; variant: Variant }> = {
@@ -93,8 +90,8 @@ export function PaymentStatusBadge({ status, className }: { status: PaymentStatu
   )
 }
 
-export function TableStatusBadge({ status, className }: { status: TableStatus; className?: string }) {
-  const meta = TABLE_STATUS_META[status]
+export function TableStatusBadge({ status, className }: { status: TableStatus | TableState; className?: string }) {
+  const meta = TABLE_STATUS_META[normalizeTableStatus(status)]
   return (
     <Badge variant={meta.variant} className={className}>
       <span className={cn('size-1.5 rounded-full', meta.dot)} />

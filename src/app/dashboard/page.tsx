@@ -530,7 +530,7 @@ export default async function DashboardPage({
               <div className="grid grid-cols-2 gap-px border-b bg-border sm:grid-cols-4">
                 <FloorTile label="In use" value={floor.inUse} tone="text-warning" />
                 <FloorTile label="Free" value={floor.free} tone="text-success" />
-                <FloorTile label="Cleaning" value={floor.cleaning} />
+                <FloorTile label="Out of service" value={floor.outOfService} />
                 <FloorTile label="Reserved" value={floor.reserved} />
               </div>
 

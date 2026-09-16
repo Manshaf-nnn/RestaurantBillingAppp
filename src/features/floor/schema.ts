@@ -20,7 +20,9 @@ export const tableSchema = z.object({
   label: z.string().trim().max(40).optional().or(z.literal('')),
   area: z.string().trim().max(40).optional().or(z.literal('')),
   capacity: z.coerce.number().int().min(1, 'At least 1 seat').max(50),
-  status: z.enum(['AVAILABLE', 'OCCUPIED', 'RESERVED', 'CLEANING', 'OUT_OF_SERVICE']).default('AVAILABLE'),
+  // Empty or Occupied (abc.md §3). Reserved comes from bookings; out of
+  // service is `isActive`, toggled from the card.
+  status: z.enum(['AVAILABLE', 'OCCUPIED']).default('AVAILABLE'),
   notes: z.string().trim().max(200).optional().or(z.literal('')),
 })
 export type TableInput = z.infer<typeof tableSchema>
@@ -33,24 +35,22 @@ export const bulkTablesSchema = z.object({
   area: z.string().trim().max(40).optional().or(z.literal('')),
 })
 
+/**
+ * The two states a person may set (abc.md §3). ORDERING / EATING / WAITING_BILL
+ * / CLEANING / OUT_OF_SERVICE are gone from the vocabulary: the first three
+ * were "occupied" said three ways, cleaning is not a state the system can
+ * know, and out of service is `isActive`. RESERVED is never posted — a
+ * booking in its window makes a table Reserved by itself.
+ */
 export const updateTableStatusSchema = z.object({
   id: z.string().cuid(),
-  status: z.enum([
-    'AVAILABLE',
-    'ORDERING',
-    'EATING',
-    'WAITING_BILL',
-    'OCCUPIED',
-    'RESERVED',
-    'CLEANING',
-    'OUT_OF_SERVICE',
-  ]),
+  status: z.enum(['AVAILABLE', 'OCCUPIED']),
 })
 
-/** The everyday statuses a waiter can set from the floor. */
+/** What a waiter sets from the floor: seat a walk-in, or clear a table. */
 export const serviceTableStatusSchema = z.object({
   id: z.string().cuid(),
-  status: z.enum(['AVAILABLE', 'ORDERING', 'EATING', 'WAITING_BILL', 'CLEANING']),
+  status: z.enum(['AVAILABLE', 'OCCUPIED']),
 })
 
 export const reservationSchema = z.object({

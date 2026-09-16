@@ -1,5 +1,5 @@
 import 'server-only'
-import type { Order, OrderItem, OrderStatus, Prisma, TableStatus } from '@prisma/client'
+import type { Order, OrderItem, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
@@ -20,6 +20,8 @@ import {
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
+import { normalizeTableStatus } from '@/features/floor/table-state'
 import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import type { OrderSummaryPayload } from '@/lib/realtime/events'
@@ -749,12 +751,12 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
        * screen reading `RestaurantTable.status` under-reported the floor from
        * about lunchtime onwards.
        *
-       * Deliberately not "anything except OCCUPIED": `ORDERING`, `EATING` and
-       * `WAITING_BILL` are set by hand on the waiter board and say more than
-       * `OCCUPIED` does. A second round ordered while a table waits for its
-       * bill must not overwrite `WAITING_BILL` with something coarser.
+       * Anything that is not OCCUPIED means nobody is sitting there (abc.md
+       * §3): Empty, a leftover hand-set Reserved, or a booking whose party has
+       * just arrived — this order IS the seating. The finer hand-set states
+       * that once had to be preserved here no longer exist.
        */
-      if (table && NOBODY_SEATED.has(table.status)) {
+      if (table && normalizeTableStatus(table.status) !== 'OCCUPIED') {
         await tx.restaurantTable.update({
           where: { id: table.id },
           data: { status: 'OCCUPIED' },
@@ -918,11 +920,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
  * cleaning after its bill settles, only a busser clears it, and until this was
  * widened the next party to sit down never marked the table occupied.
  *
- * `RESERVED` is here too — a booked party arriving and ordering is exactly the
- * moment the booking becomes a seating. The four in-use states are absent on
- * purpose; see the seating code above.
+ * The set that once listed the "nobody seated" statuses is gone with them
+ * (abc.md §3): a table is OCCUPIED or it is not, and `normalizeTableStatus`
+ * answers that for any value the column still carries.
  */
-const NOBODY_SEATED = new Set<TableStatus>(['AVAILABLE', 'CLEANING', 'RESERVED'])
 
 const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   PENDING: ['ACCEPTED', 'PREPARING', 'CANCELLED'],
@@ -1130,6 +1131,7 @@ export async function updateOrderStatus(params: {
   const timestampField = STATUS_TIMESTAMP[params.status]
 
   let lowStockCandidates: string[] = []
+  let freedTable: FreedTable | null = null
 
   const updated = await prisma.$transaction(async (tx) => {
     /*
@@ -1247,31 +1249,20 @@ export async function updateOrderStatus(params: {
       lowStockCandidates = depleted.affectedItemIds
     }
 
-    // Free the table once everything on it is settled.
+    // Free the table once everything on it is settled (abc.md §3): Empty, and
+    // the sitting closed, in the one writer every path shares.
     if (params.status === 'COMPLETED' && order.tableId) {
-      const openOrders = await tx.order.count({
-        where: {
-          restaurantId: order.restaurantId,
-          tableId: order.tableId,
-          id: { not: order.id },
-          status: { notIn: ['COMPLETED', 'CANCELLED'] },
-        },
+      const openOrders = await otherOpenOrders(tx, {
+        restaurantId: order.restaurantId, tableId: order.tableId, exceptOrderId: order.id,
       })
       if (openOrders === 0) {
-        await tx.restaurantTable.update({
-          where: { id: order.tableId },
-          data: { status: 'CLEANING' },
-        })
-        // The table clearing is what ends the sitting.
-        await tx.tableSession.updateMany({
-          where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
-          data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
-        })
+        freedTable = await freeTable(tx, { restaurantId: order.restaurantId, tableId: order.tableId })
       }
     }
 
     return next
   })
+  announceFreed(order.restaurantId, freedTable)
 
   // Warn the floor about anything this order pushed to its reorder level —
   // after commit, so the warning can only ever describe stock that really moved.
@@ -1353,6 +1344,7 @@ export async function cancelOrder(params: {
     throw new AppError('Refund what has been paid before cancelling this order', 409, 'ORDER_PAID')
   }
 
+  let freedTable: FreedTable | null = null
   const updated = await prisma.$transaction(async (tx) => {
     /*
      * Which direction this order's statuses flow.
@@ -1450,23 +1442,11 @@ export async function cancelOrder(params: {
     })
 
     if (order.tableId) {
-      const openOrders = await tx.order.count({
-        where: {
-          restaurantId: order.restaurantId,
-          tableId: order.tableId,
-          id: { not: order.id },
-          status: { notIn: ['COMPLETED', 'CANCELLED'] },
-        },
+      const openOrders = await otherOpenOrders(tx, {
+        restaurantId: order.restaurantId, tableId: order.tableId, exceptOrderId: order.id,
       })
       if (openOrders === 0) {
-        await tx.restaurantTable.update({
-          where: { id: order.tableId },
-          data: { status: 'AVAILABLE' },
-        })
-        await tx.tableSession.updateMany({
-          where: { restaurantId: order.restaurantId, tableId: order.tableId, status: 'OPEN' },
-          data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
-        })
+        freedTable = await freeTable(tx, { restaurantId: order.restaurantId, tableId: order.tableId })
       }
     }
 
@@ -1486,6 +1466,7 @@ export async function cancelOrder(params: {
 
     return next
   })
+  announceFreed(order.restaurantId, freedTable)
 
   realtime.orderCancelled(order.restaurantId, {
     orderId: order.id,
@@ -1518,6 +1499,20 @@ export async function cancelOrder(params: {
 // Recipe-driven depletion now lives in @/features/inventory/depletion.
 
 // ── broadcasting ─────────────────────────────────────────────────────────────
+
+/**
+ * Tell the floor a table is Empty — after commit, never from inside the
+ * transaction that freed it. The manual status actions always emitted this;
+ * the automatic writers (settled, completed, cancelled) never did, so a table
+ * freed by a payment stayed Occupied on every open screen until somebody
+ * refreshed (abc.md §9).
+ */
+function announceFreed(restaurantId: string, table: FreedTable | null) {
+  if (!table) return
+  realtime.tableUpdated(restaurantId, {
+    id: table.id, number: table.number, status: 'AVAILABLE', branchId: table.branchId,
+  })
+}
 
 export async function toOrderPayload(orderId: string): Promise<OrderSummaryPayload | null> {
   const order = await prisma.order.findUnique({

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import type { OrderItemStatus, ServiceRequestType, TableStatus } from '@prisma/client'
+import type { OrderItemStatus, ServiceRequestType } from '@prisma/client'
 import {
   Bell,
   Check,
@@ -31,14 +31,13 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { resolveServiceRequest, serveOrder, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
+import type { SettableTableState, TableState } from '@/features/floor/table-state'
 import { callAction } from '@/lib/use-action'
 
-const TABLE_STATUSES: Array<{ value: TableStatus; label: string }> = [
+/** What a waiter sets by hand (abc.md §3). Reserved comes from bookings. */
+const TABLE_STATUSES: Array<{ value: SettableTableState; label: string }> = [
   { value: 'AVAILABLE', label: 'Empty' },
-  { value: 'ORDERING', label: 'Ordering' },
-  { value: 'EATING', label: 'Eating' },
-  { value: 'WAITING_BILL', label: 'Bill' },
-  { value: 'CLEANING', label: 'Clean' },
+  { value: 'OCCUPIED', label: 'Occupied' },
 ]
 
 export interface WaiterOrder {
@@ -74,7 +73,9 @@ export interface WaiterTable {
   label: string | null
   area: string | null
   capacity: number
-  status: TableStatus
+  /** The derived three-state value. */
+  status: TableState
+  reservedFor: string | null
   openOrders: Array<{ id: string; orderNumber: string; status: string; grandTotal: number; paymentStatus: string }>
 }
 
@@ -272,7 +273,7 @@ export function WaiterBoard({
     toast.success(`Order ${order.orderNumber} served`)
   }
 
-  const setTableStatus = async (tableId: string, status: TableStatus) => {
+  const setTableStatus = async (tableId: string, status: SettableTableState) => {
     setTables((current) => current.map((t) => (t.id === tableId ? { ...t, status } : t)))
     const result = await callAction(() => setServiceTableStatus({ id: tableId, status }))
     if (!result.ok) toast.error(result.error)
@@ -489,7 +490,7 @@ export function WaiterBoard({
                   className={cn(
                     'rounded-xl border bg-card p-4 shadow-soft transition-colors',
                     table.status === 'OCCUPIED' && 'border-primary/40 bg-primary/5',
-                    table.status === 'CLEANING' && 'border-warning/40 bg-warning/5',
+                    table.status === 'RESERVED' && 'border-chart-2/40 bg-chart-2/5',
                   )}
                 >
                   <div className="flex items-start justify-between">
@@ -499,6 +500,7 @@ export function WaiterBoard({
 
                   <p className="mt-1 text-xs text-muted-foreground">
                     {table.area ? `${table.area} · ` : ''}seats {table.capacity}
+                    {table.reservedFor ? ` · reserved for ${table.reservedFor}` : ''}
                   </p>
 
                   <div className="mt-3 flex flex-wrap gap-1">

@@ -172,6 +172,10 @@ const SERVICE = [
   'expiry-tracking-test',
   'staff-attendance-test',
   'live-board-test',
+  // abc.md §3 — a table is Empty, Occupied or Reserved: an order seats it,
+  // settling or cancelling the last order frees it (Empty, not Cleaning),
+  // Reserved is derived from a booking's window and never stored.
+  'table-state-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',

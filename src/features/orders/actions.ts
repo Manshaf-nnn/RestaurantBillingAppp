@@ -16,6 +16,7 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
+import { tableStatesFor } from '@/features/floor/table-state-server'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
@@ -83,6 +84,8 @@ export async function resolveTable(
     branchCode: string
     branchName: string
     openBill: { orders: number; itemCount: number; outstanding: number } | null
+    /** A booking whose window covers now, so the guest can check it is theirs. */
+    reservedFor: { name: string; at: string } | null
   }>
 > {
   return runAction(tableEntrySchema, input, async (data) => {
@@ -124,9 +127,13 @@ export async function resolveTable(
         'TABLE_NOT_FOUND',
       )
     }
-    if (table.status === 'OUT_OF_SERVICE') {
-      throw new AppError('This table is not in service. Please ask our staff for help.', 409, 'TABLE_CLOSED')
-    }
+    // Out of service is `isActive`, already in the query above (abc.md §3).
+    // A booking in its window is told to the guest rather than refused: the
+    // party sitting down is, in the ordinary case, the party that booked.
+    const held = (await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [table.id] })).get(table.id)
+    const reservedFor = held?.reservation
+      ? { name: held.reservation.customerName, at: held.reservation.reservedAt.toISOString() }
+      : null
 
     // A table can already be mid-service: an earlier round from the same party,
     // or a previous group whose bill has not been settled. Either way the guest
@@ -163,6 +170,7 @@ export async function resolveTable(
       branchCode: branch.code,
       branchName: branch.name,
       openBill,
+      reservedFor,
     }
   })
 }

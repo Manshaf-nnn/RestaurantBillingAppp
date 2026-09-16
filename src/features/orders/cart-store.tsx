@@ -38,6 +38,8 @@ export interface TableSession {
   tableId: string
   tableNumber: string
   label: string | null
+  /** A booking whose window covers now (abc.md §3), so the guest can check it is theirs. */
+  reservedFor?: { name: string; at: string } | null
   /**
    * The branch this table is at, carried from the QR through to the order.
    *

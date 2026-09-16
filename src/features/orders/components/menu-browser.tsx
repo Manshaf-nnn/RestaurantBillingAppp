@@ -292,6 +292,22 @@ export function MenuBrowser({
           </div>
         ) : null}
 
+        {state.table?.reservedFor ? (
+          <div className="guest-surface mx-4 mt-4 flex items-start gap-3 rounded-2xl border p-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/15 text-lg">
+              🪑
+            </span>
+            <div className="min-w-0 text-xs leading-snug">
+              <p className="guest-ink font-semibold">
+                Table {state.table.tableNumber} is reserved for {state.table.reservedFor.name}
+              </p>
+              <p className="guest-ink-muted">
+                If that is you, welcome — go ahead and order. If not, please ask our staff for a table.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {loyalty?.enabled && loyalty.earnRateX100 > 0 ? (
           <div
             className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border p-3 backdrop-blur-xl"

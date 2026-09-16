@@ -4,6 +4,8 @@ import type { OrderStatus, Prisma } from '@prisma/client'
 
 import { planRouting } from '@/features/kitchen/routing'
 import { prisma } from '@/server/db/prisma'
+import { normalizeTableStatus } from '@/features/floor/table-state'
+import { tableStatesFor } from '@/features/floor/table-state-server'
 import { getGuestSessionId } from '@/server/auth/session'
 import type { SelectedOption } from './pricing'
 
@@ -238,7 +240,23 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
     }),
   ])
 
-  return { ready, serving, requests, tables }
+  // The derived three-state value per table (abc.md §3), so the floor plan
+  // shows Reserved during a booking's window and never a stale hand-set label.
+  const states = await tableStatesFor(prisma, {
+    restaurantId,
+    tableIds: tables.map((t) => t.id),
+    occupiedIds: tables.filter((t) => t.orders.length > 0).map((t) => t.id),
+  })
+  return {
+    ready,
+    serving,
+    requests,
+    tables: tables.map((t) => ({
+      ...t,
+      state: states.get(t.id)?.state ?? normalizeTableStatus(t.status),
+      reservedFor: states.get(t.id)?.reservation?.customerName ?? null,
+    })),
+  }
 }
 
 export interface OrderListFilter {

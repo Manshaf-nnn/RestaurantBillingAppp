@@ -426,14 +426,20 @@ async function main() {
   // ── 7. the floor ──────────────────────────────────────────────────────────
   console.log('\n── 7. the floor ──')
 
+  /*
+   * DELIBERATE behaviour change, abc.md §3, 2026-09: a table is Empty,
+   * Occupied or Reserved. EATING and CLEANING are no longer written — a
+   * seated table is OCCUPIED, and a table that is not in service is
+   * `isActive: false`, counted apart as `outOfService`.
+   */
   const t1 = await prisma.restaurantTable.create({
-    data: { restaurantId: restaurant.id, branchId: main.id, number: '1', status: 'EATING' },
+    data: { restaurantId: restaurant.id, branchId: main.id, number: '1', status: 'OCCUPIED' },
   })
   const t2 = await prisma.restaurantTable.create({
     data: { restaurantId: restaurant.id, branchId: main.id, number: '2', status: 'AVAILABLE' },
   })
   await prisma.restaurantTable.create({
-    data: { restaurantId: restaurant.id, branchId: main.id, number: '3', status: 'CLEANING' },
+    data: { restaurantId: restaurant.id, branchId: main.id, number: '3', isActive: false },
   })
   const other = await prisma.restaurantTable.create({
     data: { restaurantId: restaurant.id, branchId: second.id, number: '1', status: 'OCCUPIED' },
@@ -466,9 +472,9 @@ async function main() {
     range: month,
     branchIds: [main.id],
   })
-  check('EATING counts as in use, not just OCCUPIED', floor.inUse === 1, `${floor.inUse}`)
-  check('free and cleaning are counted apart', floor.free === 1 && floor.cleaning === 1)
-  check('the other branch\'s table is not on this floor', floor.total === 3, `${floor.total}`)
+  check('an occupied table counts as in use', floor.inUse === 1, `${floor.inUse}`)
+  check('free and out-of-service are counted apart', floor.free === 1 && floor.outOfService === 1, `${floor.free} ${floor.outOfService}`)
+  check('the other branch\'s table is not on this floor, and total is the active tables', floor.total === 2, `${floor.total}`)
   check(
     'tables rank by takings',
     floor.topTables[0]?.number === '1' && floor.topTables[0]?.revenue === 4_000,

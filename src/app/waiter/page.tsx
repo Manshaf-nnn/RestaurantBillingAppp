@@ -123,7 +123,8 @@ export default async function WaiterPage({
         label: table.label,
         area: table.area,
         capacity: table.capacity,
-        status: table.status,
+        status: table.state,
+        reservedFor: table.reservedFor,
         openOrders: table.orders.map((order) => ({
           id: order.id,
           orderNumber: order.orderNumber,

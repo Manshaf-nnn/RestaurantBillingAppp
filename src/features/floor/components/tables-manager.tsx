@@ -38,7 +38,7 @@ import {
   updateTableStatus,
 } from '../actions'
 
-import type { TableStatus } from '@prisma/client'
+import { SETTABLE_TABLE_STATES, type SettableTableState, type TableState } from '@/features/floor/table-state'
 import { callAction } from '@/lib/use-action'
 
 export interface ManagedTable {
@@ -47,7 +47,10 @@ export interface ManagedTable {
   label: string | null
   area: string | null
   capacity: number
-  status: TableStatus
+  /** The derived three-state value (abc.md §3). */
+  status: TableState
+  /** Who the table is held for, while it reads Reserved. */
+  reservedFor: string | null
   notes: string | null
   /** Which building this table stands in. Never null — the column is required. */
   branchId: string
@@ -60,7 +63,8 @@ export interface TableBranch {
   name: string
 }
 
-const STATUSES: TableStatus[] = ['AVAILABLE', 'OCCUPIED', 'RESERVED', 'CLEANING', 'OUT_OF_SERVICE']
+/** What a manager sets by hand. Reserved comes from bookings; out of service is `isActive`. */
+const STATUSES: SettableTableState[] = [...SETTABLE_TABLE_STATES]
 
 export function TablesManager({
   tables: initial,
@@ -96,7 +100,7 @@ export function TablesManager({
 
   const areas = groupBy(tables, (table) => table.area ?? 'Main')
 
-  const changeStatus = async (table: ManagedTable, status: TableStatus) => {
+  const changeStatus = async (table: ManagedTable, status: SettableTableState) => {
     setTables((current) =>
       current.map((entry) => (entry.id === table.id ? { ...entry, status } : entry)),
     )
@@ -122,12 +126,13 @@ export function TablesManager({
 
   const available = tables.filter((table) => table.status === 'AVAILABLE').length
   const occupied = tables.filter((table) => table.status === 'OCCUPIED').length
+  const reserved = tables.filter((table) => table.status === 'RESERVED').length
 
   return (
     <>
       <PageHeader
         title="Tables"
-        description={`${tables.length} tables · ${available} available · ${occupied} occupied`}
+        description={`${tables.length} tables · ${available} empty · ${occupied} occupied${reserved ? ` · ${reserved} reserved` : ''}`}
         actions={
           canManage ? (
             <>
@@ -172,8 +177,7 @@ export function TablesManager({
                     className={cn(
                       'group relative rounded-xl border bg-card p-4 shadow-soft transition-colors',
                       table.status === 'OCCUPIED' && 'border-primary/40 bg-primary/5',
-                      table.status === 'CLEANING' && 'border-warning/40 bg-warning/5',
-                      table.status === 'OUT_OF_SERVICE' && 'opacity-60',
+                      table.status === 'RESERVED' && 'border-chart-2/40 bg-chart-2/5',
                     )}
                   >
                     <div className="flex items-start justify-between">
@@ -193,6 +197,11 @@ export function TablesManager({
                     {table.label ? (
                       <p className="mt-1 truncate text-xs text-muted-foreground">{table.label}</p>
                     ) : null}
+                    {table.reservedFor ? (
+                      <p className="mt-1 truncate text-xs font-medium text-chart-2">
+                        Reserved for {table.reservedFor}
+                      </p>
+                    ) : null}
 
                     <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
                       <Users className="size-3" /> {table.capacity}
@@ -206,8 +215,10 @@ export function TablesManager({
                     {canManage ? (
                       <div className="mt-3 space-y-2">
                         <Select
-                          value={table.status}
-                          onValueChange={(value) => changeStatus(table, value as TableStatus)}
+                          // A Reserved card is held by a booking, not set by hand;
+                          // the select shows what a person may choose.
+                          value={table.status === 'RESERVED' ? 'AVAILABLE' : table.status}
+                          onValueChange={(value) => changeStatus(table, value as SettableTableState)}
                         >
                           <SelectTrigger className="h-8 text-xs">
                             <SelectValue />
@@ -364,7 +375,8 @@ function TableDialog({
       label: form.label,
       area: form.area,
       capacity: Number(form.capacity),
-      status: table?.status ?? 'AVAILABLE',
+      // Reserved is derived, never posted: an edit keeps Occupied or Empty.
+      status: table?.status === 'OCCUPIED' ? 'OCCUPIED' : 'AVAILABLE',
       notes: form.notes,
     }))
     setSaving(false)

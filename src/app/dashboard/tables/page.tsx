@@ -5,6 +5,8 @@ import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { normalizeTableStatus } from '@/features/floor/table-state'
+import { tableStatesFor } from '@/features/floor/table-state-server'
 import { AutoRefresh } from '@/components/auto-refresh'
 
 export const dynamic = 'force-dynamic'
@@ -77,6 +79,14 @@ export default async function TablesPage({
 
   const branches = allBranches
 
+  // The derived three-state value (abc.md §3): Occupied when an order is open
+  // or the column says so, Reserved during a booking's window, else Empty.
+  const states = await tableStatesFor(prisma, {
+    restaurantId: user.restaurantId,
+    branchId,
+    occupiedIds: tables.filter((t) => t._count.orders > 0).map((t) => t.id),
+  })
+
   return (
     <>
       <AutoRefresh scope="catalog" intervalMs={10000} />
@@ -92,7 +102,8 @@ export default async function TablesPage({
         label: table.label,
         area: table.area,
         capacity: table.capacity,
-        status: table.status,
+        status: states.get(table.id)?.state ?? normalizeTableStatus(table.status),
+        reservedFor: states.get(table.id)?.reservation?.customerName ?? null,
         notes: table.notes,
         branchId: table.branchId,
         branchName: table.branch.name,

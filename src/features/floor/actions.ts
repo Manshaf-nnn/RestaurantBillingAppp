@@ -90,6 +90,7 @@ export async function saveTable(input: unknown): Promise<ActionResult<{ id: stri
           id: record.id,
           number: record.number,
           status: record.status,
+          branchId: record.branchId,
         })
         revalidatePath('/dashboard/tables')
         return { id: record.id }
@@ -255,14 +256,17 @@ export async function updateTableStatus(input: unknown): Promise<ActionResult<{ 
     })
     if (result.count === 0) throw new NotFoundError('Table')
 
-    realtime.tableUpdated(user.restaurantId, { id: data.id, number: '', status: data.status })
+    const table = await prisma.restaurantTable.findUnique({ where: { id: data.id }, select: { number: true, branchId: true } })
+    realtime.tableUpdated(user.restaurantId, {
+      id: data.id, number: table?.number ?? '', status: data.status, branchId: table?.branchId ?? null,
+    })
     revalidatePath('/dashboard/tables')
     revalidatePath('/waiter')
     return { id: data.id }
   })
 }
 
-/** Waiters set the everyday table status (Empty / Ordering / Eating / etc.). */
+/** Waiters seat a walk-in or clear a table from the floor (abc.md §3: Empty / Occupied). */
 export async function setServiceTableStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(serviceTableStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
@@ -277,7 +281,10 @@ export async function setServiceTableStatus(input: unknown): Promise<ActionResul
     })
     if (result.count === 0) throw new NotFoundError('Table')
 
-    realtime.tableUpdated(user.restaurantId, { id: data.id, number: '', status: data.status })
+    const table = await prisma.restaurantTable.findUnique({ where: { id: data.id }, select: { number: true, branchId: true } })
+    realtime.tableUpdated(user.restaurantId, {
+      id: data.id, number: table?.number ?? '', status: data.status, branchId: table?.branchId ?? null,
+    })
     revalidatePath('/waiter')
     revalidatePath('/dashboard/tables')
     return { id: data.id }

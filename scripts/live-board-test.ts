@@ -439,12 +439,18 @@ async function main() {
 
   // The column is stale by design — a table with no open order can still say
   // OCCUPIED from a party that has left.
-  check('a stale OCCUPIED reads as available', emptyTableLabel('OCCUPIED') === 'Available')
-  check('so does WAITING_BILL', emptyTableLabel('WAITING_BILL') === 'Available')
-  check('AVAILABLE reads as available', emptyTableLabel('AVAILABLE') === 'Available')
-  check('cleaning is worth saying', emptyTableLabel('CLEANING') === 'Needs clearing')
-  check('so is reserved', emptyTableLabel('RESERVED') === 'Reserved')
-  check('and out of service', emptyTableLabel('OUT_OF_SERVICE') === 'Out of service')
+  /*
+   * DELIBERATE behaviour change, abc.md §3, 2026-09: three states. An empty
+   * card is Reserved (a booking's window covers now) or Empty — CLEANING and
+   * OUT_OF_SERVICE are no longer states, and the row's status is the derived
+   * value, so a stale hand-set label can no longer reach this function.
+   */
+  check('a stale OCCUPIED reads as empty', emptyTableLabel('OCCUPIED') === 'Empty')
+  check('so does WAITING_BILL', emptyTableLabel('WAITING_BILL') === 'Empty')
+  check('AVAILABLE reads as empty', emptyTableLabel('AVAILABLE') === 'Empty')
+  check('cleaning is not a state', emptyTableLabel('CLEANING') === 'Empty')
+  check('reserved is worth saying', emptyTableLabel('RESERVED') === 'Reserved')
+  check('and out of service is isActive, not a label', emptyTableLabel('OUT_OF_SERVICE') === 'Empty')
 
   console.log('\n── 16. Floor order is the layout, not the alphabet ─────────')
 

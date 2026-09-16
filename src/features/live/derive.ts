@@ -89,7 +89,7 @@ export interface FloorTableRow {
   label: string | null
   area: string | null
   capacity: number
-  /** `TableStatus` as text. Only ever used as a sub-label — see `emptyTableLabel`. */
+  /** The derived three-state value (`TableState`) as text — see `emptyTableLabel`. */
   status: string
   sortOrder: number
 }
@@ -115,17 +115,13 @@ export function emptyTables(floor: FloorTableRow[], occupied: LiveTable[]): Floo
 /**
  * What to say on a table with nobody at it.
  *
- * A whitelist rather than the shared `TABLE_STATUS_META`, because the status
- * column is stale by design: a table with no open order can still say OCCUPIED
- * or WAITING_BILL from a party that left. Printing that label would have the
- * card contradict the board that just decided it was free, so anything not on
- * this list reads as available.
+ * The row's `status` is the DERIVED state (`tableStatesFor`), so a table with
+ * no open order is Reserved when a booking's window covers now and Empty
+ * otherwise — never a stale hand-set label from a party that left.
  */
 export function emptyTableLabel(status: string): string {
-  if (status === 'CLEANING') return 'Needs clearing'
-  if (status === 'RESERVED') return 'Reserved'
-  if (status === 'OUT_OF_SERVICE') return 'Out of service'
-  return 'Available'
+  // Three states (abc.md §3); an empty card is Reserved or Empty, nothing else.
+  return status === 'RESERVED' ? 'Reserved' : 'Empty'
 }
 
 /**

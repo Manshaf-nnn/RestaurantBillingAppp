@@ -541,20 +541,18 @@ function Count({
  */
 function EmptyCard({ row }: { row: FloorTableRow }) {
   const text = emptyTableLabel(row.status)
-  const needsClearing = row.status === 'CLEANING'
-  const outOfService = row.status === 'OUT_OF_SERVICE'
+  const reserved = row.status === 'RESERVED'
 
   return (
     <div
       className={cn(
         'flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed p-3 text-center',
-        needsClearing ? 'border-warning/40 bg-warning/5' : 'border-border bg-muted/30',
-        outOfService && 'opacity-60',
+        reserved ? 'border-chart-2/40 bg-chart-2/5' : 'border-border bg-muted/30',
       )}
     >
       <span className="text-sm font-bold text-muted-foreground">T{row.number}</span>
       <Armchair className="size-5 text-muted-foreground opacity-60" />
-      <span className={cn('text-[11px]', needsClearing ? 'text-warning' : 'text-muted-foreground')}>
+      <span className={cn('text-[11px]', reserved ? 'text-chart-2' : 'text-muted-foreground')}>
         {text}
       </span>
       <span className="text-[10px] text-muted-foreground">seats {row.capacity}</span>

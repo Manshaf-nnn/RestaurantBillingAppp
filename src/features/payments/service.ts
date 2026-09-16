@@ -12,6 +12,7 @@ import { recordRefundAgainstOpenDrawer } from '@/features/cashdrawer/service'
 import { requireRestaurant } from '@/server/db/tenant'
 import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
 import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import { settleLoyalty } from '@/features/orders/service'
@@ -200,6 +201,7 @@ export async function capturePayment(params: {
     )
   }
 
+  let freedTable: FreedTable | null = null
   const result = await prisma.$transaction(async (tx) => {
     /*
      * Lock the bill before reading what is outstanding.
@@ -425,26 +427,14 @@ export async function capturePayment(params: {
         orderId: order.id,
       })
 
-      // Free the table when nothing else is open on it.
+      // Settled in full and nothing else open: the sitting is over and the
+      // table is Empty for the next party (abc.md §3) — through the one writer.
       if (order.tableId) {
-        const open = await tx.order.count({
-          where: {
-            restaurantId: params.restaurantId,
-            tableId: order.tableId,
-            id: { not: order.id },
-            status: { notIn: ['COMPLETED', 'CANCELLED'] },
-          },
+        const open = await otherOpenOrders(tx, {
+          restaurantId: params.restaurantId, tableId: order.tableId, exceptOrderId: order.id,
         })
         if (open === 0) {
-          await tx.restaurantTable.update({
-            where: { id: order.tableId },
-            data: { status: 'CLEANING' },
-          })
-          // Settled in full and nothing else open: the sitting is over.
-          await tx.tableSession.updateMany({
-            where: { restaurantId: params.restaurantId, tableId: order.tableId, status: 'OPEN' },
-            data: { status: 'CLOSED', closedAt: new Date(), activeTableKey: null },
-          })
+          freedTable = await freeTable(tx, { restaurantId: params.restaurantId, tableId: order.tableId })
         }
       }
     }
@@ -483,6 +473,16 @@ export async function capturePayment(params: {
       replayed: false as const,
     }
   })
+
+  // After commit, so no screen hears of a table freed by a rolled-back payment.
+  // (Read through a cast: the checker cannot see the assignment inside the
+  // transaction callback and narrows the variable to its initial null.)
+  const freed = freedTable as FreedTable | null
+  if (freed) {
+    realtime.tableUpdated(params.restaurantId, {
+      id: freed.id, number: freed.number, status: 'AVAILABLE', branchId: freed.branchId,
+    })
+  }
 
   /*
    * A replay has no news. The money arrived once, the loyalty was accrued
