@@ -179,9 +179,17 @@ async function main() {
 
     check('the form no longer asks for a storage area', !/storage area/i.test(builder))
     check('and no longer sends storage ids', !/fromStorageId|toStorageId/.test(builder))
+    /*
+     * DELIBERATE behaviour change, recorrection.md §1, 2026-09: transfers are
+     * pulled. The requester's own branch is the destination, chosen first (or
+     * locked, when they have one), and the SOURCE list is every other
+     * location. So it is the source list that excludes the destination now —
+     * the same rule, that a transfer changes which location holds the stock,
+     * read from the other end.
+     */
     check(
-      'the destination list excludes the source',
-      /locations\.filter\(\(l\) => l\.id !== fromId\)/.test(builder),
+      'the source list excludes the destination',
+      /locations\.filter\(\(l\) => l\.id !== toId\)/.test(builder),
     )
     check('and a same-location transfer is refused outright', /fromId === toId/.test(builder))
 

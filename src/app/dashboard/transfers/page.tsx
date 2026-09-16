@@ -7,9 +7,10 @@ import { EmptyState } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ExportMenu } from '@/features/reports/components/export-menu'
-import { listTransfers } from '@/features/transfers/queries'
+import { listTransfers, type TransferSummary } from '@/features/transfers/queries'
+import { sectionFor, type TransferSection } from '@/features/transfers/sections'
 import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { PERMISSIONS, can } from '@/lib/rbac'
+import { PERMISSIONS, can, canAccessBranch } from '@/lib/rbac'
 import { SearchBox } from '@/components/search-box'
 import { requirePagePermission } from '@/server/auth/guard'
 
@@ -26,6 +27,7 @@ const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' |
   REJECTED: { label: 'Rejected', variant: 'destructive' },
   CANCELLED: { label: 'Cancelled', variant: 'destructive' },
 }
+
 
 export default async function TransfersPage({
   searchParams,
@@ -53,20 +55,32 @@ export default async function TransfersPage({
     branchNameFor(user.restaurantId, selection.branchId),
   ])
 
-  const open = transfers.filter((t) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(t.status))
+  // The list, in the four states a transfer waits in (recorrection.md §1),
+  // filed by status and by which end the viewer stands at — see `sectionFor`.
+  const sections: Record<TransferSection, Array<{ t: TransferSummary; hint: string }>> = {
+    approval: [], dispatch: [], receive: [], closed: [],
+  }
+  for (const t of transfers) {
+    const atSource = canAccessBranch(user, t.fromBranchId)
+    const atDestination = canAccessBranch(user, t.toBranchId)
+    const [section, hint] = sectionFor(t, atSource, atDestination)
+    sections[section].push({ t, hint })
+  }
+
+  const waiting = sections.approval.length + sections.dispatch.length + sections.receive.length
 
   return (
     <>
       <PageHeader
         title="Transfers"
         branch={branchName}
-        description="Stock moving between locations. It leaves on dispatch and arrives on receipt — never both at once."
+        description="Stock moving between locations. The branch that needs it asks; the source approves and sends; it arrives on receipt."
         actions={
           <>
             {can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="transfers" /> : null}
             {can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
               <Button asChild>
-                <Link href="/dashboard/transfers/new">New transfer</Link>
+                <Link href="/dashboard/transfers/new">Request stock</Link>
               </Button>
             ) : null}
           </>
@@ -77,36 +91,78 @@ export default async function TransfersPage({
         <SearchBox placeholder="Transfer number, location or item…" defaultValue={search} />
       </div>
 
-      {open.length > 0 && (
-        <SectionCard title="In progress" description="Requested, approved or on the road." >
-          <ul className="divide-y divide-border">
-            {open.map((t) => <Row key={t.id} t={t} />)}
-          </ul>
-        </SectionCard>
-      )}
-
-      <SectionCard title="All transfers">
-        {transfers.length === 0 ? (
+      {transfers.length === 0 ? (
+        <SectionCard title="Transfers">
           <EmptyState
             title={search ? `Nothing matches “${search}”` : 'No transfers yet'}
             description={
               search
                 ? 'Try the transfer number, either location, or an item that was moved.'
-                : 'Move stock between branches, a warehouse or the production house.'
+                : 'Ask another location for stock, and it shows up here at every step until it arrives.'
             }
           />
-        ) : (
-          <ul className="divide-y divide-border">
-            {transfers.map((t) => <Row key={t.id} t={t} />)}
-          </ul>
-        )}
-      </SectionCard>
+        </SectionCard>
+      ) : null}
+
+      {sections.approval.length > 0 && (
+        <Group
+          title="Pending approval"
+          count={sections.approval.length}
+          description="Requested and not yet ruled on. The source decides on the Approvals desk."
+          rows={sections.approval}
+        />
+      )}
+      {sections.dispatch.length > 0 && (
+        <Group
+          title="Pending dispatch"
+          count={sections.dispatch.length}
+          description="Approved and reserved. Stock leaves when it is dispatched."
+          rows={sections.dispatch}
+        />
+      )}
+      {sections.receive.length > 0 && (
+        <Group
+          title="Pending receive"
+          count={sections.receive.length}
+          description="On its way, or approved and being prepared. It arrives when the destination receives it."
+          rows={sections.receive}
+        />
+      )}
+      {sections.closed.length > 0 && (
+        <Group
+          title={waiting > 0 ? 'Completed and closed' : 'All transfers'}
+          count={sections.closed.length}
+          description="Finished, rejected or cancelled."
+          rows={sections.closed}
+        />
+      )}
     </>
   )
 }
 
-function Row({ t }: { t: Awaited<ReturnType<typeof listTransfers>>[number] }) {
+function Group({
+  title,
+  count,
+  description,
+  rows,
+}: {
+  title: string
+  count: number
+  description: string
+  rows: Array<{ t: TransferSummary; hint: string }>
+}) {
+  return (
+    <SectionCard title={`${title} (${count})`} description={description}>
+      <ul className="divide-y divide-border">
+        {rows.map(({ t, hint }) => <Row key={t.id} t={t} hint={hint} />)}
+      </ul>
+    </SectionCard>
+  )
+}
+
+function Row({ t, hint }: { t: TransferSummary; hint: string }) {
   const status = STATUS[t.status] ?? STATUS.REQUESTED
+  const mine = hint.includes('on you')
   return (
     <li>
       <Link
@@ -120,6 +176,11 @@ function Row({ t }: { t: Awaited<ReturnType<typeof listTransfers>>[number] }) {
           {t.lineCount} item{t.lineCount === 1 ? '' : 's'}
         </span>
         {t.hasVariance && <Badge variant="destructive">variance</Badge>}
+        {hint ? (
+          <span className={mine ? 'text-xs font-medium text-primary' : 'text-xs text-muted-foreground'}>
+            {hint}
+          </span>
+        ) : null}
         <span className="ml-auto text-xs text-muted-foreground">
           <LocalDateTime value={t.requestedAt} />
           {t.requestedByName ? ` · ${t.requestedByName}` : ''}

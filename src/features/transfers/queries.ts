@@ -120,6 +120,13 @@ export interface TransferSummary {
   id: string
   number: string
   status: string
+  /**
+   * Both ends by id as well as name (recorrection.md §1). The list has to say
+   * "waiting on YOU to dispatch" versus "waiting on THEM", and that is a
+   * question about which end the viewer stands at — unanswerable from names.
+   */
+  fromBranchId: string
+  toBranchId: string
   fromName: string
   toName: string
   lineCount: number
@@ -177,6 +184,8 @@ export async function listTransfers(params: {
     id: t.id,
     number: t.number,
     status: t.status,
+    fromBranchId: t.fromBranchId,
+    toBranchId: t.toBranchId,
     fromName: t.fromBranch.name,
     toName: t.toBranch.name,
     lineCount: t.lines.length,
@@ -467,8 +476,15 @@ export async function getTransferDetail(params: {
   }
 }
 
-/** Locations and items for the "new transfer" form. */
-export async function getTransferBuilderData(restaurantId: string) {
+/**
+ * Locations and items for the "new transfer" form.
+ *
+ * `reach` is which branches the requester may act FOR (`visibleBranchIds`):
+ * null means every one. recorrection.md §1 makes the destination the
+ * requester, so the form locks TO to that reach and offers every location as
+ * FROM — a branch requests stock from somewhere it cannot see.
+ */
+export async function getTransferBuilderData(restaurantId: string, reach: string[] | null = null) {
   /*
    * Shelves are no longer fetched here (correctionA.md §7). The form used to
    * offer "From storage area" and "To storage area", which let a transfer mean
@@ -491,6 +507,8 @@ export async function getTransferBuilderData(restaurantId: string) {
 
   return {
     locations,
+    /** Branches the requester may be the destination of. Null = any. */
+    actableBranchIds: reach,
     // Only what a location actually holds can be sent from it.
     stockByBranch: locations.map((l) => ({
       branchId: l.id,

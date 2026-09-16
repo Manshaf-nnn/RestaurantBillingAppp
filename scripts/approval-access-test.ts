@@ -125,7 +125,7 @@ async function main() {
     const request = await raise(kandy.id, alice.id)
     check(
       'so anybody else may decide it',
-      whyCannotApprove({ policy: basePolicy, request, userId: bob.id, mayForce: false }) === null,
+      whyCannotApprove({ policy: basePolicy, request, userId: bob.id, unconfined: false }) === null,
     )
   }
 
@@ -136,11 +136,11 @@ async function main() {
 
     check(
       'somebody on it may decide',
-      whyCannotApprove({ policy, request, userId: bob.id, mayForce: false }) === null,
+      whyCannotApprove({ policy, request, userId: bob.id, unconfined: false }) === null,
     )
     check(
       'somebody not on it may not',
-      whyCannotApprove({ policy, request, userId: owner.id, mayForce: false })?.code ===
+      whyCannotApprove({ policy, request, userId: owner.id, unconfined: false })?.code ===
         'APPROVAL_NOT_APPROVER',
     )
 
@@ -148,7 +148,7 @@ async function main() {
     const elsewhere = await raise(jaffna.id, alice.id)
     check(
       "and another location's queue is unaffected",
-      whyCannotApprove({ policy, request: elsewhere, userId: owner.id, mayForce: false }) === null,
+      whyCannotApprove({ policy, request: elsewhere, userId: owner.id, unconfined: false }) === null,
     )
 
     // A restaurant-wide request has its own key.
@@ -159,7 +159,7 @@ async function main() {
     }
     check(
       'the restaurant-wide queue has its own list',
-      whyCannotApprove({ policy: widePolicy, request: wide, userId: owner.id, mayForce: false })
+      whyCannotApprove({ policy: widePolicy, request: wide, userId: owner.id, unconfined: false })
         ?.code === 'APPROVAL_NOT_APPROVER',
     )
   }
@@ -208,7 +208,7 @@ async function main() {
           approvalId: mine.id,
           approve: true,
           userId: alice.id,
-          mayForce: false,
+          unconfined: false,
           force: true,
         }),
       /cannot approve your own/i,

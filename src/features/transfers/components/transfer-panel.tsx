@@ -1,8 +1,9 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Check, PackageCheck, Send, Truck, X } from 'lucide-react'
+import { PackageCheck, Truck } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -12,8 +13,7 @@ import { Label } from '@/components/ui/label'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import {
-  approveTransferAction, closeTransferAction, completeTransferAction,
-  dispatchTransferAction, receiveTransferAction,
+  completeTransferAction, dispatchTransferAction, receiveTransferAction,
 } from '../actions'
 
 const REASONS = [
@@ -73,7 +73,7 @@ export function TransferPanel({
   can,
 }: {
   detail: TransferDetailView
-  can: { approve: boolean; dispatch: boolean; receive: boolean }
+  can: { dispatch: boolean; receive: boolean }
 }) {
   const router = useRouter()
   const status = STATUS[detail.status] ?? STATUS.REQUESTED
@@ -129,28 +129,23 @@ export function TransferPanel({
         {detail.notes && <span className="text-muted-foreground">{detail.notes}</span>}
       </div>
 
-      {can.approve && detail.status === 'REQUESTED' && (
+      {/*
+        No Approve here (recorrection.md §1). The decision is made once, on the
+        Approvals desk, where the request shows its lines and the approver
+        list applies. This card used to offer Approve/Reject too — a Reject
+        whose reason was hard-coded to "Not needed" — and since the desk's
+        own decision already moved the transfer, pressing it here answered
+        "already approved" every time. Two doors to one decision is one too
+        many; this one points at the other.
+      */}
+      {detail.status === 'REQUESTED' && (
         <SectionCard
-          title="Approve this request"
-          description="Approving reserves the stock at the source so it cannot be promised twice. It does not move anything yet."
+          title="Waiting for approval"
+          description={`${detail.fromName} decides this on the Approvals desk. Approving reserves the stock there; nothing moves until it is dispatched.`}
         >
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => run(() => approveTransferAction(detail.id), 'Approved')} disabled={busy}>
-              <Check className="mr-2 h-4 w-4" />
-              Approve
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={busy}
-              onClick={() => run(
-                () => closeTransferAction({ transferId: detail.id, status: 'REJECTED', reason: 'Not needed' }),
-                'Rejected',
-              )}
-            >
-              <X className="mr-2 h-4 w-4" />
-              Reject
-            </Button>
-          </div>
+          <Button variant="outline" asChild>
+            <Link href="/dashboard/approvals">Open the approvals desk</Link>
+          </Button>
         </SectionCard>
       )}
 

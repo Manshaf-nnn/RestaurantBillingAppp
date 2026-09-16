@@ -4,28 +4,39 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, can } from '@/lib/rbac'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
-import { ForbiddenError } from '@/lib/errors'
-import type { Prisma } from '@prisma/client'
+import { ForbiddenError, NotFoundError } from '@/lib/errors'
 import {
   RESTAURANT_WIDE,
   decideApproval,
   getApprovalDetail,
   getApprovalPolicy,
+  getApprovalPolicyStamp,
+  saveApprovers,
   whyCannotApprove,
   withdrawApproval,
 } from './service'
+import { DECIDE_PERMISSION } from './permissions'
 import type { ApprovalDetailPayload } from './types'
 import { approveTransfer, closeTransfer } from '@/features/transfers/service'
 
 /**
- * Deciding an approval is gated on SETTINGS_MANAGE — in practice an owner or
- * admin. Deliberately not MANAGER: the point of the step is that someone above
- * the person who asked signs it off, and managers are frequently the ones
- * asking.
+ * Rule on a request (recorrection.md §1).
+ *
+ * Three gates, in order: `approvals.view` to be at the desk at all; the
+ * branch guard, so a manager confined to Kandy cannot decide Jaffna's; and
+ * the permission for the KIND of request — `transfer.approve` for a
+ * transfer, `payment.refund` for a refund — because deciding one is a
+ * deferred act of that kind. See `DECIDE_PERMISSION` for why this replaced
+ * `settings.manage`.
+ *
+ * Whether the approver LIST applies, and whether this is the decider's own
+ * request, is the service's business; it is told whether the decider is
+ * confined, because an owner who works across every location is bound by no
+ * branch's list.
  */
 export async function decideApprovalAction(
   input: unknown,
@@ -37,8 +48,9 @@ export async function decideApprovalAction(
         approve: z.boolean(),
         note: z.string().trim().max(200).optional().or(z.literal('')),
         // Asked for explicitly. Holding the permission is not the same as
-        // using it — an owner working the queue normally must still be
-        // refused their own request, or the override stops being visible.
+        // using it — a confined approver working the queue normally must
+        // still be refused their own request, or the override stops being
+        // visible.
         force: z.boolean().optional(),
       })
       // A refusal has to carry its reason, and saying so on the FIELD gives
@@ -55,32 +67,72 @@ export async function decideApprovalAction(
       }),
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      const user = await requirePermission(PERMISSIONS.APPROVALS_VIEW)
 
       /*
-       * Whose request this is, before deciding it.
+       * Whose request this is, and of what kind, before deciding it.
        *
-       * This action scoped by restaurant alone, so a manager confined to one
-       * branch could approve another branch's refund — the permission was
-       * checked and the location never was. `assertRecordBranch` returns early
-       * on a null branchId, so a restaurant-wide request stays decidable by
-       * everyone who holds the permission.
+       * `assertRecordBranch` returns early on a null branchId, so a
+       * restaurant-wide request stays decidable by everyone in reach.
        */
       const target = await prisma.approvalRequest.findFirst({
         where: { id: data.approvalId, restaurantId: user.restaurantId },
-        select: { branchId: true },
+        select: { kind: true, branchId: true, entityId: true },
       })
+      if (!target) throw new NotFoundError('Approval request')
       await assertRecordBranch(user, target, 'approval request')
+
+      const needed = DECIDE_PERMISSION[target.kind]
+      if (!can(user, needed)) {
+        throw new ForbiddenError(
+          'You can see this request, but deciding it needs the permission for that kind of request',
+        )
+      }
+
+      const note = data.note || null
+      const isTransfer = target.kind === 'STOCK_TRANSFER' && Boolean(target.entityId)
 
       const request = await decideApproval({
         restaurantId: user.restaurantId,
         approvalId: data.approvalId,
         approve: data.approve,
         userId: user.id,
-        note: data.note || null,
+        note,
         mayForce: can(user, PERMISSIONS.APPROVALS_FORCE),
         force: data.force,
+        unconfined: visibleBranchIds(user) === null,
+        /*
+         * The decision IS the decision. Approving moves the transfer to
+         * APPROVED and reserves the source's stock; rejecting closes it with
+         * the decider's note as the reason. Inside the same transaction, so
+         * a failed reserve rolls the ruling back and the decider sees why —
+         * the previous shape recorded the ruling first and swallowed the
+         * failure, which left an APPROVED request pointing at a REQUESTED
+         * transfer with nothing but a server log to say so.
+         */
+        apply: isTransfer
+          ? async (tx) => {
+              if (data.approve) {
+                await approveTransfer({
+                  restaurantId: user.restaurantId,
+                  transferId: target.entityId!,
+                  userId: user.id,
+                  tx,
+                })
+              } else {
+                await closeTransfer({
+                  restaurantId: user.restaurantId,
+                  transferId: target.entityId!,
+                  status: 'REJECTED',
+                  reason: note || 'Rejected at the approvals desk',
+                  userId: user.id,
+                  tx,
+                })
+              }
+            }
+          : undefined,
       })
+
       await audit({
         restaurantId: user.restaurantId, branchId: request.branchId, userId: user.id,
         actorName: user.name,
@@ -95,12 +147,10 @@ export async function decideApprovalAction(
         after: {
           status: request.status,
           kind: request.kind,
-          note: data.note || null,
+          note,
           ...(request.forced ? { forced: true } : {}),
         },
       })
-
-      await applyDecision(request, user, data.note || null)
 
       revalidatePath('/dashboard/approvals')
       revalidatePath('/dashboard/transfers')
@@ -108,56 +158,6 @@ export async function decideApprovalAction(
     },
     'Decision recorded.',
   )
-}
-
-/**
- * Carry the decision through to the thing it was about.
- *
- * `ApprovalRequest.payload` is documented as "what to apply if approved", and
- * until now nothing applied anything — the row's status changed and the world
- * did not. For a stock transfer that would have meant the owner pressing
- * Approve and the transfer sitting exactly where it was, waiting for a second
- * approval from the branch, which is not what the owner just did.
- *
- * So the owner's decision IS the decision: approving moves the transfer to
- * APPROVED and reserves the source's stock; rejecting closes it with the
- * owner's note as the reason. The branch's own Approve button stays for
- * same-branch moves, which never reach this queue.
- *
- * Failures here are logged and swallowed deliberately. The decision has already
- * been recorded and audited; if reserving stock fails — someone emptied the
- * shelf while the request sat in the queue — the right outcome is a decided
- * request and a transfer that can be retried, not a 500 that loses the ruling.
- */
-async function applyDecision(
-  request: { id: string; kind: string; status: string; entity: string; entityId: string | null },
-  user: { restaurantId: string; id: string; name: string },
-  note: string | null,
-) {
-  if (request.kind !== 'STOCK_TRANSFER' || !request.entityId) return
-
-  try {
-    if (request.status === 'APPROVED') {
-      await approveTransfer({
-        restaurantId: user.restaurantId,
-        transferId: request.entityId,
-        userId: user.id,
-      })
-    } else if (request.status === 'REJECTED') {
-      await closeTransfer({
-        restaurantId: user.restaurantId,
-        transferId: request.entityId,
-        status: 'REJECTED',
-        reason: note || 'Rejected by the owner',
-        userId: user.id,
-      })
-    }
-  } catch (error) {
-    console.error(
-      `[approvals] decision on ${request.id} recorded, but the transfer could not be moved:`,
-      error,
-    )
-  }
 }
 
 export async function withdrawApprovalAction(approvalId: string): Promise<ActionResult<{ status: string }>> {
@@ -198,6 +198,15 @@ export async function withdrawApprovalAction(approvalId: string): Promise<Action
  * An empty list is meaningful and is stored: it means "no list here", which
  * falls back to anyone with the permission. That is how every restaurant
  * behaves today and must keep behaving until an owner decides otherwise.
+ *
+ * ── Reach (recorrection.md §1) ──────────────────────────────────────────────
+ *
+ * A branch manager sets the list for their own branch and nobody else's.
+ * The first cut checked the branch id when one was given and skipped the
+ * check for the EMPTY key — which is the restaurant-wide list, the one that
+ * applies everywhere. So the manager of one branch could rewrite the
+ * approvers for the whole business. Now the global key needs an unconfined
+ * actor, and every person named must be somebody within the actor's reach.
  */
 export async function setApprovalAccessAction(
   input: unknown,
@@ -211,10 +220,15 @@ export async function setApprovalAccessAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.APPROVALS_MANAGE)
+      const reach = visibleBranchIds(user)
 
-      // A branch id from the client is a branch id like any other.
       if (data.branchId) {
+        // A branch id from the client is a branch id like any other.
         await assertBranchAccess(user, data.branchId)
+      } else if (reach !== null) {
+        throw new ForbiddenError(
+          'The approvers for every location can only be set by someone who works across every location',
+        )
       }
 
       const unique = [...new Set(data.approverIds)]
@@ -226,12 +240,26 @@ export async function setApprovalAccessAction(
               isActive: true,
               deletedAt: null,
             },
-            select: { id: true, name: true, role: true, permissions: true, staffRole: { select: { permissions: true, isActive: true } } },
+            select: {
+              id: true, name: true, role: true, permissions: true, branchId: true,
+              staffRole: { select: { permissions: true, isActive: true } },
+            },
           })
         : []
 
       if (staff.length !== unique.length) {
         throw new ForbiddenError('One of those people is not a member of your staff')
+      }
+
+      // Somebody at a location the actor does not manage is not theirs to
+      // appoint. A person with no location at all works everywhere and is.
+      const beyondReach = reach
+        ? staff.filter((member) => member.branchId && !reach.includes(member.branchId))
+        : []
+      if (beyondReach.length > 0) {
+        throw new ForbiddenError(
+          `${beyondReach.map((m) => m.name).join(', ')} work at a location you do not manage`,
+        )
       }
 
       const cannotSee = staff.filter(
@@ -252,18 +280,16 @@ export async function setApprovalAccessAction(
         )
       }
 
+      // Stamp first, then the policy: `saveApprovers` refuses the write if the
+      // row moved in between, so two managers saving two branches at once
+      // cannot undo each other.
       const key = data.branchId || RESTAURANT_WIDE
-      const policy = await getApprovalPolicy(user.restaurantId)
-      const next = { ...(policy.approvers ?? {}), [key]: unique }
-
-      await prisma.restaurant.update({
-        where: { id: user.restaurantId },
-        data: {
-          approvalPolicy: {
-            ...policy,
-            approvers: next,
-          } as unknown as Prisma.InputJsonValue,
-        },
+      const stamp = await getApprovalPolicyStamp(user.restaurantId)
+      const saved = await saveApprovers({
+        restaurantId: user.restaurantId,
+        key,
+        approverIds: unique,
+        expectedUpdatedAt: stamp,
       })
 
       await audit({
@@ -274,8 +300,8 @@ export async function setApprovalAccessAction(
         action: AUDIT_ACTIONS.APPROVAL_ACCESS_SET,
         entity: 'Restaurant',
         entityId: user.restaurantId,
-        before: { approvers: policy.approvers?.[key] ?? [] },
-        after: { approvers: unique },
+        before: { approvers: saved.before },
+        after: { approvers: saved.after },
       })
 
       revalidatePath('/dashboard/approvals')
@@ -306,7 +332,7 @@ export async function approvalDetailAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.APPROVALS_VIEW)
-      const { request, history } = await getApprovalDetail({
+      const { request, history, transfer } = await getApprovalDetail({
         restaurantId: user.restaurantId,
         approvalId: data.approvalId,
       })
@@ -315,17 +341,15 @@ export async function approvalDetailAction(
       const policy = await getApprovalPolicy(user.restaurantId)
       const mayForce = can(user, PERMISSIONS.APPROVALS_FORCE)
       /*
-       * Why they cannot decide it NORMALLY — computed with `mayForce: false`
-       * on purpose. The dialog needs to know there is a rule in the way even
-       * when this viewer is allowed to override it, or the override button
-       * has nothing to explain itself with.
+       * Why they cannot decide it NORMALLY. The dialog needs to know there is
+       * a rule in the way even when this viewer is allowed to override it, or
+       * the override button has nothing to explain itself with. An unconfined
+       * viewer is bound by no list, and their own request is allowed (and
+       * marked) — so for them this is null.
        */
-      const refusal = whyCannotApprove({
-        policy,
-        request,
-        userId: user.id,
-        mayForce: false,
-      })
+      const unconfined = visibleBranchIds(user) === null
+      const refusal = whyCannotApprove({ policy, request, userId: user.id, unconfined })
+      const selfByUnconfined = refusal?.code === 'APPROVAL_SELF' && unconfined
 
       const payload = (request.payload ?? {}) as Record<string, unknown>
       const details = Object.entries(payload)
@@ -353,7 +377,10 @@ export async function approvalDetailAction(
           request.kind === 'STOCK_TRANSFER' && request.entityId
             ? `/dashboard/transfers/${request.entityId}`
             : null,
-        reference: request.entityId ? `${request.entity} ${request.entityId.slice(0, 8)}` : null,
+        // The document's own number where it has one, not an id slice.
+        reference:
+          transfer?.number ??
+          (request.entityId ? `${request.entity} ${request.entityId.slice(0, 8)}` : null),
         details,
         history: history.map((entry) => ({
           id: entry.id,
@@ -362,8 +389,21 @@ export async function approvalDetailAction(
           createdAt: entry.createdAt.toISOString(),
           entity: entry.entity,
         })),
-        blockedReason: refusal?.message ?? null,
+        blockedReason: selfByUnconfined ? null : (refusal?.message ?? null),
         mayForce,
+        transfer: transfer
+          ? {
+              number: transfer.number,
+              status: transfer.status,
+              fromBranchName: transfer.fromBranch.name,
+              toBranchName: transfer.toBranch.name,
+              lines: transfer.lines.map((line) => ({
+                name: line.item.name,
+                unit: line.item.unit,
+                quantity: line.requestedQty,
+              })),
+            }
+          : null,
       }
     },
   )

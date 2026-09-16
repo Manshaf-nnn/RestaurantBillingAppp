@@ -189,6 +189,17 @@ const SERVICE = [
   // and the row says so afterwards; From/To filter both directions and neither
   // can widen what somebody may see.
   'approval-access-test',
+  // recorrection.md §1 — deciding is gated on the permission for the KIND of
+  // request, not settings.manage; an owner is bound by no branch's approver
+  // list and may sign their own (marked forced); a decision and its
+  // consequence are one transaction; the desk shows a transfer's lines to
+  // both ends; filters narrow the pending desk; write-offs are on it; the
+  // approver list is written compare-and-swap.
+  'approval-desk-test',
+  // recorrection.md §1 — transfers are pulled: the destination requests, the
+  // source approves and dispatches, the destination receives; the list files
+  // by status and by the viewer's side; the transfer page no longer decides.
+  'transfer-direction-test',
   // correctionA.md §2 — a task can name a person, the posted id is checked
   // against the caller's own restaurant before it is stored, and the nav badge
   // counts what is mine rather than what is on a colleague's plate.
@@ -219,6 +230,11 @@ const RUNTIME = [
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
+  // recorrection.md §1/§4 — the task picker scrolls under the wheel inside its
+  // dialog and names role and location; the pending desk opens details and
+  // approves from the dialog; the transfer form locks TO for a confined
+  // manager; each end's list files the transfer by their side.
+  'recorrection-ui-test',
   // athu.md — the refresh race over real HTTP with a cookie jar: two tabs on
   // one day-old token both stay signed in; Set-Cookie attributes; prefetch
   // exclusion; /logout fetch-metadata; sign-in with the second factor.

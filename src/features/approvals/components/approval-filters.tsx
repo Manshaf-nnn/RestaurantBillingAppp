@@ -33,7 +33,7 @@ export function ApprovalFilters({
   statuses,
 }: {
   locations: Array<{ id: string; name: string }>
-  staff: Array<{ id: string; name: string }>
+  staff: Array<{ id: string; name: string; roleLabel: string; branchName: string | null }>
   kinds: Array<{ value: string; label: string }>
   statuses: Array<{ value: string; label: string }>
 }) {
@@ -82,7 +82,11 @@ export function ApprovalFilters({
         <div className="space-y-1">
           <Label className="text-xs">Requested by</Label>
           <ItemPicker
-            options={staff.map((s) => ({ value: s.id, label: s.name }))}
+            options={staff.map((s) => ({
+              value: s.id,
+              label: s.name,
+              hint: `${s.roleLabel} — ${s.branchName ?? 'no location set'}`,
+            }))}
             value={value('requestedBy')}
             onChange={(v) => set({ requestedBy: v })}
             placeholder="Anyone"

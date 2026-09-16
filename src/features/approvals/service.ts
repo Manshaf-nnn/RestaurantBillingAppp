@@ -208,25 +208,35 @@ export function whyCannotApprove(params: {
   policy: ApprovalPolicy
   request: Pick<ApprovalRequest, 'branchId' | 'requestedById'>
   userId: string
-  /** Holder of `approvals.force` — an owner or main admin. */
-  mayForce: boolean
+  /**
+   * `visibleBranchIds(user) === null` — an owner, admin or group manager.
+   *
+   * recorrection.md §1: "Main admin can approve/reject ANY request." So a
+   * per-location approver list never binds an unconfined user. It exists to
+   * say which of a *branch's* staff may sign for that branch; it was never
+   * meant to be a way of locking the owner out of their own restaurant — and
+   * the first version of this did exactly that, with no override control on
+   * the screen where it happened.
+   */
+  unconfined: boolean
 }): { code: 'APPROVAL_SELF' | 'APPROVAL_NOT_APPROVER'; message: string } | null {
-  const { policy, request, userId, mayForce } = params
+  const { policy, request, userId, unconfined } = params
 
   /*
-   * Force does not skip the list and the self-rule separately; it skips both,
-   * because the two together are "somebody else must sign this" and an owner
-   * overriding it is overriding that one idea. What it does NOT skip is the
-   * permission, or the tenant check, or the record of having done it.
+   * The self-rule comes first and applies to everyone, because the answer to
+   * "may I sign my own request" is not "yes" for anybody — for an unconfined
+   * user it is "yes, and it will be recorded as an override", which is
+   * `decideApproval`'s call to make, not this function's. This function only
+   * says whether a rule is in the way.
    */
-  if (mayForce) return null
-
   if (request.requestedById && request.requestedById === userId) {
     return {
       code: 'APPROVAL_SELF',
       message: 'You cannot approve your own request',
     }
   }
+
+  if (unconfined) return null
 
   const approvers = approversFor(policy, request.branchId)
   if (approvers && !approvers.includes(userId)) {
@@ -270,6 +280,15 @@ export async function decideApproval(params: {
   mayForce?: boolean
   /** Whether they actually asked to override, rather than merely being able to. */
   force?: boolean
+  /** `visibleBranchIds(user) === null`. See `whyCannotApprove`. */
+  unconfined?: boolean
+  /**
+   * What approving or rejecting DOES, run in the same transaction as the
+   * status change so the two cannot disagree. The caller supplies it because
+   * the consequence belongs to another domain (a transfer's reserve) and this
+   * module must not import it.
+   */
+  apply?: (tx: Prisma.TransactionClient) => Promise<void>
   // `previousStatus` rides along so the caller can audit what changed; the
   // row itself cannot say what it used to be once it has been written.
 }): Promise<ApprovalRequest & { previousStatus: ApprovalStatus; forced: boolean }> {
@@ -306,9 +325,25 @@ export async function decideApproval(params: {
     policy,
     request,
     userId: params.userId,
-    mayForce: false,
+    unconfined: params.unconfined ?? false,
   })
-  const forced = Boolean(blocked && params.force && params.mayForce)
+
+  /*
+   * Two ways through a rule that is in the way, and both leave a mark.
+   *
+   * An unconfined user signing their own request needs no extra click
+   * (recorrection.md §1 lists it as simply allowed) — but it is still the
+   * two-person rule being bypassed, so it is recorded as forced exactly as if
+   * they had pressed Override. The badge and the audit filter stay honest;
+   * only the friction is gone.
+   *
+   * Anybody else needs the permission AND to have asked for it. Holding
+   * `approvals.force` is not using it: a confined approver working the queue
+   * normally must still be refused their own request, or the override becomes
+   * the default and stops being visible.
+   */
+  const selfByUnconfined = blocked?.code === 'APPROVAL_SELF' && params.unconfined === true
+  const forced = Boolean(blocked && (selfByUnconfined || (params.force && params.mayForce)))
   if (blocked && !forced) throw new AppError(blocked.message, 403, blocked.code)
   /*
    * Saying no has to say why (bill.md §3).
@@ -335,23 +370,38 @@ export async function decideApproval(params: {
    *
    * This is the same shape `outgoing-payments/service.ts` already uses.
    */
-  const decided = await prisma.approvalRequest.updateMany({
-    where: { id: request.id, restaurantId: params.restaurantId, status: 'PENDING' },
-    data: {
-      status: params.approve ? 'APPROVED' : 'REJECTED',
-      decidedById: params.userId,
-      decidedAt: new Date(),
-      decisionNote: params.note?.trim() || null,
-      // Stamped on the row, not left to the audit log, so the queue and the
-      // detail view can mark it for as long as the record exists.
-      forcedAt: forced ? new Date() : null,
-    },
-  })
-  if (decided.count === 0) {
-    throw new AppError('That request has already been decided', 409, 'APPROVAL_DECIDED')
-  }
+  const after = await prisma.$transaction(async (tx) => {
+    const decided = await tx.approvalRequest.updateMany({
+      where: { id: request.id, restaurantId: params.restaurantId, status: 'PENDING' },
+      data: {
+        status: params.approve ? 'APPROVED' : 'REJECTED',
+        decidedById: params.userId,
+        decidedAt: new Date(),
+        decisionNote: params.note?.trim() || null,
+        // Stamped on the row, not left to the audit log, so the queue and the
+        // detail view can mark it for as long as the record exists.
+        forcedAt: forced ? new Date() : null,
+      },
+    })
+    if (decided.count === 0) {
+      throw new AppError('That request has already been decided', 409, 'APPROVAL_DECIDED')
+    }
 
-  const after = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })
+    /*
+     * The consequence, inside the same transaction (recorrection.md §1).
+     *
+     * The caller used to apply the decision AFTER this returned, in a
+     * try/catch that logged and swallowed. So when reserving the stock failed
+     * — the shelf was emptied while the request sat in the queue — the
+     * request read APPROVED, the transfer still read REQUESTED, and the
+     * only record of the gap was a line in a server log nobody reads. Now a
+     * failed consequence rolls the decision back and the decider is told,
+     * which is the only outcome that leaves the two records agreeing.
+     */
+    if (params.apply) await params.apply(tx)
+
+    return tx.approvalRequest.findUniqueOrThrow({ where: { id: request.id } })
+  })
   // Both rows, because the caller audits before/after and cannot reconstruct
   // `before` once the write has happened (bill.md §4). `forced` rides along so
   // the caller can audit the override as its own action rather than as an
@@ -524,6 +574,34 @@ export async function getApprovalDetail(params: {
   if (!request) throw new NotFoundError('Approval request')
 
   /*
+   * The record itself, when it is a transfer (recorrection.md §1).
+   *
+   * "View Details must open inside the Approval tab. Do NOT redirect to the
+   * Transfer tab." The request row carries a reason string and a line COUNT;
+   * what somebody rules on is which items, how many, from where to where. That
+   * lives on the StockTransfer, so it is joined here rather than sending the
+   * reader to another page to find it.
+   */
+  const transfer =
+    request.entity === 'StockTransfer' && request.entityId
+      ? await prisma.stockTransfer.findFirst({
+          where: { id: request.entityId, restaurantId: params.restaurantId },
+          select: {
+            number: true,
+            status: true,
+            fromBranch: { select: { name: true } },
+            toBranch: { select: { name: true } },
+            lines: {
+              select: {
+                requestedQty: true,
+                item: { select: { name: true, unit: true } },
+              },
+            },
+          },
+        })
+      : null
+
+  /*
    * The trail for this request AND for the record it is about. An approval on
    * its own says "somebody said yes"; the entity's history says what that yes
    * did, which is the question a reader actually has.
@@ -549,5 +627,58 @@ export async function getApprovalDetail(params: {
     },
   })
 
-  return { request, history }
+  return { request, history, transfer }
+}
+
+/** The restaurant row's `updatedAt`, read BEFORE the policy so `saveApprovers` can insist nothing moved. */
+export async function getApprovalPolicyStamp(restaurantId: string): Promise<Date> {
+  const row = await prisma.restaurant.findUniqueOrThrow({
+    where: { id: restaurantId },
+    select: { updatedAt: true },
+  })
+  return row.updatedAt
+}
+
+/**
+ * Store one location's approver list (correctionA.md §9).
+ *
+ * ── Compare-and-swap on the restaurant row (recorrection.md §1) ────────────
+ *
+ * The policy is one JSON column holding every location's list, so saving
+ * Kandy's approvers is read-the-whole-thing, change-one-key, write-the-whole-
+ * thing. Two managers saving two branches at the same moment both read the
+ * same JSON and the second write silently undid the first. The caller reads
+ * the row's `updatedAt` first (`getApprovalPolicyStamp`), then this reads the
+ * policy and writes it back only if the stamp still matches; if anything
+ * touched the row in between — this form or any other setting — the loser is
+ * told to reload rather than told nothing.
+ *
+ * Who may write which key is the action's business; this only makes the
+ * write safe.
+ */
+export async function saveApprovers(params: {
+  restaurantId: string
+  /** A branch id, or `RESTAURANT_WIDE`. */
+  key: string
+  approverIds: string[]
+  expectedUpdatedAt: Date
+}): Promise<{ before: string[]; after: string[] }> {
+  const policy = await getApprovalPolicy(params.restaurantId)
+  const before = policy.approvers?.[params.key] ?? []
+  const next = { ...(policy.approvers ?? {}), [params.key]: params.approverIds }
+
+  const written = await prisma.restaurant.updateMany({
+    where: { id: params.restaurantId, updatedAt: params.expectedUpdatedAt },
+    data: {
+      approvalPolicy: { ...policy, approvers: next } as unknown as Prisma.InputJsonValue,
+    },
+  })
+  if (written.count === 0) {
+    throw new AppError(
+      'Somebody else changed the approval settings just now. Reload and try again.',
+      409,
+      'APPROVAL_POLICY_CHANGED',
+    )
+  }
+  return { before, after: params.approverIds }
 }

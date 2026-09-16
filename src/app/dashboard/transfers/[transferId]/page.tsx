@@ -50,7 +50,6 @@ export default async function TransferPage({
       <TransferPanel
         detail={detail}
         can={{
-          approve: atSource && can(user, PERMISSIONS.TRANSFER_APPROVE),
           dispatch: atSource && can(user, PERMISSIONS.TRANSFER_DISPATCH),
           receive: atDestination && can(user, PERMISSIONS.TRANSFER_RECEIVE),
         }}

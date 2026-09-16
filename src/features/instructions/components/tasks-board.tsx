@@ -74,7 +74,7 @@ export function TasksBoard({
    * Who a task may be given to (correctionA.md §2). Empty for anyone who
    * cannot write one — the server decides this list, not the form.
    */
-  staff: Array<{ id: string; name: string; branchName: string | null }>
+  staff: Array<{ id: string; name: string; roleLabel: string; branchName: string | null }>
   /** True for an owner or group manager — the only people who may write one. */
   canInstruct: boolean
 }) {
@@ -306,33 +306,37 @@ export function TasksBoard({
               Optional on purpose (correctionA.md §2). "Anyone at the location"
               is the original meaning of an instruction and the right one for a
               notice — making a name mandatory would force an owner to pick
-              somebody arbitrary for "prices go up on the 1st", and a task
-              addressed to a person nobody chose is worse than one addressed to
-              the site.
+              somebody arbitrary for "prices go up on the 1st".
 
-              The branch is shown beside each name because two members of staff
-              sharing a first name is the ordinary case, not the edge one.
+              Each row reads name — role — branch (recorrection.md §4). Two
+              members of staff sharing a first name is the ordinary case, and
+              "Nuwan — Cashier — Kandy" is what tells them apart.
+
+              Not rendered at all when there is nobody to pick: `staff` is empty
+              for anyone who cannot write an instruction, and an empty picker
+              inside a dialog reads as a broken control rather than as the
+              rules working.
             */}
-            <div>
-              <label className="mb-1 block text-sm font-medium">
-                Assign to <span className="font-normal text-muted-foreground">(optional)</span>
-              </label>
-              <ItemPicker
-                options={[
-                  ...staff.map((m) => ({
+            {staff.length > 0 ? (
+              <div>
+                <label className="mb-1 block text-sm font-medium">
+                  Assign to <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <ItemPicker
+                  options={staff.map((m) => ({
                     value: m.id,
                     label: m.name,
-                    hint: m.branchName ?? 'No location set',
-                  })),
-                ]}
-                value={form.assigneeId}
-                onChange={(v) => setForm((f) => ({ ...f, assigneeId: v }))}
-                placeholder="Anyone at the location"
-                searchPlaceholder="Search staff…"
-                emptyMessage="Nobody matches that."
-                clearable
-              />
-            </div>
+                    hint: `${m.roleLabel} — ${m.branchName ?? 'no location set'}`,
+                  }))}
+                  value={form.assigneeId}
+                  onChange={(v) => setForm((f) => ({ ...f, assigneeId: v }))}
+                  placeholder="Anyone at the location"
+                  searchPlaceholder="Search staff…"
+                  emptyMessage="Nobody matches that."
+                  clearable
+                />
+              </div>
+            ) : null}
 
             <div>
               <label className="mb-1 block text-sm font-medium">What needs doing</label>

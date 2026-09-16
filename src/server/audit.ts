@@ -191,6 +191,13 @@ export const AUDIT_ACTIONS = {
   TRANSFER_DISPATCHED: 'transfer.dispatched',
   TRANSFER_RECEIVED: 'transfer.received',
   TRANSFER_CLOSED: 'transfer.closed',
+  /**
+   * The destination signed for it and the stock is on their shelf
+   * (recorrection.md §1). Its own key: completion used to be logged as
+   * `transfer.closed` with a flag inside `after`, which made "how long do
+   * transfers take end to end" a question the log could not answer.
+   */
+  TRANSFER_COMPLETED: 'transfer.completed',
   UNIT_UPDATED: 'catalog.unit_updated',
   CATEGORY_CREATED: 'catalog.category_created',
   CATEGORY_UPDATED: 'catalog.category_updated',

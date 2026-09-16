@@ -25,4 +25,16 @@ export interface ApprovalDetailPayload {
   history: Array<{ id: string; action: string; actorName: string; createdAt: string; entity: string }>
   blockedReason: string | null
   mayForce: boolean
+  /**
+   * The transfer this request is about, with its lines (recorrection.md §1).
+   * Null for every other kind. What a reader needs in order to decide without
+   * being sent to the Transfers tab.
+   */
+  transfer: {
+    number: string
+    status: string
+    fromBranchName: string
+    toBranchName: string
+    lines: Array<{ name: string; unit: string; quantity: number }>
+  } | null
 }

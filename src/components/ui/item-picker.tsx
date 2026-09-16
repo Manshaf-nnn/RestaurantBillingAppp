@@ -89,6 +89,20 @@ export function ItemPicker({
   // A narrowed list must not leave the highlight past the end of it.
   React.useEffect(() => setActive(0), [term])
 
+  /*
+   * The highlighted row follows the keys (recorrection.md §4).
+   *
+   * Arrow keys moved `active` and nothing moved the list, so on any list
+   * longer than the box the highlight walked off the bottom and the person
+   * kept pressing Down into rows they could not see. `block: 'nearest'` scrolls
+   * only as far as it must, so mouse users hovering a visible row are not
+   * yanked about.
+   */
+  React.useEffect(() => {
+    if (!open) return
+    document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: 'nearest' })
+  }, [active, open, listId])
+
   // Opening fresh each time: a stale search term hides the list you just opened.
   React.useEffect(() => {
     if (!open) setTerm('')
@@ -115,7 +129,19 @@ export function ItemPicker({
   }
 
   return (
-    <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
+    /*
+     * `modal`, and this is the whole reason the list scrolls inside a dialog
+     * (recorrection.md §4).
+     *
+     * The list is portalled to <body>, outside the Dialog that opened it, and
+     * a Radix Dialog locks scrolling on everything outside itself — so wheel
+     * events over this list were swallowed and a picker with more rows than
+     * fit was a picker whose lower rows did not exist. Reproduced with 22
+     * staff: overflow of 840px, wheel moves nothing. A modal popover owns its
+     * own scroll lock; nested locks let the innermost one govern, which is
+     * this one.
+     */
+    <Popover modal open={open} onOpenChange={disabled ? undefined : setOpen}>
       <PopoverTrigger asChild>
         <button
           id={id}
@@ -123,6 +149,7 @@ export function ItemPicker({
           role="combobox"
           aria-expanded={open}
           aria-haspopup="listbox"
+          aria-controls={listId}
           disabled={disabled}
           className={cn(
             'flex h-10 w-full items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 text-left text-sm',
@@ -157,7 +184,12 @@ export function ItemPicker({
           </div>
         </div>
 
-        <ul id={listId} role="listbox" className="max-h-64 overflow-y-auto p-1">
+        {/*
+          Half the viewport, capped. 16rem was six rows, which on a staff list
+          of thirty is a keyhole. Viewport-relative so a phone still gets a
+          usable list without the popover running off the bottom of the screen.
+        */}
+        <ul id={listId} role="listbox" className="max-h-[min(50vh,24rem)] overflow-y-auto overscroll-contain p-1">
           {clearable && !term ? (
             <li>
               <button

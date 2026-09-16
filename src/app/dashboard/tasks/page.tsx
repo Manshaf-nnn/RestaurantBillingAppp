@@ -6,7 +6,7 @@ import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch
 import { TasksBoard, type TaskView } from '@/features/instructions/components/tasks-board'
 import { listAssignableStaff, listInstructions } from '@/features/instructions/service'
 import { listLocations } from '@/features/transfers/queries'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 
 export const dynamic = 'force-dynamic'
@@ -80,6 +80,9 @@ export default async function TasksPage({
         staff={staff.map((m) => ({
           id: m.id,
           name: m.name,
+          // recorrection.md §4: "name + role + branch". The service returned
+          // the role all along; this mapping dropped it on the floor.
+          roleLabel: ROLE_LABELS[m.role],
           branchName: m.branch?.name ?? null,
         }))}
         canInstruct={canInstruct}

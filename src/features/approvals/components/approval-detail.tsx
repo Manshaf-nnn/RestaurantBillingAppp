@@ -41,6 +41,14 @@ export interface ApprovalDetailView {
   blockedReason: string | null
   /** Whether this viewer holds `approvals.force`. */
   mayForce: boolean
+  /** The transfer this is about, with its lines (recorrection.md §1). */
+  transfer: {
+    number: string
+    status: string
+    fromBranchName: string
+    toBranchName: string
+    lines: Array<{ name: string; unit: string; quantity: number }>
+  } | null
 }
 
 /**
@@ -161,7 +169,33 @@ export function ApprovalDetail({
           ) : null}
         </dl>
 
-        {request.details.length > 0 ? (
+        {/*
+          What is actually being asked for (recorrection.md §1). The payload
+          holds a branch id and a line COUNT; the person deciding needs the
+          items, the quantities and both ends by name, and should not have
+          to leave for the Transfers tab to get them.
+        */}
+        {request.transfer ? (
+          <section className="mt-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {request.transfer.number} · {request.transfer.fromBranchName} → {request.transfer.toBranchName}
+            </h3>
+            <table className="w-full rounded-lg border text-sm">
+              <tbody className="divide-y">
+                {request.transfer.lines.map((line, index) => (
+                  <tr key={`${line.name}-${index}`}>
+                    <td className="px-3 py-1.5">{line.name}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">
+                      {line.quantity} {line.unit.toLowerCase()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ) : null}
+
+        {request.details.length > 0 && !request.transfer ? (
           <section className="mt-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               What would happen

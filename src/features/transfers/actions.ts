@@ -51,12 +51,21 @@ export async function requestTransferAction(
     async (data) => {
       const user = await requirePermission(PERMISSIONS.TRANSFER_REQUEST)
       /*
-       * Either end. This used to demand access to the SOURCE, which meant a
-       * branch manager could not ask the warehouse for anything — the one thing
-       * the screen exists for. Asking to pull stock in is as legitimate as
-       * offering to push it out.
+       * The DESTINATION raises it (recorrection.md §1).
+       *
+       * This was `'EITHER'`, with a note arguing that "offering to push" stock
+       * out was as legitimate as asking to pull it in. That was a real choice
+       * and it is reversed here on purpose: the spec's flow is that the branch
+       * that NEEDS stock creates the request, the source approves and
+       * dispatches, and the requester receives. A push from the source would
+       * put the same branch on both sides of its own approval — the source
+       * asking itself and then signing.
+       *
+       * An unconfined user still passes any side, so an owner can raise one
+       * on a branch's behalf; `assertTransferSide` already reads it that way.
+       * What this refuses is a confined manager at Kandy creating Kandy → Ampara.
        */
-      assertTransferSide(user, { fromBranchId: data.fromBranchId, toBranchId: data.toBranchId }, 'EITHER')
+      assertTransferSide(user, { fromBranchId: data.fromBranchId, toBranchId: data.toBranchId }, 'DESTINATION')
 
       // Names for the approval queue, so the owner reads "Main → Kandy" rather
       // than two cuids.
@@ -78,7 +87,7 @@ export async function requestTransferAction(
         userId: user.id,
       })
       await audit({
-        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        restaurantId: user.restaurantId, branchId: data.fromBranchId, userId: user.id, actorName: user.name,
         action: AUDIT_ACTIONS.TRANSFER_REQUESTED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number, from: data.fromBranchId, to: data.toBranchId },
       })
@@ -166,7 +175,7 @@ export async function approveTransferAction(transferId: string): Promise<ActionR
 
     const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId: ends.fromBranchId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.TRANSFER_APPROVED, entity: 'StockTransfer', entityId: transfer.id,
       after: { number: transfer.number },
     })
@@ -204,7 +213,7 @@ export async function dispatchTransferAction(input: unknown): Promise<ActionResu
         userId: user.id,
       })
       await audit({
-        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        restaurantId: user.restaurantId, branchId: ends.fromBranchId, userId: user.id, actorName: user.name,
         action: AUDIT_ACTIONS.TRANSFER_DISPATCHED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number },
       })
@@ -254,7 +263,7 @@ export async function receiveTransferAction(
         })),
       })
       await audit({
-        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        restaurantId: user.restaurantId, branchId: ends.toBranchId, userId: user.id, actorName: user.name,
         action: AUDIT_ACTIONS.TRANSFER_RECEIVED, entity: 'StockTransfer', entityId: result.transfer.id,
         after: { number: result.transfer.number, variances: result.variances },
       })
@@ -304,8 +313,10 @@ export async function completeTransferAction(transferId: string): Promise<Action
       userId: user.id,
     })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
-      action: AUDIT_ACTIONS.TRANSFER_CLOSED, entity: 'StockTransfer', entityId: transfer.id,
+      restaurantId: user.restaurantId, branchId: ends.toBranchId, userId: user.id, actorName: user.name,
+      // Its own key (recorrection.md §1): completion is the end of the flow,
+      // not a variety of closing it.
+      action: AUDIT_ACTIONS.TRANSFER_COMPLETED, entity: 'StockTransfer', entityId: transfer.id,
       after: { number: transfer.number, status: 'COMPLETED', variancesAccepted: true },
     })
     await notifyLocation({
@@ -343,7 +354,7 @@ export async function closeTransferAction(input: unknown): Promise<ActionResult<
         userId: user.id,
       })
       await audit({
-        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        restaurantId: user.restaurantId, branchId: ends.fromBranchId, userId: user.id, actorName: user.name,
         action: AUDIT_ACTIONS.TRANSFER_CLOSED, entity: 'StockTransfer', entityId: transfer.id,
         after: { number: transfer.number, status: data.status },
       })

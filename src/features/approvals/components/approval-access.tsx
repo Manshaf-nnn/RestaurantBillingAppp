@@ -45,7 +45,7 @@ export function ApprovalAccess({
 }: {
   rows: ApprovalAccessRow[]
   /** Everybody who can open the queue — the server checks this again. */
-  staff: Array<{ id: string; name: string; branchName: string | null }>
+  staff: Array<{ id: string; name: string; roleLabel: string; branchName: string | null }>
 }) {
   const router = useRouter()
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -116,7 +116,8 @@ export function ApprovalAccess({
                     options={candidates.map((s) => ({
                       value: s.id,
                       label: s.name,
-                      hint: s.branchName ?? 'No location set',
+                      // Name, role, location (recorrection.md §4) — one convention for every people picker.
+                      hint: `${s.roleLabel} — ${s.branchName ?? 'no location set'}`,
                     }))}
                     value={adding[row.branchId] ?? ''}
                     onChange={(v) => setAdding((c) => ({ ...c, [row.branchId]: v }))}

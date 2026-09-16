@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { StockTransfer, TransferStatus, TransferVarianceReason, UserRole } from '@prisma/client'
+import type { StockTransfer, TransferStatus, TransferVarianceReason, UserRole, Prisma } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { canAccessBranch } from '@/lib/rbac'
@@ -229,8 +229,15 @@ export async function approveTransfer(params: {
   restaurantId: string
   transferId: string
   userId?: string | null
+  /**
+   * A caller's own transaction to join (recorrection.md §1). The approvals
+   * desk decides the request and reserves the stock as one unit of work, so
+   * a failed reserve rolls the decision back instead of leaving an APPROVED
+   * request pointing at a REQUESTED transfer.
+   */
+  tx?: Prisma.TransactionClient
 }): Promise<StockTransfer> {
-  return prisma.$transaction(async (tx) => {
+  const run = async (tx: Prisma.TransactionClient) => {
     const transfer = await load(tx, params.restaurantId, params.transferId)
     assertTransition(transfer.status, 'APPROVED')
 
@@ -256,7 +263,8 @@ export async function approveTransfer(params: {
       where: { id: transfer.id },
       data: { status: 'APPROVED', approvedById: params.userId ?? null, approvedAt: new Date() },
     })
-  })
+  }
+  return params.tx ? run(params.tx) : prisma.$transaction(run)
 }
 
 /**
@@ -536,8 +544,10 @@ export async function closeTransfer(params: {
   status: 'REJECTED' | 'CANCELLED'
   reason?: string | null
   userId?: string | null
+  /** See `approveTransfer` — a rejection at the desk joins its transaction. */
+  tx?: Prisma.TransactionClient
 }): Promise<StockTransfer> {
-  return prisma.$transaction(async (tx) => {
+  const run = async (tx: Prisma.TransactionClient) => {
     const transfer = await load(tx, params.restaurantId, params.transferId)
     assertTransition(transfer.status, params.status)
 
@@ -570,7 +580,8 @@ export async function closeTransfer(params: {
       where: { id: transfer.id },
       data: { status: params.status, rejectReason: params.reason?.trim() || null },
     })
-  })
+  }
+  return params.tx ? run(params.tx) : prisma.$transaction(run)
 }
 
 /**
