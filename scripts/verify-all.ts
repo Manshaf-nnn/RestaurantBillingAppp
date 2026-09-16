@@ -81,6 +81,12 @@ const SERVICE = [
   // the same reference number, and the planned figure survives so the variance
   // is real.
   'production-yield-test',
+  // recorrection.md §3 — one flow: Create writes the prepared item and its
+  // recipe and moves nothing; Mark Done consumes the plan under the batch's
+  // own number (no fresh PRD- drawn, none skipped); the recipe is kept when
+  // the plan is identical and versioned when it changes; unit, self-reference
+  // and raw-name mistakes are refused at Create; the form has one verb.
+  'prepared-item-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',

@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ChefHat, Plus, Timer, Trash2 } from 'lucide-react'
+import { ChefHat, MapPin, Plus, Trash2 } from 'lucide-react'
 import type { StockUnit } from '@prisma/client'
 
 import { Alert } from '@/components/ui/feedback'
@@ -17,21 +17,29 @@ import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { roundQty } from '@/lib/quantity'
 import { newRequestKey } from '@/lib/request-key'
 import { useAction } from '@/lib/use-action'
-import { produceItemAction, startBatchAction } from '../actions'
-import type { ProduceItemResult, WorkspaceItem } from '../types'
+import { startBatchAction } from '../actions'
+import { MarkDoneForm } from './mark-done-form'
+import type { PrepRecipe, ProduceItemResult, StartBatchResult, WorkspaceItem } from '../types'
 
 /**
- * Make Item (redesignkitchenjob.md): name → quantity → ingredients → cost → done.
+ * Make an Item (recorrection.md §3): one flow.
+ *
+ *   pick or name the prepared item → output → ingredients → Create
+ *     → "made it already?" actual qty → Mark done        (or: later, from Prepared Items)
+ *
+ * Create writes the item and its recipe and starts the batch; it moves no
+ * stock. Mark Done runs the one atomic transaction with the quantity that
+ * actually came out. There is no "make it now" any more, and no location
+ * select: the location is the one the switcher chose, named at the top.
  *
  * The cost preview is computed here from the figures the page loaded — each
  * item's exact average cost and what this branch holds — using the same unit
  * conversion the ledger uses. It is a preview: the transaction re-reads the
- * ledger and its answer is the one that gets recorded. The two agree unless
- * stock moved between the page loading and the button being pressed.
+ * ledger and its answer is the one that gets recorded.
  *
  * One request key per attempt at a batch. It is minted when the form is
  * shown and again after each success, never on retry, so a double tap or a
- * retried request records the batch once.
+ * retried request creates the batch once.
  */
 
 type Row = { key: string; itemId: string; quantity: string; unit: StockUnit | '' }
@@ -39,6 +47,8 @@ type WasteRow = Row & { note: string }
 
 const ALL_UNITS = Object.keys(UNIT_LABELS) as StockUnit[]
 const SELECT = 'h-10 w-full rounded-lg border border-input bg-background px-2 text-sm'
+/** The picker's "none of these" row. Not an id anything could collide with. */
+const NEW_ITEM = '__new__'
 
 let rowSeq = 0
 const newRow = (): Row => ({ key: `r${++rowSeq}`, itemId: '', quantity: '', unit: '' })
@@ -46,39 +56,41 @@ const newWasteRow = (): WasteRow => ({ ...newRow(), note: '' })
 
 export function MakeItemForm({
   items,
-  branches,
+  recipes,
   branchId,
+  branchName,
+  branchIsFallback,
   currency,
   locale,
-  prefillName,
+  prefill,
+  onLater,
 }: {
   items: WorkspaceItem[]
-  branches: Array<{ id: string; name: string }>
+  recipes: Record<string, PrepRecipe>
   branchId: string | null
+  branchName: string | null
+  /** The location was not chosen on the switcher; the form says so. */
+  branchIsFallback: boolean
   currency: string
   locale: string
   /** Set by "Make more" on the Prepared Items tab. */
-  prefillName: string | null
+  prefill: { itemId: string; name: string } | null
+  /** "Later" on the confirmation — the batch waits on the Prepared Items tab. */
+  onLater: () => void
 }) {
   const router = useRouter()
   const { busy, run } = useAction()
   const requestKey = React.useRef(newRequestKey('prod'))
 
-  const [branch, setBranch] = React.useState(branchId ?? branches[0]?.id ?? '')
-  const [name, setName] = React.useState(prefillName ?? '')
+  const [choice, setChoice] = React.useState<string>(prefill?.itemId ?? '')
+  const [newName, setNewName] = React.useState('')
   const [quantity, setQuantity] = React.useState('')
   const [unit, setUnit] = React.useState<StockUnit>('KG')
   const [rows, setRows] = React.useState<Row[]>([newRow()])
   const [waste, setWaste] = React.useState<WasteRow[]>([])
   const [notes, setNotes] = React.useState('')
+  const [created, setCreated] = React.useState<StartBatchResult | null>(null)
   const [result, setResult] = React.useState<ProduceItemResult | null>(null)
-
-  React.useEffect(() => {
-    if (prefillName) {
-      setName(prefillName)
-      setResult(null)
-    }
-  }, [prefillName])
 
   const byId = React.useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const money = (minor: number) => formatMoney(Math.round(minor), currency, locale)
@@ -90,22 +102,81 @@ export function MakeItemForm({
     return `${formatMoney(0, currency, locale).replace(/[\d.,\s]/g, '')}${major.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
   }
 
-  /* ── What the typed name means ────────────────────────────────────────── */
+  /* ── Which prepared item ──────────────────────────────────────────────── */
 
-  const trimmed = name.trim().replace(/\s+/g, ' ')
-  const matched = React.useMemo(
-    () => items.find((item) => item.name.toLowerCase() === trimmed.toLowerCase()) ?? null,
-    [items, trimmed],
+  const preparedOptions = React.useMemo(
+    () => [
+      { value: NEW_ITEM, label: 'New prepared item…', hint: 'Give it a name below' },
+      ...items
+        .filter((item) => item.isPrepared)
+        .map((item) => ({
+          value: item.id,
+          label: item.name,
+          hint: `${formatQuantity(item.available, item.unit)} here · avg ${perUnit(item.unitCost)}/${UNIT_LABELS[item.unit]}${recipes[item.id] ? ' · has a recipe' : ''}`,
+        })),
+    ],
+    // perUnit closes over currency/locale, which are stable for the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, recipes, currency, locale],
   )
+
+  const trimmedNewName = newName.trim().replace(/\s+/g, ' ')
+  /** The item being made: picked, or matched by the new name, or nothing yet. */
+  const matched = React.useMemo(() => {
+    if (choice && choice !== NEW_ITEM) return byId.get(choice) ?? null
+    if (choice === NEW_ITEM && trimmedNewName) {
+      return items.find((item) => item.name.toLowerCase() === trimmedNewName.toLowerCase()) ?? null
+    }
+    return null
+  }, [choice, byId, items, trimmedNewName])
   const nameIsRaw = matched !== null && !matched.isPrepared
+  const outputName = matched?.name ?? trimmedNewName
+  const hasName = choice !== '' && (choice !== NEW_ITEM || trimmedNewName.length >= 2)
 
   /*
-   * The ingredient list (correctionA.md §8, and redesignkitchenjob.md's
-   * "Ingredient field MUST be a dropdown/search").
-   *
-   * The item being made is disabled rather than hidden: seeing it greyed out
-   * says "not this one, you are making it", where hiding it just looks like
-   * the search is broken.
+   * Pre-fill from the recipe (recorrection.md §3). Choosing an item that has
+   * been made before brings back how it was made — yield and lines — for the
+   * cook to adjust. A first-time item starts blank.
+   */
+  const fill = React.useCallback(
+    (itemId: string) => {
+      const item = byId.get(itemId)
+      const recipe = recipes[itemId]
+      if (!item) return
+      if (recipe) {
+        setQuantity(String(recipe.yieldQty))
+        setUnit(recipe.yieldUnit ?? item.unit)
+        setRows(
+          recipe.ingredients.length > 0
+            ? recipe.ingredients.map((line) => ({ key: `r${++rowSeq}`, itemId: line.itemId, quantity: String(line.quantity), unit: line.unit }))
+            : [newRow()],
+        )
+      } else {
+        setUnit(item.unit)
+      }
+    },
+    [byId, recipes],
+  )
+
+  const choose = (next: string) => {
+    setChoice(next)
+    setNewName('')
+    if (next && next !== NEW_ITEM) fill(next)
+  }
+
+  React.useEffect(() => {
+    if (prefill) {
+      setCreated(null)
+      setResult(null)
+      setChoice(prefill.itemId)
+      fill(prefill.itemId)
+    }
+  }, [prefill, fill])
+
+  /*
+   * The ingredient list (correctionA.md §8). The item being made is disabled
+   * rather than hidden: seeing it greyed out says "not this one, you are
+   * making it", where hiding it just looks like the search is broken.
    */
   const ingredientOptions = React.useMemo(
     () =>
@@ -165,14 +236,14 @@ export function MakeItemForm({
   )
 
   const ready =
-    trimmed.length >= 2 &&
+    hasName &&
     !nameIsRaw &&
     Number(quantity) > 0 &&
     !preview.unitError &&
     preview.lines.some((l) => l.item && l.base > 0) &&
     preview.errors.length === 0 &&
     preview.shortages.length === 0 &&
-    Boolean(branch) &&
+    Boolean(branchId) &&
     !chosenIngredients.some((i) => matched && i.id === matched.id)
 
   /* ── Row editing ──────────────────────────────────────────────────────── */
@@ -187,7 +258,8 @@ export function MakeItemForm({
     setWaste((current) => current.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
   const reset = () => {
-    setName('')
+    setChoice('')
+    setNewName('')
     setQuantity('')
     setUnit('KG')
     setRows([newRow()])
@@ -196,53 +268,33 @@ export function MakeItemForm({
     requestKey.current = newRequestKey('prod')
   }
 
-  const submit = async (mode: 'now' | 'batch' = 'now') => {
-    if (!ready) return
-    const payload = {
-      clientRequestId: requestKey.current,
-      branchId: branch,
-      output: { itemId: matched?.id ?? null, name: trimmed, quantity: Number(quantity), unit },
-      ingredients: rows
-        .filter((r) => r.itemId && Number(r.quantity) > 0 && r.unit)
-        .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit })),
-      waste: waste
-        .filter((r) => r.itemId && Number(r.quantity) > 0 && r.unit)
-        .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit, note: r.note || undefined })),
-      notes: notes || undefined,
-    }
-    /*
-     * Two ways out of one form (correctionA.md §10).
-     *
-     * "Make it now" is the flow redesignkitchenjob.md settled on and is
-     * unchanged: one transaction, ingredients out and the prepared item in.
-     *
-     * "Start a batch" writes the same plan and moves nothing. It is for the
-     * things whose yield is not knowable when you begin — a pot that reduces,
-     * dough that proves — where stating the output up front means recording a
-     * guess as measured fact and quietly losing the shortfall from the
-     * costing. The quantity above becomes what you are AIMING for, and the
-     * real figure is entered on Mark Done.
-     */
-    if (mode === 'batch') {
-      await run(() => startBatchAction(payload), {
-        onDone: () => {
+  const create = async () => {
+    if (!ready || !branchId) return
+    await run(
+      () =>
+        startBatchAction({
+          clientRequestId: requestKey.current,
+          branchId,
+          output: { itemId: matched?.id ?? null, name: outputName, quantity: Number(quantity), unit },
+          ingredients: rows
+            .filter((r) => r.itemId && Number(r.quantity) > 0 && r.unit)
+            .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit })),
+          waste: waste
+            .filter((r) => r.itemId && Number(r.quantity) > 0 && r.unit)
+            .map((r) => ({ itemId: r.itemId, quantity: Number(r.quantity), unit: r.unit as StockUnit, note: r.note || undefined })),
+          notes: notes || undefined,
+        }),
+      {
+        onDone: (data) => {
+          setCreated(data)
           reset()
           router.refresh()
         },
-      })
-      return
-    }
-
-    await run(() => produceItemAction(payload), {
-      onDone: (data) => {
-        setResult(data)
-        reset()
-        router.refresh()
       },
-    })
+    )
   }
 
-  /* ── After a run: what happened to stock ──────────────────────────────── */
+  /* ── After Mark Done: what happened to stock ──────────────────────────── */
 
   if (result) {
     return (
@@ -282,13 +334,51 @@ export function MakeItemForm({
             </ul>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setResult(null)}>Make another</Button>
+            <Button onClick={() => { setResult(null); setCreated(null) }}>Make another</Button>
             <Button variant="outline" asChild>
               <Link href={`/dashboard/production/${result.orderId}`}>View record</Link>
             </Button>
             <Button variant="ghost" asChild>
               <Link href={`/dashboard/inventory/${result.item.id}`}>Open {result.item.name}</Link>
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  /* ── After Create: made it already? ───────────────────────────────────── */
+
+  if (created) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ChefHat className="size-5 text-emerald-600" />
+            {created.replayed ? 'Already created' : 'Created'} {created.number} · {created.item.name}
+          </CardTitle>
+          <CardDescription>
+            Aiming for {created.plannedQty} {UNIT_LABELS[created.unit]}.
+            {created.item.isNew ? ` ${created.item.name} is now a prepared item in Inventory.` : ''}{' '}
+            Nothing has left stock yet — that happens when you mark it done.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="mb-2 text-sm font-medium">Made it already? Enter what came out.</p>
+            <MarkDoneForm
+              batch={{ id: created.id, number: created.number, plannedQty: created.plannedQty, unit: created.unit }}
+              onDone={(done) => {
+                setResult(done)
+                router.refresh()
+              }}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2 border-t pt-3">
+            <Button variant="outline" onClick={() => { setCreated(null); onLater() }}>
+              Later — it waits on Prepared Items
+            </Button>
+            <Button variant="ghost" onClick={() => setCreated(null)}>Create another</Button>
           </div>
         </CardContent>
       </Card>
@@ -302,49 +392,70 @@ export function MakeItemForm({
       <div className="space-y-5 lg:col-span-2">
         <Card>
           <CardHeader>
-            <CardTitle>What did you make?</CardTitle>
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+              <MapPin className="size-4 text-muted-foreground" />
+              Making at <strong>{branchName ?? 'no location'}</strong>
+              {branchIsFallback ? (
+                <span className="text-xs font-normal text-muted-foreground">
+                  — not chosen on the switcher; change it there
+                </span>
+              ) : null}
+            </CardTitle>
             <CardDescription>
-              Type a name. An existing prepared item is topped up; a new name creates one.
+              Pick a prepared item to make it again, or name a new one. Create writes the item and its recipe and starts the batch — nothing leaves stock until you mark it done.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {branches.length > 1 ? (
-              <label className="block text-sm">
-                <span className="mb-1 block text-muted-foreground">Made at</span>
-                <select className={SELECT} value={branch} onChange={(e) => setBranch(e.target.value)}>
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </label>
+            {!branchId ? (
+              <Alert variant="destructive" title="No location">
+                Your account is not attached to a location, so there is nowhere for the prepared item to be stocked. Ask a manager to set one.
+              </Alert>
             ) : null}
 
             <label className="block text-sm">
               <span className="mb-1 block text-muted-foreground">Prepared item</span>
-              <Input
-                list="prepared-item-names"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Mayonnaise, curry paste, dough…"
-                aria-invalid={nameIsRaw}
-                autoComplete="off"
+              <ItemPicker
+                options={preparedOptions}
+                value={choice}
+                onChange={choose}
+                placeholder="Choose a prepared item, or create a new one…"
+                searchPlaceholder="Search prepared items…"
+                emptyMessage="Nothing prepared matches — choose “New prepared item…” to create it."
               />
-              <datalist id="prepared-item-names">
-                {items.filter((i) => i.isPrepared).map((i) => <option key={i.id} value={i.name} />)}
-              </datalist>
               {matched && !nameIsRaw ? (
                 <span className="mt-1 block text-xs text-muted-foreground">
                   Adds to <strong>{matched.name}</strong> — stocked in {UNIT_LABELS[matched.unit]}, {formatQuantity(matched.available, matched.unit)} here, avg {perUnit(matched.unitCost)}/{UNIT_LABELS[matched.unit]}.
-                </span>
-              ) : null}
-              {nameIsRaw ? (
-                <span className="mt-1 block text-xs text-destructive">
-                  “{matched!.name}” is a raw stock item. Give the prepared item its own name — “Prepared {matched!.name.toLowerCase()}”, say.
+                  {recipes[matched.id] ? ' Ingredients filled in from how it was last made.' : ''}
                 </span>
               ) : null}
             </label>
 
+            {choice === NEW_ITEM ? (
+              <label className="block text-sm">
+                <span className="mb-1 block text-muted-foreground">Name the new prepared item</span>
+                <Input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Mayonnaise, curry paste, dough…"
+                  aria-invalid={nameIsRaw}
+                  autoComplete="off"
+                />
+                {nameIsRaw ? (
+                  <span className="mt-1 block text-xs text-destructive">
+                    “{matched!.name}” is a raw stock item. Give the prepared item its own name — “Prepared {matched!.name.toLowerCase()}”, say.
+                  </span>
+                ) : matched ? (
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    That prepared item already exists — this batch will add to it.
+                  </span>
+                ) : null}
+              </label>
+            ) : null}
+
             <div className="grid grid-cols-[1fr_8rem] gap-3">
               <label className="block text-sm">
-                <span className="mb-1 block text-muted-foreground">Quantity produced</span>
+                <span className="mb-1 block text-muted-foreground">Output — how much you are making</span>
                 <Input type="number" inputMode="decimal" min={0} step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0" />
               </label>
               <label className="block text-sm">
@@ -361,7 +472,7 @@ export function MakeItemForm({
         <Card>
           <CardHeader>
             <CardTitle>Ingredients</CardTitle>
-            <CardDescription>Stock items only. Costs are today’s average from the ledger.</CardDescription>
+            <CardDescription>Stock items only. Costs are today’s average from the ledger. Saved as the item’s recipe for next time.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="hidden grid-cols-[1fr_6rem_6rem_7rem_7rem_2.5rem] gap-2 text-xs uppercase tracking-wide text-muted-foreground sm:grid">
@@ -404,7 +515,7 @@ export function MakeItemForm({
             <details className="rounded-lg border border-dashed border-border p-3" open={waste.length > 0}>
               <summary className="cursor-pointer text-sm font-medium">Production waste (optional)</summary>
               <p className="mt-1 text-xs text-muted-foreground">
-                Trimmings, a spoiled part-batch — anything thrown away while making this. Deducted as waste and expensed; it does not raise the item’s cost.
+                Trimmings, a spoiled part-batch — anything thrown away while making this. Deducted as waste and expensed on Mark Done; it does not raise the item’s cost.
               </p>
               <div className="mt-3 space-y-2">
                 {waste.map((row) => (
@@ -438,14 +549,14 @@ export function MakeItemForm({
         <Card>
           <CardHeader>
             <CardTitle>Cost preview</CardTitle>
-            <CardDescription>From today’s average costs. The record uses the ledger at the moment you complete.</CardDescription>
+            <CardDescription>From today’s average costs. The record uses the ledger at the moment you mark it done.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <Stat label="Ingredients" value={money(preview.total)} />
             <Stat
               label={preview.producedBase > 0 ? `Cost per ${UNIT_LABELS[matched ? matched.unit : unit]}` : 'Cost per unit'}
               value={preview.producedBase > 0 ? perUnit(preview.perBase) : '—'}
-              hint={preview.producedBase > 0 ? `${formatQuantity(preview.producedBase, matched ? matched.unit : unit)} produced` : 'Enter the quantity produced'}
+              hint={preview.producedBase > 0 ? `at ${formatQuantity(preview.producedBase, matched ? matched.unit : unit)} — the real figure follows the actual yield` : 'Enter how much you are making'}
             />
             {preview.unpriced.length > 0 ? (
               <Alert variant="warning" title="No recorded cost yet">
@@ -454,30 +565,14 @@ export function MakeItemForm({
             ) : null}
             {preview.shortages.length > 0 ? (
               <Alert variant="destructive" title="Not enough stock here">
-                Production never takes a shelf below zero.
+                Mark Done never takes a shelf below zero, so this could not be finished as planned.
               </Alert>
             ) : null}
-            <Button className="w-full" size="lg" onClick={() => submit('now')} disabled={!ready} loading={busy}>
-              Make it now
+            <Button className="w-full" size="lg" onClick={create} disabled={!ready} loading={busy}>
+              Create prepared item
             </Button>
-            <Button
-              className="w-full"
-              size="lg"
-              variant="outline"
-              onClick={() => submit('batch')}
-              disabled={!ready}
-              loading={busy}
-            >
-              <Timer /> Start a batch
-            </Button>
-            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                <strong>Make it now</strong> — one transaction: ingredients leave stock and the
-                prepared item arrives carrying exactly their value.{' '}
-                <strong>Start a batch</strong> — nothing moves yet; come back and enter what
-                actually came out. Either way, nothing is expensed until a dish is sold.
-              </span>
+            <p className="text-xs text-muted-foreground">
+              Creates the item and its recipe and starts the batch. Nothing leaves stock until you mark it done with what actually came out — right after, or later from Prepared Items.
             </p>
           </CardContent>
         </Card>

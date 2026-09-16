@@ -14,7 +14,8 @@ import { postMovement } from '@/features/inventory/ledger'
 import { assertSufficient } from '@/features/inventory/location-stock'
 import { UNIT_LABELS, UnitConversionError, toBaseUnits } from '@/features/inventory/units'
 import { recordWastageWithin } from '@/features/inventory/wastage'
-import type { ProduceItemResult } from './types'
+import { saveRecipe } from '@/features/recipes/service'
+import type { ProduceItemResult, StartBatchResult } from './types'
 
 /**
  * Kitchen production: making a prepared item out of stock (redesignkitchenjob.md).
@@ -124,13 +125,13 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
       for (const id of ids) if (!byId.has(id)) throw new NotFoundError('Ingredient')
 
       /*
-       * Job numbers are derived from the highest issued, so two runs created in
-       * the same instant would draw the same one. A per-restaurant advisory lock
-       * serialises that without locking any row, and is released with the
-       * transaction — safe behind a transaction-mode pooler.
+       * A number is drawn only for a run created here. A batch already has
+       * one — issued when it was started — and the first cut drew a second
+       * regardless and used it in every ledger reason and in the batch number,
+       * so the order read PRD-000041 while its movements said "Made mayonnaise
+       * (PRD-000042)", and 42 was skipped for ever (recorrection.md §3).
        */
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.restaurantId}))`
-      const number = await nextJobNumber(tx, params.restaurantId)
+      const number = params.batchId ? null : await drawJobNumber(tx, params.restaurantId)
       const now = new Date()
 
       /*
@@ -193,7 +194,8 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
             data: {
               restaurantId: params.restaurantId,
               branchId: params.branchId,
-              number,
+              // Non-null on this path: it is only skipped when finishing a batch.
+              number: number!,
               status: 'COMPLETED',
               clientRequestId: params.clientRequestId,
               outputItemId: resolved.item.id,
@@ -209,7 +211,9 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
             },
           })
 
-      const reason = `Made ${resolved.item.name} (${number})`
+      // The batch's own number when finishing one; the fresh one otherwise.
+      const jobNumber = order.number
+      const reason = `Made ${resolved.item.name} (${jobNumber})`
       const reference = { referenceType: 'ProductionOrder', referenceId: order.id }
 
       /*
@@ -279,7 +283,7 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
           unit: line.unit,
           reason: 'PREPARATION',
           reasonNote: line.note?.trim() || null,
-          notes: `Production ${number} — ${resolved.item.name}`,
+          notes: `Production ${jobNumber} — ${resolved.item.name}`,
           branchId: params.branchId,
           userId: params.userId,
           productionOrderId: order.id,
@@ -299,7 +303,7 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
        * it, not the other way round.
        */
       const batchNumber = resolved.item.trackBatches
-        ? `${number}-${now.toISOString().slice(0, 10).replace(/-/g, '')}`
+        ? `${jobNumber}-${now.toISOString().slice(0, 10).replace(/-/g, '')}`
         : null
       const produced = await postMovement(tx, {
         restaurantId: params.restaurantId,
@@ -359,7 +363,7 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
       return {
         replayed: false,
         orderId: order.id,
-        number,
+        number: jobNumber,
         item: {
           id: resolved.item.id,
           name: resolved.item.name,
@@ -463,7 +467,9 @@ function convertOrRefuse(
  * make both wrong; the form says so and suggests a different name.
  */
 async function resolvePreparedItem(
-  params: ProduceItemParams,
+  params: Pick<ProduceItemParams, 'restaurantId' | 'branchId'> & {
+    output: Pick<ProduceItemParams['output'], 'itemId' | 'name' | 'unit'>
+  },
 ): Promise<{ item: InventoryItem; created: boolean }> {
   const name = params.output.name.trim().replace(/\s+/g, ' ')
 
@@ -531,6 +537,17 @@ function refuseRawName(item: InventoryItem) {
  * internal reference — it appears on ledger rows and the run's page, not as
  * the way anyone is expected to find a run.
  */
+async function drawJobNumber(tx: TxClient, restaurantId: string): Promise<string> {
+  /*
+   * Job numbers are derived from the highest issued, so two runs created in
+   * the same instant would draw the same one. A per-restaurant advisory lock
+   * serialises that without locking any row, and is released with the
+   * transaction — safe behind a transaction-mode pooler.
+   */
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${restaurantId}))`
+  return nextJobNumber(tx, restaurantId)
+}
+
 async function nextJobNumber(tx: TxClient, restaurantId: string): Promise<string> {
   const last = await tx.productionOrder.findFirst({
     where: { restaurantId },
@@ -611,26 +628,38 @@ export interface BatchPlan {
 }
 
 /**
- * Start a batch (correctionA.md §10).
+ * Create a prepared item — start its batch (recorrection.md §3).
  *
- * ── Why this exists alongside the one-step flow ────────────────────────────
+ * ── One flow ────────────────────────────────────────────────────────────────
  *
- * `redesignkitchenjob.md` replaced a confusing two-phase "Kitchen Jobs" screen
- * with one-step Make Item, and that was right: for chopping vegetables you
- * know the answer before you start, and a second click is friction with no
- * information in it.
+ * There used to be two buttons: "Make it now", which deducted the ingredients
+ * and stocked the output in one go, and "Start a batch", which wrote a plan
+ * and moved nothing. Both were defensible and together they were confusing —
+ * the same form, two verbs, and a cook asked to predict the yield of a pot
+ * that had not reduced yet. Now there is one: Create. It moves nothing. The
+ * stock moves on Mark Done, with the quantity that actually came out, which
+ * may be entered a moment later or hours later. The one-step transaction is
+ * still `produceItem`, and Mark Done runs it against this batch's own row.
  *
- * It is wrong for the things it is wrong for. A pot of stock reduces; dough
- * proves; a bag of flour becomes fewer rolls than the recipe promised. The
- * cook cannot honestly state the yield at the moment they start, and the
- * one-step flow makes them guess — which records a number nobody measured and
- * quietly erases yield loss from the costing. So both paths exist and the
- * kitchen picks: "Make it now" when the answer is known, "Start a batch" when
- * it is not.
+ * ── What Create actually creates ───────────────────────────────────────────
  *
- * Nothing moves here. No stock is deducted, no ledger is written, no cost is
- * computed — the plan is a note about intent, and every figure comes from the
- * single atomic transaction that runs on Mark Done.
+ * Two things, before the batch itself, and both outlive it:
+ *
+ *   - the prepared ITEM, as an ordinary `InventoryItem` with `isPrepared` —
+ *     found by id, found by name, or created empty. The first cut created it
+ *     only on Mark Done, so a batch for a new item was a row with a name and
+ *     no item behind it, and the Prepared Items tab could not show it;
+ *   - the prepared item's RECIPE (`Recipe.producesItemId`), holding the
+ *     ingredients and the yield — how this thing is made. It is what "Make
+ *     more" pre-fills from. Written through `saveRecipe`, the recipes domain's
+ *     own writer, so its versioning rule applies: edited in place until a
+ *     completed run has costed against it, superseded after. Left alone when
+ *     the plan is identical to the recipe on file, so making the same thing
+ *     the same way every day does not manufacture versions.
+ *
+ * The three writes are not one transaction, deliberately: the item and the
+ * recipe are worth keeping if the batch row fails to be created, and the next
+ * attempt finds and reuses both. Nothing in any of them touches stock.
  */
 export async function startBatch(params: {
   restaurantId: string
@@ -639,7 +668,7 @@ export async function startBatch(params: {
   clientRequestId: string
   plan: BatchPlan
   notes?: string | null
-}): Promise<{ id: string; number: string }> {
+}): Promise<StartBatchResult> {
   if (!params.plan.name.trim()) throw new AppError('Name what is being made', 400, 'PRODUCTION_NO_NAME')
   if (!(params.plan.quantity > 0)) {
     throw new AppError('How much are you making?', 400, 'PRODUCTION_NO_QUANTITY')
@@ -650,18 +679,44 @@ export async function startBatch(params: {
 
   await requireBranch(params.restaurantId, params.branchId)
 
+  const resolved = await resolvePreparedItem({
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
+    output: { itemId: params.plan.itemId ?? null, name: params.plan.name, unit: params.plan.unit },
+  })
+  // A yield in a unit the item cannot be measured in is refused now, at the
+  // form, not at Mark Done with the pot on the counter.
+  convertOrRefuse(params.plan.quantity, params.plan.unit, resolved.item, 'produced')
+
+  const recipe = await rememberRecipe({
+    restaurantId: params.restaurantId,
+    userId: params.userId,
+    item: resolved.item,
+    plan: params.plan,
+  })
+
+  const plan: BatchPlan = { ...params.plan, itemId: resolved.item.id, name: resolved.item.name }
+
   return prisma.$transaction(async (tx) => {
     await guardLocks(tx)
 
     // Same replay guard as `produceItem`: a double tap starts one batch.
     const already = await tx.productionOrder.findFirst({
       where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
-      select: { id: true, number: true },
+      select: { id: true, number: true, plannedQty: true, unit: true },
     })
-    if (already) return already
+    if (already) {
+      return {
+        replayed: true,
+        id: already.id,
+        number: already.number,
+        plannedQty: already.plannedQty,
+        unit: already.unit ?? params.plan.unit,
+        item: { id: resolved.item.id, name: resolved.item.name, unit: resolved.item.unit, isNew: false },
+      }
+    }
 
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.restaurantId}))`
-    const number = await nextJobNumber(tx, params.restaurantId)
+    const number = await drawJobNumber(tx, params.restaurantId)
 
     const order = await tx.productionOrder.create({
       data: {
@@ -670,19 +725,92 @@ export async function startBatch(params: {
         number,
         status: 'IN_PROGRESS',
         clientRequestId: params.clientRequestId,
-        recipeName: params.plan.name.trim(),
-        outputItemId: params.plan.itemId || null,
+        recipeId: recipe?.id ?? null,
+        recipeName: resolved.item.name,
+        outputItemId: resolved.item.id,
         unit: params.plan.unit,
         plannedQty: params.plan.quantity,
         notes: params.notes?.trim() || null,
         requestedById: params.userId,
         productionDate: new Date(),
-        plan: params.plan as unknown as Prisma.InputJsonValue,
+        plan: plan as unknown as Prisma.InputJsonValue,
       },
       select: { id: true, number: true },
     })
-    return order
+    return {
+      replayed: false,
+      id: order.id,
+      number: order.number,
+      plannedQty: params.plan.quantity,
+      unit: params.plan.unit,
+      item: {
+        id: resolved.item.id,
+        name: resolved.item.name,
+        unit: resolved.item.unit,
+        isNew: resolved.created,
+      },
+    }
   })
+}
+
+/**
+ * The prepared item's recipe is how it was last made.
+ *
+ * Skipped when the plan matches the recipe on file line for line; written
+ * through `saveRecipe` otherwise, so the recipes domain's versioning rule
+ * holds here too. A unit the recipe writer refuses is reported in this
+ * feature's own vocabulary.
+ */
+async function rememberRecipe(params: {
+  restaurantId: string
+  userId: string | null
+  item: InventoryItem
+  plan: BatchPlan
+}): Promise<{ id: string } | null> {
+  const current = await prisma.recipe.findFirst({
+    where: {
+      restaurantId: params.restaurantId,
+      producesItemId: params.item.id,
+      isActive: true,
+      archivedAt: null,
+    },
+    orderBy: { version: 'desc' },
+    include: { ingredients: { select: { inventoryItemId: true, quantity: true, unit: true } } },
+  })
+
+  const same =
+    current !== null &&
+    current.yieldQty === params.plan.quantity &&
+    current.yieldUnit === params.plan.unit &&
+    current.ingredients.length === params.plan.ingredients.length &&
+    params.plan.ingredients.every((line) =>
+      current.ingredients.some(
+        (row) => row.inventoryItemId === line.itemId && row.quantity === line.quantity && row.unit === line.unit,
+      ),
+    )
+  if (same) return { id: current.id }
+
+  try {
+    const saved = await saveRecipe({
+      restaurantId: params.restaurantId,
+      userId: params.userId,
+      producesItemId: params.item.id,
+      name: params.item.name,
+      yieldQty: params.plan.quantity,
+      yieldUnit: params.plan.unit,
+      ingredients: params.plan.ingredients.map((line) => ({
+        inventoryItemId: line.itemId,
+        quantity: line.quantity,
+        unit: line.unit,
+      })),
+    })
+    return { id: saved.id }
+  } catch (error) {
+    if (error instanceof UnitConversionError) {
+      throw new AppError(error.message, 400, 'PRODUCTION_UNIT_MISMATCH')
+    }
+    throw error
+  }
 }
 
 /**

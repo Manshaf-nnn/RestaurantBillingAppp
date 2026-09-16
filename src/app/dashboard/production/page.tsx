@@ -17,8 +17,9 @@ export const metadata: Metadata = { title: 'Kitchen Production' }
  * Kitchen Production (redesignkitchenjob.md).
  *
  * Make a prepared item from stock, see what has been made, see the runs. Any
- * branch may produce; the branch switcher picks where, and the form offers a
- * choice only when this person can act at more than one location.
+ * branch may produce; the branch switcher picks where. The form no longer
+ * offers its own location select (recorrection.md §3) — it names the location
+ * it is acting on and points at the switcher to change it.
  */
 export default async function ProductionPage({
   searchParams,
@@ -34,11 +35,14 @@ export default async function ProductionPage({
     listProductionBranches(user),
   ])
   // The switcher's choice when it names one location; otherwise this person's
-  // own branch, or the first they can reach.
-  const branchId =
-    scoped && scoped !== '__none__' && branches.some((b) => b.id === scoped)
-      ? scoped
-      : branches.find((b) => b.id === user.branchId)?.id ?? branches[0]?.id ?? null
+  // own branch, or the first they can reach. The form says which it was
+  // (recorrection.md §3): a location nobody chose has to be visible as such.
+  const fromSwitcher = Boolean(scoped && scoped !== '__none__' && branches.some((b) => b.id === scoped))
+  const branchId = fromSwitcher
+    ? scoped
+    : branches.find((b) => b.id === user.branchId)?.id ?? branches[0]?.id ?? null
+  const branchName = branches.find((b) => b.id === branchId)?.name ?? null
+  const branchIsFallback = !fromSwitcher && branches.length > 1
 
   const data = await getProductionWorkspace({
     restaurantId: user.restaurantId,
@@ -63,8 +67,9 @@ export default async function ProductionPage({
 
       <ProductionWorkspace
         data={data}
-        branches={branches}
         branchId={branchId}
+        branchName={branchName}
+        branchIsFallback={branchIsFallback}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         canManage={canManage}

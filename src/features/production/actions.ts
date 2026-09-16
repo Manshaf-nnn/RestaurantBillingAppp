@@ -15,7 +15,7 @@ import {
   startBatchSchema,
 } from './schema'
 import { cancelBatch, completeBatch, produceItem, startBatch } from './service'
-import type { ProduceItemResult } from './types'
+import type { ProduceItemResult, StartBatchResult } from './types'
 
 /**
  * Make a prepared item (redesignkitchenjob.md).
@@ -89,15 +89,15 @@ export async function produceItemAction(input: unknown): Promise<ActionResult<Pr
 }
 
 /**
- * Start a batch (correctionA.md §10).
+ * Create a prepared item — start its batch (recorrection.md §3).
  *
  * Nothing is deducted and nothing is costed here — see `startBatch`. The
- * permission is the same one Make Item asks for, because starting a batch and
- * making something in one go are the same authority exercised differently.
+ * permission is the one Mark Done asks for, because creating the batch and
+ * finishing it are the same authority exercised at two moments.
  */
 export async function startBatchAction(
   input: unknown,
-): Promise<ActionResult<{ id: string; number: string }>> {
+): Promise<ActionResult<StartBatchResult>> {
   return runAction(
     startBatchSchema,
     input,
@@ -121,26 +121,42 @@ export async function startBatchAction(
         notes: data.notes,
       })
 
-      await audit({
-        restaurantId: user.restaurantId,
-        branchId: data.branchId,
-        userId: user.id,
-        actorName: user.name,
-        action: AUDIT_ACTIONS.PRODUCTION_STARTED,
-        entity: 'ProductionOrder',
-        entityId: batch.id,
-        after: {
-          number: batch.number,
-          item: data.output.name,
-          planned: data.output.quantity,
-          unit: data.output.unit,
-        },
-      })
+      // A replay created nothing, so it audits nothing.
+      if (!batch.replayed) {
+        if (batch.item.isNew) {
+          await audit({
+            restaurantId: user.restaurantId,
+            branchId: data.branchId,
+            userId: user.id,
+            actorName: user.name,
+            action: AUDIT_ACTIONS.INVENTORY_PREPARED_ITEM_CREATED,
+            entity: 'InventoryItem',
+            entityId: batch.item.id,
+            after: { name: batch.item.name, unit: batch.item.unit },
+          })
+        }
+        await audit({
+          restaurantId: user.restaurantId,
+          branchId: data.branchId,
+          userId: user.id,
+          actorName: user.name,
+          action: AUDIT_ACTIONS.PRODUCTION_STARTED,
+          entity: 'ProductionOrder',
+          entityId: batch.id,
+          after: {
+            number: batch.number,
+            item: batch.item.name,
+            planned: data.output.quantity,
+            unit: data.output.unit,
+          },
+        })
+      }
 
       revalidatePath('/dashboard/production')
+      revalidatePath('/dashboard/inventory')
       return batch
     },
-    'Batch started.',
+    'Prepared item created.',
   )
 }
 

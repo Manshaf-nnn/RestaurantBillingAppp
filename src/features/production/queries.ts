@@ -5,7 +5,7 @@ import { acceptableUnits } from '@/features/inventory/units'
 import { roundQty } from '@/lib/quantity'
 import { visibleBranchIds } from '@/lib/rbac'
 import type {
-  PreparedItemRow, ProductionHistoryRow, ProductionWorkspaceData, WorkspaceItem,
+  PrepRecipe, PrepRecipeLine, PreparedItemRow, ProductionHistoryRow, ProductionWorkspaceData, WorkspaceItem,
 } from './types'
 
 const FINISHED = ['COMPLETED', 'PARTIALLY_COMPLETED'] as const
@@ -30,7 +30,7 @@ export async function getProductionWorkspace(params: {
   const dayStart = startOfToday(params.timeZone ?? 'UTC')
   const branchWhere = branchId ? { branchId } : {}
 
-  const [items, onHand, runsByItem, recent, today, openBatches] = await Promise.all([
+  const [items, onHand, runsByItem, recent, today, openBatches, prepRecipes] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId, isActive: true },
       orderBy: { name: 'asc' },
@@ -73,7 +73,19 @@ export async function getProductionWorkspace(params: {
       orderBy: { productionDate: 'desc' },
       take: 50,
       include: { branch: { select: { name: true } } },
-    })
+    }),
+    // recorrection.md §3 — how each prepared item was last made. The active
+    // prep recipe per item; "Make more" pre-fills from it.
+    prisma.recipe.findMany({
+      where: { restaurantId, producesItemId: { not: null }, isActive: true, archivedAt: null },
+      select: {
+        id: true, version: true, producesItemId: true, yieldQty: true, yieldUnit: true,
+        ingredients: {
+          select: { inventoryItemId: true, quantity: true, unit: true },
+          orderBy: { sortOrder: 'asc' },
+        },
+      },
+    }),
   ])
 
   const available = new Map<string, number>()
@@ -138,12 +150,33 @@ export async function getProductionWorkspace(params: {
     openBatches: openBatches.map((b) => ({
       id: b.id,
       number: b.number,
+      itemId: b.outputItemId,
       name: b.recipeName ?? 'Unnamed batch',
       plannedQty: b.plannedQty,
       unit: b.unit,
       branchName: b.branch?.name ?? null,
       startedAt: (b.productionDate ?? b.createdAt).toISOString(),
+      notes: b.notes,
+      ingredients: ((b.plan as { ingredients?: PrepRecipeLine[] } | null)?.ingredients ?? []).map((line) => ({
+        itemId: line.itemId, quantity: line.quantity, unit: line.unit,
+      })),
     })),
+    recipes: Object.fromEntries(
+      prepRecipes
+        .filter((r) => r.producesItemId)
+        .map((r): [string, PrepRecipe] => [
+          r.producesItemId!,
+          {
+            recipeId: r.id,
+            version: r.version,
+            yieldQty: r.yieldQty,
+            yieldUnit: r.yieldUnit,
+            ingredients: r.ingredients
+              .filter((line) => line.inventoryItemId)
+              .map((line) => ({ itemId: line.inventoryItemId!, quantity: line.quantity, unit: line.unit })),
+          },
+        ]),
+    ),
     stats: {
       runsToday: today._count._all,
       valueToday: today._sum.totalCost ?? 0,

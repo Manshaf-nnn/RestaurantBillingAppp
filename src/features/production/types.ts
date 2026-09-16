@@ -58,20 +58,49 @@ export interface ProductionHistoryRow {
   wasteCount: number
 }
 
+/** One line of how a prepared item is made. */
+export interface PrepRecipeLine {
+  itemId: string
+  quantity: number
+  unit: StockUnit
+}
+
+/**
+ * How a prepared item was last made (recorrection.md §3): the active
+ * `Recipe.producesItemId` recipe, flattened. "Make more" pre-fills from it and
+ * the detail costs it against today's averages.
+ */
+export interface PrepRecipe {
+  recipeId: string
+  version: number
+  yieldQty: number
+  yieldUnit: StockUnit | null
+  ingredients: PrepRecipeLine[]
+}
+
+/** A batch created and not yet marked done. Nothing in it has moved. */
+export interface OpenBatch {
+  id: string
+  number: string
+  /** The prepared item it will stock — set from Create (recorrection.md §3). */
+  itemId: string | null
+  name: string
+  plannedQty: number
+  unit: StockUnit | null
+  branchName: string | null
+  startedAt: string
+  notes: string | null
+  /** What Mark Done will consume. */
+  ingredients: PrepRecipeLine[]
+}
+
 export interface ProductionWorkspaceData {
   items: WorkspaceItem[]
   prepared: PreparedItemRow[]
   history: ProductionHistoryRow[]
-  /** Started and not yet finished (correctionA.md §10). */
-  openBatches: Array<{
-    id: string
-    number: string
-    name: string
-    plannedQty: number
-    unit: StockUnit | null
-    branchName: string | null
-    startedAt: string
-  }>
+  openBatches: OpenBatch[]
+  /** Keyed by the prepared item's id. */
+  recipes: Record<string, PrepRecipe>
   stats: {
     runsToday: number
     /** Value moved from raw stock into prepared stock today, minor units. */
@@ -105,4 +134,21 @@ export interface ProduceItemResult {
   /** Per base unit of the item, minor units, rounded. */
   unitCost: number
   completedAt: string
+}
+
+/** What Create hands back (recorrection.md §3). Flat, so it can cross the action boundary. */
+export interface StartBatchResult {
+  /** True when this request key had already started a batch; nothing new was created. */
+  replayed: boolean
+  id: string
+  number: string
+  plannedQty: number
+  unit: StockUnit
+  item: {
+    id: string
+    name: string
+    unit: StockUnit
+    /** Created by this Create rather than found. */
+    isNew: boolean
+  }
 }

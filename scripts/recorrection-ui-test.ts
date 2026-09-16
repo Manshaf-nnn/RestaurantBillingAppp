@@ -1,5 +1,5 @@
 /**
- * recorrection.md §1 and §4, in a browser.
+ * recorrection.md §1, §3 and §4, in a browser.
  *
  * ── Why this needs a browser ────────────────────────────────────────────────
  *
@@ -15,7 +15,11 @@
  *     an action and rendering a dialog with its own Approve, and that the
  *     Approve in the dialog actually moves the transfer is a round trip;
  *   - the transfer form locks its destination from a prop the page computes
- *     from the session, which is only visible as rendered markup.
+ *     from the session, which is only visible as rendered markup;
+ *   - Make an Item is one flow across three client components — Create,
+ *     the "made it already?" confirmation, and the Prepared Items detail —
+ *     and whether Mark Done from each actually moves the stock is a round
+ *     trip through all of them.
  *
  * Two people: an owner, and a manager confined to the branch that raised the
  * request. Each sees a different desk and a different list, and both views
@@ -32,6 +36,7 @@ import { generateToken, hashToken } from '../src/server/auth/password'
 import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/auth/jwt'
 import { postMovement } from '../src/features/inventory/ledger'
 import { requestApproval } from '../src/features/approvals/service'
+import { startBatch } from '../src/features/production/service'
 import { requestTransfer } from '../src/features/transfers/service'
 import { ROLE_LABELS } from '../src/lib/rbac'
 
@@ -110,7 +115,14 @@ async function cleanup(id: string) {
   await prisma.stockTransferLine.deleteMany({ where: { transfer: { restaurantId: id } } })
   await prisma.stockTransfer.deleteMany({ where: { restaurantId: id } })
   await prisma.approvalRequest.deleteMany({ where: { restaurantId: id } })
+  await prisma.productionConsumption.deleteMany({ where: { order: { restaurantId: id } } })
+  await prisma.productionOutput.deleteMany({ where: { order: { restaurantId: id } } })
+  await prisma.wastageRecord.deleteMany({ where: { restaurantId: id } })
+  await prisma.productionOrder.deleteMany({ where: { restaurantId: id } })
+  await prisma.recipeIngredient.deleteMany({ where: { recipe: { restaurantId: id } } })
+  await prisma.recipe.deleteMany({ where: { restaurantId: id } })
   await prisma.stockMovement.deleteMany({ where: { restaurantId: id } })
+  await prisma.stockBatch.deleteMany({ where: { restaurantId: id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: id } })
   try {
@@ -302,6 +314,93 @@ async function main() {
       await jayPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
       check('Jaffna sees it under Pending receive', await seen(jayPage, /Pending receive \(1\)/))
       check('waiting for Kandy to send it', await seen(jayPage, /waiting for Kandy to dispatch/))
+    }
+
+    const mayo = `Mayo UI ${stamp}`
+
+    console.log('\n── 7. Make an Item: one flow — create, then mark done from the confirmation ──')
+    {
+      await ownerPage.goto(`${BASE}/dashboard/production`, { waitUntil: 'networkidle' })
+      check('the form names the location it is acting on', await seen(ownerPage, /Making at/))
+      check('no "Make it now"', (await ownerPage.getByRole('button', { name: 'Make it now' }).count()) === 0)
+      check('no location select on the form', (await ownerPage.getByText('Made at').count()) === 0)
+
+      await ownerPage.getByRole('combobox').filter({ hasText: 'Choose a prepared item' }).click()
+      await ownerPage.getByRole('option', { name: /New prepared item/ }).click()
+      await ownerPage.getByPlaceholder('Mayonnaise, curry paste, dough…').fill(mayo)
+      await ownerPage.getByLabel('Output — how much you are making').fill('900')
+      // The label wraps the select, so its text is "Unit" plus every option's; scope by the label instead.
+      await ownerPage.locator('label', { hasText: /^Unit/ }).locator('select').selectOption('GRAM')
+
+      await ownerPage.getByRole('combobox').filter({ hasText: 'Choose a stock item' }).first().click()
+      await ownerPage.getByPlaceholder('Search stock items…').fill(chicken.name)
+      await ownerPage.getByRole('option', { name: chicken.name }).click()
+      const ingredientRow = ownerPage
+        .locator('div.grid')
+        .filter({ has: ownerPage.getByRole('combobox').filter({ hasText: chicken.name }) })
+        .last()
+      await ingredientRow.getByPlaceholder('0').first().fill('2')
+
+      const createButton = ownerPage.getByRole('button', { name: 'Create prepared item' })
+      check('Create is enabled once the plan is complete', await createButton.isEnabled())
+      await createButton.click()
+      await ownerPage.getByText(/^Created PRD-/).waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('Create confirms with the batch number', await seen(ownerPage, /^Created PRD-/))
+      check('and offers Mark Done at once', await seen(ownerPage, 'Made it already?'))
+
+      const item = await eventually(
+        () => prisma.inventoryItem.findFirst({ where: { restaurantId: restaurant.id, name: mayo } }),
+        (i) => i !== null,
+      )
+      check('the prepared item exists from Create', item?.isPrepared === true)
+      const chickenBefore = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
+      check('and nothing has left stock', chickenBefore?.available === 10, String(chickenBefore?.available))
+
+      await ownerPage.getByLabel(/Actually produced/).fill('850')
+      check('a shortfall is named and asks why', await seen(ownerPage, /Short by 50/) && (await ownerPage.getByLabel('Why?').count()) === 1)
+      await ownerPage.getByLabel('Why?').selectOption('PRODUCTION_LOSS')
+      await ownerPage.getByLabel('In your words').fill('reduced on the hob')
+      await ownerPage.getByRole('button', { name: 'Mark done' }).click()
+      await ownerPage.getByText(/^Made — /).waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('Mark Done reports what was made', await seen(ownerPage, new RegExp(`^Made — .*${mayo}`)))
+
+      const order = await eventually(
+        () => prisma.productionOrder.findFirst({ where: { restaurantId: restaurant.id, outputItemId: item?.id ?? '' }, orderBy: { createdAt: 'desc' } }),
+        (o) => o?.status === 'COMPLETED',
+      )
+      check('the batch is completed, with the reason from the enum', order?.status === 'COMPLETED' && order.varianceReason === 'PRODUCTION_LOSS' && order.actualQty === 850)
+      const chickenAfter = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
+      check('and the chicken left on Mark Done, not on Create', chickenAfter?.available === 8, String(chickenAfter?.available))
+      const mayoStock = await prisma.inventoryStock.findFirst({ where: { itemId: item?.id ?? '', branchId: kandy.id } })
+      check('the mayonnaise is on the shelf at the actual yield', mayoStock?.available === 850, String(mayoStock?.available))
+    }
+
+    console.log('\n── 8. Prepared Items: an in-progress row → detail → mark done ──')
+    {
+      const mayoItem = await prisma.inventoryItem.findFirstOrThrow({ where: { restaurantId: restaurant.id, name: mayo } })
+      const second = await startBatch({
+        restaurantId: restaurant.id, branchId: kandy.id, userId: owner.id, clientRequestId: `ui-${stamp}-second`,
+        plan: { name: mayo, itemId: mayoItem.id, quantity: 500, unit: 'GRAM', ingredients: [{ itemId: chicken.id, quantity: 1, unit: 'KG' }] },
+      })
+      await ownerPage.goto(`${BASE}/dashboard/production`, { waitUntil: 'networkidle' })
+      check('the count in progress is said above the tabs', await seen(ownerPage, /1 batch in progress/))
+      await ownerPage.getByRole('tab', { name: /Prepared Items/ }).click()
+      const row = ownerPage.locator('tr[data-state="in-progress"]')
+      check('the item is a row in the in-progress state', (await row.count()) === 1 && (await row.first().innerText().catch(() => '')).includes(mayo))
+      await row.first().getByRole('button', { name: /Mark done/ }).click()
+      const dialog = ownerPage.locator('[role="dialog"]')
+      await dialog.waitFor()
+      const text = await dialog.innerText()
+      check('the detail shows the batch waiting', /In progress/i.test(text) && text.includes(second.number))
+      check('and how the item is made, costed', /How it is made/i.test(text) && text.includes(chicken.name))
+      await dialog.getByLabel(/Actually produced/).fill('500')
+      check('no reason asked when the figures match', (await dialog.getByLabel('Why?').count()) === 0)
+      await dialog.getByRole('button', { name: 'Mark done' }).click()
+      const done = await eventually(
+        () => prisma.productionOrder.findUniqueOrThrow({ where: { id: second.id } }),
+        (o) => o.status === 'COMPLETED',
+      )
+      check('marked done from the detail', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
     }
   } finally {
     await browser?.close()
