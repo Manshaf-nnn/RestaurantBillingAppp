@@ -3,12 +3,18 @@ import { formatDate } from '@/lib/datetime'
 import Link from 'next/link'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { NoteButton } from '@/features/accounting/components/note-button'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
-import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
+import { InvoiceFilters } from '@/features/payments/components/invoice-filters'
+import { listInvoices, type InvoiceStatusFilter } from '@/features/payments/queries'
+import { ReportFilters } from '@/features/reports/components/report-filters'
+import { resolveRange, type RangePreset } from '@/features/reports/range'
+import { listSwitchableLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { can, PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -16,13 +22,23 @@ import { requireRestaurant } from '@/server/db/tenant'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Invoices' }
 
+const STATUSES: InvoiceStatusFilter[] = ['ALL', 'OUTSTANDING', 'SETTLED', 'REFUNDED', 'FAILED']
+
+/** 50 / 100 / All from the screen; anything else is the default (abc.md §2). */
+function readPerPage(raw: string | string[] | undefined): 50 | 100 | 'ALL' {
+  if (raw === '100') return 100
+  if (raw === 'ALL') return 'ALL'
+  return 50
+}
+
 /**
- * Every invoice, outstanding ones first.
+ * Every invoice issued in a period, outstanding ones first.
  *
  * Invoices exist from the moment a bill is presented, so "outstanding" means
  * something at last: a numbered document a guest has seen, not yet fully
- * settled. Before this screen the only way to an invoice was through the
- * order that produced it.
+ * settled. The rows and the totals come from one query over one predicate
+ * (abc.md §2) — the newest-200-and-add-them-up-in-the-browser version told
+ * the accountant a figure that was true of 200 invoices and false of the month.
  */
 export default async function InvoicesPage({
   searchParams,
@@ -33,40 +49,50 @@ export default async function InvoicesPage({
   const restaurant = await requireRestaurant(user.restaurantId)
   const money = (value: number) => formatMoney(value, restaurant.currency)
 
-  const { branchIds } = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const selection = await selectedBranch(user, params)
+  const branchId = scopeToOne(selection)
 
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      restaurantId: user.restaurantId,
-      ...(branchIds ? { order: { branchId: { in: branchIds } } } : {}),
-    },
-    orderBy: { issuedAt: 'desc' },
-    take: 200,
-    include: {
-      order: {
-        select: {
-          id: true,
-          orderNumber: true,
-          customerName: true,
-          paymentStatus: true,
-          grandTotal: true,
-          tipAmount: true,
-          paidTotal: true,
-        },
-      },
-    },
+  /*
+   * A period, in the one vocabulary every report screen uses — `?preset=`,
+   * `?from=`, `?to=` — in the restaurant's own timezone. Invoices open on
+   * this month: that is the accountant's unit of work.
+   */
+  const range = resolveRange({
+    preset: (typeof params.preset === 'string' ? params.preset : 'THIS_MONTH') as RangePreset,
+    from: typeof params.from === 'string' ? params.from : undefined,
+    to: typeof params.to === 'string' ? params.to : undefined,
+    timeZone: restaurant.timezone,
   })
+  const status = (STATUSES as string[]).includes(String(params.status)) ? (params.status as InvoiceStatusFilter) : 'ALL'
+  const perPage = readPerPage(params.perPage)
+  const page = typeof params.page === 'string' ? Math.max(1, Number(params.page) || 1) : 1
 
-  // The accountant's notes on these invoices, one query for the whole page.
+  const [result, locations] = await Promise.all([
+    listInvoices({
+      restaurantId: user.restaurantId,
+      branchIds: branchId ? [branchId] : selection.branchIds,
+      range: { from: range.from, to: range.to },
+      status,
+      page,
+      perPage,
+    }),
+    listSwitchableLocations(user.restaurantId, visibleBranchIds(user)),
+  ])
+  const { invoices, totals } = result
+
+  // The accountant's notes on these invoices, one query for the page's rows.
   const canNote = can(user, PERMISSIONS.ACCOUNTING_NOTE)
-  const noteRows = await prisma.accountantNote.findMany({
-    where: {
-      restaurantId: user.restaurantId,
-      entity: 'invoice',
-      entityId: { in: invoices.map((invoice) => invoice.id) },
-    },
-    orderBy: { createdAt: 'desc' },
-  })
+  const noteRows = invoices.length
+    ? await prisma.accountantNote.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          entity: 'invoice',
+          entityId: { in: invoices.map((invoice) => invoice.id) },
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    : []
   const notesByInvoice = new Map<string, typeof noteRows>()
   for (const note of noteRows) {
     const list = notesByInvoice.get(note.entityId) ?? []
@@ -74,31 +100,71 @@ export default async function InvoicesPage({
     notesByInvoice.set(note.entityId, list)
   }
 
-  const outstanding = invoices.filter(
-    (invoice) => invoice.order.paymentStatus === 'UNPAID' || invoice.order.paymentStatus === 'PARTIAL',
-  )
-  const owedTotal = outstanding.reduce(
-    (sum, invoice) =>
-      sum +
-      Math.max(0, invoice.order.grandTotal + invoice.order.tipAmount - invoice.order.paidTotal),
-    0,
-  )
+  const pageHref = (target: number) => {
+    const next = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (typeof value === 'string' && key !== 'page') next.set(key, value)
+    }
+    next.set('page', String(target))
+    return `/dashboard/invoices?${next.toString()}`
+  }
 
   return (
     <>
       <PageHeader
         title="Invoices"
         description={
-          outstanding.length > 0
-            ? `${outstanding.length} outstanding · ${money(owedTotal)} still to collect`
-            : 'Every presented bill, numbered and on the record.'
+          totals.outstanding > 0
+            ? `${totals.count} invoices · ${range.label} · ${money(totals.outstanding)} still to collect`
+            : `${totals.count} invoices · ${range.label} · everything collected`
         }
       />
-      <SectionCard title="Issued invoices">
+      <ReportFilters
+        preset={range.preset}
+        from={range.from.toISOString().slice(0, 10)}
+        to={range.to.toISOString().slice(0, 10)}
+        locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+        branchId={branchId ?? ''}
+      />
+      <InvoiceFilters status={status} perPage={perPage === 'ALL' ? 'ALL' : String(perPage)} />
+
+      {/* abc.md §2: the whole filtered set's money, whichever page is showing. */}
+      <dl
+        data-testid="invoice-totals"
+        className="mb-4 grid grid-cols-2 gap-2 rounded-xl border bg-card p-3 text-sm shadow-soft sm:grid-cols-4"
+      >
+        <div>
+          <dt className="text-xs text-muted-foreground">Invoices</dt>
+          <dd className="font-semibold tabular-nums">{totals.count}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Invoiced</dt>
+          <dd className="font-semibold tabular-nums">{money(totals.amount)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Collected</dt>
+          <dd className="font-semibold tabular-nums text-success">{money(totals.collected)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Outstanding</dt>
+          <dd className={totals.outstanding > 0 ? 'font-semibold tabular-nums text-destructive' : 'font-semibold tabular-nums'}>
+            {money(totals.outstanding)}
+          </dd>
+        </div>
+      </dl>
+
+      <SectionCard
+        title="Issued invoices"
+        description={
+          result.pageCount > 1
+            ? `Page ${result.page} of ${result.pageCount} · ${perPage} a page`
+            : undefined
+        }
+      >
         {invoices.length === 0 ? (
           <EmptyState
-            title="No invoices yet"
-            description="An invoice is issued the moment a bill is presented or settled."
+            title="No invoices in this period"
+            description="An invoice is issued the moment a bill is presented or settled. Widen the period or change the status."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -145,6 +211,8 @@ export default async function InvoicesPage({
                           <Badge variant="destructive">{money(owed)} due</Badge>
                         ) : invoice.order.paymentStatus === 'REFUNDED' ? (
                           <Badge variant="outline">refunded</Badge>
+                        ) : invoice.order.paymentStatus === 'FAILED' ? (
+                          <Badge variant="destructive">failed</Badge>
                         ) : (
                           <Badge variant="secondary">settled</Badge>
                         )}
@@ -170,6 +238,26 @@ export default async function InvoicesPage({
             </table>
           </div>
         )}
+
+        {result.pageCount > 1 ? (
+          <div className="mt-3 flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              Page {result.page} of {result.pageCount} · {result.total} invoices
+            </p>
+            <div className="flex gap-2">
+              <Button asChild variant="outline" size="sm" disabled={result.page <= 1}>
+                <Link href={pageHref(Math.max(1, result.page - 1))} aria-disabled={result.page <= 1}>
+                  Previous
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm" disabled={result.page >= result.pageCount}>
+                <Link href={pageHref(Math.min(result.pageCount, result.page + 1))} aria-disabled={result.page >= result.pageCount}>
+                  Next
+                </Link>
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </SectionCard>
     </>
   )

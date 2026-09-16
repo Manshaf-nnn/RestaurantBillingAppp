@@ -5,10 +5,8 @@ import { outstandingOn, derivePaymentStatus } from '@/features/orders/pricing'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  Banknote,
   Bell,
   Check,
-  CreditCard,
   Download,
   ArrowRightLeft,
   Merge,
@@ -20,9 +18,9 @@ import {
   QrCode,
   Receipt,
   Search,
-  Smartphone,
   Split,
-  Wallet, Landmark, CircleEllipsis, X } from 'lucide-react'
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 
@@ -64,6 +62,7 @@ import {
 } from '@/features/cashier/actions'
 import { awaitsCashier, channelLabel } from '@/features/orders/channels'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
+import { quickCash, TENDER_METHODS } from '@/features/payments/components/tender'
 import { callWaiterAction } from '@/features/floor/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
@@ -114,16 +113,8 @@ export interface CashierBill {
 
 type BillFilter = 'ACTIVE' | 'DINE_IN' | 'TAKEAWAY' | 'HELD'
 
-const METHODS = [
-  { key: 'CASH' as const, label: 'Cash', icon: Banknote },
-  { key: 'CARD' as const, label: 'Card', icon: CreditCard },
-  { key: 'QR' as const, label: 'QR / UPI', icon: QrCode },
-  { key: 'ONLINE' as const, label: 'Online', icon: Smartphone },
-  { key: 'WALLET' as const, label: 'Wallet', icon: Wallet },
-  // Recorded, never processed (§6). The reference field carries the proof.
-  { key: 'BANK_TRANSFER' as const, label: 'Bank transfer', icon: Landmark },
-  { key: 'OTHER' as const, label: 'Other', icon: CircleEllipsis },
-]
+/** The same methods, order and icons as the orders screen's Take-payment dialog. */
+const METHODS = TENDER_METHODS
 
 export function CashierBoard({
   initialBills,
@@ -1786,14 +1777,6 @@ function DiscountDialog({
   )
 }
 
-/** Cash-drawer style presets: exact, then the next sensible round notes. */
-function quickCash(amountMinor: number, currency: string): number[] {
-  const factor = currency.toUpperCase() === 'JPY' ? 1 : 100
-  const major = amountMinor / factor
-  const rounds = [50, 100, 200, 500, 1000, 2000]
-  const presets = rounds.filter((value) => value > major).slice(0, 3)
-  return [amountMinor, ...presets.map((value) => value * factor)]
-}
 
 /**
  * A key for one order.

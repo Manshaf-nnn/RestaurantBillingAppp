@@ -3,6 +3,7 @@ import 'server-only'
 import type { OrderStatus, Prisma } from '@prisma/client'
 
 import { planRouting } from '@/features/kitchen/routing'
+import { AppError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { tableStatesFor } from '@/features/floor/table-state-server'
@@ -281,18 +282,60 @@ export interface OrderListFilter {
   status?: string
   paymentStatus?: string
   type?: string
+  /** Where the order came from: QR, STAFF, COUNTER, PHONE, ONLINE (abc.md §1). */
+  channel?: string
   from?: string
   to?: string
   page?: number
-  perPage?: number
+  /**
+   * Rows per page. A number is clamped to [10, 5000]; 'ALL' shows the whole
+   * filtered set and needs a period (`from` AND `to`), or it is refused.
+   */
+  perPage?: number | 'ALL'
   /** Restrict to one location. Null or absent means every location. */
   branchId?: string | null
 }
 
-/** Paginated order search for the management console. */
+/** The whole filtered set's money, from the rows' own predicate (abc.md §1). */
+export interface OrderListTotals {
+  count: number
+  grandTotal: number
+  tipAmount: number
+  paidTotal: number
+  /** total + tips − collected. Never negative: the service refuses overpayment. */
+  outstanding: number
+}
+
+/** The hard ceiling on one page, including "All": a safety limit, not a horizon. */
+export const ORDER_LIST_MAX_ROWS = 5000
+
+/**
+ * Paginated order search for the management console.
+ *
+ * ── Totals are the set's, not the page's ────────────────────────────────────
+ *
+ * `totals` is an aggregate over the SAME `where` as the rows, so it is the
+ * whole filtered set's count, total, collected and outstanding whichever
+ * page is showing — and with 'ALL' it equals the sum of the rows returned.
+ * The screen's footer therefore never contradicts the export.
+ *
+ * ── Rows per page ───────────────────────────────────────────────────────────
+ *
+ * The clamp used to be 100, which silently cut the export's 500 a page and
+ * made it page five times as often for the same rows. It is 5000 now; the
+ * screen offers 50 / 100 / All, and All is refused without a period so a
+ * years-old restaurant cannot ask for everything it has ever sold in one
+ * request.
+ */
 export async function listOrders(restaurantId: string, filter: OrderListFilter) {
   const page = Math.max(1, filter.page ?? 1)
-  const perPage = Math.min(100, Math.max(10, filter.perPage ?? 25))
+  const all = filter.perPage === 'ALL'
+  if (all && !(filter.from && filter.to)) {
+    throw new AppError('Choose a period before showing every order', 400, 'RANGE_REQUIRED')
+  }
+  const perPage = all
+    ? ORDER_LIST_MAX_ROWS
+    : Math.min(ORDER_LIST_MAX_ROWS, Math.max(10, typeof filter.perPage === 'number' ? filter.perPage : 25))
 
   const where: Prisma.OrderWhereInput = {
     restaurantId,
@@ -304,6 +347,7 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
       ? { paymentStatus: filter.paymentStatus as never }
       : {}),
     ...(filter.type && filter.type !== 'ALL' ? { type: filter.type as never } : {}),
+    ...(filter.channel && filter.channel !== 'ALL' ? { channel: filter.channel as never } : {}),
     /*
      * `to` arrives in one of two shapes, and both have to work.
      *
@@ -343,7 +387,7 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
       : {}),
   }
 
-  const [orders, total] = await Promise.all([
+  const [orders, aggregate] = await Promise.all([
     prisma.order.findMany({
       where,
       include: {
@@ -355,10 +399,33 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
       skip: (page - 1) * perPage,
       take: perPage,
     }),
-    prisma.order.count({ where }),
+    prisma.order.aggregate({
+      where,
+      _count: { _all: true },
+      _sum: { grandTotal: true, tipAmount: true, paidTotal: true },
+    }),
   ])
 
-  return { orders, total, page, perPage, pageCount: Math.max(1, Math.ceil(total / perPage)) }
+  const total = aggregate._count._all
+  const grandTotal = aggregate._sum.grandTotal ?? 0
+  const tipAmount = aggregate._sum.tipAmount ?? 0
+  const paidTotal = aggregate._sum.paidTotal ?? 0
+  const totals: OrderListTotals = {
+    count: total,
+    grandTotal,
+    tipAmount,
+    paidTotal,
+    outstanding: Math.max(0, grandTotal + tipAmount - paidTotal),
+  }
+
+  return {
+    orders,
+    total,
+    page,
+    perPage: all ? ('ALL' as const) : perPage,
+    pageCount: all ? 1 : Math.max(1, Math.ceil(total / perPage)),
+    totals,
+  }
 }
 
 /** Unpaid bills waiting at the till. */

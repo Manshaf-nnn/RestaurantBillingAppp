@@ -197,6 +197,12 @@ const SERVICE = [
   // unique index, not a timer), acknowledged then resolved with who and
   // when, waiters and management told at the table's branch, history per site.
   'waiter-call-test',
+  // abc.md §1 — the orders list: period, filters, 50 / 100 / All, and
+  // totals from the rows' own predicate; the export's 500 a page honoured.
+  'orders-list-test',
+  // abc.md §2 — the invoices list: period, status, rows per page, totals
+  // from one predicate through the order's branch and payment status.
+  'invoices-list-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',

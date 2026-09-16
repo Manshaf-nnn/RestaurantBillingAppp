@@ -58,6 +58,7 @@ const PAGES = [
   '/dashboard/staff/codes',
   '/dashboard/menu',
   '/dashboard/orders',
+  '/dashboard/invoices',
   '/dashboard/tables',
   '/dashboard/settings',
   '/dashboard/loyalty',

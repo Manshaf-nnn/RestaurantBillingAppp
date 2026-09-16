@@ -206,3 +206,136 @@ export async function getDestinationPayments(
     branchName: row.order.branch?.name ?? null,
   }))
 }
+
+// ── the invoices list (abc.md §2) ───────────────────────────────────────────
+
+export type InvoiceStatusFilter = 'ALL' | 'OUTSTANDING' | 'SETTLED' | 'REFUNDED' | 'FAILED'
+
+/** How a settlement status on the screen maps to the order's payment status. */
+const INVOICE_STATUS_MAP: Record<Exclude<InvoiceStatusFilter, 'ALL'>, PaymentStatus[]> = {
+  OUTSTANDING: ['UNPAID', 'PARTIAL'],
+  SETTLED: ['PAID'],
+  REFUNDED: ['REFUNDED'],
+  FAILED: ['FAILED'],
+}
+
+/** The hard ceiling on one page, including "All": a safety limit, not a horizon. */
+export const INVOICE_LIST_MAX_ROWS = 5000
+
+export interface InvoiceListTotals {
+  count: number
+  /** Σ (grand total + tip) — what the invoices are for. */
+  amount: number
+  /** Σ collected. */
+  collected: number
+  /** amount − collected, never negative: the service refuses overpayment. */
+  outstanding: number
+}
+
+export interface InvoiceListRow {
+  id: string
+  number: string
+  issuedAt: Date
+  emailedAt: Date | null
+  order: {
+    id: string
+    orderNumber: string
+    customerName: string
+    paymentStatus: PaymentStatus
+    grandTotal: number
+    tipAmount: number
+    paidTotal: number
+    branchId: string
+  }
+}
+
+/**
+ * Invoices issued in a period, at some locations, with a settlement status —
+ * and the whole set's money from the same predicate.
+ *
+ * ── Why the totals come from here ───────────────────────────────────────────
+ *
+ * The screen used to take the newest 200 invoices and add them up in the
+ * browser, so "still to collect" on a busy month was the newest 200's, not
+ * the month's. `totals` is an aggregate over the orders whose invoice sits
+ * inside exactly the rows' predicate (an invoice is 1:1 with its order, so
+ * the counts agree), whichever page is showing.
+ *
+ * `branchIds` follows the house convention: null is every location, an array
+ * narrows through the order's branch, and an empty array is nothing.
+ */
+export async function listInvoices(params: {
+  restaurantId: string
+  branchIds: string[] | null
+  range: { from: Date; to: Date }
+  status?: InvoiceStatusFilter
+  page?: number
+  perPage?: number | 'ALL'
+}): Promise<{
+  invoices: InvoiceListRow[]
+  total: number
+  page: number
+  perPage: number | 'ALL'
+  pageCount: number
+  totals: InvoiceListTotals
+}> {
+  const page = Math.max(1, params.page ?? 1)
+  const all = params.perPage === 'ALL'
+  const perPage = all
+    ? INVOICE_LIST_MAX_ROWS
+    : Math.min(INVOICE_LIST_MAX_ROWS, Math.max(10, typeof params.perPage === 'number' ? params.perPage : 50))
+  const statuses = params.status && params.status !== 'ALL' ? INVOICE_STATUS_MAP[params.status] : null
+
+  // One predicate, written once for the order side and once for the invoice
+  // side of the same 1:1 relation.
+  const orderSide = {
+    restaurantId: params.restaurantId,
+    ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+    ...(statuses ? { paymentStatus: { in: statuses } } : {}),
+  }
+  const issued = { gte: params.range.from, lte: params.range.to }
+
+  const [rows, aggregate] = await Promise.all([
+    prisma.invoice.findMany({
+      where: { restaurantId: params.restaurantId, issuedAt: issued, order: orderSide },
+      orderBy: { issuedAt: 'desc' },
+      skip: (page - 1) * perPage,
+      take: perPage,
+      select: {
+        id: true,
+        number: true,
+        issuedAt: true,
+        emailedAt: true,
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            customerName: true,
+            paymentStatus: true,
+            grandTotal: true,
+            tipAmount: true,
+            paidTotal: true,
+            branchId: true,
+          },
+        },
+      },
+    }),
+    prisma.order.aggregate({
+      where: { ...orderSide, invoice: { is: { restaurantId: params.restaurantId, issuedAt: issued } } },
+      _count: { _all: true },
+      _sum: { grandTotal: true, tipAmount: true, paidTotal: true },
+    }),
+  ])
+
+  const total = aggregate._count._all
+  const amount = (aggregate._sum.grandTotal ?? 0) + (aggregate._sum.tipAmount ?? 0)
+  const collected = aggregate._sum.paidTotal ?? 0
+  return {
+    invoices: rows,
+    total,
+    page,
+    perPage: all ? 'ALL' : perPage,
+    pageCount: all ? 1 : Math.max(1, Math.ceil(total / perPage)),
+    totals: { count: total, amount, collected, outstanding: Math.max(0, amount - collected) },
+  }
+}
