@@ -183,7 +183,16 @@ async function main() {
     const nowOccupied = await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [t3.id] })
     check('the booked party ordering makes it Occupied', (await table(t3.id)).status === 'OCCUPIED' && nowOccupied.get(t3.id)?.state === 'OCCUPIED')
     check('and the reservation is no longer what the card says', nowOccupied.get(t3.id)?.reservation === null)
+    // Sitting down consumes the booking (abc.md §4): it is Seated, and a
+    // Seated booking holds nothing — even after the order is cancelled the
+    // table is Empty, not Reserved, because the party did arrive.
+    check('the booking is Seated once the party orders', (await prisma.reservation.findUniqueOrThrow({ where: { id: booking.id } })).status === 'SEATED')
     await cancelOrder({ restaurantId: restaurant.id, orderId: seated.id, reason: 'Test' })
+    const afterCancel = await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [t3.id] })
+    check('and a Seated booking no longer reserves the table', afterCancel.get(t3.id)?.state === 'AVAILABLE')
+
+    // Put the booking back to Confirmed so the next section has a Reserved table.
+    await prisma.reservation.update({ where: { id: booking.id }, data: { status: 'CONFIRMED' } })
   }
 
   console.log('\n── 5. The floor analytics count in the same three states ──')
