@@ -2,6 +2,11 @@ import 'server-only'
 
 import type { Prisma } from '@prisma/client'
 
+import { AppError, NotFoundError } from '@/lib/errors'
+import { prisma } from '@/server/db/prisma'
+import { normalizeTableStatus } from './table-state'
+import { reservationsInWindow } from './table-state-server'
+
 /** What a freed table looks like to the caller that has to announce it. */
 export interface FreedTable {
   id: string
@@ -68,5 +73,140 @@ export async function otherOpenOrders(
       id: { not: params.exceptOrderId },
       status: { notIn: ['COMPLETED', 'CANCELLED'] },
     },
+  })
+}
+
+const OPEN = ['COMPLETED', 'CANCELLED'] as const
+
+export interface SwapResult {
+  from: FreedTable
+  to: FreedTable
+  movedOrderIds: string[]
+  /** The sitting that moved, when the source had one. */
+  sessionId: string | null
+}
+
+/**
+ * Move a sitting to another table (abc.md §3).
+ *
+ * ── What moves, and what does not ───────────────────────────────────────────
+ *
+ * The open sitting (`TableSession`) and every open order on the source are
+ * re-pointed at the target; the order rows keep their items, payments,
+ * customer, discounts and history untouched, because a table is where a
+ * bill is, not what it is. Each moved order gets an event saying where it
+ * came from, so the trail reads correctly afterwards. The target becomes
+ * Occupied and the source Empty — nothing open remains on it by
+ * construction, which is the "logically safe" the spec asks for.
+ *
+ * ── Refusals ────────────────────────────────────────────────────────────────
+ *
+ * The target must be at the same site, in service, and genuinely free: no
+ * open sitting, no open order, not held by a booking whose window covers
+ * now, and not marked Occupied by hand. The source must have something to
+ * move. Both rows are locked for the duration (in id order, so two swaps
+ * touching the same pair cannot deadlock), and the sitting's unique
+ * `activeTableKey` guarantees the target cannot acquire two sittings even
+ * if a check above were somehow skipped.
+ */
+export async function swapTable(params: {
+  restaurantId: string
+  fromTableId: string
+  toTableId: string
+  actorId?: string | null
+  actorName?: string | null
+}): Promise<SwapResult> {
+  if (params.fromTableId === params.toTableId) {
+    throw new AppError('Choose a different table to move to', 400, 'TABLE_SWAP_SAME')
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; number: string; branchId: string; isActive: boolean; status: string }>
+    >`
+      SELECT id, number, "branchId", "isActive", status::text AS status
+        FROM restaurant_tables
+       WHERE "restaurantId" = ${params.restaurantId}
+         AND id IN (${params.fromTableId}, ${params.toTableId})
+       ORDER BY id
+       FOR UPDATE
+    `
+    const source = rows.find((row) => row.id === params.fromTableId)
+    const target = rows.find((row) => row.id === params.toTableId)
+    if (!source || !target) throw new NotFoundError('Table')
+
+    if (source.branchId !== target.branchId) {
+      throw new AppError('Both tables have to be at the same location', 409, 'TABLE_SWAP_BRANCH')
+    }
+    if (!target.isActive) {
+      throw new AppError(`Table ${target.number} is out of service`, 409, 'TABLE_SWAP_TARGET_INACTIVE')
+    }
+
+    const [targetOrders, targetSession, held] = await Promise.all([
+      tx.order.count({
+        where: { restaurantId: params.restaurantId, tableId: target.id, status: { notIn: [...OPEN] } },
+      }),
+      tx.tableSession.findFirst({
+        where: { restaurantId: params.restaurantId, tableId: target.id, status: 'OPEN' },
+        select: { id: true },
+      }),
+      reservationsInWindow(tx, { restaurantId: params.restaurantId, tableIds: [target.id] }),
+    ])
+    if (targetOrders > 0 || targetSession || normalizeTableStatus(target.status) === 'OCCUPIED') {
+      throw new AppError(`Table ${target.number} is occupied`, 409, 'TABLE_SWAP_TARGET_OCCUPIED')
+    }
+    const booking = held.get(target.id)
+    if (booking) {
+      throw new AppError(
+        `Table ${target.number} is reserved for ${booking.customerName}`,
+        409,
+        'TABLE_SWAP_TARGET_RESERVED',
+      )
+    }
+
+    const [openOrders, sourceSession] = await Promise.all([
+      tx.order.findMany({
+        where: { restaurantId: params.restaurantId, tableId: source.id, status: { notIn: [...OPEN] } },
+        select: { id: true, status: true },
+      }),
+      tx.tableSession.findFirst({
+        where: { restaurantId: params.restaurantId, tableId: source.id, status: 'OPEN' },
+        select: { id: true },
+      }),
+    ])
+    if (openOrders.length === 0 && !sourceSession) {
+      throw new AppError(`Nothing is open on table ${source.number}`, 409, 'TABLE_SWAP_NOTHING_OPEN')
+    }
+
+    if (sourceSession) {
+      await tx.tableSession.update({
+        where: { id: sourceSession.id },
+        data: { tableId: target.id, activeTableKey: target.id },
+      })
+    }
+    await tx.order.updateMany({
+      where: { restaurantId: params.restaurantId, tableId: source.id, status: { notIn: [...OPEN] } },
+      data: { tableId: target.id, tableNumber: target.number },
+    })
+    for (const order of openOrders) {
+      await tx.orderEvent.create({
+        data: {
+          orderId: order.id,
+          status: order.status,
+          note: `Moved from table ${source.number} to table ${target.number}`,
+          actorId: params.actorId ?? null,
+          actorName: params.actorName ?? null,
+        },
+      })
+    }
+    await tx.restaurantTable.update({ where: { id: target.id }, data: { status: 'OCCUPIED' } })
+    await tx.restaurantTable.update({ where: { id: source.id }, data: { status: 'AVAILABLE' } })
+
+    return {
+      from: { id: source.id, number: source.number, branchId: source.branchId },
+      to: { id: target.id, number: target.number, branchId: target.branchId },
+      movedOrderIds: openOrders.map((order) => order.id),
+      sessionId: sourceSession?.id ?? null,
+    }
   })
 }

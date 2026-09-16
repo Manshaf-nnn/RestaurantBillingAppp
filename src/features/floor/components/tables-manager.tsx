@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import {
-  ArrowRightLeft, Building2, ClipboardList, LayoutGrid, Pencil, Plus, Trash2, Users,
+  ArrowRightLeft, Building2, ClipboardList, LayoutGrid, Pencil, Plus, Replace, Trash2, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/select'
 import { TableStatusBadge, TABLE_STATUS_META } from '@/components/ui/status'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { SwapTableDialog } from './swap-table-dialog'
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { cn, groupBy } from '@/lib/utils'
 import {
@@ -69,11 +70,14 @@ const STATUSES: SettableTableState[] = [...SETTABLE_TABLE_STATES]
 export function TablesManager({
   tables: initial,
   canManage,
+  canSwap,
   branches,
   selectedBranchId,
 }: {
   tables: ManagedTable[]
   canManage: boolean
+  /** May move a sitting to an empty table (abc.md §3). */
+  canSwap: boolean
   /** Locations this user may put a table at. */
   branches: TableBranch[]
   /** What the top-bar switcher is showing. Null means "All locations". */
@@ -85,6 +89,7 @@ export function TablesManager({
   const [bulkOpen, setBulkOpen] = React.useState(false)
   const [deleteId, setDeleteId] = React.useState<string | null>(null)
   const [moving, setMoving] = React.useState<ManagedTable | null>(null)
+  const [swapping, setSwapping] = React.useState<ManagedTable | null>(null)
 
   /*
    * Whether to name the branch on each card.
@@ -202,6 +207,17 @@ export function TablesManager({
                         Reserved for {table.reservedFor}
                       </p>
                     ) : null}
+                    {canSwap && table.status === 'OCCUPIED' ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 w-full"
+                        onClick={() => setSwapping(table)}
+                        aria-label={`Move the sitting at table ${table.number} to an empty table`}
+                      >
+                        <Replace /> Swap table
+                      </Button>
+                    ) : null}
 
                     <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
                       <Users className="size-3" /> {table.capacity}
@@ -298,6 +314,11 @@ export function TablesManager({
         table={moving}
         branches={branches}
         onOpenChange={(open) => !open && setMoving(null)}
+      />
+      <SwapTableDialog
+        open={swapping !== null}
+        onOpenChange={(open) => !open && setSwapping(null)}
+        table={swapping ? { id: swapping.id, number: swapping.number } : null}
       />
 
       <ConfirmDialog

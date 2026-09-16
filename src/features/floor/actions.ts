@@ -7,6 +7,10 @@ import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { upsertReservation } from './reservations'
+import { swapTableSchema, swapTargetsSchema } from './schema'
+import { swapTable } from './service'
+import { tableStatesFor } from './table-state-server'
+import { toOrderPayload } from '@/features/orders/service'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { resolveBranchId } from '@/features/branches/service'
@@ -328,6 +332,102 @@ export async function deleteTable(id: string): Promise<ActionResult<{ id: string
     revalidatePath('/dashboard/tables')
     return { id }
   }, 'Table deleted.')
+}
+
+// ── swapping tables (abc.md §3) ──────────────────────────────────────────────
+
+/** Empty, in-service tables at the source's location — where a sitting may move. */
+export async function listSwapTargetsAction(
+  input: unknown,
+): Promise<ActionResult<{ tables: Array<{ id: string; number: string; label: string | null; area: string | null; capacity: number }> }>> {
+  return runAction(swapTargetsSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.TABLE_SWAP)
+    const source = await prisma.restaurantTable.findFirst({
+      where: { id: data.fromTableId, restaurantId: user.restaurantId },
+      select: { id: true, branchId: true },
+    })
+    await assertRecordBranch(user, source, 'table')
+    if (!source) throw new NotFoundError('Table')
+
+    const tables = await prisma.restaurantTable.findMany({
+      where: { restaurantId: user.restaurantId, branchId: source.branchId, isActive: true, id: { not: source.id } },
+      select: {
+        id: true, number: true, label: true, area: true, capacity: true,
+        _count: { select: { orders: { where: { status: { notIn: ['COMPLETED', 'CANCELLED'] } } } } },
+      },
+      orderBy: [{ area: 'asc' }, { sortOrder: 'asc' }, { number: 'asc' }],
+    })
+    const states = await tableStatesFor(prisma, {
+      restaurantId: user.restaurantId,
+      branchId: source.branchId,
+      occupiedIds: tables.filter((t) => t._count.orders > 0).map((t) => t.id),
+    })
+    return {
+      tables: tables
+        .filter((t) => states.get(t.id)?.state === 'AVAILABLE')
+        .map((t) => ({ id: t.id, number: t.number, label: t.label, area: t.area, capacity: t.capacity })),
+    }
+  })
+}
+
+/**
+ * Move a sitting to an empty table. The rules live in `swapTable`; this is
+ * the guard, the audit row and the news: both tables' states and every moved
+ * order go out after commit, so the kitchen, the floor and the till all show
+ * the new table at once.
+ */
+export async function swapTableAction(
+  input: unknown,
+): Promise<ActionResult<{ fromNumber: string; toNumber: string; movedOrders: number }>> {
+  return runAction(
+    swapTableSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.TABLE_SWAP)
+      const source = await prisma.restaurantTable.findFirst({
+        where: { id: data.fromTableId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      await assertRecordBranch(user, source, 'table')
+
+      const result = await swapTable({
+        restaurantId: user.restaurantId,
+        fromTableId: data.fromTableId,
+        toTableId: data.toTableId,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: result.from.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.TABLE_SWAPPED,
+        entity: 'RestaurantTable',
+        entityId: result.from.id,
+        before: { table: result.from.number },
+        after: { table: result.to.number, orders: result.movedOrderIds, sessionId: result.sessionId },
+      })
+
+      realtime.tableUpdated(user.restaurantId, {
+        id: result.from.id, number: result.from.number, status: 'AVAILABLE', branchId: result.from.branchId,
+      })
+      realtime.tableUpdated(user.restaurantId, {
+        id: result.to.id, number: result.to.number, status: 'OCCUPIED', branchId: result.to.branchId,
+      })
+      for (const orderId of result.movedOrderIds) {
+        const payload = await toOrderPayload(orderId)
+        if (payload) realtime.orderUpdated(user.restaurantId, payload)
+      }
+
+      for (const path of ['/dashboard/tables', '/dashboard/live', '/waiter', '/kitchen', '/cashier', '/cashier/pos']) {
+        revalidatePath(path)
+      }
+      return { fromNumber: result.from.number, toNumber: result.to.number, movedOrders: result.movedOrderIds.length }
+    },
+    'Table swapped.',
+  )
 }
 
 // ── reservations ─────────────────────────────────────────────────────────────

@@ -32,6 +32,8 @@ export const PERMISSIONS = {
   // floor
   TABLE_VIEW: 'table.view',
   TABLE_MANAGE: 'table.manage',
+  /** Move an occupied table's sitting to an empty one (abc.md §3). */
+  TABLE_SWAP: 'table.swap',
   RESERVATION_MANAGE: 'reservation.manage',
 
   // orders
@@ -259,6 +261,8 @@ const CASHIER: Permission[] = [
   PERMISSIONS.CUSTOMER_VIEW,
   PERMISSIONS.MENU_VIEW,
   PERMISSIONS.TABLE_VIEW,
+  // A customer needs to move: the cashier at the till is who they ask (abc.md §3).
+  PERMISSIONS.TABLE_SWAP,
   PERMISSIONS.BRANCH_VIEW,
   PERMISSIONS.CASH_DRAWER_OPERATE,
 ]
@@ -390,6 +394,8 @@ const ACCOUNTANT: Permission[] = [
  * invisible until somebody's screen is empty.
  */
 const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
+  // abc.md §3 — whoever manages tables may swap them; cashiers get it explicitly.
+  [PERMISSIONS.TABLE_SWAP, PERMISSIONS.TABLE_MANAGE],
   [PERMISSIONS.TASKS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.APPROVALS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.HANDOVER_VIEW, PERMISSIONS.ORDER_VIEW],

@@ -180,6 +180,10 @@ const SERVICE = [
   // at once ([start, end) — neighbours are fine); the party must fit; a
   // cancelled booking blocks nothing; the first order seats the booked party.
   'reservation-conflict-test',
+  // abc.md §3 — a sitting moves to an empty table with its orders, bill and
+  // customer intact; the target must be free (no sitting, no order, no
+  // booking in window, same site, in service); the source is Empty after.
+  'table-swap-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',

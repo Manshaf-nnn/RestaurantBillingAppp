@@ -4,6 +4,7 @@ import * as React from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { OrderItemStatus, ServiceRequestType } from '@prisma/client'
 import {
+  ArrowRightLeft,
   Bell,
   Check,
   ChefHat,
@@ -31,6 +32,7 @@ import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { resolveServiceRequest, serveOrder, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
+import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { SettableTableState, TableState } from '@/features/floor/table-state'
 import { callAction } from '@/lib/use-action'
 
@@ -272,6 +274,8 @@ export function WaiterBoard({
     setReady((current) => current.filter((entry) => entry.id !== order.id))
     toast.success(`Order ${order.orderNumber} served`)
   }
+
+  const [swapping, setSwapping] = React.useState<WaiterTable | null>(null)
 
   const setTableStatus = async (tableId: string, status: SettableTableState) => {
     setTables((current) => current.map((t) => (t.id === tableId ? { ...t, status } : t)))
@@ -520,6 +524,11 @@ export function WaiterBoard({
                       </button>
                     ))}
                   </div>
+                  {table.status === 'OCCUPIED' ? (
+                    <Button variant="outline" size="sm" className="mt-2 w-full" onClick={() => setSwapping(table)}>
+                      <ArrowRightLeft /> Swap table
+                    </Button>
+                  ) : null}
 
                   {table.openOrders.length ? (
                     <div className="mt-3 space-y-1 border-t pt-2 text-xs">
@@ -551,6 +560,12 @@ export function WaiterBoard({
           </div>
         </TabsContent>
       </Tabs>
+
+      <SwapTableDialog
+        open={swapping !== null}
+        onOpenChange={(open) => !open && setSwapping(null)}
+        table={swapping ? { id: swapping.id, number: swapping.number } : null}
+      />
     </OpsShell>
   )
 }

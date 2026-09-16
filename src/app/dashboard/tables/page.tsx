@@ -92,6 +92,7 @@ export default async function TablesPage({
       <AutoRefresh scope="catalog" intervalMs={10000} />
     <TablesManager
       canManage={can(user, PERMISSIONS.TABLE_MANAGE)}
+      canSwap={can(user, PERMISSIONS.TABLE_SWAP)}
       branches={branches}
       // What the switcher is showing, so the form opens on the right location.
       // Null means "All locations", and then the form makes the owner choose.

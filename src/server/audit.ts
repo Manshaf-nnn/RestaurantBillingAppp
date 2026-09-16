@@ -121,6 +121,8 @@ export const AUDIT_ACTIONS = {
   ORDER_RESUMED: 'order.resumed',
   ORDER_SPLIT: 'order.split',
   ORDER_MERGED: 'order.merged',
+  /** A sitting moved to another table, orders and bill intact (abc.md §3). */
+  TABLE_SWAPPED: 'table.swapped',
   PAYMENT_COLLECTED: 'payment.collected',
   PAYMENT_REFUNDED: 'payment.refunded',
   INVOICE_ISSUED: 'invoice.issued',

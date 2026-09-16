@@ -156,6 +156,7 @@ export default async function CashierPage({
         type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
         status: order.status as 'PENDING',
         paymentStatus: order.paymentStatus,
+        tableId: order.tableId,
         tableNumber: order.tableNumber ?? order.table?.number ?? null,
         customerName: order.customerName,
         customerPhone: order.customerPhone,

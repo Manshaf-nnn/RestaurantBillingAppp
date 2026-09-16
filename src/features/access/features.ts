@@ -288,6 +288,12 @@ export const FEATURES: Feature[] = [
     actions: [
       { key: 'view', permission: PERMISSIONS.TABLE_VIEW },
       { key: 'edit', label: 'Manage', permission: PERMISSIONS.TABLE_MANAGE },
+      {
+        key: 'submit',
+        label: 'Swap tables',
+        permission: PERMISSIONS.TABLE_SWAP,
+        hint: 'Move a sitting — its orders, bill and customer — to an empty table.',
+      },
     ],
     routes: ['/dashboard/tables'],
   },

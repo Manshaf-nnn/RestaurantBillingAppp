@@ -9,6 +9,7 @@ import {
   Check,
   CreditCard,
   Download,
+  ArrowRightLeft,
   Merge,
   PauseCircle,
   Percent,
@@ -58,6 +59,7 @@ import {
   resumeBillAction,
   splitBillAction,
 } from '@/features/cashier/actions'
+import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
 import {
@@ -85,6 +87,8 @@ export interface CashierBill {
   type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
   status: 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'SERVED' | 'COMPLETED'
   paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'REFUNDED' | 'FAILED'
+  /** The table the sitting is at, so it can be moved (abc.md §3). */
+  tableId: string | null
   tableNumber: string | null
   customerName: string
   customerPhone: string
@@ -390,6 +394,9 @@ export function CashierBoard({
         type: orderType === 'COUNTER' ? 'TAKEAWAY' : orderType,
         status: 'PENDING',
         paymentStatus: 'UNPAID',
+        // The closure still holds the table chosen for this order; the state
+        // was cleared for the next one a few lines up.
+        tableId: tableId || null,
         tableNumber: bill.tableNumber,
         customerName: bill.customerName,
         customerPhone: customerPhone.trim(),
@@ -793,6 +800,7 @@ function BillingDetailPanel({
 }) {
   const [splitOpen, setSplitOpen] = React.useState(false)
   const [mergeOpen, setMergeOpen] = React.useState(false)
+  const [swapOpen, setSwapOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
   const print = async () => {
@@ -885,6 +893,11 @@ function BillingDetailPanel({
                 {bill.heldAt ? <PlayCircle /> : <PauseCircle />}
                 {bill.heldAt ? 'Resume' : 'Hold'}
               </Button>
+              {bill.type === 'DINE_IN' && bill.tableId ? (
+                <Button variant="outline" size="sm" onClick={() => setSwapOpen(true)}>
+                  <ArrowRightLeft /> Swap table
+                </Button>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -902,6 +915,11 @@ function BillingDetailPanel({
         bill={bill}
         otherBills={otherBills}
         restaurant={restaurant}
+      />
+      <SwapTableDialog
+        open={swapOpen}
+        onOpenChange={setSwapOpen}
+        table={bill.tableId ? { id: bill.tableId, number: bill.tableNumber ?? '' } : null}
       />
 
       <div className="grid gap-4 p-4 md:grid-cols-[1.1fr_0.9fr]">

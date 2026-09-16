@@ -75,3 +75,12 @@ export const moveTableSchema = z.object({
   branchId: z.string().min(1, 'Choose a location'),
 })
 export type MoveTableInput = z.infer<typeof moveTableSchema>
+
+/** Moving a sitting from an occupied table to an empty one (abc.md §3). */
+export const swapTableSchema = z.object({
+  fromTableId: z.string().cuid(),
+  toTableId: z.string().cuid(),
+})
+export type SwapTableInput = z.infer<typeof swapTableSchema>
+
+export const swapTargetsSchema = z.object({ fromTableId: z.string().cuid() })
