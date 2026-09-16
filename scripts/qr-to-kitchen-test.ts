@@ -31,6 +31,7 @@ import { generateToken, hashToken } from '../src/server/auth/password'
 import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/auth/jwt'
 import { quoteCart, resolveTable } from '../src/features/orders/actions'
 import { placeOrder } from '../src/features/orders/service'
+import { acceptGuestOrder } from '../src/features/cashier/service'
 
 /*
  * Defaults to the port `npm start` uses.
@@ -369,6 +370,27 @@ async function main() {
   )
 
   console.log('\n── 5. whose kitchen display shows it ──')
+
+  /*
+   * DELIBERATE behaviour change 2026-09 (abc.md §5). A QR order used to land
+   * on the kitchen rail the moment it was placed. It now waits at the till
+   * as "Pending acceptance": no kitchen sees it until the cashier accepts,
+   * and the SAME order then reaches exactly the kitchen it always did. The
+   * branch-isolation checks below run after that acceptance.
+   */
+  const beforeAccept = await fetch(`${BASE}/kitchen`, { headers: { cookie: await signIn(chefB01) } })
+  check(
+    'a pending QR order is the till’s, not the kitchen’s — not on Branch 02’s rail yet',
+    !(beforeAccept.status === 200 ? await beforeAccept.text() : '').includes(order.orderNumber),
+    'a QR order reached the kitchen before the cashier accepted it',
+  )
+  const accepted = await acceptGuestOrder({
+    restaurantId: restaurant.id,
+    orderId: order.id,
+    actorId: owner.id,
+    actorName: owner.name,
+  })
+  check('accepted at the till, it is the same order, now ACCEPTED', accepted.order.id === order.id && accepted.order.status === 'ACCEPTED')
 
   const atB02 = await fetch(`${BASE}/kitchen`, { headers: { cookie: await signIn(chefB01) } })
   const b02Screen = atB02.status === 200 ? await atB02.text() : ''

@@ -62,6 +62,8 @@ export const PERMISSIONS = {
   // money
   PAYMENT_VIEW: 'payment.view',
   PAYMENT_COLLECT: 'payment.collect',
+  /** Accept or turn away a QR / online order at the till (abc.md §5). */
+  ORDER_ACCEPT: 'order.accept',
   PAYMENT_REFUND: 'payment.refund',
   INVOICE_VIEW: 'invoice.view',
   DISCOUNT_APPLY: 'discount.apply',
@@ -256,6 +258,8 @@ const CASHIER: Permission[] = [
   PERMISSIONS.ORDER_UPDATE_STATUS,
   PERMISSIONS.PAYMENT_VIEW,
   PERMISSIONS.PAYMENT_COLLECT,
+  // QR and online orders wait at the till for a yes or a no (abc.md §5).
+  PERMISSIONS.ORDER_ACCEPT,
   PERMISSIONS.INVOICE_VIEW,
   PERMISSIONS.DISCOUNT_APPLY,
   PERMISSIONS.CUSTOMER_VIEW,
@@ -396,6 +400,10 @@ const ACCOUNTANT: Permission[] = [
 const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   // abc.md §3 — whoever manages tables may swap them; cashiers get it explicitly.
   [PERMISSIONS.TABLE_SWAP, PERMISSIONS.TABLE_MANAGE],
+  // abc.md §5 — whoever collects payment accepts online orders at the till.
+  // Split from PAYMENT_COLLECT and NOT from ORDER_UPDATE_STATUS: the kitchen
+  // and the waiters hold that one, and the point is that they do not accept.
+  [PERMISSIONS.ORDER_ACCEPT, PERMISSIONS.PAYMENT_COLLECT],
   [PERMISSIONS.TASKS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.APPROVALS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.HANDOVER_VIEW, PERMISSIONS.ORDER_VIEW],

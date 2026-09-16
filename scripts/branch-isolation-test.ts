@@ -19,6 +19,7 @@ import { prisma } from '../src/server/db/prisma'
 import { getManagedMenu, getPublicMenu } from '../src/features/menu/queries'
 import { applyBranchOverrides, replaceFoodBranches } from '../src/features/menu/branch-menu'
 import { placeOrder } from '../src/features/orders/service'
+import { acceptGuestOrder } from '../src/features/cashier/service'
 import { resolvePublicBranch } from '../src/features/branches/public-branch'
 import { getSalesReport } from '../src/features/reports/sales'
 import {
@@ -762,6 +763,18 @@ async function main() {
     items: [{ foodId: burger.id, quantity: 1, optionIds: [] }],
   })
   check('the order is stamped Branch 01', b01Order.branchId === b01.id, `${b01Order.branchId}`)
+
+  /*
+   * DELIBERATE behaviour change 2026-09 (abc.md §5). A QR order now waits at
+   * the till until the cashier accepts it — no kitchen rail shows it before
+   * that. The isolation question here is unchanged: once accepted, the SAME
+   * order reaches exactly the branch that was scanned and no other.
+   */
+  check(
+    'until the till accepts it, no rail shows it',
+    !(await getKitchenQueue(restaurant.id, [b01.id])).some((o) => o.id === b01Order.id),
+  )
+  await acceptGuestOrder({ restaurantId: restaurant.id, orderId: b01Order.id })
 
   const b01Rail = await getKitchenQueue(restaurant.id, [b01.id])
   const mainRail = await getKitchenQueue(restaurant.id, [main.id])

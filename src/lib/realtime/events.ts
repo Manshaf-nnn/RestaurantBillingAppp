@@ -59,6 +59,8 @@ export interface OrderSummaryPayload {
   branchId: string
   status: OrderStatus
   type: string
+  /** QR / ONLINE orders wait at the till; the KDS ignores them until accepted (abc.md §5). */
+  channel: string
   tableId: string | null
   tableNumber: string | null
   customerName: string
@@ -115,6 +117,8 @@ export interface OrderStatusPayload {
   tableId: string | null
   tableNumber: string | null
   at: string
+  /** On `order:cancelled`: why, so the guest's screen can say (abc.md §5). */
+  reason?: string | null
 }
 
 export interface PaymentPayload {

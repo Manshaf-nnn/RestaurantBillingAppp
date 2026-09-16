@@ -21,7 +21,7 @@ import {
   Search,
   Smartphone,
   Split,
-  Wallet, Landmark, CircleEllipsis } from 'lucide-react'
+  Wallet, Landmark, CircleEllipsis, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 
@@ -37,7 +37,7 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/feedback'
 import { Field } from '@/components/ui/label'
-import { Input } from '@/components/ui/input'
+import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
@@ -58,7 +58,10 @@ import {
   mergeBillsAction,
   resumeBillAction,
   splitBillAction,
+  acceptGuestOrderAction,
+  rejectGuestOrderAction,
 } from '@/features/cashier/actions'
+import { awaitsCashier, channelLabel } from '@/features/orders/channels'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
@@ -85,6 +88,8 @@ export interface CashierBill {
   id: string
   orderNumber: string
   type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'
+  /** Where it came from: a QR / ONLINE order waits here for acceptance (abc.md §5). */
+  channel: string
   status: 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'SERVED' | 'COMPLETED'
   paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'REFUNDED' | 'FAILED'
   /** The table the sitting is at, so it can be moved (abc.md §3). */
@@ -130,11 +135,14 @@ export function CashierBoard({
   branchIds,
   branchName,
   tables = [],
+  canAccept = false,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
   todayCount: number
   user: { name: string; role: string }
+  /** Holds order.accept: may say yes or no to a QR / online order (abc.md §5). */
+  canAccept?: boolean
   /**
    * A way back to the dashboard, rendered by the page.
    *
@@ -221,6 +229,14 @@ export function CashierBoard({
 
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
     if (!isOurs(payload)) return
+    // A QR / online order is this screen's to accept (abc.md §5); the row
+    // itself arrives with the next refresh, a few seconds at most.
+    if (awaitsCashier(payload)) {
+      toast.warning(`New ${channelLabel(payload.channel)} order ${payload.orderNumber} — waiting for acceptance`, {
+        description: payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName,
+      })
+      return
+    }
     toast.info(`New order ${payload.orderNumber}`, {
       description: payload.tableNumber ? `Table ${payload.tableNumber}` : undefined,
     })
@@ -238,6 +254,8 @@ export function CashierBoard({
     const takeawayKeywords = ['takeaway', 'take away', 'pickup', 'pick up', 'collection', 'takeout']
 
     let result = bills.filter((bill) => {
+      // Waiting for acceptance is its own list above; not a bill to settle yet.
+      if (awaitsCashier(bill)) return false
       if (!query) return true
       const normalizedType = bill.type.toLowerCase()
       const normalizedName = bill.customerName.toLowerCase()
@@ -268,6 +286,45 @@ export function CashierBoard({
   }, [bills, search, filter])
 
   const heldCount = React.useMemo(() => bills.filter((bill) => bill.heldAt).length, [bills])
+
+  /*
+   * QR / online orders waiting for the till's yes or no (abc.md §5).
+   *
+   * Accept runs the ordinary ACCEPTED transition on the same order server-side
+   * — routing, stock, the kitchen's chime — and the row simply moves down into
+   * the bills below. Reject is a cancellation with a reason the guest reads.
+   */
+  const awaiting = React.useMemo(() => bills.filter((bill) => awaitsCashier(bill)), [bills])
+  const [decidingId, setDecidingId] = React.useState<string | null>(null)
+  const [rejecting, setRejecting] = React.useState<CashierBill | null>(null)
+  const [rejectReason, setRejectReason] = React.useState('')
+
+  const acceptGuest = async (bill: CashierBill) => {
+    setDecidingId(bill.id)
+    const result = await callAction(() => acceptGuestOrderAction({ orderId: bill.id }))
+    setDecidingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setBills((current) => current.map((b) => (b.id === bill.id ? { ...b, status: 'ACCEPTED' } : b)))
+    toast.success(`Order ${bill.orderNumber} accepted — sent to the kitchen`)
+  }
+
+  const rejectGuest = async () => {
+    if (!rejecting) return
+    setDecidingId(rejecting.id)
+    const result = await callAction(() => rejectGuestOrderAction({ orderId: rejecting.id, reason: rejectReason }))
+    setDecidingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setBills((current) => current.filter((b) => b.id !== rejecting.id))
+    toast.success(`Order ${rejecting.orderNumber} rejected`)
+    setRejecting(null)
+    setRejectReason('')
+  }
 
   const selected = filtered.find((bill) => bill.id === selectedId) ?? filtered[0] ?? null
 
@@ -392,6 +449,8 @@ export function CashierBoard({
         id: bill.orderId,
         orderNumber: bill.orderNumber,
         type: orderType === 'COUNTER' ? 'TAKEAWAY' : orderType,
+        // Typed in at the till: staff channel, straight to the kitchen.
+        channel: 'STAFF',
         status: 'PENDING',
         paymentStatus: 'UNPAID',
         // The closure still holds the table chosen for this order; the state
@@ -672,9 +731,114 @@ export function CashierBoard({
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={rejecting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRejecting(null)
+            setRejectReason('')
+          }
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Reject order {rejecting?.orderNumber}</DialogTitle>
+            <DialogDescription>
+              The guest is told, with your reason. Nothing has been cooked or charged.
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Reason" htmlFor="reject-reason" required>
+            <Textarea
+              id="reject-reason"
+              value={rejectReason}
+              onChange={(event) => setRejectReason(event.target.value)}
+              rows={3}
+              maxLength={200}
+              placeholder="e.g. The kitchen is closing · That dish has run out"
+            />
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejecting(null)} disabled={decidingId !== null}>
+              Keep it
+            </Button>
+            <Button
+              variant="destructive"
+              loading={rejecting !== null && decidingId === rejecting.id}
+              disabled={rejectReason.trim().length < 2}
+              onClick={rejectGuest}
+            >
+              <X /> Reject order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,380px)_1fr]">
         {/* ── open bills ─────────────────────────────────────────── */}
         <section className="space-y-3">
+          {/* ── waiting for acceptance (abc.md §5) ─────────────────── */}
+          {awaiting.length > 0 ? (
+            <div className="rounded-xl border border-warning/40 bg-warning/5 p-3" data-testid="awaiting-acceptance">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-semibold">Waiting for acceptance</p>
+                <Badge variant="warning">{awaiting.length}</Badge>
+              </div>
+              <ul className="space-y-2">
+                {awaiting.map((bill) => (
+                  <li key={bill.id} className="rounded-lg border bg-card p-3 shadow-soft">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold">#{bill.orderNumber}</span>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary">{channelLabel(bill.channel)}</Badge>
+                        {bill.tableNumber ? (
+                          <Badge variant="solid">T{bill.tableNumber}</Badge>
+                        ) : (
+                          <Badge variant="secondary">{bill.type === 'DELIVERY' ? 'Delivery' : 'Pickup'}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                      {bill.customerName}
+                      {bill.customerPhone ? ` · ${bill.customerPhone}` : ''} ·{' '}
+                      {bill.items.reduce((n, item) => n + item.quantity, 0)} item(s) ·{' '}
+                      <span className="font-semibold text-foreground">
+                        {formatMoney(bill.grandTotal, restaurant.currency, restaurant.locale)}
+                      </span>
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {bill.items.map((item) => `${item.quantity} × ${item.name}`).join(', ')}
+                    </p>
+                    {canAccept ? (
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          className="flex-1"
+                          loading={decidingId === bill.id}
+                          onClick={() => acceptGuest(bill)}
+                        >
+                          <Check /> Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 text-destructive hover:text-destructive"
+                          disabled={decidingId === bill.id}
+                          onClick={() => setRejecting(bill)}
+                        >
+                          <X /> Reject
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Ask a cashier to accept or reject this order.
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}

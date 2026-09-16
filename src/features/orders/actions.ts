@@ -539,6 +539,7 @@ export async function updateGuestOrderItems(
           branchId: refreshedOrder.branchId,
           status: refreshedOrder.status,
           type: refreshedOrder.type,
+          channel: refreshedOrder.channel,
           tableId: refreshedOrder.tableId,
           tableNumber: refreshedOrder.table?.number ?? null,
           customerName: refreshedOrder.customerName,

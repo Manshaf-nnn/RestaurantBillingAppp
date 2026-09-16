@@ -10,13 +10,23 @@ import { prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
 import { toOrderPayload } from '@/features/orders/service'
 import {
+  acceptGuestOrderSchema,
   holdBillSchema,
   mergeBillsSchema,
+  rejectGuestOrderSchema,
   resumeBillSchema,
   splitBillSchema,
   voidItemSchema,
 } from './schema'
-import { holdBill, mergeBills, resumeBill, splitBill, voidOrderItem } from './service'
+import {
+  acceptGuestOrder,
+  holdBill,
+  mergeBills,
+  rejectGuestOrder,
+  resumeBill,
+  splitBill,
+  voidOrderItem,
+} from './service'
 
 /*
  * Whose shelves and whose till a bill belongs to.
@@ -243,5 +253,93 @@ export async function voidItemAction(
       return { orderId: order.id, grandTotal: order.grandTotal }
     },
     'Item voided.',
+  )
+}
+
+// ── QR / online orders wait at the till (abc.md §5) ─────────────────────────
+
+/**
+ * Accept a guest order at the till.
+ *
+ * Gated on ORDER_ACCEPT — split from PAYMENT_COLLECT, so whoever takes money
+ * has it and the kitchen and waiters (who hold ORDER_UPDATE_STATUS) do not.
+ * The service opens the one gate `updateOrderStatus` has for a pending guest
+ * order; from there the order is the kitchen's like any other.
+ */
+export async function acceptGuestOrderAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; orderNumber: string; status: string }>> {
+  return runAction(
+    acceptGuestOrderSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.ORDER_ACCEPT)
+      await assertBillBranch(user, user.restaurantId, data.orderId)
+
+      const { order, routed } = await acceptGuestOrder({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_ACCEPTED_AT_TILL,
+        entity: 'Order',
+        entityId: order.id,
+        after: { number: order.orderNumber, channel: order.channel, routed },
+      })
+
+      revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
+      revalidatePath('/kitchen')
+      revalidatePath('/waiter')
+      revalidatePath('/dashboard/orders')
+      return { id: order.id, orderNumber: order.orderNumber, status: order.status }
+    },
+    'Order accepted — sent to the kitchen.',
+  )
+}
+
+/** Turn a guest order away at the till. A reason is required; the guest reads it. */
+export async function rejectGuestOrderAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; orderNumber: string }>> {
+  return runAction(
+    rejectGuestOrderSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.ORDER_ACCEPT)
+      await assertBillBranch(user, user.restaurantId, data.orderId)
+
+      const order = await rejectGuestOrder({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        reason: data.reason,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_CANCELLED,
+        entity: 'Order',
+        entityId: order.id,
+        after: { number: order.orderNumber, channel: order.channel, reason: data.reason, rejectedAtTill: true },
+      })
+
+      revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
+      revalidatePath('/dashboard/orders')
+      return { id: order.id, orderNumber: order.orderNumber }
+    },
+    'Order rejected.',
   )
 }

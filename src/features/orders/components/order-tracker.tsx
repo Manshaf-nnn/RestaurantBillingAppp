@@ -46,8 +46,8 @@ const STATUS_MESSAGES: Partial<Record<OrderStatus, string>> = {
 }
 
 const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
-  { status: 'PENDING', label: 'Order received', description: 'We have your order', icon: Check },
-  { status: 'ACCEPTED', label: 'Accepted', description: 'The kitchen has taken it on', icon: Hand },
+  { status: 'PENDING', label: 'Order received', description: 'Waiting to be confirmed', icon: Check },
+  { status: 'ACCEPTED', label: 'Accepted', description: 'Confirmed and sent to the kitchen', icon: Hand },
   { status: 'PREPARING', label: 'Preparing', description: 'Your food is being cooked', icon: ChefHat },
   { status: 'READY', label: 'Ready', description: 'Freshly plated', icon: CheckCircle2 },
   { status: 'SERVED', label: 'Served', description: 'Enjoy your meal', icon: UtensilsCrossed },
@@ -98,6 +98,8 @@ export function OrderTracker({
 }) {
   const router = useRouter()
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
+  const [cancelReason, setCancelReason] = React.useState<string | null>(initial.cancelReason)
+  React.useEffect(() => setCancelReason(initial.cancelReason), [initial.cancelReason])
   const [editing, setEditing] = React.useState(false)
   /*
    * A line the kitchen has started can only grow (the extra becomes a fresh
@@ -183,6 +185,18 @@ export function OrderTracker({
     })
   })
 
+  // Turned away at the till (abc.md §5): the guest is told, with the reason.
+  useSocketEvent(EVENTS.ORDER_CANCELLED, (payload: OrderStatusPayload) => {
+    if (payload.orderId !== initial.id) return
+    setStatus('CANCELLED')
+    lastStatus.current = 'CANCELLED'
+    if (payload.reason) setCancelReason(payload.reason)
+    toast.error(STATUS_MESSAGES.CANCELLED ?? 'Your order was cancelled', {
+      description: payload.reason ?? undefined,
+    })
+    router.refresh()
+  })
+
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
     if (payload.orderId !== initial.id) return
     setStatus(payload.status)
@@ -259,8 +273,8 @@ export function OrderTracker({
                 <XCircle className="size-7" />
               </span>
               <h2 className="text-lg font-bold">This order was cancelled</h2>
-              {initial.cancelReason ? (
-                <p className="text-sm text-muted-foreground">{initial.cancelReason}</p>
+              {cancelReason ? (
+                <p className="text-sm text-muted-foreground">{cancelReason}</p>
               ) : null}
               <Button asChild variant="outline">
                 <Link href="/order/menu">Back to the menu</Link>

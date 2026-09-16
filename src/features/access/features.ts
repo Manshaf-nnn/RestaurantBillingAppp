@@ -369,6 +369,12 @@ export const FEATURES: Feature[] = [
       { key: 'view', permission: PERMISSIONS.PAYMENT_VIEW },
       { key: 'create', label: 'Collect', permission: PERMISSIONS.PAYMENT_COLLECT },
       {
+        key: 'submit',
+        label: 'Accept online orders',
+        permission: PERMISSIONS.ORDER_ACCEPT,
+        hint: 'QR and website orders wait at the till; this is the yes or the no.',
+      },
+      {
         key: 'approve',
         label: 'Refund',
         permission: PERMISSIONS.PAYMENT_REFUND,

@@ -5,6 +5,9 @@ import type { Order } from '@prisma/client'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { computeTotals, derivePaymentStatus } from '@/features/orders/pricing'
 import { rowStatusFromCounters } from '@/features/orders/progress'
+import { isGuestChannel } from '@/features/orders/channels'
+import { cancelOrder, updateOrderStatus } from '@/features/orders/service'
+import { planRouting } from '@/features/kitchen/routing'
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { reconcileIfDepleted, reconcileOrderDepletion } from '@/features/inventory/depletion'
 import { nextCounterValue } from '@/server/db/counters'
@@ -763,5 +766,116 @@ export async function voidOrderItem(
 
     const updated = await recalculateOrderTotals(tx, order.id)
     return { order: updated, itemName: item.name, lineTotal: item.lineTotal, stock }
+  })
+}
+
+// ── QR / online orders wait at the till (abc.md §5) ─────────────────────────
+
+/**
+ * The till's yes.
+ *
+ * A guest order is PENDING at the cashier: nobody has confirmed the table is
+ * right, the kitchen is open, the card went through. Accept runs the ordinary
+ * ACCEPTED transition on the SAME order — routing to sections, stock, the
+ * kitchen's chime — through the one gate `updateOrderStatus` opens for it,
+ * so everything downstream (KDS → live floor → depletion → billing) is the
+ * path every other order takes. Nothing is copied into a second system.
+ *
+ * Refuses a staff order (typed in = already accepted), anything past PENDING
+ * (the kitchen has it), and — the same rule the KDS applies — a dish with no
+ * kitchen section, named, so the menu can be fixed before food is promised.
+ */
+export async function acceptGuestOrder(
+  params: ActorParams & { orderId: string },
+): Promise<{ order: Order; routed: number }> {
+  const order = await prisma.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    select: { id: true, status: true, channel: true, orderNumber: true },
+  })
+  if (!order) throw new NotFoundError('Order')
+  if (!isGuestChannel(order.channel)) {
+    throw new AppError(
+      `${order.orderNumber} was placed by staff and went straight to the kitchen`,
+      409,
+      'NOT_GUEST_ORDER',
+    )
+  }
+  if (order.status !== 'PENDING') {
+    throw new AppError(
+      order.status === 'CANCELLED'
+        ? `${order.orderNumber} was cancelled`
+        : `${order.orderNumber} has already been accepted`,
+      409,
+      order.status === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_ALREADY_ACCEPTED',
+    )
+  }
+
+  // Read first; nothing is written until every dish has somewhere to go.
+  const plan = await planRouting(prisma, { restaurantId: params.restaurantId, orderId: order.id })
+  if (plan.unmapped.length > 0) {
+    const names = [...new Set(plan.unmapped.map((row) => row.name))]
+    const list = names.slice(0, 3).join(', ')
+    const rest = names.length > 3 ? ` and ${names.length - 3} more` : ''
+    throw new AppError(
+      `${list}${rest} ${names.length === 1 ? 'is' : 'are'} not assigned to a kitchen section here — set that on the menu first`,
+      400,
+      'ITEM_NO_STATION',
+    )
+  }
+
+  const accepted = await updateOrderStatus({
+    restaurantId: params.restaurantId,
+    orderId: order.id,
+    status: 'ACCEPTED',
+    gate: 'cashier',
+    actorId: params.actorId ?? null,
+    actorName: params.actorName ?? null,
+  })
+  return { order: accepted, routed: plan.assignments.length }
+}
+
+/**
+ * The till's no: a cancellation with a reason the guest will read.
+ *
+ * `cancelOrder` is the one door for cancelling — it frees the table, gives
+ * coupons and points back, records the reason and tells the guest's screen.
+ * Only while PENDING: once accepted, food is being cooked and taking it off
+ * the books is a management cancellation from the orders screen.
+ */
+export async function rejectGuestOrder(
+  params: ActorParams & { orderId: string; reason: string },
+): Promise<Order> {
+  const reason = params.reason.trim()
+  if (reason.length < 2) {
+    throw new AppError('Tell the guest why the order was turned away', 400, 'REJECT_NO_REASON')
+  }
+  const order = await prisma.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    select: { id: true, status: true, channel: true, orderNumber: true },
+  })
+  if (!order) throw new NotFoundError('Order')
+  if (!isGuestChannel(order.channel)) {
+    throw new AppError(
+      `${order.orderNumber} was placed by staff — cancel it from the orders screen`,
+      409,
+      'NOT_GUEST_ORDER',
+    )
+  }
+  if (order.status !== 'PENDING') {
+    throw new AppError(
+      order.status === 'CANCELLED'
+        ? `${order.orderNumber} was already cancelled`
+        : `${order.orderNumber} has already been accepted — it can only be cancelled from the orders screen`,
+      409,
+      order.status === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_ALREADY_ACCEPTED',
+    )
+  }
+
+  return cancelOrder({
+    restaurantId: params.restaurantId,
+    orderId: order.id,
+    reason,
+    actorId: params.actorId ?? null,
+    actorName: params.actorName ?? null,
   })
 }

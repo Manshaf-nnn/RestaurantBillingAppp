@@ -30,6 +30,17 @@ export type HoldBillInput = z.infer<typeof holdBillSchema>
 export type SplitBillInput = z.infer<typeof splitBillSchema>
 export type MergeBillsInput = z.infer<typeof mergeBillsSchema>
 
+/** The till's yes to a QR / online order (abc.md §5). */
+export const acceptGuestOrderSchema = z.object({
+  orderId: z.string().min(1),
+})
+
+/** The till's no: a cancellation, and the guest is told why. */
+export const rejectGuestOrderSchema = z.object({
+  orderId: z.string().min(1),
+  reason: z.string().trim().min(2, 'Tell the guest why').max(200),
+})
+
 export const voidItemSchema = z.object({
   orderId: z.string().min(1),
   itemId: z.string().min(1),

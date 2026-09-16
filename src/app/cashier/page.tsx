@@ -6,7 +6,7 @@ import { readPaperWidths } from '@/features/printing/paper'
 import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
-import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, can } from '@/lib/rbac'
 import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
@@ -150,10 +150,13 @@ export default async function CashierPage({
         phone: restaurant.phone,
       }}
       tables={tables}
+      // QR / online orders wait here for a yes or a no (abc.md §5).
+      canAccept={can(user, PERMISSIONS.ORDER_ACCEPT)}
       initialBills={bills.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
         type: order.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
+        channel: order.channel,
         status: order.status as 'PENDING',
         paymentStatus: order.paymentStatus,
         tableId: order.tableId,

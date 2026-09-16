@@ -7,6 +7,7 @@ import { prisma } from '@/server/db/prisma'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { tableStatesFor } from '@/features/floor/table-state-server'
 import { getGuestSessionId } from '@/server/auth/session'
+import { GUEST_CHANNELS } from './channels'
 import type { SelectedOption } from './pricing'
 
 const ORDER_DETAIL_INCLUDE = {
@@ -87,6 +88,17 @@ function atBranch(branchIds?: string[] | null) {
   return branchIds ? { branchId: { in: branchIds } } : {}
 }
 
+/**
+ * A QR / online order that the till has not yet accepted (abc.md §5).
+ *
+ * Spread into a `where` to keep such orders OFF a kitchen or waiter query:
+ * they are the cashier's until accepted, and the same row appears on the
+ * rail the moment it is.
+ */
+const NOT_AWAITING_CASHIER = {
+  NOT: { status: 'PENDING' as const, channel: { in: [...GUEST_CHANNELS] } },
+}
+
 /** The kitchen rail: everything still cooking, oldest first. */
 export async function getKitchenQueue(restaurantId: string, branchIds?: string[] | null) {
   const orders = await prisma.order.findMany({
@@ -94,6 +106,7 @@ export async function getKitchenQueue(restaurantId: string, branchIds?: string[]
       restaurantId,
       ...atBranch(branchIds),
       status: { in: ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'] },
+      ...NOT_AWAITING_CASHIER,
     },
     include: {
       items: { orderBy: { createdAt: 'asc' } },
@@ -138,7 +151,7 @@ export async function getKitchenStats(restaurantId: string, branchIds?: string[]
   const here = atBranch(branchIds)
 
   const [pending, preparing, ready, completedToday, timings] = await Promise.all([
-    prisma.order.count({ where: { restaurantId, ...here, status: 'PENDING' } }),
+    prisma.order.count({ where: { restaurantId, ...here, status: 'PENDING', ...NOT_AWAITING_CASHIER } }),
     prisma.order.count({ where: { restaurantId, ...here, status: { in: ['ACCEPTED', 'PREPARING'] } } }),
     prisma.order.count({ where: { restaurantId, ...here, status: 'READY' } }),
     prisma.order.count({
@@ -209,6 +222,8 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
         restaurantId,
         ...here,
         status: { in: ['PENDING', 'ACCEPTED', 'PREPARING'] },
+        // A QR / online order the till has not accepted is not being cooked.
+        ...NOT_AWAITING_CASHIER,
         // Kept off the "waiting to be cooked" list once something on it is
         // ready, or a half-finished table would appear in both columns.
         items: { none: { status: 'READY' } },
@@ -375,8 +390,8 @@ export function readOptions(value: unknown): SelectedOption[] {
 }
 
 export const ORDER_TIMELINE: Array<{ status: OrderStatus; label: string; description: string }> = [
-  { status: 'PENDING', label: 'Order received', description: 'We have your order' },
-  { status: 'ACCEPTED', label: 'Accepted', description: 'The kitchen has taken it on' },
+  { status: 'PENDING', label: 'Order received', description: 'Waiting to be confirmed' },
+  { status: 'ACCEPTED', label: 'Accepted', description: 'Confirmed and sent to the kitchen' },
   { status: 'PREPARING', label: 'Preparing', description: 'Your food is being cooked' },
   { status: 'READY', label: 'Ready', description: 'Freshly plated and on its way' },
   { status: 'SERVED', label: 'Served', description: 'Enjoy your meal' },

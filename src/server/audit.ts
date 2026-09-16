@@ -98,6 +98,8 @@ export const AUDIT_ACTIONS = {
   ORDER_PLACED: 'order.placed',
   ORDER_STATUS: 'order.status_changed',
   ORDER_CANCELLED: 'order.cancelled',
+  /** A QR / online order accepted at the till (abc.md §5). */
+  ORDER_ACCEPTED_AT_TILL: 'order.accepted_at_till',
   OUTGOING_CREATED: 'outgoingPayment.created',
   OUTGOING_SUBMITTED: 'outgoingPayment.submitted',
   OUTGOING_APPROVED: 'outgoingPayment.approved',

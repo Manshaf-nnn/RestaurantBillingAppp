@@ -18,8 +18,9 @@ import {
   type TxClient,
 } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
-import { notify } from '@/server/notifications'
+import { notify, notifyAudiences } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { isGuestChannel } from './channels'
 import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { seatReservation } from '@/features/floor/reservations'
@@ -1263,6 +1264,11 @@ export async function updateOrderStatus(params: {
   estimatedMinutes?: number
   actorId?: string | null
   actorName?: string | null
+  /**
+   * `'cashier'` when the till is accepting a QR / online order (abc.md §5).
+   * Only `acceptGuestOrder` passes it, after the ORDER_ACCEPT check.
+   */
+  gate?: 'cashier'
 }): Promise<Order> {
   const order = await prisma.order.findFirst({
     where: { id: params.orderId, restaurantId: params.restaurantId },
@@ -1271,6 +1277,27 @@ export async function updateOrderStatus(params: {
   if (!order) throw new NotFoundError('Order')
 
   if (order.status === params.status) return order
+
+  /*
+   * A guest order waits for the cashier (abc.md §5).
+   *
+   * Nothing the kitchen or a waiter can do moves a PENDING QR / online order
+   * on: not Accept on the KDS, not the PENDING → PREPARING shortcut the old
+   * board took. The till's Accept is the one door, and it says so with the
+   * gate. A staff order was accepted by being typed in and is untouched.
+   */
+  if (
+    order.status === 'PENDING' &&
+    isGuestChannel(order.channel) &&
+    (params.status === 'ACCEPTED' || params.status === 'PREPARING') &&
+    params.gate !== 'cashier'
+  ) {
+    throw new AppError(
+      `${order.orderNumber} is waiting for the cashier to accept it`,
+      409,
+      'CASHIER_ACCEPT_REQUIRED',
+    )
+  }
 
   /*
    * Belt to the schema's braces, for direct service callers: cancellation must
@@ -1647,6 +1674,7 @@ export async function cancelOrder(params: {
     tableId: order.tableId,
     tableNumber: order.table?.number ?? null,
     at: new Date().toISOString(),
+    reason: params.reason,
   })
 
   await notify({
@@ -1698,6 +1726,7 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
     branchId: order.branchId,
     status: order.status,
     type: order.type,
+    channel: order.channel,
     tableId: order.tableId,
     tableNumber: order.table?.number ?? null,
     customerName: order.customerName,
@@ -1736,17 +1765,34 @@ async function broadcastOrder(orderId: string, kind: 'created' | 'status') {
 
   if (kind === 'created') {
     realtime.orderCreated(order.restaurantId, payload)
-    await notify({
-      restaurantId: order.restaurantId,
-      branchId: order.branchId,
-      type: 'ORDER_PLACED',
-      title: `New order ${payload.orderNumber}`,
-      body: payload.tableNumber
-        ? `Table ${payload.tableNumber} · ${payload.itemCount} item(s)`
-        : `${payload.itemCount} item(s)`,
-      audience: 'KITCHEN',
-      data: { orderId: payload.id, orderNumber: payload.orderNumber },
-    })
+    const where = payload.tableNumber
+      ? `Table ${payload.tableNumber} · ${payload.itemCount} item(s)`
+      : `${payload.itemCount} item(s)`
+    if (isGuestChannel(payload.channel)) {
+      /*
+       * A QR / online order is the till's first (abc.md §5): the cashier and
+       * the managers are told, the kitchen is not — it hears on acceptance,
+       * through the ordinary ACCEPTED broadcast.
+       */
+      await notifyAudiences(['CASHIER', 'MANAGEMENT'], {
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        type: 'ORDER_PLACED',
+        title: `New ${payload.channel === 'ONLINE' ? 'online' : 'QR'} order ${payload.orderNumber} — waiting for acceptance`,
+        body: where,
+        data: { orderId: payload.id, orderNumber: payload.orderNumber, channel: payload.channel },
+      })
+    } else {
+      await notify({
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        type: 'ORDER_PLACED',
+        title: `New order ${payload.orderNumber}`,
+        body: where,
+        audience: 'KITCHEN',
+        data: { orderId: payload.id, orderNumber: payload.orderNumber },
+      })
+    }
   } else {
     realtime.orderUpdated(order.restaurantId, payload)
     realtime.orderStatus(order.restaurantId, {

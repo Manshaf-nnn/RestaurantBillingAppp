@@ -25,6 +25,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { progressItemsAction, updateOrderStatus } from '@/features/orders/actions'
+import { awaitsCashier, isGuestChannel } from '@/features/orders/channels'
 import { rejectOrderAction } from '@/features/kitchen/actions'
 import { acceptOrderAction, setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
@@ -204,16 +205,14 @@ export function KitchenBoard({
     })),
   })
 
-  useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
-    if (!isOurs(payload)) return
+  // A new ticket on the rail: chime, toast, flash for six seconds.
+  const arrive = (payload: OrderSummaryPayload, description: string) => {
     setTickets((current) =>
       current.some((ticket) => ticket.id === payload.id) ? current : [...current, toTicket(payload)],
     )
     setStats((current) => ({ ...current, pending: current.pending + 1 }))
     play('new-order')
-    toast.success(`New order ${payload.orderNumber}`, {
-      description: payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName,
-    })
+    toast.success(`New order ${payload.orderNumber}`, { description })
 
     // Flash the card for 6 seconds so it is impossible to miss across a room.
     setFlashing((current) => new Set(current).add(payload.id))
@@ -226,13 +225,38 @@ export function KitchenBoard({
         }),
       6000,
     )
+  }
+
+  useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload)) return
+    /*
+     * A QR / online order is the till's until the cashier accepts it (abc.md
+     * §5). It arrives here on `order:updated` the moment that happens — with
+     * ACCEPTED as its status — and not a second before.
+     */
+    if (awaitsCashier(payload)) return
+    arrive(payload, payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName)
   })
 
   useSocketEvent(EVENTS.ORDER_UPDATED, (payload: OrderSummaryPayload) => {
     if (!isOurs(payload)) return
-    setTickets((current) =>
-      current.map((ticket) => (ticket.id === payload.id ? toTicket(payload) : ticket)),
-    )
+    if (awaitsCashier(payload)) return
+    const onRail = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'].includes(payload.status)
+    setTickets((current) => {
+      if (current.some((ticket) => ticket.id === payload.id)) {
+        return current.map((ticket) => (ticket.id === payload.id ? toTicket(payload) : ticket))
+      }
+      return current
+    })
+    // Accepted at the till: it is a new ticket as far as this room is concerned.
+    if (onRail && isGuestChannel(payload.channel) && !tickets.some((ticket) => ticket.id === payload.id)) {
+      arrive(
+        payload,
+        `${payload.channel === 'ONLINE' ? 'Online' : 'QR'} order accepted at the till${
+          payload.tableNumber ? ` · Table ${payload.tableNumber}` : ''
+        }`,
+      )
+    }
   })
 
   useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {

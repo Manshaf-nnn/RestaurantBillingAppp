@@ -189,6 +189,10 @@ const SERVICE = [
   // cascades carry the counters, a split keeps made plates with the
   // original, and the floor reads Ordered / Prepared / Served / Remaining.
   'item-progress-test',
+  // abc.md §5 — a QR / online order waits at the till: off the kitchen rail
+  // and counts until the cashier accepts it (one gate in the service), reject
+  // is a cancellation with a reason, the cashier is told on placement.
+  'cashier-accept-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',
