@@ -6,6 +6,7 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
+import { upsertReservation } from './reservations'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { resolveBranchId } from '@/features/branches/service'
@@ -384,25 +385,25 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         branchId = await actingBranchId(user)
       }
 
-      const payload = {
-        customerName: data.customerName,
-        customerPhone: data.customerPhone,
-        customerEmail: data.customerEmail || null,
-        tableId: data.tableId || null,
-        branchId,
-        partySize: data.partySize,
-        reservedAt: new Date(data.reservedAt),
-        durationMinutes: data.durationMinutes,
-        status: data.status,
-        notes: data.notes || null,
-      }
-
-      const record = existing
-        ? await prisma.reservation.update({
-            where: { id: existing.id },
-            data: payload,
-          })
-        : await prisma.reservation.create({ data: { ...payload, restaurantId: user.restaurantId } })
+      // The rules — end time, capacity, no two bookings holding one table at
+      // once — live in `upsertReservation` (abc.md §4), under a lock on the
+      // table's row so two hosts booking the same slot are serialised.
+      const record = await upsertReservation({
+        restaurantId: user.restaurantId,
+        id: existing?.id ?? null,
+        data: {
+          customerName: data.customerName,
+          customerPhone: data.customerPhone,
+          customerEmail: data.customerEmail || null,
+          tableId: data.tableId || null,
+          branchId,
+          partySize: data.partySize,
+          reservedAt: new Date(data.reservedAt),
+          durationMinutes: data.durationMinutes,
+          status: data.status,
+          notes: data.notes || null,
+        },
+      })
 
       await audit({
         restaurantId: user.restaurantId,

@@ -2605,6 +2605,9 @@ model Reservation {
   partySize       Int               @default(2)
   reservedAt      DateTime
   durationMinutes Int               @default(90)
+  /// `reservedAt + durationMinutes`, written on every save (abc.md §4) so the
+  /// overlap check and the Reserved window can ask the database, not the app.
+  endsAt          DateTime?
   status          ReservationStatus @default(PENDING)
   notes           String?
 

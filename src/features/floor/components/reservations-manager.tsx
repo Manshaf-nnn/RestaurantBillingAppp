@@ -48,6 +48,10 @@ export interface ReservationRow {
   customerPhone: string
   partySize: number
   reservedAt: string
+  /** ISO. Start + duration (abc.md §4). */
+  endsAt: string
+  durationMinutes: number
+  tableId: string | null
   tableNumber: string | null
   status: ReservationStatus
   notes: string | null
@@ -59,7 +63,7 @@ export function ReservationsManager({
   locale,
 }: {
   reservations: ReservationRow[]
-  tables: Array<{ id: string; number: string; branchName?: string | null }>
+  tables: Array<{ id: string; number: string; capacity: number; branchName?: string | null }>
   locale: string
 }) {
   const [reservations, setReservations] = React.useState(initial)
@@ -143,6 +147,11 @@ export function ReservationsManager({
                       locale={locale}
                       options={{ dateStyle: 'medium', timeStyle: 'short' }}
                     />
+                    <span className="text-muted-foreground">
+                      {' – '}
+                      <LocalDateTime value={reservation.endsAt} locale={locale} options={{ timeStyle: 'short' }} />
+                      {` · ${reservation.durationMinutes} min`}
+                    </span>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
                     <span className="flex items-center gap-1 text-sm">
@@ -210,7 +219,7 @@ function ReservationDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   reservation: ReservationRow | null
-  tables: Array<{ id: string; number: string; branchName?: string | null }>
+  tables: Array<{ id: string; number: string; capacity: number; branchName?: string | null }>
 }) {
   const [form, setForm] = React.useState({
     customerName: '',
@@ -235,8 +244,11 @@ function ReservationDialog({
       customerEmail: '',
       partySize: String(reservation?.partySize ?? 2),
       reservedAt: reservation ? reservation.reservedAt.slice(0, 16) : '',
-      durationMinutes: '90',
-      tableId: '',
+      // Editing keeps what was booked (abc.md §4). These were hard-coded to
+      // 90 and blank, so every edit silently reset the duration and dropped
+      // the table.
+      durationMinutes: String(reservation?.durationMinutes ?? 90),
+      tableId: reservation?.tableId ?? '',
       status: reservation?.status ?? 'PENDING',
       notes: reservation?.notes ?? '',
     })
@@ -259,7 +271,7 @@ function ReservationDialog({
       <DialogContent size="default">
         <DialogHeader>
           <DialogTitle>{reservation ? 'Edit reservation' : 'New reservation'}</DialogTitle>
-          <DialogDescription>Book a table for a guest.</DialogDescription>
+          <DialogDescription>Book a table for a guest. The table reads Reserved from 15 minutes before until the booking ends or the party sits down; two bookings cannot hold one table at once.</DialogDescription>
         </DialogHeader>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -279,6 +291,16 @@ function ReservationDialog({
           <Field label="Party size" required>
             <Input type="number" value={form.partySize} onChange={(e) => setForm({ ...form, partySize: e.target.value })} />
           </Field>
+          <Field label="Duration" hint="Minutes the table is held (30–360)">
+            <Input
+              type="number"
+              min={30}
+              max={360}
+              step={15}
+              value={form.durationMinutes}
+              onChange={(e) => setForm({ ...form, durationMinutes: e.target.value })}
+            />
+          </Field>
           {tables.length ? (
             <Field label="Table">
               <Select value={form.tableId} onValueChange={(value) => setForm({ ...form, tableId: value })}>
@@ -295,7 +317,7 @@ function ReservationDialog({
                   */}
                   {tables.map((table) => (
                     <SelectItem key={table.id} value={table.id}>
-                      Table {table.number}
+                      Table {table.number} · seats {table.capacity}
                       {table.branchName ? ` · ${table.branchName}` : ''}
                     </SelectItem>
                   ))}

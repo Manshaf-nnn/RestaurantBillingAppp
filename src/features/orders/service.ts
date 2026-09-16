@@ -22,6 +22,7 @@ import { notify } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
 import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
 import { normalizeTableStatus } from '@/features/floor/table-state'
+import { seatReservation } from '@/features/floor/reservations'
 import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import type { OrderSummaryPayload } from '@/lib/realtime/events'
@@ -761,6 +762,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
           where: { id: table.id },
           data: { status: 'OCCUPIED' },
         })
+        // The booked party has arrived (abc.md §4): the booking whose window
+        // covers now becomes SEATED, so the diary says who came and the table
+        // stops reading Reserved.
+        await seatReservation(tx, { restaurantId: params.restaurantId, tableId: table.id })
       }
 
       /*

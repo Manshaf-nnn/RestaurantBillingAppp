@@ -176,6 +176,10 @@ const SERVICE = [
   // settling or cancelling the last order frees it (Empty, not Cleaning),
   // Reserved is derived from a booking's window and never stored.
   'table-state-test',
+  // abc.md §4 — a booking stores its end; two bookings cannot hold one table
+  // at once ([start, end) — neighbours are fine); the party must fit; a
+  // cancelled booking blocks nothing; the first order seats the booked party.
+  'reservation-conflict-test',
   'recipe-costing-test',
   'input-stability-test',
   'kitchen-routing-test',
