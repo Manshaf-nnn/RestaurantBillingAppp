@@ -21,8 +21,9 @@ import { readFileSync } from 'node:fs'
 import { prisma } from '../src/server/db/prisma'
 import { generateToken, hashToken } from '../src/server/auth/password'
 import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/auth/jwt'
-import { PERMISSIONS, ROLE_HOME, type PermissionSubject } from '../src/lib/rbac'
+import { PERMISSIONS, ROLE_HOME, can, type PermissionSubject } from '../src/lib/rbac'
 import { posTabsFor, resolvePosTab } from '../src/features/cashier/pos-tabs'
+import { RECEIVER_ROLES } from '../src/features/handover/shift-service'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
@@ -62,14 +63,30 @@ async function main() {
   {
     const subject = (role: PermissionSubject['role'], permissions: string[] = []): PermissionSubject =>
       ({ role, permissions } as PermissionSubject)
-    check('a cashier has all three', posTabsFor(subject('CASHIER')).join(',') === 'orders,cashier,drawer')
-    check('an owner has all three', posTabsFor(subject('OWNER')).join(',') === 'orders,cashier,drawer')
-    check('a waiter has only orders', posTabsFor(subject('WAITER')).join(',') === 'orders')
-    check('the kitchen has none', posTabsFor(subject('KITCHEN')).length === 0)
+    // DELIBERATE behaviour change 2026-09 (recorrection.md §2): Shift
+    // Handover is the fourth tab, where the person finishing a shift stands.
+    check('a cashier has all four', posTabsFor(subject('CASHIER')).join(',') === 'orders,cashier,drawer,handover')
+    check('an owner has all four', posTabsFor(subject('OWNER')).join(',') === 'orders,cashier,drawer,handover')
+    check('a waiter takes orders and hands their shift on', posTabsFor(subject('WAITER')).join(',') === 'orders,handover')
+    check('the kitchen still has none — it hands over from its own screen', posTabsFor(subject('KITCHEN')).length === 0)
+    check('and neither do the stores', posTabsFor(subject('WAREHOUSE_STAFF')).length === 0)
     check('an asked-for tab is honoured when allowed', resolvePosTab(subject('CASHIER'), 'drawer') === 'drawer')
     check('a tab they may not open falls to the first they may', resolvePosTab(subject('WAITER'), 'cashier') === 'orders')
     check('nonsense falls to the first', resolvePosTab(subject('OWNER'), 'nope') === 'orders')
+    check('the handover tab is honoured', resolvePosTab(subject('WAITER'), 'handover') === 'handover')
     check('and nothing allowed is null', resolvePosTab(subject('KITCHEN'), 'orders') === null)
+
+    /*
+     * The tab and the page gate must agree. The POS asks for a till
+     * permission before it will open at all, so a tab offered to somebody
+     * that gate turns away would be a tab nobody could reach.
+     */
+    const posGate = [PERMISSIONS.ORDER_CREATE, PERMISSIONS.PAYMENT_COLLECT, PERMISSIONS.CASH_DRAWER_OPERATE, PERMISSIONS.CASH_DRAWER_MANAGE]
+    const roles = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'KITCHEN', 'ACCOUNTANT', 'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF'] as const
+    check('nobody is offered a tab on a screen they cannot open',
+      roles.every((role) => posTabsFor(subject(role)).length === 0 || posGate.some((p) => can(subject(role), p))))
+    check('everybody who may hand over can reach the screen that accepts it',
+      roles.every((role) => !RECEIVER_ROLES[role]?.length || can(subject(role), PERMISSIONS.HANDOVER_VIEW)))
   }
 
   console.log('\n── 1. The registry ──')
@@ -135,7 +152,7 @@ async function main() {
       const orders = await hit(`/cashier/pos?${q}`, asOwner)
       check('the POS renders for an owner', orders.status === 200, `status ${orders.status}`)
       check('with the tab strip', orders.body.includes('data-testid="pos-tabs"'))
-      check('showing all three tabs', orders.body.includes('>Orders<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<'))
+      check('showing every tab', orders.body.includes('>Orders<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<') && orders.body.includes('>Shift Handover<'))
       check('and the order-taking screen', /Tap a dish to add it/.test(orders.body))
 
       const cashier = await hit(`/cashier/pos?${q}&tab=cashier`, asOwner)
@@ -144,6 +161,26 @@ async function main() {
 
       const drawer = await hit(`/cashier/pos?${q}&tab=drawer`, asOwner)
       check('the Drawer tab renders the drawer console', drawer.status === 200 && /float/i.test(drawer.body), `status ${drawer.status}`)
+
+      // recorrection.md §2 — the same handover screen the dashboard mounts,
+      // on the till where the person finishing a shift is standing.
+      const handover = await hit(`/cashier/pos?${q}&tab=handover`, asOwner)
+      check('the Shift Handover tab renders', handover.status === 200, `status ${handover.status}`)
+      check('with the flow on it', /Start handover/.test(handover.body))
+      check('and the history section', /Handover history/.test(handover.body))
+      /*
+       * The columns are pinned at their source rather than in the rendered
+       * page: this fixture's owner has never handed a shift over, so the
+       * table is an empty state here, and asserting on the markup would pass
+       * or fail on whether the test data happened to include a handover.
+       */
+      const panel = readFileSync('src/features/handover/components/shift-handover.tsx', 'utf8')
+      check('which lists date, who, where, shift and status',
+        ['>Date<', '>Outgoing<', '>Receiving<', '>Location<', '>Shift<', '>Status<'].every((column) => panel.includes(column)))
+      check('inside the shell, not a second screen', handover.body.includes('data-testid="pos-tabs"'))
+
+      const page = readFileSync('src/app/cashier/pos/page.tsx', 'utf8')
+      check('it mounts the existing panel, not a copy of it', page.includes('<ShiftHandoverPanel') && page.includes("from '@/features/handover/shift-service'"))
     }
 
     console.log('\n── 4. A tab they may not open ──')

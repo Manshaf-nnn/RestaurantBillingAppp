@@ -292,6 +292,9 @@ const ADMIN: Permission[] = ALL
 /** Runs stock: counts, adjustments, wastage, transfers, recipes. Not money. */
 const INVENTORY_MANAGER: Permission[] = [
   PERMISSIONS.DASHBOARD_VIEW,
+  // They work shifts and `RECEIVER_ROLES` already offers them as receivers;
+  // without this a handover to one of them could never be accepted.
+  PERMISSIONS.HANDOVER_VIEW,
   PERMISSIONS.INVENTORY_VIEW,
   PERMISSIONS.INVENTORY_MANAGE,
   PERMISSIONS.INVENTORY_ADJUST,
@@ -321,6 +324,7 @@ const INVENTORY_MANAGER: Permission[] = [
  *  they cannot do, since that is the control the approval step exists for. */
 const PURCHASING_MANAGER: Permission[] = [
   PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.HANDOVER_VIEW,
   PERMISSIONS.PURCHASE_VIEW,
   PERMISSIONS.PURCHASE_CREATE,
   PERMISSIONS.PURCHASE_RECEIVE,
@@ -338,6 +342,7 @@ const PURCHASING_MANAGER: Permission[] = [
  *  or edits a cost — those are the two ways stock discrepancies get hidden. */
 const WAREHOUSE_STAFF: Permission[] = [
   PERMISSIONS.DASHBOARD_VIEW,
+  PERMISSIONS.HANDOVER_VIEW,
   PERMISSIONS.INVENTORY_VIEW,
   PERMISSIONS.INVENTORY_COUNT,
   PERMISSIONS.INVENTORY_WASTAGE,

@@ -311,6 +311,13 @@ const ACTION_LABELS: Record<string, string> = {
   'cashDrawer.handed_over': 'Handed over',
   'cashDrawer.handover_accepted': 'Taken on',
   'cashDrawer.handover_declined': 'Handover declined',
+  'cashDrawer.handover_cancelled': 'Handover withdrawn',
+  // The shift handover around the till, which has its own keys. Without
+  // these the trail on a handed-over session read as a bare dotted string.
+  'shiftHandover.started': 'Shift handed over',
+  'shiftHandover.completed': 'Shift accepted',
+  'shiftHandover.rejected': 'Shift handover rejected',
+  'shiftHandover.cancelled': 'Shift handover withdrawn',
 }
 
 const FIELD_LABELS: Record<string, string> = {
