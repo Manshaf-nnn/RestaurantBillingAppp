@@ -490,6 +490,11 @@ export async function getCategoryBreakdown(params: {
       AND o."placedAt" >= ${utc(range.from)}
       AND o."placedAt" <= ${utc(range.to)}
       AND o.status <> 'CANCELLED'
+      -- A voided line was never sold. Without this the category's revenue
+      -- included dishes taken off the bill, so the breakdown did not add up
+      -- to the sales it was breaking down — the top-items query above has
+      -- always had this predicate.
+      AND oi.status <> 'CANCELLED'
       ${atBranch}
     GROUP BY c.name
     ORDER BY revenue DESC

@@ -399,7 +399,8 @@ export async function issueInvoiceEmail(input: unknown): Promise<ActionResult<{ 
     const order = await prisma.order.findFirst({
       where: { id: data.orderId, restaurantId: user.restaurantId },
       include: {
-        items: true,
+        // An emailed bill lists what is charged for; voided lines are not.
+        items: { where: { status: { not: 'CANCELLED' } } },
         restaurant: {
           select: {
             name: true,

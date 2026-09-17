@@ -598,7 +598,9 @@ export async function ensureInvoice(
 
   const order = await tx.order.findFirst({
     where: { id: params.orderId, restaurantId: params.restaurantId },
-    include: { items: true, table: true },
+    // A voided line is not on the invoice: the document has to add up from
+    // the lines printed on it.
+    include: { items: { where: { status: { not: 'CANCELLED' } } }, table: true },
   })
   if (!order) throw new NotFoundError('Order')
   const restaurant = await tx.restaurant.findUniqueOrThrow({

@@ -317,7 +317,11 @@ export async function getOrderForWebsite(
 ): Promise<OrderWithLines | null> {
   return prisma.order.findFirst({
     where: { id: orderId, restaurantId, channel: 'ONLINE' },
-    include: { items: true, branch: { select: { id: true, name: true, code: true } } },
+    include: {
+      // What the customer is being charged for, and nothing they cancelled.
+      items: { where: { status: { not: 'CANCELLED' } } },
+      branch: { select: { id: true, name: true, code: true } },
+    },
   })
 }
 

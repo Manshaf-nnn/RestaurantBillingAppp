@@ -10,7 +10,23 @@ import { GUEST_CHANNELS } from './channels'
 import type { SelectedOption } from './pricing'
 
 const ORDER_DETAIL_INCLUDE = {
-  items: { orderBy: { createdAt: 'asc' as const } },
+  /*
+   * Live lines only (aO.md §4 follow-up).
+   *
+   * A cancelled line is kept as a row — it is the record that the dish was
+   * ordered and taken back, and the order's events say who took it back and
+   * why — but it is not part of the bill and must not be shown as though it
+   * were. It was priced in the list while the totals excluded it, so a guest
+   * reading their own bill saw a dish they had cancelled, with its price,
+   * and a total that did not add up from the lines above it.
+   *
+   * Filtered here rather than in each screen because this include IS the
+   * order as every bill-like surface sees it: the guest's bill and tracker,
+   * the emailed receipt, and the management order detail. The kitchen rail
+   * reads its own query and still shows cancelled lines crossed out, which
+   * is a work instruction, not a bill.
+   */
+  items: { where: { status: { not: 'CANCELLED' as const } }, orderBy: { createdAt: 'asc' as const } },
   table: { select: { id: true, number: true, label: true, area: true } },
   // The branch's code, so a guest screen can prove which place it belongs to
   // when it calls back — a call bell must ring in the room the guest is in.
@@ -190,7 +206,11 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
         status: { in: ['ACCEPTED', 'PREPARING', 'READY', 'SERVED'] },
         items: { some: { status: 'READY' } },
       },
-      include: { items: true, table: { select: { id: true, number: true } } },
+      include: {
+        // A voided dish is not carried to any table.
+        items: { where: { status: { not: 'CANCELLED' } } },
+        table: { select: { id: true, number: true } },
+      },
       orderBy: [{ readyAt: 'asc' }, { placedAt: 'asc' }],
     }),
     prisma.order.findMany({
@@ -204,7 +224,11 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
         // ready, or a half-finished table would appear in both columns.
         items: { none: { status: 'READY' } },
       },
-      include: { items: true, table: { select: { id: true, number: true } } },
+      include: {
+        // A voided dish is not carried to any table.
+        items: { where: { status: { not: 'CANCELLED' } } },
+        table: { select: { id: true, number: true } },
+      },
       orderBy: { placedAt: 'asc' },
       take: 40,
     }),
@@ -367,7 +391,8 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
       where,
       include: {
         table: { select: { number: true } },
-        items: { select: { id: true, quantity: true } },
+        // Counted as "N items" on the row, so voided lines are not in it.
+        items: { where: { status: { not: 'CANCELLED' } }, select: { id: true, quantity: true } },
         payments: { select: { method: true, status: true } },
       },
       orderBy: { placedAt: 'desc' },
@@ -403,7 +428,12 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
   }
 }
 
-/** Unpaid bills waiting at the till. */
+/**
+ * Unpaid bills waiting at the till.
+ *
+ * Live lines only: a voided dish is off the bill, and the till is where the
+ * money is taken, so it must show what is being charged for and nothing else.
+ */
 export async function getCashierQueue(restaurantId: string, branchIds?: string[] | null) {
   return prisma.order.findMany({
     where: {
@@ -421,7 +451,7 @@ export async function getCashierQueue(restaurantId: string, branchIds?: string[]
       ],
     },
     include: {
-      items: true,
+      items: { where: { status: { not: 'CANCELLED' } } },
       table: { select: { id: true, number: true } },
       payments: true,
     },

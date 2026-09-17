@@ -19,6 +19,8 @@ interface TicketItem {
   quantity: number
   optionsLabel?: string
   notes?: string | null
+  /** 'CANCELLED' prints as a struck-out DO NOT MAKE line (aO.md §4). */
+  status?: string
 }
 
 interface TicketInput {
@@ -190,18 +192,28 @@ export function printKitchenTicket(
    */
   const time = formatTime(ticket.placedAt, { timeZone: ticket.timeZone })
 
+  /*
+   * A cancelled line stays on the paper and says so (aO.md §4).
+   *
+   * The screen strikes it through; paper printed it as an ordinary line with
+   * nothing to distinguish it, which is worse than leaving it off — a cook
+   * reading the docket would make the dish. Struck through AND labelled,
+   * because a thermal printer's line-through can be faint on cheap rolls.
+   */
   const items = ticket.items
-    .map(
-      (item) => `
-        <div class="item">
-          <span class="qty">${item.quantity}×</span>
+    .map((item) => {
+      const cancelled = item.status === 'CANCELLED'
+      return `
+        <div class="item"${cancelled ? ' style="opacity:.75"' : ''}>
+          <span class="qty"${cancelled ? ' style="text-decoration:line-through"' : ''}>${item.quantity}×</span>
           <span>
-            <span class="bold">${escapeHtml(item.name)}</span>
-            ${item.optionsLabel ? `<br><span class="muted">${escapeHtml(item.optionsLabel)}</span>` : ''}
-            ${item.notes ? `<br><span class="bold">** ${escapeHtml(item.notes)} **</span>` : ''}
+            <span class="bold"${cancelled ? ' style="text-decoration:line-through"' : ''}>${escapeHtml(item.name)}</span>
+            ${cancelled ? '<br><span class="bold">** CANCELLED — DO NOT MAKE **</span>' : ''}
+            ${item.optionsLabel ? `<br><span class="muted"${cancelled ? ' style="text-decoration:line-through"' : ''}>${escapeHtml(item.optionsLabel)}</span>` : ''}
+            ${item.notes && !cancelled ? `<br><span class="bold">** ${escapeHtml(item.notes)} **</span>` : ''}
           </span>
-        </div>`,
-    )
+        </div>`
+    })
     .join('')
 
   printDocument(

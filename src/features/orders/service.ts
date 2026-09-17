@@ -1849,7 +1849,18 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
     tableNumber: order.table?.number ?? null,
     customerName: order.customerName,
     customerPhone: order.customerPhone,
-    itemCount: order.items.reduce((total, item) => total + item.quantity, 0),
+    /*
+     * Live lines only. A voided dish is not part of how big the order is —
+     * the till and the floor read this as "8 items" beside a total that
+     * covers six of them.
+     *
+     * `items` below deliberately still carries cancelled lines: the kitchen
+     * rail shows them crossed out so nobody cooks them (aO.md §4), and it is
+     * the only screen that does.
+     */
+    itemCount: order.items
+      .filter((item) => item.status !== 'CANCELLED')
+      .reduce((total, item) => total + item.quantity, 0),
     grandTotal: order.grandTotal,
     notes: order.notes,
     placedAt: order.placedAt.toISOString(),

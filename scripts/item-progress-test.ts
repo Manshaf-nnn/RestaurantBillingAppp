@@ -33,7 +33,8 @@ import {
 import { cancelOrder, placeOrder, progressItems, updateOrderStatus } from '../src/features/orders/service'
 import { mergeBills, splitBill, voidOrderItem } from '../src/features/cashier/service'
 import { getLiveBoard } from '../src/features/live/queries'
-import { getKitchenQueue } from '../src/features/orders/queries'
+import { getCashierQueue, getKitchenQueue, getOrderForStaff } from '../src/features/orders/queries'
+import { toOrderPayload } from '../src/features/orders/service'
 
 let passed = 0
 let failed = 0
@@ -320,6 +321,31 @@ async function main() {
     const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
     check('the KDS shows them crossed out, marked, without a box', kds.includes('Cancelled — do not prepare') && kds.includes('canTick && !cancelled'))
     check('and keeps them out of the counts and Select all', kds.includes("const liveItems = ticket.items.filter((item) => item.status !== 'CANCELLED')") && kds.includes('liveItems\n                  .filter((item) => item.preparedQty < item.quantity)'))
+
+    /*
+     * …and nowhere else. The kitchen rail is the one screen that shows a
+     * cancelled dish, because a cook has to know not to make it. Every
+     * bill-like surface reads the order without it: a guest who cancelled a
+     * dish was still shown it, priced, above a total that excluded it.
+     */
+    const staffView = await getOrderForStaff(restaurant.id, g.id)
+    check('the order detail no longer carries the cancelled line', staffView?.items.some((item) => item.id === riceLine.id) === false)
+    check('but its live lines are all there', staffView?.items.length === 1 && staffView.items[0].name === 'Burger')
+    check('and the void is still in the order\'s history', staffView?.events.some((event) => (event.note ?? '').includes('Voided 1 × Rice')) === true)
+    check('the row itself was never deleted', (await prisma.orderItem.findUnique({ where: { id: riceLine.id } }))?.status === 'CANCELLED')
+
+    const till = (await getCashierQueue(restaurant.id, [branch.id])).find((row) => row.id === g.id)
+    check('the till bills only the live lines', till?.items.some((item) => item.id === riceLine.id) === false)
+    check('and the bill adds up from what it shows', till !== undefined && till.items.reduce((sum, item) => sum + item.lineTotal, 0) === till.subtotal)
+
+    const payload = await toOrderPayload(g.id)
+    check('the broadcast counts only live lines', payload?.itemCount === 2, String(payload?.itemCount))
+    check('while still carrying the cancelled one for the rail', payload?.items.some((item) => item.id === riceLine.id) === true)
+
+    const queries = readFileSync('src/features/orders/queries.ts', 'utf8')
+    check('the shared order read filters them for every bill surface', queries.includes("items: { where: { status: { not: 'CANCELLED' as const } }, orderBy: { createdAt: 'asc' as const } }"))
+    const bill = readFileSync('src/features/payments/service.ts', 'utf8')
+    check('and the invoice is minted without them', bill.includes("include: { items: { where: { status: { not: 'CANCELLED' } } }, table: true }"))
   }
 
   console.log('\n── 7. The action, the event, the boards ──')

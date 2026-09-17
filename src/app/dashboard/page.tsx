@@ -138,7 +138,11 @@ export default async function DashboardPage({
       where: { restaurantId: user.restaurantId, ...(branchId ? { branchId } : {}) },
       orderBy: { placedAt: 'desc' },
       take: 8,
-      include: { table: { select: { number: true } }, items: { select: { quantity: true } } },
+      include: {
+        table: { select: { number: true } },
+        // Counted as "N items" below; a voided line is not one of them.
+        items: { where: { status: { not: 'CANCELLED' } }, select: { quantity: true } },
+      },
     }),
     prisma.order.count({
       where: {

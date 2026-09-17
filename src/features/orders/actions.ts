@@ -50,6 +50,7 @@ import {
   progressItems,
   updateOrderStatus as updateOrderStatusService,
   serveWholeOrder,
+  toOrderPayload,
   type ProgressedItem,
 } from './service'
 import { computeTotals, estimatePrepMinutes } from './pricing'
@@ -522,43 +523,24 @@ export async function updateGuestOrderItems(
         })
       })
 
-      const refreshedOrder = await prisma.order.findFirst({
-        where: { id: order.id, restaurantId: restaurant.id },
-        include: { table: true, items: true },
-      })
+      /*
+       * The same payload every other broadcast sends. This was built by hand
+       * here, field for field, and drifted: it counted voided lines in
+       * `itemCount`, so a guest who cancelled a dish saw the order still
+       * described with the old number of items. One builder, one answer.
+       */
+      const payload = await toOrderPayload(order.id)
+      const refreshedOrder = payload
+        ? await prisma.order.findFirst({
+            where: { id: order.id, restaurantId: restaurant.id },
+            select: {
+              id: true, orderNumber: true, branchId: true, status: true,
+              tableId: true, table: { select: { number: true } },
+            },
+          })
+        : null
 
-      if (refreshedOrder) {
-        const payload = {
-          id: refreshedOrder.id,
-          orderNumber: refreshedOrder.orderNumber,
-          branchId: refreshedOrder.branchId,
-          status: refreshedOrder.status,
-          type: refreshedOrder.type,
-          channel: refreshedOrder.channel,
-          tableId: refreshedOrder.tableId,
-          tableNumber: refreshedOrder.table?.number ?? null,
-          customerName: refreshedOrder.customerName,
-          customerPhone: refreshedOrder.customerPhone,
-          itemCount: refreshedOrder.items.reduce((total, item) => total + item.quantity, 0),
-          grandTotal: refreshedOrder.grandTotal,
-          notes: refreshedOrder.notes,
-          placedAt: refreshedOrder.placedAt.toISOString(),
-          estimatedMinutes: refreshedOrder.estimatedMinutes,
-          items: refreshedOrder.items.map((item) => ({
-            id: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            notes: item.notes,
-            isVeg: item.isVeg,
-            options: ((item.options as Array<{ groupName: string; name: string }> | null) ?? []).map((option) => ({
-              groupName: option.groupName,
-              name: option.name,
-            })),
-            status: item.status,
-            preparedQty: item.preparedQty,
-            servedQty: item.servedQty,
-          })),
-        }
+      if (payload && refreshedOrder) {
         realtime.orderUpdated(restaurant.id, payload)
         realtime.orderStatus(restaurant.id, {
           orderId: refreshedOrder.id,
