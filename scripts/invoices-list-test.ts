@@ -9,7 +9,8 @@
  *   - Outstanding = unpaid or partly paid; Settled = paid; Refunded; Failed;
  *   - an invoice belongs to a location through its order, and an empty list
  *     of locations is nothing, never everything;
- *   - rows per page is 50 / 100 / All from the screen, clamped like orders;
+ *   - rows per page is whatever the reader chose (aO.md §6), clamped to
+ *     [1, 5000] like orders, with no unlimited option;
  *   - the screen opens on This month through `resolveRange`, mounts the
  *     period filters every report uses, and is rendered by the page suite.
  *
@@ -104,7 +105,7 @@ async function main() {
 
   console.log('\n── 1. Rows and totals from one predicate ──')
   {
-    const all = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 'ALL' })
+    const all = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 500 })
     check('every invoice issued in the period', all.invoices.length === 4 && all.total === 4)
     const amount = all.invoices.reduce((s, i) => s + i.order.grandTotal + i.order.tipAmount, 0)
     const collected = all.invoices.reduce((s, i) => s + i.order.paidTotal, 0)
@@ -150,12 +151,14 @@ async function main() {
   {
     const fifty = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week })
     check('fifty a page by default', fifty.perPage === 50 && fifty.pageCount === 1)
-    const ten = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 3 })
-    check('below ten is lifted to ten', ten.perPage === 10)
+    // DELIBERATE behaviour change 2026-09 (aO.md §6): the number is the
+    // reader's, so a small one is honoured and there is no 'ALL'.
+    const three = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 3 })
+    check('a small number is honoured, not lifted', three.perPage === 3 && three.invoices.length === 3 && three.pageCount === 2)
     const huge = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 99_999 })
     check('and nothing above five thousand', huge.perPage === 5000)
-    const all = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 'ALL' })
-    check("All reports itself as 'ALL'", all.perPage === 'ALL' && all.pageCount === 1)
+    const fraction = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 25.7 })
+    check('a fraction is truncated, never zero', fraction.perPage === 25)
     const beyond = await listInvoices({ restaurantId: restaurant.id, branchIds: null, range: week, perPage: 10, page: 4 })
     check('a page past the end is empty, totals still the set’s', beyond.invoices.length === 0 && beyond.totals.count === 4)
   }
@@ -167,6 +170,10 @@ async function main() {
     check('mounts the period filters every report uses', page.includes('<ReportFilters'))
     check('reads rows and totals from listInvoices, not an inline query', page.includes('listInvoices(') && !page.includes('prisma.invoice.findMany'))
     check('offers status and rows-per-page filters', page.includes('<InvoiceFilters'))
+    // DELIBERATE behaviour change 2026-09 (aO.md §6): the same editable
+    // control as the orders list, presets plus a custom number, no 'All'.
+    const filters = readFileSync('src/features/payments/components/invoice-filters.tsx', 'utf8')
+    check('rows per page is the shared, editable control', filters.includes('<RowsPerPage') && !filters.includes('All rows'))
     const suite = readFileSync('scripts/page-render-test.ts', 'utf8')
     check('and is rendered by the page suite', suite.includes("'/dashboard/invoices'"))
   }

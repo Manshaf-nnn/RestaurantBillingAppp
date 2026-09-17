@@ -2,7 +2,6 @@ import 'server-only'
 
 import type { OrderStatus, Prisma } from '@prisma/client'
 
-import { AppError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { tableStatesFor } from '@/features/floor/table-state-server'
@@ -264,10 +263,10 @@ export interface OrderListFilter {
   to?: string
   page?: number
   /**
-   * Rows per page. A number is clamped to [10, 5000]; 'ALL' shows the whole
-   * filtered set and needs a period (`from` AND `to`), or it is refused.
+   * Rows per page, clamped to [1, 5000] (aO.md §6). The reader chooses the
+   * number; the ceiling is a safety limit on one request, not a horizon.
    */
-  perPage?: number | 'ALL'
+  perPage?: number
   /** Restrict to one location. Null or absent means every location. */
   branchId?: string | null
 }
@@ -292,26 +291,26 @@ export const ORDER_LIST_MAX_ROWS = 5000
  *
  * `totals` is an aggregate over the SAME `where` as the rows, so it is the
  * whole filtered set's count, total, collected and outstanding whichever
- * page is showing — and with 'ALL' it equals the sum of the rows returned.
- * The screen's footer therefore never contradicts the export.
+ * page is showing. The screen's footer therefore never contradicts the
+ * export.
  *
  * ── Rows per page ───────────────────────────────────────────────────────────
  *
- * The clamp used to be 100, which silently cut the export's 500 a page and
- * made it page five times as often for the same rows. It is 5000 now; the
- * screen offers 50 / 100 / All, and All is refused without a period so a
- * years-old restaurant cannot ask for everything it has ever sold in one
- * request.
+ * Whatever the reader asked for, clamped to [1, 5000] (aO.md §6). The clamp
+ * used to be 100, which silently cut the export's 500 a page and made it
+ * page five times as often for the same rows.
+ *
+ * There is no 'ALL' any more. It was the one size nobody chose: on a
+ * restaurant with years of orders it asked for five thousand rows and got a
+ * period check bolted on to make it safe. A number the reader picked, over
+ * the set they filtered to, answers the same question without the guard.
  */
 export async function listOrders(restaurantId: string, filter: OrderListFilter) {
   const page = Math.max(1, filter.page ?? 1)
-  const all = filter.perPage === 'ALL'
-  if (all && !(filter.from && filter.to)) {
-    throw new AppError('Choose a period before showing every order', 400, 'RANGE_REQUIRED')
-  }
-  const perPage = all
-    ? ORDER_LIST_MAX_ROWS
-    : Math.min(ORDER_LIST_MAX_ROWS, Math.max(10, typeof filter.perPage === 'number' ? filter.perPage : 25))
+  const perPage = Math.min(
+    ORDER_LIST_MAX_ROWS,
+    Math.max(1, typeof filter.perPage === 'number' ? Math.trunc(filter.perPage) : 25),
+  )
 
   const where: Prisma.OrderWhereInput = {
     restaurantId,
@@ -398,8 +397,8 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
     orders,
     total,
     page,
-    perPage: all ? ('ALL' as const) : perPage,
-    pageCount: all ? 1 : Math.max(1, Math.ceil(total / perPage)),
+    perPage,
+    pageCount: Math.max(1, Math.ceil(total / perPage)),
     totals,
   }
 }

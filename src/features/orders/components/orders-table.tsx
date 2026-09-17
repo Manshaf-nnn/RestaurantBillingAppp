@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { RowsPerPage } from '@/components/ui/rows-per-page'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { EVENTS, type OrderSummaryPayload } from '@/lib/realtime/events'
@@ -52,7 +53,6 @@ const STATUS_OPTIONS = ['ALL', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SER
 const PAYMENT_OPTIONS = ['ALL', 'UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']
 const TYPE_OPTIONS = ['ALL', 'DINE_IN', 'TAKEAWAY', 'DELIVERY']
 const CHANNEL_OPTIONS = ['ALL', 'QR', 'ONLINE', 'STAFF', 'COUNTER', 'PHONE']
-const PER_PAGE_OPTIONS = ['50', '100', 'ALL'] as const
 
 export function OrdersTable({
   orders,
@@ -80,8 +80,8 @@ export function OrdersTable({
   filters: { search: string; status: string; paymentStatus: string; type: string; channel: string }
   /** Locations this list is showing. Null means all of them. */
   branchIds: string[] | null
-  /** 50 / 100 / All (abc.md §1). */
-  perPage: 50 | 100 | 'ALL'
+  /** How many rows this page is showing (aO.md §6). */
+  perPage: number
   /** The whole filtered set's money, whichever page is showing. */
   totals: OrderListTotals
   /** The period the rows were read for, as instants, so a live row is judged by it too. */
@@ -158,7 +158,7 @@ export function OrdersTable({
       placedAt: payload.placedAt,
     }
     if (!matchesFilters(row)) return
-    const limit = perPage === 'ALL' ? Number.POSITIVE_INFINITY : perPage
+    const limit = perPage
     setLive((current) => {
       if (current.some((order) => order.id === payload.id)) return current
       // The footer is the set's figures; a new row in the set moves them too.
@@ -274,18 +274,7 @@ export function OrdersTable({
             ))}
           </SelectContent>
         </Select>
-        <Select value={perPage === 'ALL' ? 'ALL' : String(perPage)} onValueChange={(value) => setParam('perPage', value)}>
-          <SelectTrigger className="w-32" aria-label="Rows per page">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PER_PAGE_OPTIONS.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option === 'ALL' ? 'All rows' : `${option} rows`}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <RowsPerPage value={perPage} defaultValue={50} />
       </div>
 
       {/* abc.md §1: the whole filtered set's money, whichever page is showing. */}

@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { OrdersTable } from '@/features/orders/components/orders-table'
-import { listOrders } from '@/features/orders/queries'
+import { ORDER_LIST_MAX_ROWS, listOrders } from '@/features/orders/queries'
 import { ReportFilters } from '@/features/reports/components/report-filters'
 import { resolveRange, type RangePreset } from '@/features/reports/range'
 import { listSwitchableLocations } from '@/features/transfers/queries'
@@ -16,11 +16,18 @@ export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = { title: 'Orders' }
 
-/** 50 / 100 / All from the screen; anything else is the default (abc.md §1). */
-function readPerPage(raw: string | undefined): 50 | 100 | 'ALL' {
-  if (raw === '100') return 100
-  if (raw === 'ALL') return 'ALL'
-  return 50
+/**
+ * Rows per page, as the reader asked for it (aO.md §6).
+ *
+ * Any whole number from one up, clamped to the list's ceiling; anything that
+ * is not a number — including the old 'ALL', which a bookmark may still
+ * carry — falls back to fifty. The clamp is here as well as in the query
+ * because a hand-typed address is not a screen.
+ */
+function readPerPage(raw: string | undefined): number {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 1) return 50
+  return Math.min(ORDER_LIST_MAX_ROWS, Math.trunc(parsed))
 }
 
 export default async function OrdersPage({

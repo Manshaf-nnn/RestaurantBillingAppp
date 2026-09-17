@@ -7,9 +7,10 @@
  *     and stay the whole set's figures on any one page;
  *   - every filter narrows rows and totals together — status, payment,
  *     type, source (channel), search, and the period;
- *   - rows per page is 50 / 100 / All from the screen; a number is clamped
- *     to [10, 5000] so the export's 500 a page is honoured (it used to be
- *     silently cut to 100); All needs a period, or it is refused;
+ *   - rows per page is whatever the reader chose (aO.md §6) — presets and a
+ *     custom number — clamped to [1, 5000] so the export's 500 a page is
+ *     honoured (it used to be silently cut to 100) and no request can ask
+ *     for an unbounded set;
  *   - `to` works as a bare date ("2026-09-15", meaning the whole day) and
  *     as a full instant, as before;
  *   - the screen opens on Today through `resolveRange`, mounts the same
@@ -35,17 +36,6 @@ function check(name: string, ok: boolean, detail = '') {
   } else {
     failed += 1
     console.log(`  ✗ ${name}${detail ? `\n      ${detail}` : ''}`)
-  }
-}
-
-async function refuses(name: string, run: () => Promise<unknown>, expect: RegExp) {
-  try {
-    await run()
-    check(name, false, 'it was allowed')
-  } catch (error) {
-    const code = (error as { code?: string }).code ?? ''
-    const message = error instanceof Error ? error.message : String(error)
-    check(name, expect.test(`${code} ${message}`), `wrong reason: ${code} ${message}`)
   }
 }
 
@@ -110,8 +100,8 @@ async function main() {
 
   console.log('\n── 1. Totals are the whole set’s, from the rows’ own predicate ──')
   {
-    const all = await listOrders(restaurant.id, { from, to, perPage: 'ALL' })
-    check('All shows every order in the period', all.orders.length === 4 && all.total === 4 && all.pageCount === 1)
+    const all = await listOrders(restaurant.id, { from, to, perPage: 500 })
+    check('a big page shows every order in the period', all.orders.length === 4 && all.total === 4 && all.pageCount === 1)
     const expected = sum(all.orders)
     check('count agrees with the rows', all.totals.count === 4)
     check('total agrees with the rows', all.totals.grandTotal === expected.grandTotal, `${all.totals.grandTotal} vs ${expected.grandTotal}`)
@@ -143,18 +133,23 @@ async function main() {
     check('50 a page is 50 a page', fifty.perPage === 50 && fifty.pageCount === 1)
     const hundred = await listOrders(restaurant.id, { from, to, perPage: 100 })
     check('and 100', hundred.perPage === 100)
+    // DELIBERATE behaviour change 2026-09 (aO.md §6): the reader picks the
+    // number, so a small one is honoured rather than lifted to ten, and
+    // 'ALL' — never a size anybody chose — is gone.
     const five = await listOrders(restaurant.id, { from, to, perPage: 5 })
-    check('below ten is lifted to ten', five.perPage === 10)
+    check('a small number is honoured, not lifted', five.perPage === 5)
+    const one = await listOrders(restaurant.id, { from, to, perPage: 1 })
+    check('one a page is one a page', one.perPage === 1 && one.orders.length === 1 && one.pageCount === 4)
+    const fraction = await listOrders(restaurant.id, { from, to, perPage: 12.9 })
+    check('a fraction is truncated, never zero', fraction.perPage === 12)
     const huge = await listOrders(restaurant.id, { from, to, perPage: 99_999 })
     check('and nothing above five thousand', huge.perPage === 5000)
     const export_ = await listOrders(restaurant.id, { from, to, perPage: 500 })
     check('the export’s 500 a page is honoured, not cut to 100', export_.perPage === 500)
     const beyond = await listOrders(restaurant.id, { from, to, perPage: 10, page: 3 })
     check('a page past the end is empty, but the totals are still the set’s', beyond.orders.length === 0 && beyond.totals.count === 4)
-    const all = await listOrders(restaurant.id, { from, to, perPage: 'ALL' })
-    check("All reports itself as 'ALL'", all.perPage === 'ALL')
-    await refuses('All without a period is refused', () => listOrders(restaurant.id, { perPage: 'ALL' }), /RANGE_REQUIRED/)
-    await refuses('with only a start it is still refused', () => listOrders(restaurant.id, { from, perPage: 'ALL' }), /RANGE_REQUIRED/)
+    const noPeriod = await listOrders(restaurant.id, { perPage: 500 })
+    check('a big page needs no period guard any more', noPeriod.perPage === 500)
   }
 
   console.log('\n── 4. The period ──')
@@ -182,7 +177,13 @@ async function main() {
     check('mounts the period filters every report uses', page.includes('<ReportFilters'))
     check('Take payment is offered to whoever may collect', page.includes('canCollect={can(user, PERMISSIONS.PAYMENT_COLLECT)}'))
     const table = readFileSync('src/features/orders/components/orders-table.tsx', 'utf8')
-    check('rows per page is 50 / 100 / All', table.includes("'50'") && table.includes("'100'") && table.includes("'ALL'"))
+    // DELIBERATE behaviour change 2026-09 (aO.md §6): presets plus Custom,
+    // in one shared control, and no unlimited option anywhere.
+    const control = readFileSync('src/components/ui/rows-per-page.tsx', 'utf8')
+    check('rows per page is the shared, editable control', table.includes('<RowsPerPage') && !table.includes('PER_PAGE_OPTIONS') && !table.includes('All rows'))
+    check('with the presets', [10, 25, 50, 100, 250, 500].every((n) => control.includes(String(n))))
+    check('and a custom number', control.includes('Custom') && control.includes('Rows per page, exactly'))
+    check('and no unlimited option', !control.includes('All rows'))
     check('the totals footer is there', table.includes('data-testid="orders-totals"'))
     check('a source filter is there', table.includes("setParam('channel'"))
     check('and Take payment opens the dialog on unpaid rows', table.includes('<TakePaymentDialog') && table.includes('Take payment'))

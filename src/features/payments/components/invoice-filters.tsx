@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 
+import { RowsPerPage } from '@/components/ui/rows-per-page'
 import {
   Select,
   SelectContent,
@@ -18,16 +19,14 @@ const STATUS_OPTIONS = [
   { value: 'FAILED', label: 'Failed' },
 ] as const
 
-const PER_PAGE_OPTIONS = ['50', '100', 'ALL'] as const
-
 /**
- * Status and rows-per-page for the invoices list (abc.md §2).
+ * Status and rows-per-page for the invoices list (abc.md §2, aO.md §6).
  *
  * State lives in the URL, next to the period the report filters wrote, so
  * the server component narrows the query and the figures are the database's.
  * Changing a filter goes back to page 1.
  */
-export function InvoiceFilters({ status, perPage }: { status: string; perPage: string }) {
+export function InvoiceFilters({ status, perPage }: { status: string; perPage: number }) {
   const router = useRouter()
   const params = useSearchParams()
 
@@ -53,18 +52,7 @@ export function InvoiceFilters({ status, perPage }: { status: string; perPage: s
           ))}
         </SelectContent>
       </Select>
-      <Select value={perPage} onValueChange={(value) => set('perPage', value === '50' ? '' : value)}>
-        <SelectTrigger className="w-32" aria-label="Rows per page">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {PER_PAGE_OPTIONS.map((option) => (
-            <SelectItem key={option} value={option}>
-              {option === 'ALL' ? 'All rows' : `${option} rows`}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <RowsPerPage value={perPage} defaultValue={50} />
     </div>
   )
 }

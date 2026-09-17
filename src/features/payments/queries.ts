@@ -270,20 +270,21 @@ export async function listInvoices(params: {
   range: { from: Date; to: Date }
   status?: InvoiceStatusFilter
   page?: number
-  perPage?: number | 'ALL'
+  /** Rows per page, clamped to [1, 5000] (aO.md §6). */
+  perPage?: number
 }): Promise<{
   invoices: InvoiceListRow[]
   total: number
   page: number
-  perPage: number | 'ALL'
+  perPage: number
   pageCount: number
   totals: InvoiceListTotals
 }> {
   const page = Math.max(1, params.page ?? 1)
-  const all = params.perPage === 'ALL'
-  const perPage = all
-    ? INVOICE_LIST_MAX_ROWS
-    : Math.min(INVOICE_LIST_MAX_ROWS, Math.max(10, typeof params.perPage === 'number' ? params.perPage : 50))
+  const perPage = Math.min(
+    INVOICE_LIST_MAX_ROWS,
+    Math.max(1, typeof params.perPage === 'number' ? Math.trunc(params.perPage) : 50),
+  )
   const statuses = params.status && params.status !== 'ALL' ? INVOICE_STATUS_MAP[params.status] : null
 
   // One predicate, written once for the order side and once for the invoice
@@ -334,8 +335,8 @@ export async function listInvoices(params: {
     invoices: rows,
     total,
     page,
-    perPage: all ? 'ALL' : perPage,
-    pageCount: all ? 1 : Math.max(1, Math.ceil(total / perPage)),
+    perPage,
+    pageCount: Math.max(1, Math.ceil(total / perPage)),
     totals: { count: total, amount, collected, outstanding: Math.max(0, amount - collected) },
   }
 }

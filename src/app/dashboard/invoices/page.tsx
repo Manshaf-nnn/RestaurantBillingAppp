@@ -9,7 +9,7 @@ import { NoteButton } from '@/features/accounting/components/note-button'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { InvoiceFilters } from '@/features/payments/components/invoice-filters'
-import { listInvoices, type InvoiceStatusFilter } from '@/features/payments/queries'
+import { INVOICE_LIST_MAX_ROWS, listInvoices, type InvoiceStatusFilter } from '@/features/payments/queries'
 import { ReportFilters } from '@/features/reports/components/report-filters'
 import { resolveRange, type RangePreset } from '@/features/reports/range'
 import { listSwitchableLocations } from '@/features/transfers/queries'
@@ -24,11 +24,15 @@ export const metadata: Metadata = { title: 'Invoices' }
 
 const STATUSES: InvoiceStatusFilter[] = ['ALL', 'OUTSTANDING', 'SETTLED', 'REFUNDED', 'FAILED']
 
-/** 50 / 100 / All from the screen; anything else is the default (abc.md §2). */
-function readPerPage(raw: string | string[] | undefined): 50 | 100 | 'ALL' {
-  if (raw === '100') return 100
-  if (raw === 'ALL') return 'ALL'
-  return 50
+/**
+ * Rows per page, as the reader asked for it (aO.md §6). Any whole number
+ * from one up, clamped to the list's ceiling; anything else — including the
+ * old 'ALL' a bookmark may still carry — is fifty.
+ */
+function readPerPage(raw: string | string[] | undefined): number {
+  const parsed = Number(typeof raw === 'string' ? raw : NaN)
+  if (!Number.isFinite(parsed) || parsed < 1) return 50
+  return Math.min(INVOICE_LIST_MAX_ROWS, Math.trunc(parsed))
 }
 
 /**
@@ -126,7 +130,7 @@ export default async function InvoicesPage({
         locations={locations.map((l) => ({ id: l.id, name: l.name }))}
         branchId={branchId ?? ''}
       />
-      <InvoiceFilters status={status} perPage={perPage === 'ALL' ? 'ALL' : String(perPage)} />
+      <InvoiceFilters status={status} perPage={perPage} />
 
       {/* abc.md §2: the whole filtered set's money, whichever page is showing. */}
       <dl
