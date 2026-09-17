@@ -97,7 +97,7 @@ export function MakeItemForm({
     return `${formatMoney(0, currency, locale).replace(/[\d.,\s]/g, '')}${major.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
   }
 
-  /* ── Which prepared item ──────────────────────────────────────────────── */
+  /* ── Which item is being made ─────────────────────────────────────────── */
 
   /*
    * Everything in stock, not only what has been made before (aO.md §5:
@@ -120,7 +120,7 @@ export function MakeItemForm({
       const prepared = items.filter((item) => item.isPrepared)
       const rest = items.filter((item) => !item.isPrepared)
       return [
-        { value: NEW_ITEM, label: 'New prepared item…', hint: 'Give it a name below' },
+        { value: NEW_ITEM, label: 'New item…', hint: 'Give it a name below' },
         ...prepared.map((item) => ({
           value: item.id,
           label: item.name,
@@ -348,7 +348,7 @@ export function MakeItemForm({
               ) : null}
             </CardTitle>
             <CardDescription>
-              Pick a prepared item to make it again, or name a new one. Create writes the item and its recipe and starts the batch — nothing leaves stock until you say how much you made.
+              Pick anything you stock to make it again, or name something new. Create writes the item and its recipe and starts the batch — nothing leaves stock until you say how much you made.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -359,14 +359,14 @@ export function MakeItemForm({
             ) : null}
 
             <label className="block text-sm">
-              <span className="mb-1 block text-muted-foreground">Prepared item</span>
+              <span className="mb-1 block text-muted-foreground">Make an item</span>
               <ItemPicker
                 options={preparedOptions}
                 value={choice}
                 onChange={choose}
-                placeholder="Choose a prepared item, or create a new one…"
-                searchPlaceholder="Search prepared items…"
-                emptyMessage="Nothing prepared matches — choose “New prepared item…” to create it."
+                placeholder="Choose any item from stock, or name a new one…"
+                searchPlaceholder="Search all stock items…"
+                emptyMessage="Nothing in stock matches — choose “New item…” to create it."
               />
               {matched && !nameIsRaw ? (
                 <span className="mt-1 block text-xs text-muted-foreground">
@@ -379,7 +379,7 @@ export function MakeItemForm({
 
             {choice === NEW_ITEM ? (
               <label className="block text-sm">
-                <span className="mb-1 block text-muted-foreground">Name the new prepared item</span>
+                <span className="mb-1 block text-muted-foreground">Name the new item</span>
                 <Input
                   autoFocus
                   value={newName}

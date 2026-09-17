@@ -406,6 +406,9 @@ async function main() {
     check('the item picker lists every stock item', !/items\s*\n?\s*\.filter\(\(item\) => item\.isPrepared\)\s*\n?\s*\.map/.test(form))
     check('with the ones made before first', form.includes('items.filter((item) => item.isPrepared)') && form.includes('items.filter((item) => !item.isPrepared)'))
     check('and a search box over them', form.includes('searchPlaceholder'))
+    // aO.md §5 — the field asks what is being made and says where the list
+    // comes from, so nobody reads it as "things production has made before".
+    check('the field is Make an item, over stock', form.includes('>Make an item</span>') && form.includes('Choose any item from stock') && form.includes('Search all stock items'))
   }
 }
 

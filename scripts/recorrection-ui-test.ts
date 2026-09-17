@@ -327,8 +327,11 @@ async function main() {
       check('no "Make it now"', (await ownerPage.getByRole('button', { name: 'Make it now' }).count()) === 0)
       check('no location select on the form', (await ownerPage.getByText('Made at').count()) === 0)
 
-      await ownerPage.getByRole('combobox').filter({ hasText: 'Choose a prepared item' }).click()
-      await ownerPage.getByRole('option', { name: /New prepared item/ }).click()
+      // DELIBERATE wording change 2026-09 (aO.md §5): the field asks what you
+      // are making and offers the whole of stock, not only what production
+      // has made before.
+      await ownerPage.getByRole('combobox').filter({ hasText: 'Choose any item from stock' }).click()
+      await ownerPage.getByRole('option', { name: /New item/ }).click()
       await ownerPage.getByPlaceholder('Mayonnaise, curry paste, dough…').fill(mayo)
       await ownerPage.getByLabel('Output — how much you are making').fill('900')
       // The label wraps the select, so its text is "Unit" plus every option's; scope by the label instead.
