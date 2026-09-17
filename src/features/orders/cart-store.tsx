@@ -38,8 +38,6 @@ export interface TableSession {
   tableId: string
   tableNumber: string
   label: string | null
-  /** A booking whose window covers now (abc.md §3), so the guest can check it is theirs. */
-  reservedFor?: { name: string; at: string } | null
   /**
    * The branch this table is at, carried from the QR through to the order.
    *
@@ -52,12 +50,6 @@ export interface TableSession {
    */
   branchCode?: string
   branchName?: string
-  /** Set when the table already has an unsettled bill the guest is joining. */
-  openBill?: {
-    orders: number
-    itemCount: number
-    outstanding: number
-  } | null
 }
 
 interface CartState {

@@ -168,8 +168,12 @@ async function main() {
     const burgers = await line(a.id, 'Burger')
     // A staff order is accepted by being typed in (aO.md §1); the ticket that
     // nobody has taken on is a guest's, waiting at the till.
+    // Its own table: a QR guest cannot start an order at a table in use (aO.md §2).
+    const spare = await prisma.restaurantTable.create({
+      data: { restaurantId: restaurant.id, branchId: branch.id, number: '2', capacity: 2 },
+    })
     const waiting = await placeOrder({
-      restaurantId: restaurant.id, branchId: branch.id, tableId: table.id, type: 'DINE_IN', channel: 'QR',
+      restaurantId: restaurant.id, branchId: branch.id, tableId: spare.id, type: 'DINE_IN', channel: 'QR',
       items: [{ foodId: rice.id, quantity: 1, optionIds: [] }],
       customerName: 'Scanner', customerPhone: '0770000001',
     })

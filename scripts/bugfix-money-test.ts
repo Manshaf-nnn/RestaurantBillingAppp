@@ -324,11 +324,19 @@ async function main() {
 
   console.log('\n── M11 + D4. A split is the same sitting; two first orders open one sitting ──')
   {
+    /*
+     * DELIBERATE behaviour change 2026-09 (aO.md §2). Two strangers scanning
+     * one table at once no longer both get an order — the second is told the
+     * table is in use. The race this pins (two first orders opening ONE
+     * sitting, never two) is run with till orders, which may always seat a
+     * table; the QR refusal is pinned right after.
+     */
     const [one, two] = await Promise.all([
-      order({ type: 'DINE_IN', channel: 'QR', tableId: S.table.id }),
-      order({ type: 'DINE_IN', channel: 'QR', tableId: S.table.id, items: [{ foodId: S.b.id, quantity: 2, optionIds: [] }] }),
+      order({ type: 'DINE_IN', channel: 'STAFF', tableId: S.table.id }),
+      order({ type: 'DINE_IN', channel: 'STAFF', tableId: S.table.id, items: [{ foodId: S.b.id, quantity: 2, optionIds: [] }] }),
     ])
-    check('two guests scanning one table at once share ONE sitting', one.tableSessionId !== null && one.tableSessionId === two.tableSessionId)
+    check('two first orders at one table at once share ONE sitting', one.tableSessionId !== null && one.tableSessionId === two.tableSessionId)
+    await refuses('a QR guest scanning the now-occupied table is refused', () => order({ type: 'DINE_IN', channel: 'QR', tableId: S.table.id, guestSessionId: `stranger-${stamp}` }), /currently in use/)
     check('…and the table has exactly one open sitting', (await prisma.tableSession.count({ where: { tableId: S.table.id, status: 'OPEN' } })) === 1)
 
     const rice = two.items[0]

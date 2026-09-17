@@ -18,7 +18,7 @@ import { customRange } from '../src/features/reports/range'
 import { prisma } from '../src/server/db/prisma'
 import { getManagedMenu, getPublicMenu } from '../src/features/menu/queries'
 import { applyBranchOverrides, replaceFoodBranches } from '../src/features/menu/branch-menu'
-import { placeOrder } from '../src/features/orders/service'
+import { cancelOrder, placeOrder } from '../src/features/orders/service'
 import { acceptGuestOrder } from '../src/features/cashier/service'
 import { resolvePublicBranch } from '../src/features/branches/public-branch'
 import { getSalesReport } from '../src/features/reports/sales'
@@ -749,6 +749,10 @@ async function main() {
     !wrongPoster.ok && !/Main Branch/.test(wrongPoster.error) && !/Branch 01/.test(wrongPoster.error),
     !wrongPoster.ok ? wrongPoster.error : '',
   )
+
+  // aO.md §2: Branch 01's table 1 is still the first guest's until their order
+  // closes — another QR scan there would be told it is in use. Close it first.
+  await cancelOrder({ restaurantId: restaurant.id, orderId: order.id, reason: 'Fixture — freeing the table' })
 
   console.log('\n── 21. the ticket reaches the branch that was scanned ──')
 

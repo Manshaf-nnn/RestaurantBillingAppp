@@ -54,6 +54,7 @@ export default async function TrackOrderPage({
           status: order.status,
           tableId: order.tableId,
           branchCode: order.branch?.code ?? null,
+          slug: restaurant.slug,
           tableNumber: order.tableNumber ?? order.table?.number ?? null,
           customerName: order.customerName,
           grandTotal: order.grandTotal,

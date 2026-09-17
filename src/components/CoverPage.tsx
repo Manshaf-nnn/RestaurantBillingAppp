@@ -83,6 +83,10 @@ export default function CoverPage(props: Props) {
   const [theme, setTheme] = useState({ r: 249, g: 115, b: 22 })
   const [tableNumber, setTableNumber] = useState(props.initialTable ?? '')
   const [error, setError] = useState<string | null>(null)
+  /** The table cannot be ordered at right now (aO.md §2); what the server said. */
+  const [unavailable, setUnavailable] = useState<{ tableNumber: string; reason: string } | null>(null)
+  /** This guest already has an order at the table: take them to it. */
+  const [ownOrder, setOwnOrder] = useState<{ tableNumber: string; id: string; orderNumber: string; editable: boolean } | null>(null)
   const [pending, setPending] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [focused, setFocused] = useState(false)
@@ -100,36 +104,46 @@ export default function CoverPage(props: Props) {
 
   const rgb = rgbToCss(theme.r, theme.g, theme.b)
 
+  const menuHref = props.slug && props.branchCode ? guestPath(props.slug, props.branchCode, 'menu') : '/order/menu'
+
   const submit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     setError(null)
+    setUnavailable(null)
+    setOwnOrder(null)
     const trimmed = tableNumber.trim()
     if (!trimmed) { setError('Enter the number printed on your table'); return }
     try {
       setPending(true)
       const result = await resolveTable({ tableNumber: trimmed }, undefined, props.branchCode)
       if (!result.ok) { setError(result.error); setPending(false); return }
-      setTable(result.data)
-      // Say so up front if the table is mid-service. Finding out only at the
-      // bill that it includes an earlier round is how arguments start.
-      if (result.data.openBill) {
-        toast.info(`Table ${result.data.tableNumber} already has an open bill`, {
-          description: 'Anything you order will be added to it.',
-        })
-      } else {
-        toast.success(`Table ${result.data.tableNumber} — welcome!`)
+      const { state, reason, ownOrder: mine, ...session } = result.data
+      /*
+       * The server decides whether this table can be ordered at (aO.md §2).
+       * In use or reserved: say so plainly and go no further — never
+       * "your order will be added to the bill". The party already sitting
+       * there is taken to their own order instead.
+       */
+      if (mine) {
+        setTable(session)
+        setOwnOrder({ tableNumber: session.tableNumber, ...mine })
+        setPending(false)
+        return
       }
+      if (state !== 'AVAILABLE') {
+        setUnavailable({ tableNumber: session.tableNumber, reason: reason ?? `Table ${session.tableNumber} is currently unavailable` })
+        setPending(false)
+        return
+      }
+      setTable(session)
+      toast.success(`Table ${session.tableNumber} — welcome!`)
       /*
        * Carry the branch. This was a bare `/order/menu`, which is where the
        * branch was lost: from here on it lived only in the `ros_b` cookie, and
        * a guest correctly seated at Branch 02 browsed Main's menu at Main's
        * prices whenever that cookie was stale, blocked or absent.
        */
-      router.push(
-        props.slug && props.branchCode
-          ? guestPath(props.slug, props.branchCode, 'menu')
-          : '/order/menu',
-      )
+      router.push(menuHref)
     } catch { setError('Something went wrong') }
     finally { setPending(false) }
   }
@@ -319,6 +333,36 @@ export default function CoverPage(props: Props) {
                   </Alert>
                 </div>
               )}
+
+              {unavailable ? (
+                <div className="guest-surface mt-2.5 rounded-xl border px-3 py-2.5 text-center" role="status" data-testid="table-unavailable">
+                  <p className="guest-ink text-sm font-semibold">Table {unavailable.tableNumber} is currently unavailable</p>
+                  <p className="guest-ink-muted mt-0.5 text-[11px]">{unavailable.reason}. Please ask our staff for a table.</p>
+                </div>
+              ) : null}
+
+              {ownOrder ? (
+                <div className="guest-surface mt-2.5 rounded-xl border px-3 py-2.5 text-center" role="status" data-testid="table-own-order">
+                  <p className="guest-ink text-sm font-semibold">You already have an order at table {ownOrder.tableNumber}</p>
+                  <p className="guest-ink-muted mt-0.5 text-[11px]">Order {ownOrder.orderNumber}</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/order/track/${ownOrder.id}`)}
+                      className="rounded-lg border border-amber-500/60 bg-amber-500/10 py-2 text-xs font-bold text-amber-500"
+                    >
+                      View your order
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(ownOrder.editable ? `${menuHref}?add=${ownOrder.id}` : menuHref)}
+                      className="rounded-lg bg-gradient-to-r from-orange-500 to-amber-500 py-2 text-xs font-bold text-white"
+                    >
+                      {ownOrder.editable ? 'Add more items' : 'Order more'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <button
                 type="submit"

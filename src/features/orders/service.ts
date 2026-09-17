@@ -24,6 +24,7 @@ import { isGuestChannel } from './channels'
 import { freeTable, otherOpenOrders, type FreedTable } from '@/features/floor/service'
 import { normalizeTableStatus } from '@/features/floor/table-state'
 import { seatReservation } from '@/features/floor/reservations'
+import { tableAvailability } from './table-availability'
 import { utc } from '@/server/db/sql-time'
 import { applyProgress, type ProgressUpdate } from './progress'
 import { emitOutbox } from '@/server/realtime/outbox'
@@ -542,6 +543,37 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
           where: { id: params.tableId, restaurantId: params.restaurantId, isActive: true },
         })
         if (!table) throw new NotFoundError('Table')
+
+        /*
+         * A guest may only order at a table that is theirs to order at
+         * (aO.md §2) — decided here, under the same transaction that seats
+         * it, by the one reader the cover screen also uses. A table with a
+         * stranger's open order or sitting is in use; a booking in its window
+         * is reserved until the host seats it. The party already at the table
+         * (their session owns an open order in the sitting) may order again.
+         * The till is never refused: staff seat tables.
+         */
+        if (isGuestChannel(params.channel ?? 'STAFF')) {
+          const availability = await tableAvailability(tx, {
+            restaurantId: params.restaurantId,
+            tableId: table.id,
+            guestSessionId: params.guestSessionId ?? null,
+          })
+          if (availability?.state === 'RESERVED') {
+            throw new AppError(
+              `Table ${table.number} is reserved — please ask our staff for a table`,
+              409,
+              'TABLE_RESERVED',
+            )
+          }
+          if (availability?.state === 'OCCUPIED' && !availability.ownOrder) {
+            throw new AppError(
+              `Table ${table.number} is currently in use — please ask our staff for a table`,
+              409,
+              'TABLE_OCCUPIED',
+            )
+          }
+        }
       }
 
       // Customers are keyed by phone within a restaurant — and only exist
@@ -1570,6 +1602,26 @@ export async function updateOrderStatus(params: {
 
   await broadcastOrder(order.id, 'status')
   await notifyStatusChange(updated, order.table?.number ?? null)
+
+  /*
+   * Served and paid: the sitting is over (aO.md §2).
+   *
+   * A bill settled before the food came — pay-first counters, a card tapped
+   * while the kitchen was still cooking — left the order SERVED and PAID for
+   * ever, and the table with it. Completion follows the last of the two by
+   * itself; COMPLETED is what frees the table, through the one writer, so
+   * nobody has to set a status by hand.
+   */
+  if (params.status === 'SERVED' && updated.paymentStatus === 'PAID') {
+    return updateOrderStatus({
+      restaurantId: params.restaurantId,
+      orderId: params.orderId,
+      status: 'COMPLETED',
+      note: 'Paid and served — closed',
+      actorId: params.actorId ?? null,
+      actorName: params.actorName ?? null,
+    })
+  }
   // Keep cashier page in sync when order statuses change (kitchen updates)
   try {
     // Revalidate cashier so staff see status changes for takeaway orders

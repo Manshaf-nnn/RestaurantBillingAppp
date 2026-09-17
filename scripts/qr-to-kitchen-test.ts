@@ -261,6 +261,7 @@ async function main() {
     seated.ok && seated.data.tableId === b01Table3.id,
     seated.ok ? seated.data.tableId : seated.error,
   )
+  check('and an empty table reads Empty to the guest (aO.md §2)', seated.ok && seated.data.state === 'AVAILABLE' && seated.data.reason === null)
 
   // The same number at Main resolves to Main's own row, not Branch 02's.
   const atMain = await resolveTable({ tableNumber: '1' }, restaurant.slug, 'QMAIN')
@@ -367,6 +368,16 @@ async function main() {
     'pasting Main’s table id with Branch 02’s code is refused',
     mismatchRefused,
     'a hand-edited request reached another branch',
+  )
+
+  // aO.md §2: once an order is open on the table, another guest scanning it is
+  // told it is in use — through the same action the cover screen calls — and
+  // never that their order will be added to somebody's bill.
+  const busy = await resolveTable({ tableNumber: '3' }, restaurant.slug, 'QB02')
+  check(
+    'a table with an open order reads in use to the next guest',
+    busy.ok && busy.data.state === 'OCCUPIED' && /in use/i.test(busy.data.reason ?? '') && busy.data.ownOrder === null,
+    busy.ok ? JSON.stringify({ state: busy.data.state, reason: busy.data.reason }) : busy.error,
   )
 
   console.log('\n── 5. whose kitchen display shows it ──')

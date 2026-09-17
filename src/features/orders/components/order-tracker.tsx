@@ -33,6 +33,7 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { createServiceRequest, updateGuestOrderItems } from '../actions'
+import { guestPath } from '../guest-path'
 import { callAction } from '@/lib/use-action'
 
 /** What the guest is told when their order reaches each stage. */
@@ -60,6 +61,8 @@ export interface TrackedOrder {
   tableId: string | null
   /** The branch's public code, checked server-side when calling a waiter. */
   branchCode: string | null
+  /** The restaurant's slug, so every link from here keeps the branch. */
+  slug: string
   tableNumber: string | null
   customerName: string
   grandTotal: number
@@ -97,6 +100,8 @@ export function OrderTracker({
   restaurantName: string
 }) {
   const router = useRouter()
+  // Every link out of here keeps the branch (a bare /order/menu lost it).
+  const menuHref = initial.branchCode ? guestPath(initial.slug, initial.branchCode, 'menu') : '/order/menu'
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
   const [cancelReason, setCancelReason] = React.useState<string | null>(initial.cancelReason)
   React.useEffect(() => setCancelReason(initial.cancelReason), [initial.cancelReason])
@@ -244,7 +249,7 @@ export function OrderTracker({
       <AutoRefresh intervalMs={3000} scope={`order:${initial.id}`} />
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back to menu">
-          <Link href="/order/menu">
+          <Link href={menuHref}>
             <ArrowLeft />
           </Link>
         </Button>
@@ -277,7 +282,7 @@ export function OrderTracker({
                 <p className="text-sm text-muted-foreground">{cancelReason}</p>
               ) : null}
               <Button asChild variant="outline">
-                <Link href="/order/menu">Back to the menu</Link>
+                <Link href={menuHref}>Back to the menu</Link>
               </Button>
             </motion.section>
           ) : (
@@ -424,7 +429,7 @@ export function OrderTracker({
             </Link>
           </Button>
           <Button variant="outline" asChild>
-            <Link href="/order/menu">
+            <Link href={menuHref}>
               <UtensilsCrossed /> Order more
             </Link>
           </Button>

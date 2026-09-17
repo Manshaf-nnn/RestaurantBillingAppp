@@ -68,11 +68,15 @@ async function main() {
     where: { restaurantId: shop.id, deletedAt: null, isAvailable: true },
     take: 3,
   })
-  const table = await prisma.restaurantTable.findFirstOrThrow({ where: { restaurantId: shop.id } })
 
   console.log('\n── 1. Branches ──────────────────────────────────────────')
   const branch = await ensureDefaultBranch(shop.id)
   ok('default branch created', Boolean(branch.id) && branch.isDefault)
+  // aO.md §2: a QR guest may only order at a free table, so this run seats its
+  // own table rather than whichever one the seeded shop happened to have first.
+  const table = await prisma.restaurantTable.create({
+    data: { restaurantId: shop.id, branchId: branch.id, number: `P1-${Date.now().toString(36)}`, capacity: 2 },
+  })
   const again = await ensureDefaultBranch(shop.id)
   ok('ensureDefaultBranch is idempotent', again.id === branch.id)
 
@@ -341,6 +345,8 @@ async function main() {
   await prisma.orderItem.deleteMany({ where: { orderId: { in: created.orders } } })
   await prisma.orderEvent.deleteMany({ where: { orderId: { in: created.orders } } })
   await prisma.order.deleteMany({ where: { id: { in: created.orders } } })
+  await prisma.tableSession.deleteMany({ where: { tableId: table.id } })
+  await prisma.restaurantTable.delete({ where: { id: table.id } }).catch(() => {})
   await prisma.cashDrawerSession.deleteMany({ where: { id: { in: created.drawers } } })
 
   console.log(`\n═══ ${pass} passed, ${fail} failed ═══\n`)

@@ -14,9 +14,9 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
-import { getOrCreateGuestSessionId } from '@/server/auth/session'
+import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
-import { tableStatesFor } from '@/features/floor/table-state-server'
+import { tableAvailability } from './table-availability'
 import {
   acknowledgeServiceRequest as acknowledgeServiceRequestRecord,
   openServiceRequest,
@@ -91,9 +91,12 @@ export async function resolveTable(
      */
     branchCode: string
     branchName: string
-    openBill: { orders: number; itemCount: number; outstanding: number } | null
-    /** A booking whose window covers now, so the guest can check it is theirs. */
-    reservedFor: { name: string; at: string } | null
+    /** Empty, in use, or reserved — decided on the server (aO.md §2). */
+    state: 'AVAILABLE' | 'OCCUPIED' | 'RESERVED'
+    /** What to tell the guest when they cannot order here. */
+    reason: string | null
+    /** This guest's own open order at the table, if any. */
+    ownOrder: { id: string; orderNumber: string; status: string; editable: boolean } | null
   }>
 > {
   return runAction(tableEntrySchema, input, async (data) => {
@@ -135,41 +138,22 @@ export async function resolveTable(
         'TABLE_NOT_FOUND',
       )
     }
-    // Out of service is `isActive`, already in the query above (abc.md §3).
-    // A booking in its window is told to the guest rather than refused: the
-    // party sitting down is, in the ordinary case, the party that booked.
-    const held = (await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [table.id] })).get(table.id)
-    const reservedFor = held?.reservation
-      ? { name: held.reservation.customerName, at: held.reservation.reservedAt.toISOString() }
-      : null
-
-    // A table can already be mid-service: an earlier round from the same party,
-    // or a previous group whose bill has not been settled. Either way the guest
-    // should be told, because their order joins that bill rather than starting a
-    // fresh one — and the total they eventually see will include it.
-    const openOrders = await prisma.order.findMany({
-      where: {
-        restaurantId: restaurant.id,
-        tableId: table.id,
-        status: { notIn: ['COMPLETED', 'CANCELLED'] },
-        paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
-      },
-      select: { grandTotal: true, tipAmount: true, paidTotal: true, items: { select: { quantity: true } } },
+    /*
+     * The LIVE state, decided on the server (aO.md §2): in use, reserved, or
+     * free — and whether this guest's own session already has an order here,
+     * so the screen can take them to it instead of turning them away. The
+     * same reader `placeOrder` refuses with, so the two cannot disagree.
+     * Out of service is `isActive`, already in the query above.
+     */
+    // Read only — never minted here — and absent outside a request (a script
+    // calling this action directly has no cookie jar to read).
+    const guestSessionId = await getGuestSessionId().catch(() => null)
+    const availability = await tableAvailability(prisma, {
+      restaurantId: restaurant.id,
+      tableId: table.id,
+      guestSessionId,
+      timeZone: restaurant.timezone,
     })
-
-    const openBill = openOrders.length
-      ? {
-          orders: openOrders.length,
-          itemCount: openOrders.reduce(
-            (sum, order) => sum + order.items.reduce((n, item) => n + item.quantity, 0),
-            0,
-          ),
-          outstanding: openOrders.reduce(
-            (sum, order) => sum + Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
-            0,
-          ),
-        }
-      : null
 
     return {
       tableId: table.id,
@@ -177,8 +161,9 @@ export async function resolveTable(
       label: table.label,
       branchCode: branch.code,
       branchName: branch.name,
-      openBill,
-      reservedFor,
+      state: availability?.state ?? 'AVAILABLE',
+      reason: availability?.reason ?? null,
+      ownOrder: availability?.ownOrder ?? null,
     }
   })
 }

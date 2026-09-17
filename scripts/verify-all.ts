@@ -193,6 +193,11 @@ const SERVICE = [
   // and counts until the cashier accepts it (one gate in the service), reject
   // is a cancellation with a reason, the cashier is told on placement.
   'cashier-accept-test',
+  // aO.md §2 — a QR guest orders only at a table that is theirs: a stranger's
+  // open order or sitting is "in use", a booking in its window is reserved
+  // until seated, the party at the table may order again; a bill paid before
+  // the food came does not empty the table — being served does, by itself.
+  'table-availability-test',
   // abc.md §7 — a waiter call is one event per table and need (a partial
   // unique index, not a timer), acknowledged then resolved with who and
   // when, waiters and management told at the table's branch, history per site.

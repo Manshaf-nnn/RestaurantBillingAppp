@@ -427,9 +427,14 @@ export async function capturePayment(params: {
         orderId: order.id,
       })
 
-      // Settled in full and nothing else open: the sitting is over and the
-      // table is Empty for the next party (abc.md §3) — through the one writer.
-      if (order.tableId) {
+      /*
+       * Settled in full, the food already out, and nothing else open: the
+       * sitting is over and the table is Empty for the next party (abc.md §3,
+       * aO.md §2) — through the one writer. A bill paid while the food is
+       * still coming does NOT empty the table: the order completes, and frees
+       * it, when it is served (see `updateOrderStatus`).
+       */
+      if (order.tableId && updatedOrder.status === 'COMPLETED') {
         const open = await otherOpenOrders(tx, {
           restaurantId: params.restaurantId, tableId: order.tableId, exceptOrderId: order.id,
         })
