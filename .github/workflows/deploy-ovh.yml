@@ -117,6 +117,13 @@ jobs:
           envs: GHCR_USER,GHCR_TOKEN
           script: |
             set -euo pipefail
+
+            # Whatever fails below, say what the disk looked like when it did.
+            # Five deploys in a row failed in this step on 2026-09-17 and the
+            # only thing the log carried up to GitHub was "exit code 1", which
+            # is not a diagnosis. The trap costs nothing on a good run.
+            trap 'echo "── DEPLOY FAILED. disk: $(df -h / | tail -1)"; docker system df 2>&1 || true' ERR
+
             cd ~/RestaurantBillingAppp
 
             # Disk FIRST. On 2026-09-16 three deploys in a row died at `git
@@ -128,10 +135,19 @@ jobs:
             # re-pulls its tag from GHCR anyway. `|| true`: a prune that finds
             # nothing must not stop the deploy.
             echo "disk before: $(df -h / | tail -1)"
-            docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
+            # No age filter, deliberately. `--filter until=72h` keeps every
+            # image created in the last three days — which is exactly the
+            # images the deploys themselves create, so on a day with several
+            # deploys the cleanup could not reclaim the space the deploys were
+            # consuming, and the box filled up with the tool that was supposed
+            # to stop it running. Docker never removes an image a running
+            # container uses, so the serving version survives this; every
+            # older tag is still in GHCR and a rollback re-pulls it.
+            docker image prune -af >/dev/null 2>&1 || true
             docker container prune -f >/dev/null 2>&1 || true
             docker builder prune -af >/dev/null 2>&1 || true
             echo "disk after:  $(df -h / | tail -1)"
+            docker system df 2>&1 || true
 
             # The compose file and Caddyfile are read from the repo, so a
             # change to either ships with the deploy.
