@@ -198,6 +198,10 @@ const SERVICE = [
   // until seated, the party at the table may order again; a bill paid before
   // the food came does not empty the table — being served does, by itself.
   'table-availability-test',
+  // aO.md §3 — a guest adds NEW dishes from the menu to their existing order:
+  // priced at the order's branch, routed and taken off stock only once the
+  // kitchen has the order, totals re-derived, history kept, own session only.
+  'guest-add-items-test',
   // abc.md §7 — a waiter call is one event per table and need (a partial
   // unique index, not a timer), acknowledged then resolved with who and
   // when, waiters and management told at the table's branch, history per site.

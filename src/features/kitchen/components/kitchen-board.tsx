@@ -244,6 +244,16 @@ export function KitchenBoard({
     if (!isOurs(payload)) return
     if (payload.status === 'PENDING') return
     const onRail = ['ACCEPTED', 'PREPARING', 'READY'].includes(payload.status)
+    // aO.md §3: a guest added dishes to a ticket already here — say so.
+    const before = tickets.find((ticket) => ticket.id === payload.id)
+    const live = (items: Array<{ quantity: number; status: string }>) =>
+      items.filter((item) => item.status !== 'CANCELLED').reduce((sum, item) => sum + item.quantity, 0)
+    if (before && live(payload.items) > live(before.items)) {
+      play('new-order')
+      toast.info(`Order ${payload.orderNumber} · ${live(payload.items) - live(before.items)} more item(s) added`, {
+        description: payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName,
+      })
+    }
     setTickets((current) => {
       if (current.some((ticket) => ticket.id === payload.id)) {
         return current.map((ticket) => (ticket.id === payload.id ? toTicket(payload) : ticket))
@@ -587,9 +597,11 @@ function TicketCard({
 
   // Every ticket on this rail is accepted (aO.md §1), so every line has its box.
   const canTick = true
-  const orderedCount = ticket.items.reduce((sum, item) => sum + item.quantity, 0)
-  const preparedCount = ticket.items.reduce((sum, item) => sum + item.preparedQty, 0)
-  const allPrepared = ticket.items.length > 0 && preparedCount >= orderedCount
+  // A cancelled line is shown, crossed out, and counts for nothing (aO.md §4).
+  const liveItems = ticket.items.filter((item) => item.status !== 'CANCELLED')
+  const orderedCount = liveItems.reduce((sum, item) => sum + item.quantity, 0)
+  const preparedCount = liveItems.reduce((sum, item) => sum + item.preparedQty, 0)
+  const allPrepared = liveItems.length > 0 && preparedCount >= orderedCount
 
   return (
     <motion.article
@@ -657,7 +669,7 @@ function TicketCard({
             onCheckedChange={() =>
               onProgress(
                 ticket,
-                ticket.items
+                liveItems
                   .filter((item) => item.preparedQty < item.quantity)
                   .map((item) => ({ itemId: item.id, preparedQty: item.quantity })),
               )
@@ -674,9 +686,15 @@ function TicketCard({
       <ul className="divide-y">
         {ticket.items.map((item) => {
           const done = item.preparedQty >= item.quantity
+          const cancelled = item.status === 'CANCELLED'
           return (
-          <li key={item.id} className="flex gap-2.5 px-3 py-2.5">
-            {canTick ? (
+          <li
+            key={item.id}
+            className={cn('flex gap-2.5 px-3 py-2.5', cancelled && 'bg-destructive/5')}
+            aria-disabled={cancelled || undefined}
+            data-cancelled={cancelled || undefined}
+          >
+            {canTick && !cancelled ? (
               <Checkbox
                 className="mt-1"
                 checked={done}
@@ -685,16 +703,31 @@ function TicketCard({
                 aria-label={`${item.name} prepared`}
               />
             ) : null}
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-sm font-bold text-primary">
+            <span
+              className={cn(
+                'flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-bold',
+                cancelled ? 'bg-muted text-muted-foreground line-through' : 'bg-primary/10 text-primary',
+              )}
+            >
               {item.quantity}
             </span>
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-sm font-semibold leading-tight">
                 <VegIndicator isVeg={item.isVeg} />
-                <span className={cn('truncate', item.status === 'SERVED' && 'text-muted-foreground line-through')}>
+                <span
+                  className={cn(
+                    'truncate',
+                    (item.status === 'SERVED' || cancelled) && 'text-muted-foreground line-through',
+                  )}
+                >
                   {item.name}
                 </span>
-                {item.status === 'SERVED' ? (
+                {cancelled ? (
+                  // Not silently removed: the kitchen sees it was taken back and does not cook it.
+                  <span className="ml-auto flex shrink-0 items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5 text-[11px] font-bold text-destructive">
+                    Cancelled — do not prepare
+                  </span>
+                ) : item.status === 'SERVED' ? (
                   <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-success">
                     <Check className="size-3" /> Served
                   </span>

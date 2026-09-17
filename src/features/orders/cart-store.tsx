@@ -57,6 +57,12 @@ interface CartState {
   table: TableSession | null
   couponCode: string
   customer: { name: string; phone: string; email: string }
+  /**
+   * "Add to order" mode (aO.md §3): the basket is NEW dishes joining the
+   * order the guest already has, not a new order. Set from the tracker's
+   * "Add more items" and cleared once they are sent or the guest backs out.
+   */
+  addingTo: { orderId: string; orderNumber: string } | null
 }
 
 const EMPTY: CartState = {
@@ -64,6 +70,7 @@ const EMPTY: CartState = {
   table: null,
   couponCode: '',
   customer: { name: '', phone: '', email: '' },
+  addingTo: null,
 }
 
 const STORAGE_PREFIX = 'ros.cart'
@@ -90,6 +97,8 @@ type Action =
   | { type: 'setCoupon'; code: string }
   | { type: 'setCustomer'; customer: Partial<CartState['customer']> }
   | { type: 'clearLines' }
+  | { type: 'startAdding'; order: { orderId: string; orderNumber: string } }
+  | { type: 'stopAdding' }
   | { type: 'reset' }
 
 function reducer(state: CartState, action: Action): CartState {
@@ -161,6 +170,15 @@ function reducer(state: CartState, action: Action): CartState {
     case 'clearLines':
       return { ...state, lines: [], couponCode: '' }
 
+    case 'startAdding':
+      // A basket started for a new order does not silently become an addition.
+      return state.addingTo?.orderId === action.order.orderId
+        ? state
+        : { ...state, lines: [], couponCode: '', addingTo: action.order }
+
+    case 'stopAdding':
+      return state.addingTo ? { ...state, lines: [], addingTo: null } : state
+
     case 'reset':
       return EMPTY
 
@@ -182,6 +200,8 @@ interface CartContextValue {
   setCoupon: (code: string) => void
   setCustomer: (customer: Partial<CartState['customer']>) => void
   clearLines: () => void
+  startAdding: (order: { orderId: string; orderNumber: string }) => void
+  stopAdding: () => void
   reset: () => void
 }
 
@@ -260,6 +280,8 @@ export function CartProvider({
       setCoupon: (code) => dispatch({ type: 'setCoupon', code }),
       setCustomer: (customer) => dispatch({ type: 'setCustomer', customer }),
       clearLines: () => dispatch({ type: 'clearLines' }),
+      startAdding: (order) => dispatch({ type: 'startAdding', order }),
+      stopAdding: () => dispatch({ type: 'stopAdding' }),
       reset: () => dispatch({ type: 'reset' }),
     }
   }, [state, hydrated])

@@ -25,7 +25,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { VegIndicator } from '@/components/ui/status'
 import { formatMoney } from '@/lib/money'
-import { placeGuestOrder, quoteCart } from '../actions'
+import { addGuestOrderItems, placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
 import { pointsEarned, type OrderTotals } from '../pricing'
 import { callAction } from '@/lib/use-action'
@@ -61,8 +61,15 @@ export function CartCheckout({
   branchCode,
 }: Props) {
   const router = useRouter()
-  const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines } =
+  const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines, stopAdding } =
     useCart()
+  /*
+   * "Add to order" mode (aO.md §3): the basket is new dishes joining the
+   * order the guest already has. No name, no coupon, no new order — the
+   * lines are sent through `addGuestOrderItems` and the guest goes back to
+   * their tracker.
+   */
+  const adding = state.addingTo
 
   const [totals, setTotals] = React.useState<OrderTotals | null>(null)
   const [couponInput, setCouponInput] = React.useState(state.couponCode)
@@ -158,6 +165,29 @@ export function CartCheckout({
     }
 
     setPlacing(true)
+    if (adding) {
+      const addition = await callAction(() =>
+        addGuestOrderItems({
+          orderId: adding.orderId,
+          items: state.lines.map((line) => ({
+            foodId: line.foodId,
+            quantity: line.quantity,
+            optionIds: line.options.map((option) => option.optionId),
+            notes: line.notes || '',
+          })),
+        }),
+      )
+      setPlacing(false)
+      if (!addition.ok) {
+        setFormError(addition.error)
+        return
+      }
+      clearLines()
+      stopAdding()
+      toast.success(`Added to order ${addition.data.orderNumber}`)
+      router.push(`/order/track/${addition.data.orderId}`)
+      return
+    }
     const result = await callAction(() => placeGuestOrder({
       idempotencyKey: idempotencyKey.current,
       tableId: table.tableId,
@@ -221,7 +251,7 @@ export function CartCheckout({
             description="Add something from the menu and it will show up here."
             action={
               <Button asChild size="lg">
-                <Link href="/order/menu">
+                <Link href={guestPath(slug, branchCode, 'menu')}>
                   <UtensilsCrossed /> Browse the menu
                 </Link>
               </Button>
@@ -241,7 +271,16 @@ export function CartCheckout({
 
   return (
     <div className="flex min-h-dvh flex-col pb-40">
-      <Header title="Your order" subtitle={state.table ? `Table ${state.table.tableNumber}` : undefined} />
+      <Header
+        title={adding ? 'Add to your order' : 'Your order'}
+        subtitle={
+          adding
+            ? `Adding to order ${adding.orderNumber}${state.table ? ` · Table ${state.table.tableNumber}` : ''}`
+            : state.table
+              ? `Table ${state.table.tableNumber}`
+              : undefined
+        }
+      />
 
       <div className="space-y-5 p-4">
         {/* ── items ─────────────────────────────────────────────── */}
@@ -317,14 +356,15 @@ export function CartCheckout({
           ))}
 
           <Link
-            href="/order/menu"
+            href={guestPath(slug, branchCode, 'menu')}
             className="flex items-center justify-center gap-2 p-3 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
           >
             <Plus className="size-4" /> Add more items
           </Link>
         </section>
 
-        {/* ── coupon ────────────────────────────────────────────── */}
+        {/* ── coupon (a new order only) ─────────────────────────── */}
+        {adding ? null : (
         <section className="surface p-4">
           <div className="mb-2 flex items-center gap-2">
             <Ticket className="size-4 text-primary" />
@@ -351,8 +391,10 @@ export function CartCheckout({
             </p>
           ) : null}
         </section>
+        )}
 
-        {/* ── guest details ─────────────────────────────────────── */}
+        {/* ── guest details (a new order only) ───────────────────── */}
+        {adding ? null : (
         <section className="surface space-y-4 p-4">
           <h2 className="text-sm font-semibold">Your details</h2>
 
@@ -393,6 +435,7 @@ export function CartCheckout({
             />
           </Field>
         </section>
+        )}
 
         {/* ── bill ──────────────────────────────────────────────── */}
         <section className="surface space-y-2 p-4 text-sm">
@@ -426,7 +469,7 @@ export function CartCheckout({
           <Separator className="my-2" />
 
           <div className="flex items-center justify-between text-base font-bold">
-            <span>To pay</span>
+            <span>{adding ? 'Added to your bill' : 'To pay'}</span>
             <span>{formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}</span>
           </div>
 
@@ -452,8 +495,9 @@ export function CartCheckout({
         {formError ? <Alert variant="destructive">{formError}</Alert> : null}
 
         <p className="px-1 text-center text-xs text-muted-foreground">
-          By placing this order you agree that {restaurantName} will prepare it for table{' '}
-          {state.table?.tableNumber}. Payment is collected at the table.
+          {adding
+            ? `These items join order ${adding.orderNumber} at table ${state.table?.tableNumber ?? ''} and are paid with it.`
+            : `By placing this order you agree that ${restaurantName} will prepare it for table ${state.table?.tableNumber ?? ''}. Payment is collected at the table.`}
         </p>
       </div>
 
@@ -467,7 +511,9 @@ export function CartCheckout({
         >
           {placing
             ? 'Sending to the kitchen…'
-            : `Place order · ${formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}`}
+            : adding
+              ? `Add to order ${adding.orderNumber} · ${formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}`
+              : `Place order · ${formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}`}
         </Button>
         {!canSubmit && !placing ? (
           <p className="mt-2 text-center text-xs text-muted-foreground">

@@ -132,8 +132,9 @@ export default async function KitchenPage({
         placedAt: order.placedAt.toISOString(),
         estimatedMinutes: order.estimatedMinutes,
         priority: order.priority as string,
+        // Cancelled lines stay on the ticket, crossed out (aO.md §4): the
+        // kitchen sees what was taken back rather than a dish silently gone.
         items: order.items
-          .filter((item) => item.status !== 'CANCELLED')
           .map((item) => ({
             id: item.id,
             name: item.name,

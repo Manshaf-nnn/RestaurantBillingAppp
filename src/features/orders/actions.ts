@@ -17,6 +17,7 @@ import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenan
 import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
 import { tableAvailability } from './table-availability'
+import { addGuestOrderItems as addGuestOrderItemsService } from './guest-additions'
 import {
   acknowledgeServiceRequest as acknowledgeServiceRequestRecord,
   openServiceRequest,
@@ -34,6 +35,7 @@ import {
   serviceRequestIdSchema,
   staffOrderSchema,
   tableEntrySchema,
+  addGuestOrderItemsSchema,
   updateGuestOrderItemsSchema,
   updateItemStatusSchema,
   updateOrderStatusSchema,
@@ -326,6 +328,9 @@ export async function updateGuestOrderItems(
       if (!restaurant) throw new NotFoundError('Restaurant')
 
       const guestSessionId = await getOrCreateGuestSessionId()
+      // The same ceiling as placing an order: every table shares the venue's IP.
+      await enforceRateLimit('placeOrder', `guest:${guestSessionId}`)
+      await enforceRateLimit('placeOrderBurst')
       const order = await prisma.order.findFirst({
         where: { id: data.orderId, restaurantId: restaurant.id, guestSessionId },
         include: {
@@ -633,6 +638,49 @@ export async function createServiceRequest(
       return { id: request.id }
     },
     'Our staff have been notified.',
+  )
+}
+
+/**
+ * New dishes from the menu join the guest's existing order (aO.md §3).
+ *
+ * The guest's own session is the authorization, the rate limit is the one
+ * placing an order carries, and everything that decides money, routing and
+ * stock lives in `guest-additions.ts`.
+ */
+export async function addGuestOrderItems(
+  input: unknown,
+  slug?: string,
+): Promise<ActionResult<{ orderId: string; orderNumber: string; added: number }>> {
+  return runAction(
+    addGuestOrderItemsSchema,
+    input,
+    async (data) => {
+      const restaurant = await resolvePublicTenant(slug)
+      if (!restaurant) throw new NotFoundError('Restaurant')
+
+      const guestSessionId = await getOrCreateGuestSessionId()
+      await enforceRateLimit('placeOrder', `guest:${guestSessionId}`)
+      await enforceRateLimit('placeOrderBurst')
+
+      const { order, added } = await addGuestOrderItemsService({
+        restaurantId: restaurant.id,
+        orderId: data.orderId,
+        guestSessionId,
+        items: data.items.map((item) => ({
+          foodId: item.foodId,
+          quantity: item.quantity,
+          optionIds: item.optionIds,
+          notes: item.notes || undefined,
+        })),
+      })
+
+      revalidatePath(`/order/track/${order.id}`)
+      revalidatePath('/kitchen')
+      revalidatePath('/cashier/pos')
+      return { orderId: order.id, orderNumber: order.orderNumber, added: added.length }
+    },
+    'Added to your order.',
   )
 }
 

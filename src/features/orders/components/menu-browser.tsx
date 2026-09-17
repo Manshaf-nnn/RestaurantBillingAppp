@@ -63,6 +63,7 @@ export function MenuBrowser({
   branchCode,
   branchName = null,
   taxLabel,
+  addingTo = null,
 }: {
   menu: PublicMenu
   restaurantName: string
@@ -82,9 +83,17 @@ export function MenuBrowser({
   branchCode: string
   /** Shown when the restaurant has more than one place to order from. */
   branchName?: string | null
+  /** The guest's own open order these picks join (aO.md §3), from `?add=`. */
+  addingTo?: { orderId: string; orderNumber: string } | null
 }) {
   const router = useRouter()
-  const { state, itemCount, subtotal, hydrated } = useCart()
+  const { state, itemCount, subtotal, hydrated, startAdding, stopAdding } = useCart()
+
+  // Arriving from the tracker's "Add more items": the basket becomes an addition.
+  React.useEffect(() => {
+    if (hydrated && addingTo) startAdding(addingTo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, addingTo?.orderId])
   const [search, setSearch] = React.useState('')
   const [category, setCategory] = React.useState<string>('ALL')
   const [diet, setDiet] = React.useState<DietFilter>('ALL')
@@ -258,7 +267,22 @@ export function MenuBrowser({
       </header>
 
       <main className="flex-1">
-        {liveOrder ? (
+        {state.addingTo ? (
+          <div className="guest-surface mx-4 mt-4 flex items-start gap-3 rounded-2xl border p-3" data-testid="adding-to-order">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-lg">➕</span>
+            <div className="min-w-0 flex-1 text-xs leading-snug">
+              <p className="guest-ink font-semibold">Adding to order {state.addingTo.orderNumber}</p>
+              <p className="guest-ink-muted">Anything you pick joins that order and is paid with it.</p>
+            </div>
+            <button
+              type="button"
+              onClick={stopAdding}
+              className="guest-ink-muted shrink-0 text-xs font-semibold underline-offset-2 hover:underline"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : liveOrder ? (
           <div className="mx-4 mt-4">
             <Button asChild className="w-full justify-center gap-2 rounded-xl">
               <Link href={`/order/track/${liveOrder.id}`}>

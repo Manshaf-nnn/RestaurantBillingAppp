@@ -31,8 +31,9 @@ import {
   summariseProgress,
 } from '../src/features/orders/progress'
 import { cancelOrder, placeOrder, progressItems, updateOrderStatus } from '../src/features/orders/service'
-import { mergeBills, splitBill } from '../src/features/cashier/service'
+import { mergeBills, splitBill, voidOrderItem } from '../src/features/cashier/service'
 import { getLiveBoard } from '../src/features/live/queries'
+import { getKitchenQueue } from '../src/features/orders/queries'
 
 let passed = 0
 let failed = 0
@@ -300,6 +301,25 @@ async function main() {
     const three = await floor()
     check('3 ordered, 3 served → Remaining 0, nothing waiting', three.ordered === 3 && three.ready === 0 && three.served === 3 && three.remaining === 0, JSON.stringify(three))
     check('Remaining = Ordered − Prepared − Served throughout', [one, two, three].every((row) => row.remaining === row.ordered - row.ready - row.served))
+  }
+
+  console.log('\n── 8. A cancelled line stays on the ticket, crossed out (aO.md §4) ──')
+  {
+    const g = await order([{ foodId: burger.id, quantity: 2 }, { foodId: rice.id, quantity: 1 }])
+    const riceLine = await line(g.id, 'Rice')
+    await voidOrderItem({ restaurantId: restaurant.id, orderId: g.id, itemId: riceLine.id, reason: 'Wrong dish', ...actor })
+    const ticket = (await getKitchenQueue(restaurant.id, [branch.id])).find((row) => row.id === g.id)
+    check('the ticket is still on the rail with the line on it, cancelled', ticket?.items.some((item) => item.id === riceLine.id && item.status === 'CANCELLED') === true)
+    await refuses('the kitchen cannot prepare it', () => progress(g.id, [{ itemId: riceLine.id, preparedQty: 1 }]), /ITEM_CANCELLED/)
+    const burgers = await line(g.id, 'Burger')
+    const done = await progress(g.id, [{ itemId: burgers.id, preparedQty: 2 }])
+    check('the live lines alone decide the order: all made → Ready', done.order.status === 'READY')
+    check('the cancellation is in the order’s history', (await prisma.orderEvent.count({ where: { orderId: g.id, note: { contains: 'Voided 1 × Rice' } } })) === 1)
+    const page = readFileSync('src/app/kitchen/page.tsx', 'utf8')
+    check('the kitchen page no longer drops cancelled lines', !page.includes("item.status !== 'CANCELLED'"))
+    const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
+    check('the KDS shows them crossed out, marked, without a box', kds.includes('Cancelled — do not prepare') && kds.includes('canTick && !cancelled'))
+    check('and keeps them out of the counts and Select all', kds.includes("const liveItems = ticket.items.filter((item) => item.status !== 'CANCELLED')") && kds.includes('liveItems\n                  .filter((item) => item.preparedQty < item.quantity)'))
   }
 
   console.log('\n── 7. The action, the event, the boards ──')

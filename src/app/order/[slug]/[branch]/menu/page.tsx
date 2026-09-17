@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 
 import { getPublicMenu } from '@/features/menu/queries'
+import { getOrderForGuest } from '@/features/orders/queries'
 import { orderableBranches, resolvePublicBranch } from '@/features/branches/public-branch'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
@@ -30,16 +31,31 @@ export async function generateMetadata({
  */
 export default async function BranchMenuPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string; branch: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { slug, branch: branchCode } = await params
+  const query = await searchParams
 
   const restaurant = await resolvePublicTenant(slug)
   if (!restaurant) notFound()
 
   const branch = await resolvePublicBranch(restaurant.id, branchCode).catch(() => null)
   if (!branch) notFound()
+
+  /*
+   * `?add=<orderId>` — "add to order" mode (aO.md §3): the guest's own open,
+   * unpaid order, or nothing. The cookie is the authorization, so a pasted
+   * id for somebody else's order resolves to nothing and the menu opens as
+   * a plain menu.
+   */
+  const addTo = typeof query.add === 'string' ? await getOrderForGuest(restaurant.id, query.add) : null
+  const addingTo =
+    addTo && !['SERVED', 'COMPLETED', 'CANCELLED'].includes(addTo.status) && addTo.paymentStatus === 'UNPAID'
+      ? { orderId: addTo.id, orderNumber: addTo.orderNumber }
+      : null
 
   const [menu, orderable] = await Promise.all([
     getPublicMenu(restaurant.id, restaurant.timezone, branch.id),
@@ -57,6 +73,7 @@ export default async function BranchMenuPage({
         taxLabel={restaurant.taxLabel}
         slug={slug}
         branchCode={branch.code}
+        addingTo={addingTo}
         // Named on the menu too — it never was, so a guest browsing the wrong
         // branch's prices had nothing on screen to tell them.
         branchName={orderable.length > 1 ? branch.name : null}

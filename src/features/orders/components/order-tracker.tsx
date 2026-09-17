@@ -429,9 +429,17 @@ export function OrderTracker({
             </Link>
           </Button>
           <Button variant="outline" asChild>
-            <Link href={menuHref}>
-              <UtensilsCrossed /> Order more
-            </Link>
+            {/* aO.md §3: while the order is still theirs to change, new dishes
+                join it; once served or paid, a fresh order is the way. */}
+            {!['SERVED', 'COMPLETED', 'CANCELLED'].includes(status) && initial.paymentStatus === 'UNPAID' ? (
+              <Link href={`${menuHref}?add=${initial.id}`}>
+                <UtensilsCrossed /> Add more items
+              </Link>
+            ) : (
+              <Link href={menuHref}>
+                <UtensilsCrossed /> Order more
+              </Link>
+            )}
           </Button>
         </div>
 

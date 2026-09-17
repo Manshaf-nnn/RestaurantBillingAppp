@@ -136,6 +136,23 @@ export const updateOrderStatusSchema = z.object({
 })
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>
 
+/** New dishes from the menu joining an existing order (aO.md §3). */
+export const addGuestOrderItemsSchema = z.object({
+  orderId: z.string().cuid(),
+  items: z
+    .array(
+      z.object({
+        foodId: z.string().cuid(),
+        quantity: z.coerce.number().int().min(1).max(50),
+        optionIds: z.array(z.string()).default([]),
+        notes: z.string().trim().max(160).optional().or(z.literal('')),
+      }),
+    )
+    .min(1)
+    .max(20),
+})
+export type AddGuestOrderItemsInput = z.infer<typeof addGuestOrderItemsSchema>
+
 export const updateGuestOrderItemsSchema = z.object({
   orderId: z.string().cuid(),
   items: z
