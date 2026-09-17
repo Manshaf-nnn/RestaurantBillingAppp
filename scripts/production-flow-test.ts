@@ -281,6 +281,59 @@ async function main() {
     )
   }
 
+  console.log('\n── 4b. Making something that is already a stock item ──')
+  {
+    /*
+     * aO.md §5: "search/select an existing item from Stock/Inventory". An
+     * item added in Inventory the ordinary way is not flagged prepared, and
+     * the form used to list only prepared ones — so the only way to make
+     * something you already stocked was to invent a second name for it,
+     * which is exactly the duplicate record the spec says not to create.
+     */
+    const bought = await prisma.inventoryItem.create({
+      data: {
+        restaurantId: restaurant.id, name: `Mozzarella ${stamp}`, unit: 'GRAM',
+        branchId: kitchen.id, costPerUnit: 4, isPrepared: false,
+      },
+    })
+    await prisma.$transaction((tx) =>
+      postMovement(tx, {
+        restaurantId: restaurant.id, itemId: bought.id, type: 'PURCHASE', quantity: 500,
+        enteredUnit: 'GRAM', branchId: kitchen.id, locationId: null, userId: cook.id,
+      }),
+    )
+    const itemsBefore = await prisma.inventoryItem.count({ where: { restaurantId: restaurant.id } })
+
+    const batch = await startBatch({
+      restaurantId: restaurant.id, branchId: kitchen.id, userId: cook.id, clientRequestId: key(),
+      plan: {
+        name: bought.name, itemId: bought.id, quantity: 400, unit: 'GRAM',
+        ingredients: [{ itemId: flour.id, quantity: 100, unit: 'GRAM' }],
+      },
+    })
+    check('a bought-in item can be chosen and made', batch.item.id === bought.id && batch.item.isNew === false)
+    const done = await completeBatch({
+      restaurantId: restaurant.id, batchId: batch.id, userId: cook.id, clientRequestId: key(),
+      actualQuantity: 400,
+    })
+    check('the stock it already had is kept, and the batch added to it', (await stockOf(bought.id)) === 900, String(await stockOf(bought.id)))
+    check('no second record was created for it', (await prisma.inventoryItem.count({ where: { restaurantId: restaurant.id } })) === itemsBefore)
+    const after = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: bought.id } })
+    check('and it is a prepared item from now on', after.isPrepared === true)
+    check('its cost is the blend of what was bought and what was made', done.item.costPerUnit > 0)
+
+    // Typing a raw item's NAME is still refused: that is somebody naming a
+    // dish after its main ingredient, not choosing what to make.
+    await refuses(
+      "a typed name that collides with raw stock is still refused",
+      () => startBatch({
+        restaurantId: restaurant.id, branchId: kitchen.id, userId: cook.id, clientRequestId: key(),
+        plan: { name: butter.name, itemId: null, quantity: 1, unit: 'PIECE', ingredients: [{ itemId: flour.id, quantity: 10, unit: 'GRAM' }] },
+      }),
+      /PRODUCTION_NAME_IS_RAW_STOCK|raw stock item/i,
+    )
+  }
+
   console.log('\n── 5. History tells the whole story, in every state ──')
   {
     // One batch left open and one abandoned, so all four states are present.
@@ -347,6 +400,12 @@ async function main() {
 
     const table = readFileSync('src/features/production/components/prepared-items-table.tsx', 'utf8')
     check('the rows link to the item page', table.includes('/dashboard/production/items/${row.id}'))
+
+    // aO.md §5 — the picker offers everything in stock, not only what has
+    // been made before, and searches it.
+    check('the item picker lists every stock item', !/items\s*\n?\s*\.filter\(\(item\) => item\.isPrepared\)\s*\n?\s*\.map/.test(form))
+    check('with the ones made before first', form.includes('items.filter((item) => item.isPrepared)') && form.includes('items.filter((item) => !item.isPrepared)'))
+    check('and a search box over them', form.includes('searchPlaceholder'))
   }
 }
 

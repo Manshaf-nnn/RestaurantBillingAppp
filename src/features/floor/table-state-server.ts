@@ -3,7 +3,9 @@ import 'server-only'
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
-import { RESERVATION_LEAD_MINUTES, tableState, type TableState } from './table-state'
+import {
+  RESERVATION_HOLD_AHEAD_MINUTES, RESERVATION_LEAD_MINUTES, tableState, type TableState,
+} from './table-state'
 
 type Db = PrismaClient | Prisma.TransactionClient
 
@@ -79,6 +81,68 @@ export async function reservationsInWindow(
   return byTable
 }
 
+/**
+ * The bookings HOLDING a table right now (aO.md §2).
+ *
+ * Where `reservationsInWindow` answers "is this booking happening now",
+ * which is the question for seating a party, this answers "is this table
+ * spoken for", which is the question the floor plan and a QR guest ask. A
+ * booking holds its table from the moment it is saved until it ends, so a
+ * host who reserves table 4 sees table 4 go Reserved immediately rather
+ * than fifteen minutes before the guests are due — which read as the
+ * reservation simply not working.
+ *
+ * `RESERVATION_HOLD_AHEAD_MINUTES` bounds how far ahead that starts; null,
+ * the default, means from the moment it is saved.
+ *
+ * SEATED bookings do not hold: the party is at the table, which is OCCUPIED.
+ * COMPLETED / CANCELLED / NO_SHOW never hold.
+ */
+export async function reservationsHolding(
+  db: Db,
+  params: { restaurantId: string; branchId?: string | null; tableIds?: string[]; now?: Date },
+): Promise<Map<string, ReservationInWindow>> {
+  const now = params.now ?? new Date()
+  const ahead = RESERVATION_HOLD_AHEAD_MINUTES
+
+  const rows = await db.reservation.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      status: { in: [...RESERVING_STATUSES] },
+      tableId: params.tableIds ? { in: params.tableIds } : { not: null },
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+      // Anything that could still be running or is yet to start. Six hours is
+      // the longest booking the form allows, so nothing starting before that
+      // can still be going. The exact end is worked out below.
+      reservedAt: {
+        gte: new Date(now.getTime() - 6 * 60 * 60_000),
+        ...(ahead === null ? {} : { lte: new Date(now.getTime() + ahead * 60_000) }),
+      },
+    },
+    select: {
+      id: true, tableId: true, customerName: true, partySize: true,
+      reservedAt: true, durationMinutes: true,
+    },
+    orderBy: { reservedAt: 'asc' },
+  })
+
+  const byTable = new Map<string, ReservationInWindow>()
+  for (const row of rows) {
+    if (!row.tableId || byTable.has(row.tableId)) continue
+    /*
+     * The end is computed, never read from the stored column: a booking ends
+     * at `reservedAt + durationMinutes` by definition, and the two must not
+     * be able to disagree. `reservationsInWindow` above does the same.
+     */
+    const endsAt = new Date(row.reservedAt.getTime() + row.durationMinutes * 60_000)
+    if (endsAt <= now) continue
+    // The soonest booking is the one a screen should name.
+    byTable.set(row.tableId, { id: row.id, tableId: row.tableId, customerName: row.customerName,
+      partySize: row.partySize, reservedAt: row.reservedAt, endsAt })
+  }
+  return byTable
+}
+
 export interface TableStateRow {
   state: TableState
   /** The booking making it Reserved, when that is why. */
@@ -94,6 +158,8 @@ export interface TableStateRow {
  * Occupancy is the stored column, kept true by the order and payment writers
  * (an order seats the table; settling or cancelling the last order frees it),
  * OR an open sitting/order handed in by a caller that already has them.
+ * Reserved is a booking holding the table, or the column when a host held it
+ * by hand.
  */
 export async function tableStatesFor(
   db: Db,
@@ -115,7 +181,9 @@ export async function tableStatesFor(
       },
       select: { id: true, status: true },
     }),
-    reservationsInWindow(db, {
+    // Holding, not merely in window: a booking made for tonight marks its
+    // table now (aO.md §2), which is what a host expects to see.
+    reservationsHolding(db, {
       restaurantId: params.restaurantId,
       branchId: params.branchId,
       tableIds: params.tableIds,

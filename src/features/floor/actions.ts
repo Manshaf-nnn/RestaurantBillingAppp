@@ -516,7 +516,28 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         entityId: record.id,
       })
 
+      /*
+       * A booking holds its table from the moment it is saved (aO.md §2), so
+       * the floor has to hear about it: the tables screen, the waiter board
+       * and the live floor all derive Reserved from the diary, and a host who
+       * books table 4 expects to see table 4 go Reserved, not to wonder
+       * whether it saved.
+       */
+      if (record.tableId) {
+        const table = await prisma.restaurantTable.findUnique({
+          where: { id: record.tableId },
+          select: { number: true, branchId: true, status: true },
+        })
+        realtime.tableUpdated(user.restaurantId, {
+          id: record.tableId,
+          number: table?.number ?? '',
+          status: table?.status ?? 'AVAILABLE',
+          branchId: table?.branchId ?? null,
+        })
+      }
       revalidatePath('/dashboard/reservations')
+      revalidatePath('/dashboard/tables')
+      revalidatePath('/waiter')
       return { id: record.id }
     },
     'Reservation saved.',
@@ -530,7 +551,10 @@ export async function deleteReservation(id: string): Promise<ActionResult<{ id: 
       where: { id, restaurantId: user.restaurantId },
     })
     if (result.count === 0) throw new NotFoundError('Reservation')
+    // Its table is released the moment the booking is gone; say so.
     revalidatePath('/dashboard/reservations')
+    revalidatePath('/dashboard/tables')
+    revalidatePath('/waiter')
     return { id }
   }, 'Reservation removed.')
 }

@@ -462,9 +462,20 @@ function convertOrRefuse(
  * the next attempt finds by name and uses. Two first runs of the same new item
  * at the same moment: one creates, the other's create collides and re-reads.
  *
- * A name that already belongs to a RAW stock item is refused. Adding
- * production output to "Chicken" would blend prepared value into raw stock and
- * make both wrong; the form says so and suggests a different name.
+ * ── A typed name is checked; a picked item is taken at its word ───────────
+ *
+ * Typing a name that already belongs to a stock item is refused: "Chicken"
+ * in the new-item box is almost always somebody naming a dish after its main
+ * ingredient, and blending a prepared batch into raw chicken would make both
+ * costs wrong. The form says so and suggests a different name.
+ *
+ * Choosing that same item from the list is allowed (aO.md §5), because it is
+ * not a slip — it is a cook saying they make this. A restaurant that both
+ * buys and makes mozzarella keeps ONE item for it, and the weighted average
+ * blends the two exactly as it blends two deliveries at different prices;
+ * forcing a second name would be the duplicate record the spec warns about.
+ * The item is flagged prepared by the run that first produces it, and the
+ * stock it already had is kept.
  */
 async function resolvePreparedItem(
   params: Pick<ProduceItemParams, 'restaurantId' | 'branchId'> & {
@@ -478,7 +489,8 @@ async function resolvePreparedItem(
       where: { id: params.output.itemId, restaurantId: params.restaurantId, isActive: true },
     })
     if (!item) throw new NotFoundError('Prepared item')
-    refuseRawName(item)
+    // Picked deliberately from the list — see the note above. `produceItem`
+    // sets `isPrepared` when the run completes.
     return { item, created: false }
   }
 
@@ -922,7 +934,6 @@ export async function makeMore(params: {
     where: { id: params.itemId, restaurantId: params.restaurantId, isActive: true },
   })
   if (!item) throw new NotFoundError('Prepared item')
-  refuseRawName(item)
 
   const recipe = await prisma.recipe.findFirst({
     where: {

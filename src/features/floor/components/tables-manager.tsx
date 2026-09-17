@@ -264,9 +264,12 @@ export function TablesManager({
                     {canManage ? (
                       <div className="mt-3 space-y-2">
                         <Select
-                          // A Reserved card is held by a booking, not set by hand;
-                          // the select shows what a person may choose.
-                          value={table.status === 'RESERVED' ? 'AVAILABLE' : table.status}
+                          // All three states are choosable (aO.md §2). A table
+                          // held by a BOOKING shows Reserved from the booking,
+                          // and `reservedFor` below names who — changing the
+                          // select cannot release that; cancelling the booking
+                          // does.
+                          value={table.status}
                           onValueChange={(value) => changeStatus(table, value as SettableTableState)}
                         >
                           <SelectTrigger className="h-8 text-xs">

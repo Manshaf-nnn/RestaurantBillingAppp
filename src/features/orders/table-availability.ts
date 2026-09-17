@@ -3,7 +3,7 @@ import 'server-only'
 import type { OrderStatus, Prisma, PrismaClient } from '@prisma/client'
 
 import { normalizeTableStatus, type TableState } from '@/features/floor/table-state'
-import { reservationsInWindow } from '@/features/floor/table-state-server'
+import { reservationsHolding } from '@/features/floor/table-state-server'
 
 /**
  * Whether a QR guest may order at a table, decided on the server (aO.md §2).
@@ -18,8 +18,9 @@ import { reservationsInWindow } from '@/features/floor/table-state-server'
  *     The party already sitting there — the guest session that owns one of
  *     those orders — may: their own order is handed back so the screen can
  *     take them to it, and a second round is theirs to place.
- *   - RESERVED: a booking's window covers now and the host has not seated
- *     it. Nobody orders by QR until they do (the till may always seat a table).
+ *   - RESERVED: a booking is holding the table and the host has not seated
+ *     it, or a host held the table by hand. Nobody orders by QR until they
+ *     do (the till may always seat a table).
  *   - AVAILABLE: the guest may order.
  *
  * `reason` is what the guest is shown; it never mentions another party's
@@ -97,23 +98,39 @@ export async function tableAvailability(
   }
 
   const booking = (
-    await reservationsInWindow(db, {
+    await reservationsHolding(db, {
       restaurantId: params.restaurantId,
       tableIds: [table.id],
       now: params.now,
     })
   ).get(table.id)
   if (booking) {
+    const zone = params.timeZone ?? undefined
+    const day = (d: Date) =>
+      new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: zone }).format(d)
     const at = new Intl.DateTimeFormat('en-GB', {
-      hour: 'numeric',
-      minute: '2-digit',
-      ...(params.timeZone ? { timeZone: params.timeZone } : {}),
+      hour: 'numeric', minute: '2-digit', timeZone: zone,
     }).format(booking.reservedAt)
+    // A booking days away needs its date, or "at 7:30" reads as tonight.
+    const when = day(booking.reservedAt) === day(params.now ?? new Date())
+      ? `at ${at}`
+      : `on ${day(booking.reservedAt)} at ${at}`
     return {
       tableId: table.id,
       tableNumber: table.number,
       state: 'RESERVED',
-      reason: `Table ${table.number} is reserved for a booking at ${at}`,
+      reason: `Table ${table.number} is reserved for a booking ${when}`,
+      ownOrder: null,
+    }
+  }
+
+  // Held by hand, with no booking behind it.
+  if (normalizeTableStatus(table.status) === 'RESERVED') {
+    return {
+      tableId: table.id,
+      tableNumber: table.number,
+      state: 'RESERVED',
+      reason: `Table ${table.number} is reserved`,
       ownOrder: null,
     }
   }

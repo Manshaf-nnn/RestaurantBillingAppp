@@ -173,6 +173,43 @@ async function main() {
     const reserved = await availability(t2.id, BOB)
     check('a booking in its window reads Reserved, naming the time', reserved.state === 'RESERVED' && /reserved/i.test(reserved.reason ?? ''), JSON.stringify(reserved))
     await refuses('a QR order on it is refused', () => qrOrder(t2.id, BOB, 'Bob'), /TABLE_RESERVED/)
+
+    /*
+     * aO.md §2 — the booking holds the table the moment it is saved, not
+     * fifteen minutes before the guests are due. A host who books a table
+     * for tonight and sees it still Empty reads that as the reservation not
+     * working, which is what was reported.
+     */
+    const far = await upsertReservation({
+      restaurantId: restaurant.id, id: null,
+      data: {
+        customerName: 'Fernando', customerPhone: '0773333333', customerEmail: null,
+        tableId: t4.id, branchId: branch.id, partySize: 2,
+        reservedAt: new Date(Date.now() + 6 * 60 * MIN), durationMinutes: 90, status: 'CONFIRMED', notes: null,
+      },
+    })
+    const tonight = await availability(t4.id, BOB)
+    check('a booking hours away holds its table already', tonight.state === 'RESERVED', JSON.stringify(tonight))
+    check('and the guest is told when it is booked for', /reserved for a booking/i.test(tonight.reason ?? ''), tonight.reason ?? '')
+    await refuses('so a QR order on it is refused too', () => qrOrder(t4.id, BOB, 'Bob'), /TABLE_RESERVED/)
+
+    // Cancelling releases it: nothing has to be un-set by hand.
+    await upsertReservation({
+      restaurantId: restaurant.id, id: far.id,
+      data: {
+        customerName: 'Fernando', customerPhone: '0773333333', customerEmail: null,
+        tableId: t4.id, branchId: branch.id, partySize: 2,
+        reservedAt: far.reservedAt, durationMinutes: 90, status: 'CANCELLED', notes: null,
+      },
+    })
+    check('cancelling the booking frees the table by itself', (await availability(t4.id, BOB)).state === 'AVAILABLE')
+
+    // A host may also hold a table with no booking behind it (aO.md §2).
+    await prisma.restaurantTable.update({ where: { id: t4.id }, data: { status: 'RESERVED' } })
+    const held = await availability(t4.id, BOB)
+    check('a table held by hand reads Reserved', held.state === 'RESERVED', JSON.stringify(held))
+    await refuses('and refuses a QR order', () => qrOrder(t4.id, BOB, 'Bob'), /TABLE_RESERVED/)
+    await prisma.restaurantTable.update({ where: { id: t4.id }, data: { status: 'AVAILABLE' } })
     await upsertReservation({
       restaurantId: restaurant.id, id: booking.id,
       data: {

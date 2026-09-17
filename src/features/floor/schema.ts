@@ -22,7 +22,7 @@ export const tableSchema = z.object({
   capacity: z.coerce.number().int().min(1, 'At least 1 seat').max(50),
   // Empty or Occupied (abc.md §3). Reserved comes from bookings; out of
   // service is `isActive`, toggled from the card.
-  status: z.enum(['AVAILABLE', 'OCCUPIED']).default('AVAILABLE'),
+  status: z.enum(['AVAILABLE', 'OCCUPIED', 'RESERVED']).default('AVAILABLE'),
   notes: z.string().trim().max(200).optional().or(z.literal('')),
 })
 export type TableInput = z.infer<typeof tableSchema>
@@ -36,21 +36,25 @@ export const bulkTablesSchema = z.object({
 })
 
 /**
- * The two states a person may set (abc.md §3). ORDERING / EATING / WAITING_BILL
- * / CLEANING / OUT_OF_SERVICE are gone from the vocabulary: the first three
- * were "occupied" said three ways, cleaning is not a state the system can
- * know, and out of service is `isActive`. RESERVED is never posted — a
- * booking in its window makes a table Reserved by itself.
+ * The three states a person may set (abc.md §3, aO.md §2). ORDERING / EATING
+ * / WAITING_BILL / CLEANING / OUT_OF_SERVICE are gone from the vocabulary:
+ * the first three were "occupied" said three ways, cleaning is not a state
+ * the system can know, and out of service is `isActive`.
+ *
+ * RESERVED is settable because a host holds tables that have no booking
+ * behind them. A table with a booking reads Reserved on its own, and that
+ * derivation wins, so setting Empty on a booked table does not release it —
+ * cancelling the booking does.
  */
 export const updateTableStatusSchema = z.object({
   id: z.string().cuid(),
-  status: z.enum(['AVAILABLE', 'OCCUPIED']),
+  status: z.enum(['AVAILABLE', 'OCCUPIED', 'RESERVED']),
 })
 
 /** What a waiter sets from the floor: seat a walk-in, or clear a table. */
 export const serviceTableStatusSchema = z.object({
   id: z.string().cuid(),
-  status: z.enum(['AVAILABLE', 'OCCUPIED']),
+  status: z.enum(['AVAILABLE', 'OCCUPIED', 'RESERVED']),
 })
 
 export const reservationSchema = z.object({

@@ -99,17 +99,40 @@ export function MakeItemForm({
 
   /* ── Which prepared item ──────────────────────────────────────────────── */
 
+  /*
+   * Everything in stock, not only what has been made before (aO.md §5:
+   * "search/select an existing item from Stock/Inventory").
+   *
+   * Listing only `isPrepared` items was a trap with no way out: an item
+   * added in Inventory the ordinary way is not flagged prepared, so it never
+   * appeared here, and typing its name was refused as a raw stock item. The
+   * only way to make something you already stocked was to invent a second
+   * name for it — which is the duplicate record the spec says not to create.
+   *
+   * Items already made here come first, because that is what the cook is
+   * usually reaching for; everything else follows, marked, so picking one is
+   * a decision rather than an accident.
+   */
   const preparedOptions = React.useMemo(
-    () => [
-      { value: NEW_ITEM, label: 'New prepared item…', hint: 'Give it a name below' },
-      ...items
-        .filter((item) => item.isPrepared)
-        .map((item) => ({
+    () => {
+      const line = (item: WorkspaceItem) =>
+        `${formatQuantity(item.available, item.unit)} here · avg ${perUnit(item.unitCost)}/${UNIT_LABELS[item.unit]}`
+      const prepared = items.filter((item) => item.isPrepared)
+      const rest = items.filter((item) => !item.isPrepared)
+      return [
+        { value: NEW_ITEM, label: 'New prepared item…', hint: 'Give it a name below' },
+        ...prepared.map((item) => ({
           value: item.id,
           label: item.name,
-          hint: `${formatQuantity(item.available, item.unit)} here · avg ${perUnit(item.unitCost)}/${UNIT_LABELS[item.unit]}${recipes[item.id] ? ' · has a recipe' : ''}`,
+          hint: `${line(item)}${recipes[item.id] ? ' · has a recipe' : ''}`,
         })),
-    ],
+        ...rest.map((item) => ({
+          value: item.id,
+          label: item.name,
+          hint: `${line(item)} · stock item — making it adds to this`,
+        })),
+      ]
+    },
     // perUnit closes over currency/locale, which are stable for the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [items, recipes, currency, locale],
@@ -124,7 +147,15 @@ export function MakeItemForm({
     }
     return null
   }, [choice, byId, items, trimmedNewName])
-  const nameIsRaw = matched !== null && !matched.isPrepared
+  /*
+   * Only a TYPED name that collides with something already in stock is
+   * refused. Picking an item from the list is a deliberate choice to make
+   * that item, and production adds to it; typing "Chicken" into the new-item
+   * box is almost always somebody naming their dish after its main
+   * ingredient, and blending a prepared batch into raw chicken would make
+   * both costs wrong.
+   */
+  const nameIsRaw = choice === NEW_ITEM && matched !== null && !matched.isPrepared
   const outputName = matched?.name ?? trimmedNewName
   const hasName = choice !== '' && (choice !== NEW_ITEM || trimmedNewName.length >= 2)
 
@@ -341,6 +372,7 @@ export function MakeItemForm({
                 <span className="mt-1 block text-xs text-muted-foreground">
                   Adds to <strong>{matched.name}</strong> — stocked in {UNIT_LABELS[matched.unit]}, {formatQuantity(matched.available, matched.unit)} here, avg {perUnit(matched.unitCost)}/{UNIT_LABELS[matched.unit]}.
                   {recipes[matched.id] ? ' Ingredients filled in from how it was last made.' : ''}
+                  {!matched.isPrepared ? ' It is a stock item today; making it here turns it into a prepared item and keeps the stock it already has.' : ''}
                 </span>
               ) : null}
             </label>

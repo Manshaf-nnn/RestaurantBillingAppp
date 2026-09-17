@@ -62,7 +62,11 @@ async function main() {
     check('ORDERING / EATING / WAITING_BILL were "occupied" said three ways',
       ['ORDERING', 'EATING', 'WAITING_BILL'].every((s) => normalizeTableStatus(s) === 'OCCUPIED'))
     check('CLEANING is Empty — the sitting is over', normalizeTableStatus('CLEANING') === 'AVAILABLE')
-    check('a hand-set RESERVED is Empty — the booking window decides now', normalizeTableStatus('RESERVED') === 'AVAILABLE')
+    // DELIBERATE behaviour change 2026-09 (aO.md §2): a host may hold a table
+    // with no booking behind it, so the column means what it says again.
+    check('a hand-set RESERVED is Reserved', normalizeTableStatus('RESERVED') === 'RESERVED')
+    check('and it survives a read with no booking', tableState({ stored: 'RESERVED', reservedNow: false }) === 'RESERVED')
+    check('but whoever is sitting there still wins', tableState({ stored: 'RESERVED', occupied: true, reservedNow: false }) === 'OCCUPIED')
     check('OUT_OF_SERVICE folds to Empty (it is `isActive` now)', normalizeTableStatus('OUT_OF_SERVICE') === 'AVAILABLE')
     check('a booking in its window makes an empty table Reserved',
       tableState({ stored: 'AVAILABLE', reservedNow: true }) === 'RESERVED')
@@ -151,7 +155,7 @@ async function main() {
     check('sitting closed', (await session(t2.id))?.status === 'CLOSED')
   }
 
-  console.log('\n── 4. Reserved is a booking in its window, never a stored flag ──')
+  console.log('\n── 4. Reserved is a booking holding the table, or a host holding it ──')
   {
     const now = Date.now()
     const booking = await prisma.reservation.create({
@@ -166,9 +170,17 @@ async function main() {
     check('naming who it is for', inWindow.get(t3.id)?.reservation?.customerName === 'Perera')
     check('while the stored column is untouched', (await table(t3.id)).status === 'AVAILABLE')
 
+    // DELIBERATE behaviour change 2026-09 (aO.md §2): a booking holds its
+    // table from the moment it is made, not from fifteen minutes before the
+    // guests are due. A host who reserves a table expects to see it reserved.
     await prisma.reservation.update({ where: { id: booking.id }, data: { reservedAt: new Date(now + 60 * MIN) } })
     const later = await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [t3.id] })
-    check('an hour out it is still Empty', later.get(t3.id)?.state === 'AVAILABLE')
+    check('an hour out it is Reserved already', later.get(t3.id)?.state === 'RESERVED')
+
+    await prisma.reservation.update({ where: { id: booking.id }, data: { reservedAt: new Date(now + 3 * 24 * 60 * MIN) } })
+    const nextWeek = await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [t3.id] })
+    check('and a booking days away holds it too', nextWeek.get(t3.id)?.state === 'RESERVED')
+    await prisma.reservation.update({ where: { id: booking.id }, data: { reservedAt: new Date(now + 5 * MIN) } })
 
     await prisma.reservation.update({ where: { id: booking.id }, data: { reservedAt: new Date(now - 100 * MIN) } })
     const over = await tableStatesFor(prisma, { restaurantId: restaurant.id, tableIds: [t3.id] })
