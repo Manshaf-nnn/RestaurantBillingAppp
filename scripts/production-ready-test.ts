@@ -125,7 +125,15 @@ async function main() {
 
   console.log('\n2. A sale draws stock out of real batches')
 
+  /*
+   * DELIBERATE behaviour change 2026-09 (aO.md §1). A staff order is accepted
+   * by being typed in, so its ingredients leave stock at placement — the
+   * Accept that used to draw them is a no-op on such an order. The sale
+   * measured here is therefore a fresh placement, not an acceptance.
+   */
   const batchBefore = await prisma.stockBatch.findFirstOrThrow({ where: { itemId: patty.id } })
+  const sale = await placeOrder({ ...cart, idempotencyKey: `sale-${stamp}-abcdefgh` })
+  check('a staff order is accepted as it is placed', sale.status === 'ACCEPTED')
   await updateOrderStatus({
     restaurantId: restaurant.id, orderId: first.id, status: 'ACCEPTED', actorId: user.id,
   })

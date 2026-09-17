@@ -122,8 +122,13 @@ async function main() {
     await refuses('the kitchen cannot start cooking it', () => step(qr.id, 'PREPARING'), /CASHIER_ACCEPT_REQUIRED/)
     await refuses('nor take it on without the till’s gate', () => step(qr.id, 'ACCEPTED'), /CASHIER_ACCEPT_REQUIRED/)
     check('it is still pending', (await prisma.order.findUniqueOrThrow({ where: { id: qr.id } })).status === 'PENDING')
+    // DELIBERATE behaviour change 2026-09 (aO.md §1): a staff order is accepted
+    // by being typed in — it is on the rail from the moment it exists, with
+    // its acceptance stamped and recorded, and the kitchen just cooks it.
+    check('a staff order is accepted at placement', staff.status === 'ACCEPTED' && staff.acceptedAt !== null)
+    check('with the acceptance in its history', (await prisma.orderEvent.count({ where: { orderId: staff.id, status: 'ACCEPTED' } })) === 1)
     const cooked = await step(staff.id, 'PREPARING')
-    check('a staff order goes straight to the kitchen as before', cooked.status === 'PREPARING')
+    check('and the kitchen drives it from there', cooked.status === 'PREPARING')
   }
 
   console.log('\n── 2. Where a pending guest order shows, and where it does not ──')
@@ -131,7 +136,7 @@ async function main() {
     check('not on the kitchen rail', !(await kitchenHas(qr.id)))
     check('the staff order is', await kitchenHas(staff.id))
     const stats = await getKitchenStats(restaurant.id, [branch.id])
-    check('not in the kitchen’s pending count', stats.pending === 0, `${stats.pending}`)
+    check('the kitchen counts it as cooking, and counts nothing as pending', stats.preparing === 1 && !('pending' in stats), JSON.stringify(stats))
     const board = await getWaiterBoard(restaurant.id, [branch.id])
     check('not on the waiter’s "being cooked" list', !board.serving.some((row) => row.id === qr.id) && board.serving.some((row) => row.id === staff.id))
     const till = await getCashierQueue(restaurant.id, [branch.id])
@@ -192,7 +197,9 @@ async function main() {
     check('and the payments feature sells it', /key: 'payments'[\s\S]*?PERMISSIONS\.ORDER_ACCEPT/.test(features))
 
     const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
-    check('the KDS ignores a pending guest order arriving live', kds.includes('awaitsCashier(payload)'))
+    // DELIBERATE behaviour change 2026-09 (aO.md §1): the KDS has no column for
+    // anything PENDING, so it ignores every pending payload, guest or not.
+    check('the KDS ignores a pending order arriving live', kds.includes("if (payload.status === 'PENDING') return"))
     const board = readFileSync('src/features/cashier/components/cashier-board.tsx', 'utf8')
     check('the till has a "Waiting for acceptance" section', board.includes('Waiting for acceptance') && board.includes('acceptGuestOrderAction') && board.includes('rejectGuestOrderAction'))
     const service = readFileSync('src/features/orders/service.ts', 'utf8')

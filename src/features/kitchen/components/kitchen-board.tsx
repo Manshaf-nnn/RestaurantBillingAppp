@@ -4,7 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { OrderItemStatus, OrderStatus } from '@prisma/client'
-import { Bell, Check, ChefHat, Clock, Flame, Hand, Printer, Timer, Utensils, X } from 'lucide-react'
+import { Bell, Check, ChefHat, Clock, Flame, Printer, Timer, Utensils } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -25,10 +25,9 @@ import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
 import { progressItemsAction, updateOrderStatus } from '@/features/orders/actions'
-import { awaitsCashier, isGuestChannel } from '@/features/orders/channels'
+import { isGuestChannel } from '@/features/orders/channels'
 import { callWaiterAction } from '@/features/floor/actions'
-import { rejectOrderAction } from '@/features/kitchen/actions'
-import { acceptOrderAction, setOrderPriorityAction } from '../actions'
+import { setOrderPriorityAction } from '../actions'
 import { printKitchenTicket, type PaperWidth } from '@/features/printing/print'
 import { callAction } from '@/lib/use-action'
 
@@ -46,8 +45,6 @@ export interface KitchenTicket {
   placedAt: string
   estimatedMinutes: number
   priority: string
-  /** Dishes here that no section is assigned to cook. Blocks acceptance. */
-  unmappedNames: string[]
   items: Array<{
     id: string
     name: string
@@ -66,24 +63,29 @@ export interface KitchenTicket {
 type ProgressUpdate = { itemId: string; preparedQty: number }
 
 export interface KitchenStats {
-  pending: number
   preparing: number
   ready: number
   completedToday: number
   averageCookMinutes: number
 }
 
+/*
+ * Two columns, no "New orders" (aO.md §1).
+ *
+ * Every ticket on this rail is already accepted: a staff order by being typed
+ * in, a QR / online order by the cashier's Accept. So the kitchen's only
+ * questions are "what am I cooking" and "what is ready to go out".
+ */
 const COLUMNS: Array<{
-  key: 'PENDING' | 'ACTIVE' | 'READY'
+  key: 'ACTIVE' | 'READY'
   title: string
   statuses: OrderStatus[]
   accent: string
   icon: React.ElementType
 }> = [
-  { key: 'PENDING', title: 'New orders', statuses: ['PENDING'], accent: 'border-t-warning', icon: Hand },
   {
     key: 'ACTIVE',
-    title: 'In the kitchen',
+    title: 'Kitchen',
     statuses: ['ACCEPTED', 'PREPARING'],
     accent: 'border-t-primary',
     icon: Flame,
@@ -177,14 +179,9 @@ export function KitchenBoard({
   }, [initialTickets, play])
 
   const toTicket = (payload: OrderSummaryPayload): KitchenTicket => ({
-    /*
-     * A socket payload carries no priority and no routing verdict — those come
-     * from the queue query. Defaults here are the safe ones: normal urgency,
-     * and nothing known to be unmapped, so a pushed ticket is never wrongly
-     * shown as un-acceptable. The next poll replaces it with the real answer.
-     */
+    // A socket payload carries no priority — that comes from the queue query.
+    // Normal is the safe default; the next poll replaces it with the real answer.
     priority: 'NORMAL',
-    unmappedNames: [],
     id: payload.id,
     orderNumber: payload.orderNumber,
     type: payload.type as 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
@@ -214,7 +211,6 @@ export function KitchenBoard({
     setTickets((current) =>
       current.some((ticket) => ticket.id === payload.id) ? current : [...current, toTicket(payload)],
     )
-    setStats((current) => ({ ...current, pending: current.pending + 1 }))
     play('new-order')
     toast.success(`New order ${payload.orderNumber}`, { description })
 
@@ -234,18 +230,20 @@ export function KitchenBoard({
   useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
     if (!isOurs(payload)) return
     /*
-     * A QR / online order is the till's until the cashier accepts it (abc.md
-     * §5). It arrives here on `order:updated` the moment that happens — with
-     * ACCEPTED as its status — and not a second before.
+     * Nothing PENDING belongs on this rail (aO.md §1). A QR / online order is
+     * the till's until the cashier accepts it, and arrives here on
+     * `order:updated` the moment that happens — with ACCEPTED as its status —
+     * and not a second before. A staff order is accepted as it is placed, so
+     * it arrives here already ACCEPTED.
      */
-    if (awaitsCashier(payload)) return
+    if (payload.status === 'PENDING') return
     arrive(payload, payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName)
   })
 
   useSocketEvent(EVENTS.ORDER_UPDATED, (payload: OrderSummaryPayload) => {
     if (!isOurs(payload)) return
-    if (awaitsCashier(payload)) return
-    const onRail = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'].includes(payload.status)
+    if (payload.status === 'PENDING') return
+    const onRail = ['ACCEPTED', 'PREPARING', 'READY'].includes(payload.status)
     setTickets((current) => {
       if (current.some((ticket) => ticket.id === payload.id)) {
         return current.map((ticket) => (ticket.id === payload.id ? toTicket(payload) : ticket))
@@ -365,29 +363,6 @@ export function KitchenBoard({
   }
 
   /*
-   * Taking an order on is its own action now, not a status change.
-   *
-   * It used to jump PENDING straight to PREPARING, which meant `ACCEPTED` was
-   * never set by anybody and `acceptedAt` was never stamped — so the average
-   * cook time, measured from that stamp, had almost no orders to average.
-   * Accepting is also what sends each dish to the section that cooks it, and
-   * that has to be able to refuse: `acceptOrderAction` checks the whole ticket
-   * can be routed before it writes anything.
-   */
-  const accept = async (ticket: KitchenTicket) => {
-    setPendingId(ticket.id)
-    const result = await callAction(() => acceptOrderAction({ orderId: ticket.id }))
-    setPendingId(null)
-    if (!result.ok) {
-      toast.error(result.error)
-      return
-    }
-    setTickets((current) =>
-      current.map((entry) => (entry.id === ticket.id ? { ...entry, status: 'ACCEPTED' } : entry)),
-    )
-  }
-
-  /*
    * §15: jump a table up every section's screen at once.
    *
    * Sections sort by priority before waiting time, so this is said once here
@@ -411,13 +386,7 @@ export function KitchenBoard({
 
   const advance = async (ticket: KitchenTicket, status: OrderStatus) => {
     setPendingId(ticket.id)
-    // Rejection is a cancellation, and cancellation has one entry point — the
-    // status action refuses CANCELLED outright now.
-    const result = await callAction(() =>
-      status === 'CANCELLED'
-        ? rejectOrderAction({ orderId: ticket.id })
-        : updateOrderStatus({ orderId: ticket.id, status }),
-    )
+    const result = await callAction(() => updateOrderStatus({ orderId: ticket.id, status }))
     setPendingId(null)
 
     if (!result.ok) {
@@ -426,7 +395,7 @@ export function KitchenBoard({
     }
 
     setTickets((current) =>
-      status === 'SERVED' || status === 'CANCELLED'
+      status === 'SERVED'
         ? current.filter((entry) => entry.id !== ticket.id)
         : current.map((entry) => (entry.id === ticket.id ? { ...entry, status } : entry)),
     )
@@ -435,10 +404,9 @@ export function KitchenBoard({
   }
 
   const live = React.useMemo(() => {
-    const counts = { pending: 0, preparing: 0, ready: 0 }
+    const counts = { preparing: 0, ready: 0 }
     for (const ticket of tickets) {
-      if (ticket.status === 'PENDING') counts.pending += 1
-      else if (ticket.status === 'ACCEPTED' || ticket.status === 'PREPARING') counts.preparing += 1
+      if (ticket.status === 'ACCEPTED' || ticket.status === 'PREPARING') counts.preparing += 1
       else if (ticket.status === 'READY') counts.ready += 1
     }
     return counts
@@ -475,7 +443,6 @@ export function KitchenBoard({
       <AutoRefresh intervalMs={2500} />
       <OpsStats
         items={[
-          { label: 'New', value: live.pending, tone: 'warning' },
           { label: 'Cooking', value: live.preparing, tone: 'primary' },
           { label: 'Ready', value: live.ready, tone: 'success' },
           { label: 'Avg cook time', value: `${stats.averageCookMinutes} min` },
@@ -526,7 +493,7 @@ export function KitchenBoard({
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 lg:grid-cols-3">
+      <div className="grid gap-4 p-4 lg:grid-cols-2">
         {COLUMNS.map((column) => {
           const columnTickets = tickets
             .filter((ticket) => column.statuses.includes(ticket.status))
@@ -549,11 +516,9 @@ export function KitchenBoard({
                   icon={<ChefHat />}
                   title="Nothing here"
                   description={
-                    column.key === 'PENDING'
-                      ? 'New orders will appear here the moment they are placed.'
-                      : column.key === 'ACTIVE'
-                        ? 'Accept an order to start cooking.'
-                        : 'Finished dishes will land here.'
+                    column.key === 'ACTIVE'
+                      ? 'Orders land here the moment they are placed at the till or accepted by the cashier.'
+                      : 'Finished dishes will land here.'
                   }
                 />
               ) : (
@@ -566,7 +531,6 @@ export function KitchenBoard({
                       flashing={flashing.has(ticket.id)}
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
-                      onAccept={accept}
                       onProgress={progress}
                       onCallWaiter={callWaiter}
                       onPrioritise={prioritise}
@@ -591,7 +555,6 @@ function TicketCard({
   flashing,
   pending,
   onAdvance,
-  onAccept,
   onProgress,
   onCallWaiter,
   onPrioritise,
@@ -604,7 +567,6 @@ function TicketCard({
   flashing: boolean
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
-  onAccept: (ticket: KitchenTicket) => void
   onProgress: (ticket: KitchenTicket, updates: ProgressUpdate[]) => void
   onCallWaiter: (ticket: KitchenTicket) => void
   onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
@@ -623,8 +585,8 @@ function TicketCard({
   const overdue = elapsed > ticket.estimatedMinutes && ticket.status !== 'READY'
   const warning = !overdue && elapsed > ticket.estimatedMinutes * 0.7
 
-  // Boxes appear once the kitchen has taken the ticket on (abc.md §6).
-  const canTick = ticket.status !== 'PENDING'
+  // Every ticket on this rail is accepted (aO.md §1), so every line has its box.
+  const canTick = true
   const orderedCount = ticket.items.reduce((sum, item) => sum + item.quantity, 0)
   const preparedCount = ticket.items.reduce((sum, item) => sum + item.preparedQty, 0)
   const allPrepared = ticket.items.length > 0 && preparedCount >= orderedCount
@@ -683,25 +645,6 @@ function TicketCard({
           </span>
         </div>
       </div>
-
-      {/*
-        The warning rides on the ticket, not on the button.
-        A dish nobody is assigned to cook stops this order being accepted at
-        all. Saying so here means it is found while somebody is reading the
-        queue, with time to go and fix the menu — rather than by the Accept
-        button failing in the middle of service with no explanation of why.
-      */}
-      {ticket.unmappedNames.length > 0 ? (
-        <div className="border-t border-warning/40 bg-warning/5 px-3 py-2">
-          <p className="text-xs font-medium text-warning">
-            No kitchen section for {ticket.unmappedNames.slice(0, 3).join(', ')}
-            {ticket.unmappedNames.length > 3 ? ` +${ticket.unmappedNames.length - 3}` : ''}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Set it on the menu and this can be accepted.
-          </p>
-        </div>
-      ) : null}
 
       {/* abc.md §6: a box per line and Select all, once the ticket is taken on.
           A box only ever gets ticked — progress does not go backwards — and a
@@ -817,17 +760,6 @@ function TicketCard({
           </Button>
         ) : null}
 
-        {ticket.status === 'PENDING' ? (
-          <Button
-            className="flex-1"
-            loading={pending}
-            disabled={ticket.unmappedNames.length > 0}
-            onClick={() => onAccept(ticket)}
-          >
-            <Hand /> Accept
-          </Button>
-        ) : null}
-
         {ticket.status === 'ACCEPTED' || ticket.status === 'PREPARING' ? (
           <Button
             variant="success"
@@ -862,22 +794,9 @@ function TicketCard({
           <Flame />
         </Button>
 
-        {ticket.status === 'PENDING' ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground hover:text-destructive"
-            onClick={() => onAdvance(ticket, 'CANCELLED')}
-            aria-label="Reject order"
-            title="Reject order"
-          >
-            <X />
-          </Button>
-        ) : (
-          <Badge variant="outline" className="shrink-0">
-            <Timer /> {ticket.estimatedMinutes}m
-          </Badge>
-        )}
+        <Badge variant="outline" className="shrink-0">
+          <Timer /> {ticket.estimatedMinutes}m
+        </Badge>
       </div>
     </motion.article>
   )

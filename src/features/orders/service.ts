@@ -7,7 +7,7 @@ import { resolveBranchId } from '@/features/branches/service'
 import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-menu'
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
-import { orderIsRouted, routeOrderItems } from '@/features/kitchen/routing'
+import { orderIsRouted, planRouting, routeOrderItems } from '@/features/kitchen/routing'
 import { evaluate } from '@/features/customers/discounts'
 import { notifyLowStock } from '@/features/inventory/alerts'
 import {
@@ -630,7 +630,9 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               type,
               channel: params.channel ?? 'STAFF',
               branchId,
-              status: 'PENDING',
+              // Typed in by staff = accepted (aO.md §1). A guest order waits at the till.
+              status: acceptedOnPlacement(params.channel) ? 'ACCEPTED' : 'PENDING',
+              acceptedAt: acceptedOnPlacement(params.channel) ? new Date() : null,
               paymentStatus: 'UNPAID',
               tableId: table?.id ?? null,
               tableSessionId,
@@ -677,10 +679,40 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
                 })),
               },
               events: {
-                create: { status: 'PENDING', note: 'Order received' },
+                create: acceptedOnPlacement(params.channel)
+                  ? [
+                      { status: 'PENDING', note: 'Order received' },
+                      {
+                        status: 'ACCEPTED',
+                        note: 'Sent to the kitchen',
+                        actorId: params.createdById ?? null,
+                      },
+                    ]
+                  : [{ status: 'PENDING', note: 'Order received' }],
               },
             },
           })
+
+      /*
+       * A staff order is the kitchen's from the moment it exists (aO.md §1).
+       *
+       * "Send to kitchen" at the till means exactly that: no cook presses
+       * Accept. The same commit the till's Accept performs for a guest order
+       * runs here, inside the placement — routing, pinned recipes, costs,
+       * stock — so the ticket and its consequences exist together or not at
+       * all. A dish with no kitchen section is refused before anything is
+       * written, with the same message the till gives, and the placement
+       * rolls back.
+       */
+      if (acceptedOnPlacement(params.channel)) {
+        const plan = await planRouting(tx, { restaurantId: params.restaurantId, orderId: created.id })
+        if (plan.unmapped.length > 0) throw noStationError(plan.unmapped.map((row) => row.name))
+        lowStockCandidates = await commitToKitchen(tx, {
+          restaurantId: params.restaurantId,
+          orderId: created.id,
+          actorId: params.createdById ?? null,
+        })
+      }
 
       // Coupon accounting. The redemption records what the COUPON took —
       // this used to write the whole discount blob, so a manual discount on
@@ -859,6 +891,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
     'P1017', // server closed the connection
   ])
   let order: PlacedOrder | null = null
+  let lowStockCandidates: string[] = []
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -915,6 +948,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
 
   if (!order) throw new ConflictError('Could not allocate an order number, please retry')
 
+  await announceLowStock(params.restaurantId, order.branchId, lowStockCandidates)
   await broadcastOrder(order.id, 'created')
   return order
 }
@@ -1256,6 +1290,87 @@ export async function progressItems(params: {
   return { order, branchId, changed }
 }
 
+/**
+ * The kitchen commits to an order (aO.md §1, abc.md §5).
+ *
+ * One place for what "accepted" means to the rest of the system: the dishes
+ * are sent to their sections, the recipe versions are pinned, the line costs
+ * are snapshotted and the ingredients leave stock. Reconciliation is
+ * declarative — it posts the difference between what the order should have
+ * consumed and what it already has — so running it again converges instead
+ * of double-deducting. Two doors open onto this: a staff order at placement
+ * (typed in = accepted) and the till's Accept on a QR / online order.
+ *
+ * Returns the stock items this pushed towards their reorder level, to be
+ * announced AFTER the surrounding transaction commits.
+ */
+async function commitToKitchen(
+  tx: TxClient,
+  params: { restaurantId: string; orderId: string; actorId: string | null },
+): Promise<string[]> {
+  await routeOrderItems(tx, { restaurantId: params.restaurantId, orderId: params.orderId })
+  await pinRecipeVersions(tx, { restaurantId: params.restaurantId, orderId: params.orderId })
+  // Same moment, same recipe version: record what those ingredients cost, so
+  // the profit report reads the ledger's numbers rather than a menu field.
+  await snapshotLineCosts(tx, { restaurantId: params.restaurantId, orderId: params.orderId })
+  const depleted = await reconcileOrderDepletion(tx, {
+    restaurantId: params.restaurantId,
+    orderId: params.orderId,
+    userId: params.actorId,
+  })
+  return depleted.affectedItemIds
+}
+
+/**
+ * Warn the floor about anything an acceptance pushed to its reorder level —
+ * after commit, so the warning can only ever describe stock that really moved.
+ */
+async function announceLowStock(restaurantId: string, branchId: string, itemIds: string[]) {
+  if (itemIds.length === 0) return
+  try {
+    const low = await prisma.inventoryItem.findMany({
+      where: { id: { in: itemIds }, restaurantId },
+      select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
+    })
+    for (const item of low) {
+      if (item.quantity <= item.reorderLevel) {
+        realtime.lowStock(restaurantId, {
+          itemId: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          reorderLevel: item.reorderLevel,
+          unit: item.unit,
+        })
+        /*
+         * The half that is actually seen. The socket event above reaches
+         * nobody in production — realtime is off on Netlify and no client
+         * subscribes to it anywhere. Persisted to the bell, once a day per
+         * item, and deliberately not awaited: a stalled notification must
+         * never slow accepting an order.
+         */
+        void notifyLowStock({ restaurantId, branchId, item })
+      }
+    }
+  } catch {
+    // An alert must never fail the acceptance it rides on.
+  }
+}
+
+/** A dish with no kitchen section, named, so the menu can be fixed first. */
+function noStationError(names: string[]): AppError {
+  const unique = [...new Set(names)]
+  const list = unique.slice(0, 3).join(', ')
+  const rest = unique.length > 3 ? ` and ${unique.length - 3} more` : ''
+  return new AppError(
+    `${list}${rest} ${unique.length === 1 ? 'is' : 'are'} not assigned to a kitchen section here — set that on the menu first`,
+    400,
+    'ITEM_NO_STATION',
+  )
+}
+
+/** Typed in by staff = accepted (aO.md §1); a guest order waits at the till. */
+const acceptedOnPlacement = (channel: string | null | undefined) => !isGuestChannel(channel ?? 'STAFF')
+
 export async function updateOrderStatus(params: {
   restaurantId: string
   orderId: string
@@ -1422,29 +1537,14 @@ export async function updateOrderStatus(params: {
     // already has — so running it twice, or after a line changes, converges on
     // the right answer instead of double-deducting.
     if (params.status === 'ACCEPTED' || params.status === 'PREPARING') {
-      /*
-       * Send the dishes to their sections, at the moment the kitchen commits.
-       *
-       * Here rather than on the ACCEPTED edge alone, because PENDING→PREPARING
-       * is a legal transition the old board still takes — hanging routing off
-       * ACCEPTED would leave those orders with no sections at all. Idempotent,
-       * so passing through both edges routes once.
-       */
-      await routeOrderItems(tx, { restaurantId: order.restaurantId, orderId: order.id })
-
-      await pinRecipeVersions(tx, { restaurantId: order.restaurantId, orderId: order.id })
-      // Same moment, same recipe version: record what those ingredients cost, so
-      // the profit report reads the ledger's numbers rather than a menu field.
-      await snapshotLineCosts(tx, { restaurantId: order.restaurantId, orderId: order.id })
-      const depleted = await reconcileOrderDepletion(tx, {
-        restaurantId: order.restaurantId,
-        orderId: order.id,
-        userId: params.actorId ?? null,
-      })
       // Read AFTER the transaction commits — see below. Alerting from inside
       // the transaction meant a rolled-back acceptance could still ring the
       // bell, and a slow notification write held the order row locked.
-      lowStockCandidates = depleted.affectedItemIds
+      lowStockCandidates = await commitToKitchen(tx, {
+        restaurantId: order.restaurantId,
+        orderId: order.id,
+        actorId: params.actorId ?? null,
+      })
     }
 
     // Free the table once everything on it is settled (abc.md §3): Empty, and
@@ -1462,41 +1562,7 @@ export async function updateOrderStatus(params: {
   })
   announceFreed(order.restaurantId, freedTable)
 
-  // Warn the floor about anything this order pushed to its reorder level —
-  // after commit, so the warning can only ever describe stock that really moved.
-  if (lowStockCandidates.length > 0) {
-    try {
-      const low = await prisma.inventoryItem.findMany({
-        where: { id: { in: lowStockCandidates }, restaurantId: order.restaurantId },
-        select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
-      })
-      for (const item of low) {
-        if (item.quantity <= item.reorderLevel) {
-          realtime.lowStock(order.restaurantId, {
-            itemId: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            reorderLevel: item.reorderLevel,
-            unit: item.unit,
-          })
-          /*
-           * The half that is actually seen. The socket event above reaches
-           * nobody in production — realtime is off on Netlify and no client
-           * subscribes to it anywhere. Persisted to the bell, once a day per
-           * item, and deliberately not awaited: a stalled notification must
-           * never slow accepting an order.
-           */
-          void notifyLowStock({
-            restaurantId: order.restaurantId,
-            branchId: order.branchId,
-            item,
-          })
-        }
-      }
-    } catch {
-      // An alert must never fail the acceptance it rides on.
-    }
-  }
+  await announceLowStock(order.restaurantId, order.branchId, lowStockCandidates)
 
   // Somebody else completed this exact transition while we waited for the
   // lock. Their broadcast went out; ours would be a duplicate ticket.

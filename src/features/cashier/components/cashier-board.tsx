@@ -228,7 +228,7 @@ export function CashierBoard({
     // A QR / online order is this screen's to accept (abc.md §5); the row
     // itself arrives with the next refresh, a few seconds at most.
     if (awaitsCashier(payload)) {
-      toast.warning(`New ${channelLabel(payload.channel)} order ${payload.orderNumber} — waiting for acceptance`, {
+      toast.warning(`New ${channelLabel(payload.channel)} order ${payload.orderNumber} — accept it to send it to the kitchen`, {
         description: payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName,
       })
       return
@@ -445,9 +445,10 @@ export function CashierBoard({
         id: bill.orderId,
         orderNumber: bill.orderNumber,
         type: orderType === 'COUNTER' ? 'TAKEAWAY' : orderType,
-        // Typed in at the till: staff channel, straight to the kitchen.
+        // Typed in at the till: staff channel, accepted by being typed in and
+        // already in the kitchen (aO.md §1).
         channel: 'STAFF',
-        status: 'PENDING',
+        status: 'ACCEPTED',
         paymentStatus: 'UNPAID',
         // The closure still holds the table chosen for this order; the state
         // was cleared for the next one a few lines up.
@@ -772,11 +773,11 @@ export function CashierBoard({
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,380px)_1fr]">
         {/* ── open bills ─────────────────────────────────────────── */}
         <section className="space-y-3">
-          {/* ── waiting for acceptance (abc.md §5) ─────────────────── */}
+          {/* ── New Orders: QR / online orders awaiting the till (abc.md §5, aO.md §1) ── */}
           {awaiting.length > 0 ? (
             <div className="rounded-xl border border-warning/40 bg-warning/5 p-3" data-testid="awaiting-acceptance">
               <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold">Waiting for acceptance</p>
+                <p className="text-sm font-semibold">New Orders</p>
                 <Badge variant="warning">{awaiting.length}</Badge>
               </div>
               <ul className="space-y-2">

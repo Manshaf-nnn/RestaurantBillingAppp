@@ -2,7 +2,6 @@ import 'server-only'
 
 import type { OrderStatus, Prisma } from '@prisma/client'
 
-import { planRouting } from '@/features/kitchen/routing'
 import { AppError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
 import { normalizeTableStatus } from '@/features/floor/table-state'
@@ -100,14 +99,20 @@ const NOT_AWAITING_CASHIER = {
   NOT: { status: 'PENDING' as const, channel: { in: [...GUEST_CHANNELS] } },
 }
 
-/** The kitchen rail: everything still cooking, oldest first. */
+/**
+ * The kitchen rail: everything accepted and still cooking, oldest first.
+ *
+ * Nothing PENDING is on it (aO.md §1). A staff order is accepted by being
+ * typed in; a QR / online order waits at the till and arrives here through
+ * the cashier's Accept. The rail therefore never has to ask whether a ticket
+ * can be routed — that was settled before the ticket existed here.
+ */
 export async function getKitchenQueue(restaurantId: string, branchIds?: string[] | null) {
-  const orders = await prisma.order.findMany({
+  return prisma.order.findMany({
     where: {
       restaurantId,
       ...atBranch(branchIds),
-      status: { in: ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'] },
-      ...NOT_AWAITING_CASHIER,
+      status: { in: ['ACCEPTED', 'PREPARING', 'READY'] },
     },
     include: {
       items: { orderBy: { createdAt: 'asc' } },
@@ -116,34 +121,6 @@ export async function getKitchenQueue(restaurantId: string, branchIds?: string[]
     orderBy: [{ priority: 'desc' }, { placedAt: 'asc' }],
     take: 100,
   })
-
-  /*
-   * Which dishes on a waiting ticket nobody is assigned to cook.
-   *
-   * Computed here so the warning rides on the card itself. An unmapped dish
-   * stops the kitchen accepting the order, and finding that out by having the
-   * Accept button fail in the middle of service is the worst possible way to
-   * learn it — the supervisor should see it while reading the queue, with time
-   * to send somebody to fix the menu.
-   *
-   * Only for PENDING tickets: once an order is accepted it is already routed,
-   * and re-deriving would be work for an answer that cannot change.
-   */
-  const pending = orders.filter((order) => order.status === 'PENDING')
-  const plans = await Promise.all(
-    pending.map((order) => planRouting(prisma, { restaurantId, orderId: order.id })),
-  )
-  const unmappedByOrder = new Map(
-    plans.map((plan, index) => [
-      pending[index].id,
-      [...new Set(plan.unmapped.map((row) => row.name))],
-    ]),
-  )
-
-  return orders.map((order) => ({
-    ...order,
-    unmappedNames: unmappedByOrder.get(order.id) ?? [],
-  }))
 }
 
 export async function getKitchenStats(restaurantId: string, branchIds?: string[] | null) {
@@ -151,8 +128,7 @@ export async function getKitchenStats(restaurantId: string, branchIds?: string[]
   startOfDay.setHours(0, 0, 0, 0)
   const here = atBranch(branchIds)
 
-  const [pending, preparing, ready, completedToday, timings] = await Promise.all([
-    prisma.order.count({ where: { restaurantId, ...here, status: 'PENDING', ...NOT_AWAITING_CASHIER } }),
+  const [preparing, ready, completedToday, timings] = await Promise.all([
     prisma.order.count({ where: { restaurantId, ...here, status: { in: ['ACCEPTED', 'PREPARING'] } } }),
     prisma.order.count({ where: { restaurantId, ...here, status: 'READY' } }),
     prisma.order.count({
@@ -188,7 +164,7 @@ export async function getKitchenStats(restaurantId: string, branchIds?: string[]
       ? Math.round(durations.reduce((total, value) => total + value, 0) / durations.length)
       : 0
 
-  return { pending, preparing, ready, completedToday, averageCookMinutes }
+  return { preparing, ready, completedToday, averageCookMinutes }
 }
 
 /** Ready-to-serve orders plus open guest requests, for the waiter station. */

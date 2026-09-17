@@ -166,7 +166,17 @@ async function main() {
   const a = await order([{ foodId: burger.id, quantity: 3 }, { foodId: rice.id, quantity: 1 }, { foodId: pasta.id, quantity: 2 }])
   {
     const burgers = await line(a.id, 'Burger')
-    await refuses('a ticket nobody has taken on refuses', () => progress(a.id, [{ itemId: burgers.id, preparedQty: 1 }]), /ORDER_NOT_ACCEPTED/)
+    // A staff order is accepted by being typed in (aO.md §1); the ticket that
+    // nobody has taken on is a guest's, waiting at the till.
+    const waiting = await placeOrder({
+      restaurantId: restaurant.id, branchId: branch.id, tableId: table.id, type: 'DINE_IN', channel: 'QR',
+      items: [{ foodId: rice.id, quantity: 1, optionIds: [] }],
+      customerName: 'Scanner', customerPhone: '0770000001',
+    })
+    const waitingLine = await line(waiting.id, 'Rice')
+    await refuses('a ticket nobody has taken on refuses', () => progress(waiting.id, [{ itemId: waitingLine.id, preparedQty: 1 }]), /ORDER_NOT_ACCEPTED/)
+    await cancelOrder({ restaurantId: restaurant.id, orderId: waiting.id, reason: 'Test' })
+    check('a staff order is accepted the moment it is typed in', a.status === 'ACCEPTED' && a.acceptedAt !== null)
     await step(a.id, 'ACCEPTED')
 
     const one = await progress(a.id, [{ itemId: burgers.id, preparedQty: 1 }])
@@ -305,7 +315,10 @@ async function main() {
 
     const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
     check('the KDS has a box per line and Select all', kds.includes('aria-label={`${item.name} prepared`}') && kds.includes('aria-label="Select all"'))
-    check('boxes only appear once the ticket is taken on', kds.includes("const canTick = ticket.status !== 'PENDING'"))
+    // DELIBERATE behaviour change 2026-09 (aO.md §1): the KDS has no "New
+    // orders" column any more — every ticket on it is accepted, so every
+    // ticket has its boxes.
+    check('the KDS has no column for orders nobody has taken on', !kds.includes("statuses: ['PENDING']") && !kds.includes('acceptOrderAction'))
     const tracker = readFileSync('src/features/orders/components/order-tracker.tsx', 'utf8')
     check('the guest tracker listens to the line event', tracker.includes('useSocketEvent(EVENTS.ORDER_ITEM_STATUS'))
     const waiter = readFileSync('src/features/waiter/components/waiter-board.tsx', 'utf8')
