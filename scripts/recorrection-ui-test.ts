@@ -346,9 +346,12 @@ async function main() {
       const createButton = ownerPage.getByRole('button', { name: 'Create prepared item' })
       check('Create is enabled once the plan is complete', await createButton.isEnabled())
       await createButton.click()
-      await ownerPage.getByText(/^Created PRD-/).waitFor({ timeout: 15_000 }).catch(() => undefined)
-      check('Create confirms with the batch number', await seen(ownerPage, /^Created PRD-/))
-      check('and offers Mark Done at once', await seen(ownerPage, 'Made it already?'))
+      // DELIBERATE behaviour change 2026-09 (aO.md §5): Create lands on the
+      // prepared item's own page, where the yield is asked for once.
+      await ownerPage.waitForURL(/\/dashboard\/production\/items\//, { timeout: 15_000 }).catch(() => undefined)
+      check('Create lands on the prepared item\'s page', /\/dashboard\/production\/items\//.test(ownerPage.url()), ownerPage.url())
+      check('which asks how much was made', await seen(ownerPage, 'How much did you make?'))
+      check('and shows what goes into it, costed', await seen(ownerPage, 'Production Cost') && await seen(ownerPage, chicken.name))
 
       const item = await eventually(
         () => prisma.inventoryItem.findFirst({ where: { restaurantId: restaurant.id, name: mayo } }),
@@ -358,13 +361,11 @@ async function main() {
       const chickenBefore = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
       check('and nothing has left stock', chickenBefore?.available === 10, String(chickenBefore?.available))
 
-      await ownerPage.getByLabel(/Actually produced/).fill('850')
+      await ownerPage.getByLabel('How much did you make?').fill('850')
       check('a shortfall is named and asks why', await seen(ownerPage, /Short by 50/) && (await ownerPage.getByLabel('Why?').count()) === 1)
       await ownerPage.getByLabel('Why?').selectOption('PRODUCTION_LOSS')
       await ownerPage.getByLabel('In your words').fill('reduced on the hob')
-      await ownerPage.getByRole('button', { name: 'Mark done' }).click()
-      await ownerPage.getByText(/^Made — /).waitFor({ timeout: 15_000 }).catch(() => undefined)
-      check('Mark Done reports what was made', await seen(ownerPage, new RegExp(`^Made — .*${mayo}`)))
+      await ownerPage.getByRole('button', { name: 'Make Done' }).click()
 
       const order = await eventually(
         () => prisma.productionOrder.findFirst({ where: { restaurantId: restaurant.id, outputItemId: item?.id ?? '' }, orderBy: { createdAt: 'desc' } }),
@@ -372,12 +373,12 @@ async function main() {
       )
       check('the batch is completed, with the reason from the enum', order?.status === 'COMPLETED' && order.varianceReason === 'PRODUCTION_LOSS' && order.actualQty === 850)
       const chickenAfter = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
-      check('and the chicken left on Mark Done, not on Create', chickenAfter?.available === 8, String(chickenAfter?.available))
+      check('and the chicken left on Make Done, not on Create', chickenAfter?.available === 8, String(chickenAfter?.available))
       const mayoStock = await prisma.inventoryStock.findFirst({ where: { itemId: item?.id ?? '', branchId: kandy.id } })
       check('the mayonnaise is on the shelf at the actual yield', mayoStock?.available === 850, String(mayoStock?.available))
     }
 
-    console.log('\n── 8. Prepared Items: an in-progress row → detail → mark done ──')
+    console.log('\n── 8. Prepared Items: an in-progress row → the item page → Make Done, then Make More ──')
     {
       const mayoItem = await prisma.inventoryItem.findFirstOrThrow({ where: { restaurantId: restaurant.id, name: mayo } })
       const second = await startBatch({
@@ -389,20 +390,39 @@ async function main() {
       await ownerPage.getByRole('tab', { name: /Prepared Items/ }).click()
       const row = ownerPage.locator('tr[data-state="in-progress"]')
       check('the item is a row in the in-progress state', (await row.count()) === 1 && (await row.first().innerText().catch(() => '')).includes(mayo))
-      await row.first().getByRole('button', { name: /Mark done/ }).click()
-      const dialog = ownerPage.locator('[role="dialog"]')
-      await dialog.waitFor()
-      const text = await dialog.innerText()
-      check('the detail shows the batch waiting', /In progress/i.test(text) && text.includes(second.number))
-      check('and how the item is made, costed', /How it is made/i.test(text) && text.includes(chicken.name))
-      await dialog.getByLabel(/Actually produced/).fill('500')
-      check('no reason asked when the figures match', (await dialog.getByLabel('Why?').count()) === 0)
-      await dialog.getByRole('button', { name: 'Mark done' }).click()
+      // DELIBERATE behaviour change 2026-09 (aO.md §5): the row opens the
+      // item's own page instead of a dialog, and everything happens there.
+      await row.first().getByRole('link', { name: /How much did you make/ }).click()
+      await ownerPage.waitForURL(/\/dashboard\/production\/items\//, { timeout: 15_000 }).catch(() => undefined)
+      const text = await ownerPage.locator('main').innerText().catch(() => '')
+      check('the page shows the batch waiting', /in progress/i.test(text) && text.includes(second.number))
+      check('and how the item is made, costed', /Production Cost/.test(text) && text.includes(chicken.name))
+      await ownerPage.getByLabel('How much did you make?').fill('500')
+      check('no reason asked when the figures match', (await ownerPage.getByLabel('Why?').count()) === 0)
+      await ownerPage.getByRole('button', { name: 'Make Done' }).click()
       const done = await eventually(
         () => prisma.productionOrder.findUniqueOrThrow({ where: { id: second.id } }),
         (o) => o.status === 'COMPLETED',
       )
-      check('marked done from the detail', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
+      check('marked done from the item page', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
+
+      // Make More: the same page, one question, one step (aO.md §5).
+      const runsBefore = await prisma.productionOrder.count({
+        where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'COMPLETED' },
+      })
+      await ownerPage.reload({ waitUntil: 'networkidle' })
+      check('the page offers Add Production / Make More', await seen(ownerPage, /Add Production/))
+      await ownerPage.getByLabel('How much are you making?').fill('200')
+      await ownerPage.getByRole('button', { name: 'Complete production' }).click()
+      const made = await eventually(
+        () => prisma.productionOrder.count({
+          where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'COMPLETED' },
+        }),
+        (count) => count > runsBefore,
+      )
+      check('Make More completes a run in one step', made === runsBefore + 1, String(made))
+      const items = await prisma.inventoryItem.count({ where: { restaurantId: restaurant.id, name: mayo } })
+      check('and creates no second prepared item', items === 1, String(items))
     }
 
     console.log('\n── 9. Shift handover: start → select → review → confirm, then accept ──')

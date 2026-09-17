@@ -838,6 +838,13 @@ export async function completeBatch(params: {
   userId: string | null
   clientRequestId: string
   actualQuantity: number
+  /**
+   * The unit the yield was measured in (aO.md §5): "2 KG" when the batch was
+   * planned in grams. Converted by `produceItem` against the item's own
+   * ledger unit, and refused there if it cannot be. Defaults to the plan's
+   * unit, which is what every caller before this meant.
+   */
+  actualUnit?: StockUnit | null
   varianceReason?: ProductionVarianceReason | null
   varianceNote?: string | null
   overrides?: BatchPlan['ingredients']
@@ -864,13 +871,101 @@ export async function completeBatch(params: {
       itemId: plan.itemId ?? batch.outputItemId,
       name: plan.name,
       quantity: params.actualQuantity,
-      unit: plan.unit,
+      unit: params.actualUnit ?? plan.unit,
     },
     ingredients: params.overrides ?? plan.ingredients,
     waste: plan.waste,
     varianceReason: params.varianceReason ?? null,
     varianceNote: params.varianceNote ?? null,
     notes: params.notes ?? batch.notes,
+  })
+}
+
+/**
+ * Make more of something already made (aO.md §5).
+ *
+ * The prepared item's page asks one question — how much are you making? —
+ * and this answers it from the recipe the item already has: the ingredients
+ * are scaled by the ratio of what is being made to what the recipe yields,
+ * and the ordinary production transaction runs. One step, because there is
+ * nothing left to decide: the item exists, the recipe says how it is made,
+ * and the cook is standing in front of the finished pot.
+ *
+ * ── Scaling, and why the ratio is taken in base units ──────────────────────
+ *
+ * A recipe that yields 900 GRAM being asked for 2 KG is the same question as
+ * 2000 g ÷ 900 g, and only the ledger's base unit makes those comparable.
+ * Both sides go through `toBaseUnits` against the item itself, so a yield in
+ * kilos and a request in grams scale correctly, and a unit the item cannot be
+ * measured in is refused here rather than producing a nonsense multiplier.
+ *
+ * Each ingredient line keeps its OWN unit and is multiplied by that ratio:
+ * `produceItem` converts and costs it exactly as it would a typed line, so
+ * there is no second costing path and no new prepared item — this is the
+ * same item, gaining stock.
+ */
+export async function makeMore(params: {
+  restaurantId: string
+  branchId: string
+  userId: string | null
+  clientRequestId: string
+  itemId: string
+  quantity: number
+  unit: StockUnit
+  notes?: string | null
+}): Promise<ProduceItemResult> {
+  if (!(params.quantity > 0)) {
+    throw new AppError('How much are you making?', 400, 'PRODUCTION_NO_QUANTITY')
+  }
+
+  const item = await prisma.inventoryItem.findFirst({
+    where: { id: params.itemId, restaurantId: params.restaurantId, isActive: true },
+  })
+  if (!item) throw new NotFoundError('Prepared item')
+  refuseRawName(item)
+
+  const recipe = await prisma.recipe.findFirst({
+    where: {
+      restaurantId: params.restaurantId,
+      producesItemId: item.id,
+      isActive: true,
+      archivedAt: null,
+    },
+    orderBy: { version: 'desc' },
+    include: { ingredients: { select: { inventoryItemId: true, quantity: true, unit: true } } },
+  })
+  const lines = (recipe?.ingredients ?? []).filter((line) => line.inventoryItemId)
+  if (!recipe || lines.length === 0) {
+    throw new AppError(
+      `There is no recipe on file for ${item.name} yet — make it once on Make an Item, listing what goes in, and Make More can repeat it.`,
+      409,
+      'PRODUCTION_NO_RECIPE',
+    )
+  }
+
+  const wanted = convertOrRefuse(params.quantity, params.unit, item, 'produced')
+  const yieldBase = convertOrRefuse(recipe.yieldQty, recipe.yieldUnit ?? item.unit, item, 'produced')
+  if (!(yieldBase > 0)) {
+    throw new AppError(
+      `${item.name}'s recipe does not say how much it makes — make it once on Make an Item to record the yield.`,
+      409,
+      'PRODUCTION_NO_YIELD',
+    )
+  }
+  const ratio = wanted / yieldBase
+
+  return produceItem({
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
+    userId: params.userId,
+    clientRequestId: params.clientRequestId,
+    output: { itemId: item.id, name: item.name, quantity: params.quantity, unit: params.unit },
+    ingredients: lines.map((line) => ({
+      itemId: line.inventoryItemId!,
+      quantity: roundQty(line.quantity * ratio),
+      unit: line.unit,
+    })),
+    notes: params.notes?.trim() || null,
   })
 }
 

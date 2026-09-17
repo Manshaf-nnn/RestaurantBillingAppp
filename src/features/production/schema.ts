@@ -72,7 +72,9 @@ export const completeBatchSchema = z.object({
   clientRequestId: z.string().min(8).max(64),
   batchId: z.string().min(1),
   /** What actually came out. Zero is a real answer — the batch failed. */
-  actualQuantity: z.coerce.number().min(0, 'How much came out?').max(1_000_000_000),
+  actualQuantity: z.coerce.number().min(0, 'How much did you make?').max(1_000_000_000),
+  /** The unit it was measured in (aO.md §5); the plan's unit when omitted. */
+  actualUnit: z.enum(STOCK_UNITS).optional(),
   varianceReason: z
     // The enum the database already has, not a parallel vocabulary.
     .enum(['PRODUCTION_LOSS', 'DAMAGED', 'INGREDIENT_SHORTAGE', 'QUALITY_ISSUE', 'OTHER'])
@@ -83,3 +85,13 @@ export const completeBatchSchema = z.object({
 })
 
 export const cancelBatchSchema = z.object({ batchId: z.string().min(1) })
+
+/** Make more of a prepared item from its own recipe (aO.md §5). */
+export const makeMoreSchema = z.object({
+  clientRequestId: z.string().min(8).max(64),
+  branchId: z.string().min(1, 'Choose where this is being made'),
+  itemId: z.string().min(1),
+  quantity: z.coerce.number().positive('How much did you make?').max(1_000_000_000),
+  unit: z.enum(STOCK_UNITS),
+  notes: z.string().trim().max(500).optional(),
+})

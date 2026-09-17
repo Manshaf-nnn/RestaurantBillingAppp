@@ -11,10 +11,11 @@ import { prisma } from '@/server/db/prisma'
 import {
   cancelBatchSchema,
   completeBatchSchema,
+  makeMoreSchema,
   produceItemSchema,
   startBatchSchema,
 } from './schema'
-import { cancelBatch, completeBatch, produceItem, startBatch } from './service'
+import { cancelBatch, completeBatch, makeMore, produceItem, startBatch } from './service'
 import type { ProduceItemResult, StartBatchResult } from './types'
 
 /**
@@ -193,6 +194,7 @@ export async function completeBatchAction(
         userId: user.id,
         clientRequestId: data.clientRequestId,
         actualQuantity: data.actualQuantity,
+        actualUnit: data.actualUnit ?? null,
         varianceReason: data.varianceReason ?? null,
         varianceNote: data.varianceNote,
         notes: data.notes,
@@ -216,10 +218,71 @@ export async function completeBatchAction(
       }
 
       revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/items/${result.item.id}`)
       revalidatePath('/dashboard/inventory')
       return result
     },
     'Batch finished.',
+  )
+}
+
+/**
+ * Make more of a prepared item, from the recipe it already has (aO.md §5).
+ *
+ * One step: the quantity is the only thing the page asks for, and the stock
+ * moves through the same atomic, idempotent transaction Mark Done uses. The
+ * permission is PRODUCTION_MANAGE — making stock is making stock, whichever
+ * door it came through.
+ */
+export async function makeMoreAction(input: unknown): Promise<ActionResult<ProduceItemResult>> {
+  return runAction(
+    makeMoreSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
+      await assertBranchAccess(user, data.branchId)
+
+      const result = await makeMore({
+        restaurantId: user.restaurantId,
+        branchId: data.branchId,
+        userId: user.id,
+        clientRequestId: data.clientRequestId,
+        itemId: data.itemId,
+        quantity: data.quantity,
+        unit: data.unit,
+        notes: data.notes,
+      })
+
+      // A replay recorded nothing new, so it audits nothing new either.
+      if (!result.replayed) {
+        await audit({
+          restaurantId: user.restaurantId,
+          branchId: data.branchId,
+          userId: user.id,
+          actorName: user.name,
+          action: AUDIT_ACTIONS.PRODUCTION_COMPLETED,
+          entity: 'ProductionOrder',
+          entityId: result.orderId,
+          after: {
+            number: result.number,
+            item: result.item.name,
+            quantity: result.producedQty,
+            unit: result.item.unit,
+            totalCost: result.totalValue,
+            unitCost: result.unitCost,
+            consumed: result.consumed.map((l) => ({ item: l.name, quantity: l.quantity, value: l.value })),
+            viaRecipe: true,
+          },
+        })
+      }
+
+      revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/items/${data.itemId}`)
+      revalidatePath('/dashboard/inventory')
+      return result
+    },
+    undefined,
+    'makeMore',
   )
 }
 

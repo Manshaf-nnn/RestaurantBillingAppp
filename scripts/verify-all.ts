@@ -74,7 +74,7 @@ const SERVICE = [
   // redesignkitchenjob.md — prepared items: one-step Make Item, exact value
   // carried from raw stock into the prepared item, waste expensed separately,
   // idempotent completion, and production → recipe → sale → COGS exactly once.
-  // Replaces production-flow-test and production-spec-test (recipe-driven jobs).
+  // Replaced the recipe-driven job suites of the kitchenjobs.md era.
   'prepared-items-test',
   // correctionA.md §10 — a batch can be started before its yield is known:
   // starting moves nothing, finishing runs the same atomic transaction against
@@ -87,6 +87,11 @@ const SERVICE = [
   // the plan is identical and versioned when it changes; unit, self-reference
   // and raw-name mistakes are refused at Create; the form has one verb.
   'prepared-item-test',
+  // aO.md §5 — the item page's data, Make Done in the unit it was measured
+  // in, Make More scaling the recipe in one step and replaying on its key,
+  // and a history that keeps in-progress and cancelled runs with what each
+  // consumed.
+  'production-flow-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',

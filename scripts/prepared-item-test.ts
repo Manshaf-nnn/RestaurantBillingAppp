@@ -1,7 +1,7 @@
 /**
  * Kitchen production, one flow (recorrection.md §3).
  *
- *   Make an Item → Create prepared item → (Prepared Items) → actual qty → Mark done
+ *   Make an Item → Create prepared item → the item's page → actual qty → Make Done
  *
  * Create writes the ITEM and its RECIPE and starts the batch, and moves no
  * stock. Mark Done runs the one atomic transaction against that batch's own
@@ -243,7 +243,10 @@ async function main() {
     check('no location select on the form', !form.includes('Made at') && !/<select[^>]*value=\{branch\}/.test(form))
     check('it names the location it is acting on', form.includes('Making at'))
     check('one submit: Create prepared item', form.includes('Create prepared item') && form.includes('startBatchAction') && !form.includes('produceItemAction'))
-    check('and offers Mark Done right after', form.includes('Made it already?') && form.includes('<MarkDoneForm'))
+    // DELIBERATE behaviour change 2026-09 (aO.md §5): the yield is asked for
+    // once, on the prepared item's own page, not a second time on the form
+    // that just asked what was being aimed for.
+    check('Create leads to the item page, which asks what came out', form.includes('router.push(`/dashboard/production/items/') && !form.includes('Made it already?'))
     check('the old open-batches card is gone', !existsSync('src/features/production/components/open-batches.tsx'))
 
     const done = readFileSync('src/features/production/components/mark-done-form.tsx', 'utf8')
@@ -252,6 +255,10 @@ async function main() {
 
     const workspace = readFileSync('src/features/production/components/production-workspace.tsx', 'utf8')
     check('batches in progress are rows on Prepared Items, not a card above the tabs', !workspace.includes('OpenBatches') && workspace.includes('openBatches={data.openBatches}'))
+    // DELIBERATE behaviour change 2026-09 (aO.md §5): the row opens the item's
+    // own page rather than a dialog.
+    const table = readFileSync('src/features/production/components/prepared-items-table.tsx', 'utf8')
+    check('and each row opens the item\'s page', table.includes('/dashboard/production/items/${row.id}'))
   }
 }
 

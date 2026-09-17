@@ -13,13 +13,17 @@ import { cancelBatchAction, completeBatchAction } from '../actions'
 import type { ProduceItemResult } from '../types'
 
 /**
- * Mark a batch done (recorrection.md §3).
+ * Mark a batch done (recorrection.md §3) — "How much did you make?" and
+ * Make Done (aO.md §5).
  *
- * The one place the actual quantity is entered — inline on the Create
- * confirmation ("made it already?") and in the prepared item's detail
- * ("enter actual qty → mark done"). One component so the rule is the same in
- * both: the moment the stock moves, the figure that moves it was typed by
- * somebody who measured it.
+ * The one place the actual quantity is entered: on the prepared item's page,
+ * under each batch waiting for an answer. The moment the stock moves, the
+ * figure that moves it was typed by somebody who measured it.
+ *
+ * The unit is asked for beside the quantity, because a pot planned in grams
+ * is weighed in kilos as often as not (aO.md §5: "2 KG", "500 PCS", "10 L").
+ * The transaction converts it against the item's own ledger unit and refuses
+ * a unit the item cannot be measured in.
  *
  * ── Why the shortfall has to be named ─────────────────────────────────────
  *
@@ -48,11 +52,17 @@ const SELECT = 'h-10 w-full rounded-lg border border-input bg-background px-2 te
 
 export function MarkDoneForm({
   batch,
+  units,
   onDone,
   onCancelled,
   compact = false,
 }: {
   batch: { id: string; number: string; plannedQty: number; unit: StockUnit | null }
+  /**
+   * What the yield may be entered in (aO.md §5) — "2 KG" for a batch planned
+   * in grams. The plan's own unit alone when the caller has no item to ask.
+   */
+  units?: StockUnit[]
   onDone: (result: ProduceItemResult) => void
   /** When given, offers to abandon the batch. Nothing to reverse: nothing moved. */
   onCancelled?: () => void
@@ -60,15 +70,25 @@ export function MarkDoneForm({
 }) {
   const { busy, run } = useAction()
   const [actual, setActual] = React.useState('')
+  const [actualUnit, setActualUnit] = React.useState<StockUnit | ''>(batch.unit ?? '')
   const [reason, setReason] = React.useState<ProductionVarianceReason | ''>('')
   const [note, setNote] = React.useState('')
   // One key per batch per attempt, so a double tap finishes it once.
   const key = React.useRef(newRequestKey('done'))
 
-  const unit = batch.unit ? UNIT_LABELS[batch.unit] : ''
+  const choices = units && units.length > 0 ? units : batch.unit ? [batch.unit] : []
+  const unit = actualUnit ? UNIT_LABELS[actualUnit] : batch.unit ? UNIT_LABELS[batch.unit] : ''
   const value = Number(actual)
   const valid = actual.trim() !== '' && Number.isFinite(value) && value >= 0
-  const variance = valid ? value - batch.plannedQty : null
+  /*
+   * The shortfall is only meaningful while the cook is answering in the unit
+   * the batch was planned in. Measured in another — 900 g planned, "1 kg"
+   * made — the two figures are not comparable here, and the transaction is
+   * the one that converts them, so no reason is demanded for a difference
+   * this form cannot actually see.
+   */
+  const sameUnit = actualUnit === '' || actualUnit === batch.unit
+  const variance = valid && sameUnit ? value - batch.plannedQty : null
   const needsReason = variance !== null && variance !== 0
   const ready = valid && (!needsReason || (reason !== '' && note.trim().length > 0))
 
@@ -79,6 +99,7 @@ export function MarkDoneForm({
           batchId: batch.id,
           clientRequestId: key.current,
           actualQuantity: value,
+          actualUnit: actualUnit || undefined,
           varianceReason: needsReason && reason ? reason : undefined,
           varianceNote: note.trim() || undefined,
         }),
@@ -92,10 +113,10 @@ export function MarkDoneForm({
 
   return (
     <div className={compact ? 'space-y-2' : 'space-y-3'}>
-      <div className="grid gap-2 sm:grid-cols-[11rem_1fr] sm:items-end">
+      <div className="grid gap-2 sm:grid-cols-[9rem_7rem_1fr] sm:items-end">
         <div className="space-y-1">
           <Label className="text-xs" htmlFor={`actual-${batch.id}`}>
-            Actually produced ({unit})
+            How much did you make?
           </Label>
           <Input
             id={`actual-${batch.id}`}
@@ -105,8 +126,23 @@ export function MarkDoneForm({
             onChange={(event) => setActual(event.target.value)}
           />
         </div>
+        <div className="space-y-1">
+          <Label className="text-xs" htmlFor={`actual-unit-${batch.id}`}>Unit</Label>
+          <select
+            id={`actual-unit-${batch.id}`}
+            className={SELECT}
+            value={actualUnit}
+            onChange={(event) => setActualUnit(event.target.value as StockUnit | '')}
+            disabled={choices.length <= 1}
+          >
+            {choices.length === 0 ? <option value="">—</option> : null}
+            {choices.map((option) => (
+              <option key={option} value={option}>{UNIT_LABELS[option]}</option>
+            ))}
+          </select>
+        </div>
         <p className="text-xs text-muted-foreground sm:pb-2.5">
-          Aiming for {batch.plannedQty} {unit}.
+          Aiming for {batch.plannedQty} {batch.unit ? UNIT_LABELS[batch.unit] : ''}.
           {variance !== null && variance !== 0
             ? ` ${variance > 0 ? 'Over' : 'Short'} by ${Math.abs(Math.round(variance * 1000) / 1000)} ${unit}.`
             : variance === 0
@@ -153,7 +189,7 @@ export function MarkDoneForm({
 
       <div className="flex flex-wrap gap-2">
         <Button disabled={busy || !ready} loading={busy} onClick={finish}>
-          Mark done
+          Make Done
         </Button>
         {onCancelled ? (
           <Button

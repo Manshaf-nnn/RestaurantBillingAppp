@@ -1,14 +1,94 @@
 import 'server-only'
 
+import type { Prisma } from '@prisma/client'
+
 import { prisma } from '@/server/db/prisma'
-import { acceptableUnits } from '@/features/inventory/units'
+import { acceptableUnits, toBaseUnits } from '@/features/inventory/units'
 import { roundQty } from '@/lib/quantity'
 import { visibleBranchIds } from '@/lib/rbac'
 import type {
-  PrepRecipe, PrepRecipeLine, PreparedItemRow, ProductionHistoryRow, ProductionWorkspaceData, WorkspaceItem,
+  OpenBatch, PrepRecipe, PrepRecipeLine, PreparedItemPageData, PreparedItemRow, ProductionHistoryRow,
+  ProductionWorkspaceData, WorkspaceItem,
 } from './types'
 
 const FINISHED = ['COMPLETED', 'PARTIALLY_COMPLETED'] as const
+/**
+ * Every state a run can be in and still belong in Production History
+ * (aO.md §5). A batch in progress and a cancelled batch are part of the
+ * story — history that showed only what finished would hide the pot that
+ * was started and never made.
+ */
+const HISTORY = ['IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'] as const
+
+const historyInclude = {
+  outputItem: { select: { name: true, unit: true } },
+  outputs: { select: { quantity: true, unit: true }, take: 1 },
+  requestedBy: { select: { name: true } },
+  branch: { select: { name: true } },
+  consumption: {
+    select: { itemId: true, quantity: true, unit: true, item: { select: { name: true } } },
+    orderBy: { lineCost: 'desc' },
+  },
+  _count: { select: { wastage: true } },
+} satisfies Prisma.ProductionOrderInclude
+
+type HistoryRun = Prisma.ProductionOrderGetPayload<{ include: typeof historyInclude }>
+
+/**
+ * One run as a history row. Consumption rows are what actually left stock;
+ * a batch still in progress has none, so its plan says what it will take,
+ * named from `names` (an item retired since is named as such).
+ */
+function toHistoryRow(run: HistoryRun, names: Map<string, string>): ProductionHistoryRow {
+  const plan = run.plan as { ingredients?: PrepRecipeLine[] } | null
+  const consumed =
+    run.status === 'CANCELLED'
+      ? []
+      : run.consumption.length > 0
+        ? run.consumption.map((line) => ({
+            itemId: line.itemId, name: line.item.name, quantity: line.quantity, unit: line.unit as string,
+          }))
+        : (plan?.ingredients ?? []).map((line) => ({
+            itemId: line.itemId, name: names.get(line.itemId) ?? 'Retired item', quantity: line.quantity, unit: line.unit as string,
+          }))
+  return {
+    id: run.id,
+    number: run.number,
+    itemId: run.outputItemId,
+    // A run from the recipe era has no output item on the row; it kept the name.
+    itemName: run.outputItem?.name ?? run.recipeName ?? 'Production run',
+    quantity: run.outputs[0]?.quantity ?? run.actualQty ?? run.plannedQty,
+    unit: (run.outputs[0]?.unit ?? run.unit ?? run.outputItem?.unit) as string | null,
+    totalCost: run.totalCost,
+    unitCost: run.unitCost,
+    status: run.status,
+    createdAt: (run.productionDate ?? run.createdAt).toISOString(),
+    completedAt: run.completedAt?.toISOString() ?? null,
+    madeBy: run.requestedBy?.name ?? null,
+    branchName: run.branch.name,
+    wasteCount: run._count.wastage,
+    consumed,
+  }
+}
+
+type BatchRun = Prisma.ProductionOrderGetPayload<{ include: { branch: { select: { name: true } } } }>
+
+function toOpenBatch(b: BatchRun, names: Map<string, string>): OpenBatch {
+  return {
+    id: b.id,
+    number: b.number,
+    itemId: b.outputItemId,
+    name: b.recipeName ?? 'Unnamed batch',
+    plannedQty: b.plannedQty,
+    unit: b.unit,
+    branchName: b.branch?.name ?? null,
+    startedAt: (b.productionDate ?? b.createdAt).toISOString(),
+    notes: b.notes,
+    ingredients: ((b.plan as { ingredients?: PrepRecipeLine[] } | null)?.ingredients ?? []).map((line) => ({
+      itemId: line.itemId, quantity: line.quantity, unit: line.unit, name: names.get(line.itemId),
+    })),
+  }
+}
 
 /**
  * Everything the Kitchen Production screen shows, for one branch.
@@ -46,17 +126,12 @@ export async function getProductionWorkspace(params: {
       _max: { completedAt: true },
       _count: { _all: true },
     }),
+    // Every run, whatever state it is in (aO.md §5), newest first.
     prisma.productionOrder.findMany({
-      where: { restaurantId, status: { in: [...FINISHED] }, ...branchWhere },
-      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }],
+      where: { restaurantId, status: { in: [...HISTORY] }, ...branchWhere },
+      orderBy: [{ createdAt: 'desc' }],
       take: 100,
-      include: {
-        outputItem: { select: { name: true, unit: true } },
-        outputs: { select: { quantity: true, unit: true }, take: 1 },
-        requestedBy: { select: { name: true } },
-        branch: { select: { name: true } },
-        _count: { select: { wastage: true } },
-      },
+      include: historyInclude,
     }),
     prisma.productionOrder.aggregate({
       where: {
@@ -127,40 +202,14 @@ export async function getProductionWorkspace(params: {
     })
     .sort((a, b) => (b.lastProducedAt ?? '').localeCompare(a.lastProducedAt ?? '') || a.name.localeCompare(b.name))
 
-  const history: ProductionHistoryRow[] = recent.map((run) => ({
-    id: run.id,
-    number: run.number,
-    itemId: run.outputItemId,
-    // A run from the recipe era has no output item on the row; it kept the name.
-    itemName: run.outputItem?.name ?? run.recipeName ?? 'Production run',
-    quantity: run.outputs[0]?.quantity ?? run.actualQty ?? run.plannedQty,
-    unit: (run.outputItem?.unit ?? run.outputs[0]?.unit ?? run.unit) as string | null,
-    totalCost: run.totalCost,
-    unitCost: run.unitCost,
-    completedAt: run.completedAt?.toISOString() ?? null,
-    madeBy: run.requestedBy?.name ?? null,
-    branchName: run.branch.name,
-    wasteCount: run._count.wastage,
-  }))
+  const names = new Map(items.map((item) => [item.id, item.name]))
+  const history: ProductionHistoryRow[] = recent.map((run) => toHistoryRow(run, names))
 
   return {
     items: workspaceItems,
     prepared,
     history,
-    openBatches: openBatches.map((b) => ({
-      id: b.id,
-      number: b.number,
-      itemId: b.outputItemId,
-      name: b.recipeName ?? 'Unnamed batch',
-      plannedQty: b.plannedQty,
-      unit: b.unit,
-      branchName: b.branch?.name ?? null,
-      startedAt: (b.productionDate ?? b.createdAt).toISOString(),
-      notes: b.notes,
-      ingredients: ((b.plan as { ingredients?: PrepRecipeLine[] } | null)?.ingredients ?? []).map((line) => ({
-        itemId: line.itemId, quantity: line.quantity, unit: line.unit,
-      })),
-    })),
+    openBatches: openBatches.map((b) => toOpenBatch(b, names)),
     recipes: Object.fromEntries(
       prepRecipes
         .filter((r) => r.producesItemId)
@@ -182,6 +231,146 @@ export async function getProductionWorkspace(params: {
       valueToday: today._sum.totalCost ?? 0,
       preparedCount: prepared.length,
     },
+  }
+}
+
+/**
+ * One prepared item's page (aO.md §5), at one location.
+ *
+ * The same reads the workspace does, scoped to one item: what is on the
+ * shelf here, the active recipe costed at today's averages, the batches
+ * waiting to be marked done, and every run of this item here — in progress,
+ * done or cancelled. Null when the id is not this restaurant's prepared item.
+ *
+ * `branchId` scopes the quantities, the open batches and the history; the
+ * recipe and the item belong to the restaurant.
+ */
+export async function getPreparedItemPage(params: {
+  restaurantId: string
+  branchId: string | null
+  itemId: string
+}): Promise<PreparedItemPageData | null> {
+  const { restaurantId, branchId } = params
+  const item = await prisma.inventoryItem.findFirst({
+    where: { id: params.itemId, restaurantId, isPrepared: true },
+  })
+  if (!item) return null
+  const branchWhere = branchId ? { branchId } : {}
+
+  const [branch, onHand, runs, recipe, openBatches, recent, allItems] = await Promise.all([
+    branchId
+      ? prisma.branch.findFirst({ where: { id: branchId, restaurantId }, select: { id: true, name: true } })
+      : Promise.resolve(null),
+    prisma.inventoryStock.aggregate({
+      where: { restaurantId, itemId: item.id, ...branchWhere },
+      _sum: { available: true },
+    }),
+    prisma.productionOrder.aggregate({
+      where: { restaurantId, outputItemId: item.id, status: { in: [...FINISHED] }, ...branchWhere },
+      _count: { _all: true },
+      _max: { completedAt: true },
+    }),
+    prisma.recipe.findFirst({
+      where: { restaurantId, producesItemId: item.id, isActive: true, archivedAt: null },
+      orderBy: { version: 'desc' },
+      select: {
+        id: true, version: true, yieldQty: true, yieldUnit: true,
+        ingredients: {
+          select: { inventoryItemId: true, quantity: true, unit: true },
+          orderBy: { sortOrder: 'asc' },
+        },
+      },
+    }),
+    prisma.productionOrder.findMany({
+      where: { restaurantId, outputItemId: item.id, status: 'IN_PROGRESS', ...branchWhere },
+      orderBy: { productionDate: 'desc' },
+      take: 50,
+      include: { branch: { select: { name: true } } },
+    }),
+    prisma.productionOrder.findMany({
+      where: { restaurantId, outputItemId: item.id, status: { in: [...HISTORY] }, ...branchWhere },
+      orderBy: [{ createdAt: 'desc' }],
+      take: 200,
+      include: historyInclude,
+    }),
+    // Names for plan lines (open batches, batches in history) and the recipe.
+    prisma.inventoryItem.findMany({ where: { restaurantId }, select: { id: true, name: true } }),
+  ])
+  const names = new Map(allItems.map((row) => [row.id, row.name]))
+
+  /*
+   * The recipe costed at today's averages — the same arithmetic the Make
+   * Item preview uses, so the page and the form never disagree about what a
+   * batch should cost. The run itself re-reads the ledger and is the figure
+   * of record.
+   */
+  const lineIds = (recipe?.ingredients ?? []).map((l) => l.inventoryItemId).filter((id): id is string => Boolean(id))
+  const [ingredients, ingredientStock] = lineIds.length
+    ? await Promise.all([
+        prisma.inventoryItem.findMany({ where: { id: { in: lineIds }, restaurantId } }),
+        prisma.inventoryStock.groupBy({
+          by: ['itemId'],
+          where: { restaurantId, itemId: { in: lineIds }, ...branchWhere },
+          _sum: { available: true },
+        }),
+      ])
+    : [[], []]
+  const ingredientById = new Map(ingredients.map((row) => [row.id, row]))
+  const availableById = new Map(ingredientStock.map((row) => [row.itemId, roundQty(row._sum.available ?? 0)]))
+
+  let costed: PreparedItemPageData['recipe'] = null
+  if (recipe) {
+    const lines = recipe.ingredients
+      .filter((line) => line.inventoryItemId)
+      .map((line) => {
+        const ingredient = ingredientById.get(line.inventoryItemId!) ?? null
+        const unitCost = ingredient
+          ? ingredient.quantity > 0 ? Number(ingredient.stockValue) / ingredient.quantity : ingredient.costPerUnit
+          : 0
+        let base = 0
+        if (ingredient) {
+          try { base = roundQty(toBaseUnits(line.quantity, line.unit, ingredient)) } catch { base = 0 }
+        }
+        return {
+          itemId: line.inventoryItemId!,
+          name: ingredient?.name ?? names.get(line.inventoryItemId!) ?? 'Retired item',
+          quantity: line.quantity,
+          unit: line.unit,
+          itemUnit: ingredient?.unit ?? null,
+          unitCost,
+          lineCost: Math.round(base * unitCost),
+          available: availableById.get(line.inventoryItemId!) ?? 0,
+        }
+      })
+    const productionCost = lines.reduce((sum, l) => sum + l.lineCost, 0)
+    let yieldBase = recipe.yieldQty
+    try { yieldBase = roundQty(toBaseUnits(recipe.yieldQty, recipe.yieldUnit ?? item.unit, item)) } catch { /* per recipe unit */ }
+    costed = {
+      recipeId: recipe.id,
+      version: recipe.version,
+      yieldQty: recipe.yieldQty,
+      yieldUnit: recipe.yieldUnit,
+      lines,
+      productionCost,
+      costPerUnit: yieldBase > 0 ? productionCost / yieldBase : 0,
+    }
+  }
+
+  const here = roundQty(onHand._sum.available ?? 0)
+  return {
+    item: { id: item.id, name: item.name, unit: item.unit, units: acceptableUnits(item) },
+    branch,
+    stock: {
+      here,
+      total: roundQty(item.quantity),
+      costPerUnit: item.costPerUnit,
+      value: Math.round(here * item.costPerUnit),
+      lastProducedAt: runs._max.completedAt?.toISOString() ?? null,
+      runs: runs._count._all,
+    },
+    recipe: costed,
+    openBatches: openBatches.map((b) => toOpenBatch(b, names)),
+    history: recent.map((run) => toHistoryRow(run, names)),
   }
 }
 

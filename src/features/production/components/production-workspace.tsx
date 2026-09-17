@@ -6,27 +6,29 @@ import { Timer } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { MakeItemForm } from './make-item-form'
 import { PreparedItemsTable } from './prepared-items-table'
-import { PreparedItemDetail } from './prepared-item-detail'
 import { ProductionHistory } from './production-history'
 import type { ProductionWorkspaceData } from '../types'
 
 /**
- * Kitchen Production: three tabs on one screen (redesignkitchenjob.md), one
- * flow through them (recorrection.md §3):
+ * Kitchen Production: three tabs on one screen (aO.md §5), one flow through
+ * them:
  *
  *   Make an Item — create the prepared item and its batch
- *   Prepared Items — every item, in progress or stocked; Mark Done lives here
- *   Production History — the runs
+ *   Prepared Items — every item, in progress or stocked
+ *   Production History — every run, whatever state it is in
  *
- * The server page hands this component plain data and nothing else; the
- * cross-tab moves — "Make more", "Later", "Full history" — are state held
- * here, so the page never has to pass a function across the boundary.
+ * The server page hands this component plain data and nothing else.
  *
- * Batches in progress used to be a card above the tabs. They are rows on
- * Prepared Items now, in that state, because a batch IS a prepared item that
- * is not stocked yet — one list, two states, rather than two lists that the
- * cook had to reconcile. The one-line note above the tabs keeps the count
- * from being buried.
+ * A prepared item's own page is where the making happens after Create: "How
+ * much did you make?", Make Done and Make More all live there, so the row
+ * here is a link rather than a dialog. One screen per item, reachable by its
+ * own address, is also what lets a cook keep it open on a phone while the
+ * pot finishes.
+ *
+ * Batches in progress are rows on Prepared Items in that state, because a
+ * batch IS a prepared item that is not stocked yet — one list, two states,
+ * rather than two lists the cook had to reconcile. The one-line note above
+ * the tabs keeps the count from being buried.
  */
 export function ProductionWorkspace({
   data,
@@ -46,18 +48,8 @@ export function ProductionWorkspace({
   canManage: boolean
 }) {
   const [tab, setTab] = React.useState<'make' | 'prepared' | 'history'>(canManage ? 'make' : 'prepared')
-  const [historyItem, setHistoryItem] = React.useState<string | null>(null)
-  const [prefill, setPrefill] = React.useState<{ itemId: string; name: string } | null>(null)
-  const [detailItem, setDetailItem] = React.useState<string | null>(null)
 
   const inProgress = data.openBatches.length
-  const makeMore = (itemId: string, name: string) => {
-    setDetailItem(null)
-    // A fresh object each time, so making the same item twice in a row
-    // re-fills the form both times.
-    setPrefill({ itemId, name })
-    setTab('make')
-  }
 
   return (
     <>
@@ -69,7 +61,7 @@ export function ProductionWorkspace({
         >
           <Timer className="size-4 shrink-0" />
           <span>
-            <strong>{inProgress} batch{inProgress === 1 ? '' : 'es'} in progress</strong> — nothing has left stock for {inProgress === 1 ? 'it' : 'them'} yet. Mark {inProgress === 1 ? 'it' : 'them'} done on Prepared Items.
+            <strong>{inProgress} batch{inProgress === 1 ? '' : 'es'} in progress</strong> — nothing has left stock for {inProgress === 1 ? 'it' : 'them'} yet. Open {inProgress === 1 ? 'it' : 'them'} on Prepared Items to say how much you made.
           </span>
         </button>
       ) : null}
@@ -91,8 +83,7 @@ export function ProductionWorkspace({
               branchIsFallback={branchIsFallback}
               currency={currency}
               locale={locale}
-              prefill={prefill}
-              onLater={() => setTab('prepared')}
+              prefill={null}
             />
           </TabsContent>
         ) : null}
@@ -104,36 +95,13 @@ export function ProductionWorkspace({
             currency={currency}
             locale={locale}
             canManage={canManage}
-            onDetails={(itemId) => setDetailItem(itemId)}
-            onMakeMore={makeMore}
           />
         </TabsContent>
 
         <TabsContent value="history">
-          <ProductionHistory
-            rows={data.history}
-            currency={currency}
-            locale={locale}
-            filterItemId={historyItem}
-            onClearFilter={() => setHistoryItem(null)}
-          />
+          <ProductionHistory rows={data.history} currency={currency} locale={locale} />
         </TabsContent>
       </Tabs>
-
-      <PreparedItemDetail
-        itemId={detailItem}
-        data={data}
-        currency={currency}
-        locale={locale}
-        canManage={canManage}
-        onClose={() => setDetailItem(null)}
-        onMakeMore={makeMore}
-        onHistory={(itemId) => {
-          setDetailItem(null)
-          setHistoryItem(itemId)
-          setTab('history')
-        }}
-      />
     </>
   )
 }

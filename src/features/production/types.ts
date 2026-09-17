@@ -43,6 +43,12 @@ export interface PreparedItemRow {
   runs: number
 }
 
+/**
+ * One run in Production History (aO.md §5): the complete story of a run —
+ * item, when, how much, what it consumed, what it cost, who, where, its
+ * reference and its status. Batches in progress and cancelled batches are
+ * rows too; nothing that happened in the kitchen is filtered out of history.
+ */
 export interface ProductionHistoryRow {
   id: string
   number: string
@@ -52,10 +58,20 @@ export interface ProductionHistoryRow {
   unit: string | null
   totalCost: number
   unitCost: number
+  /** IN_PROGRESS · COMPLETED · PARTIALLY_COMPLETED · CANCELLED. */
+  status: string
+  /** When the run was started — a batch not yet done has no `completedAt`. */
+  createdAt: string
   completedAt: string | null
   madeBy: string | null
   branchName: string
   wasteCount: number
+  /**
+   * What left stock, in the ingredient's own unit. For a batch still in
+   * progress, what its plan will take; empty for a cancelled batch — nothing
+   * moved.
+   */
+  consumed: Array<{ itemId: string; name: string; quantity: number; unit: string }>
 }
 
 /** One line of how a prepared item is made. */
@@ -63,6 +79,8 @@ export interface PrepRecipeLine {
   itemId: string
   quantity: number
   unit: StockUnit
+  /** The ingredient's name when the reader has it; a retired item has none. */
+  name?: string
 }
 
 /**
@@ -107,6 +125,60 @@ export interface ProductionWorkspaceData {
     valueToday: number
     preparedCount: number
   }
+}
+
+/**
+ * One prepared item's page (aO.md §5): the item, what is on the shelf here,
+ * how it is made and what that costs today, the batches waiting for "How
+ * much did you make?", and its full history at this location.
+ */
+export interface PreparedItemPageData {
+  item: {
+    id: string
+    name: string
+    unit: StockUnit
+    /** Units the yield can be entered in, base first. */
+    units: StockUnit[]
+  }
+  branch: { id: string; name: string } | null
+  stock: {
+    /** Base units on hand at this location. */
+    here: number
+    /** Everywhere, base units. */
+    total: number
+    /** Rounded average per base unit, minor units. */
+    costPerUnit: number
+    /** here × costPerUnit, minor units. */
+    value: number
+    lastProducedAt: string | null
+    runs: number
+  }
+  recipe: {
+    recipeId: string
+    version: number
+    yieldQty: number
+    yieldUnit: StockUnit | null
+    lines: Array<{
+      itemId: string
+      name: string
+      quantity: number
+      unit: StockUnit
+      /** The ingredient's base unit — what its cost is per. Null for a retired item. */
+      itemUnit: StockUnit | null
+      /** Exact average per base unit today, minor units. */
+      unitCost: number
+      /** quantity (base) × unitCost, minor units. */
+      lineCost: number
+      /** On hand here, base units. */
+      available: number
+    }>
+    /** What one recipe yield costs at today's averages, minor units. */
+    productionCost: number
+    /** productionCost ÷ the yield in the item's base unit, minor units. */
+    costPerUnit: number
+  } | null
+  openBatches: OpenBatch[]
+  history: ProductionHistoryRow[]
 }
 
 /** What `produceItem` hands back — flat, so it can cross the action boundary. */

@@ -23,8 +23,9 @@ import type { OpenBatch, PreparedItemRow } from '../types'
  * prepared items and three batches on the go needs "which three" answered
  * in one glance, not found by scrolling.
  *
- * Mark Done lives in the item's detail, opened from the row, so the row stays
- * a row: one line per item however many batches it has open.
+ * The row is a link to the item's own page (aO.md §5), where what is on the
+ * shelf, how it is made, "How much did you make?" and Make More all live. So
+ * the row stays a row: one line per item however many batches it has open.
  */
 
 type Filter = 'all' | 'in-progress' | 'stocked'
@@ -37,16 +38,12 @@ export function PreparedItemsTable({
   currency,
   locale,
   canManage,
-  onDetails,
-  onMakeMore,
 }: {
   rows: PreparedItemRow[]
   openBatches: OpenBatch[]
   currency: string
   locale: string
   canManage: boolean
-  onDetails: (itemId: string) => void
-  onMakeMore: (itemId: string, name: string) => void
 }) {
   const [search, setSearch] = React.useState('')
   const [filter, setFilter] = React.useState<Filter>('all')
@@ -143,7 +140,7 @@ export function PreparedItemsTable({
               return (
                 <TableRow key={row.id} data-state={open.length > 0 ? 'in-progress' : 'stocked'}>
                   <TableCell>
-                    <Link href={`/dashboard/inventory/${row.id}`} className="font-medium hover:underline">
+                    <Link href={`/dashboard/production/items/${row.id}`} className="font-medium hover:underline">
                       {row.name}
                     </Link>
                   </TableCell>
@@ -173,12 +170,18 @@ export function PreparedItemsTable({
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       {open.length > 0 && canManage ? (
-                        <Button size="sm" onClick={() => onDetails(row.id)}>Mark done…</Button>
+                        <Button size="sm" asChild>
+                          <Link href={`/dashboard/production/items/${row.id}`}>How much did you make?</Link>
+                        </Button>
                       ) : (
-                        <Button variant="ghost" size="sm" onClick={() => onDetails(row.id)}>Details</Button>
+                        <Button variant="ghost" size="sm" asChild>
+                          <Link href={`/dashboard/production/items/${row.id}`}>Details</Link>
+                        </Button>
                       )}
                       {canManage ? (
-                        <Button variant="outline" size="sm" onClick={() => onMakeMore(row.id, row.name)}>Make more</Button>
+                        <Button variant="outline" size="sm" asChild>
+                          <Link href={`/dashboard/production/items/${row.id}#make-more`}>Make more</Link>
+                        </Button>
                       ) : null}
                     </div>
                   </TableCell>

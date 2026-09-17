@@ -1,13 +1,12 @@
 'use client'
 
 import * as React from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ChefHat, MapPin, Plus, Trash2 } from 'lucide-react'
+import { MapPin, Plus, Trash2 } from 'lucide-react'
 import type { StockUnit } from '@prisma/client'
+import { toast } from 'sonner'
 
 import { Alert } from '@/components/ui/feedback'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -18,19 +17,20 @@ import { roundQty } from '@/lib/quantity'
 import { newRequestKey } from '@/lib/request-key'
 import { useAction } from '@/lib/use-action'
 import { startBatchAction } from '../actions'
-import { MarkDoneForm } from './mark-done-form'
-import type { PrepRecipe, ProduceItemResult, StartBatchResult, WorkspaceItem } from '../types'
+import type { PrepRecipe, WorkspaceItem } from '../types'
 
 /**
- * Make an Item (recorrection.md §3): one flow.
+ * Make an Item (recorrection.md §3, aO.md §5): one flow.
  *
  *   pick or name the prepared item → output → ingredients → Create
- *     → "made it already?" actual qty → Mark done        (or: later, from Prepared Items)
+ *     → the prepared item's page: "How much did you make?" → Make Done
  *
  * Create writes the item and its recipe and starts the batch; it moves no
- * stock. Mark Done runs the one atomic transaction with the quantity that
- * actually came out. There is no "make it now" any more, and no location
- * select: the location is the one the switcher chose, named at the top.
+ * stock. Make Done, on the item's own page, runs the one atomic transaction
+ * with the quantity that actually came out. There is no "make it now" any
+ * more, no location select — the location is the one the switcher chose,
+ * named at the top — and this form asks nothing twice: it asks how much is
+ * being aimed for, and the item's page asks what came out.
  *
  * The cost preview is computed here from the figures the page loaded — each
  * item's exact average cost and what this branch holds — using the same unit
@@ -63,7 +63,6 @@ export function MakeItemForm({
   currency,
   locale,
   prefill,
-  onLater,
 }: {
   items: WorkspaceItem[]
   recipes: Record<string, PrepRecipe>
@@ -73,10 +72,8 @@ export function MakeItemForm({
   branchIsFallback: boolean
   currency: string
   locale: string
-  /** Set by "Make more" on the Prepared Items tab. */
+  /** Set when the Make tab was opened to remake a particular item. */
   prefill: { itemId: string; name: string } | null
-  /** "Later" on the confirmation — the batch waits on the Prepared Items tab. */
-  onLater: () => void
 }) {
   const router = useRouter()
   const { busy, run } = useAction()
@@ -89,8 +86,6 @@ export function MakeItemForm({
   const [rows, setRows] = React.useState<Row[]>([newRow()])
   const [waste, setWaste] = React.useState<WasteRow[]>([])
   const [notes, setNotes] = React.useState('')
-  const [created, setCreated] = React.useState<StartBatchResult | null>(null)
-  const [result, setResult] = React.useState<ProduceItemResult | null>(null)
 
   const byId = React.useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const money = (minor: number) => formatMoney(Math.round(minor), currency, locale)
@@ -166,8 +161,6 @@ export function MakeItemForm({
 
   React.useEffect(() => {
     if (prefill) {
-      setCreated(null)
-      setResult(null)
       setChoice(prefill.itemId)
       fill(prefill.itemId)
     }
@@ -268,6 +261,15 @@ export function MakeItemForm({
     requestKey.current = newRequestKey('prod')
   }
 
+  /*
+   * Create, then the item's page (aO.md §5).
+   *
+   * The form used to answer itself, asking for the yield on the very screen
+   * that had just asked how much was being aimed for — two questions about
+   * one pot, a step apart. The cook now lands on the prepared item, where
+   * the yield is asked for once, beside what is on the shelf and what the
+   * batch will consume.
+   */
   const create = async () => {
     if (!ready || !branchId) return
     await run(
@@ -286,102 +288,15 @@ export function MakeItemForm({
         }),
       {
         onDone: (data) => {
-          setCreated(data)
           reset()
-          router.refresh()
+          toast.success(
+            data.replayed
+              ? `${data.number} was already created`
+              : `${data.number} created — say how much you made when it is out of the pot`,
+          )
+          router.push(`/dashboard/production/items/${data.item.id}`)
         },
       },
-    )
-  }
-
-  /* ── After Mark Done: what happened to stock ──────────────────────────── */
-
-  if (result) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ChefHat className="size-5 text-emerald-600" />
-            {result.replayed ? 'Already recorded' : 'Made'} — {formatQuantity(result.producedQty, result.item.unit)} {result.item.name}
-          </CardTitle>
-          <CardDescription>
-            {result.replayed
-              ? 'This batch had already been recorded; nothing moved a second time.'
-              : `Inventory impact — record ${result.number}.`}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Stat label="Value moved into it" value={money(result.totalValue)} />
-            <Stat label={`Cost per ${UNIT_LABELS[result.item.unit]}`} value={perUnit(result.unitCost)} />
-            <Stat label="Now on hand" value={formatQuantity(result.item.quantity, result.item.unit)} hint={`avg ${perUnit(result.item.costPerUnit)} / ${UNIT_LABELS[result.item.unit]}`} />
-          </div>
-          <div>
-            <p className="mb-1 font-medium">Left stock</p>
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {result.consumed.map((line) => (
-                <li key={line.itemId} className="flex items-center justify-between px-3 py-2">
-                  <span>{line.name}</span>
-                  <span className="tabular-nums text-muted-foreground">−{formatQuantity(line.quantity, line.unit)} · {money(line.value)}</span>
-                </li>
-              ))}
-              {result.wasted.map((line) => (
-                <li key={`w-${line.itemId}`} className="flex items-center justify-between px-3 py-2">
-                  <span>{line.name} <Badge variant="warning" size="sm">waste</Badge></span>
-                  <span className="tabular-nums text-muted-foreground">−{formatQuantity(line.quantity, line.unit)} · {money(line.value)} expensed</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => { setResult(null); setCreated(null) }}>Make another</Button>
-            <Button variant="outline" asChild>
-              <Link href={`/dashboard/production/${result.orderId}`}>View record</Link>
-            </Button>
-            <Button variant="ghost" asChild>
-              <Link href={`/dashboard/inventory/${result.item.id}`}>Open {result.item.name}</Link>
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  /* ── After Create: made it already? ───────────────────────────────────── */
-
-  if (created) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ChefHat className="size-5 text-emerald-600" />
-            {created.replayed ? 'Already created' : 'Created'} {created.number} · {created.item.name}
-          </CardTitle>
-          <CardDescription>
-            Aiming for {created.plannedQty} {UNIT_LABELS[created.unit]}.
-            {created.item.isNew ? ` ${created.item.name} is now a prepared item in Inventory.` : ''}{' '}
-            Nothing has left stock yet — that happens when you mark it done.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <p className="mb-2 text-sm font-medium">Made it already? Enter what came out.</p>
-            <MarkDoneForm
-              batch={{ id: created.id, number: created.number, plannedQty: created.plannedQty, unit: created.unit }}
-              onDone={(done) => {
-                setResult(done)
-                router.refresh()
-              }}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2 border-t pt-3">
-            <Button variant="outline" onClick={() => { setCreated(null); onLater() }}>
-              Later — it waits on Prepared Items
-            </Button>
-            <Button variant="ghost" onClick={() => setCreated(null)}>Create another</Button>
-          </div>
-        </CardContent>
-      </Card>
     )
   }
 
@@ -402,7 +317,7 @@ export function MakeItemForm({
               ) : null}
             </CardTitle>
             <CardDescription>
-              Pick a prepared item to make it again, or name a new one. Create writes the item and its recipe and starts the batch — nothing leaves stock until you mark it done.
+              Pick a prepared item to make it again, or name a new one. Create writes the item and its recipe and starts the batch — nothing leaves stock until you say how much you made.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -572,7 +487,7 @@ export function MakeItemForm({
               Create prepared item
             </Button>
             <p className="text-xs text-muted-foreground">
-              Creates the item and its recipe and starts the batch. Nothing leaves stock until you mark it done with what actually came out — right after, or later from Prepared Items.
+              Creates the item and its recipe and starts the batch, and takes you to the item’s page. Nothing leaves stock until you say how much you made there.
             </p>
           </CardContent>
         </Card>
