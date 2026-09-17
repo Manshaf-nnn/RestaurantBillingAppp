@@ -233,7 +233,7 @@ export default async function PaymentDetailsPage({
           {pending.length > 0 ? (
             <p className="mt-3 text-xs text-muted-foreground">
               Tip: confirm a payment from the{' '}
-              <Link href="/cashier" className="font-medium text-primary hover:underline">
+              <Link href="/cashier/pos?tab=cashier" className="font-medium text-primary hover:underline">
                 Cashier
               </Link>{' '}
               screen once the transfer lands in your account.

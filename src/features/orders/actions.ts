@@ -697,6 +697,7 @@ export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ 
     revalidatePath('/waiter')
     revalidatePath('/dashboard/orders')
     revalidatePath('/cashier')
+    revalidatePath('/cashier/pos')
 
     return { id: order.id, status: order.status }
   })
@@ -1033,6 +1034,7 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
 
       revalidatePath('/dashboard/orders')
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
 
       return {
         orderId: order.id,
@@ -1196,6 +1198,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
 
       revalidatePath(`/dashboard/orders/${order.id}`)
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
       return { grandTotal: updated.grandTotal }
     },
     'Discount applied.',

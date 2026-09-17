@@ -4,7 +4,6 @@ import {
   ChefHat,
   ClipboardList,
   Coins,
-  CreditCard,
   FileText,
   HandPlatter,
   Landmark,
@@ -54,6 +53,12 @@ export interface NavItem {
   label: string
   icon: typeof LayoutDashboard
   permission: Permission
+  /**
+   * Further permissions any ONE of which also shows the entry (abc.md §8):
+   * the POS is a shell whose tabs are gated separately, so somebody who may
+   * collect payment but not take orders still needs the door.
+   */
+  anyOf?: Permission[]
   exact?: boolean
 }
 
@@ -200,15 +205,18 @@ export const NAV_SECTIONS: NavSection[] = [
        *
        * The page still reads `?type=`, so an old bookmark keeps working.
        */
-      { href: '/cashier/pos', label: 'POS', icon: HandPlatter, permission: PERMISSIONS.ORDER_CREATE },
+      /*
+       * One POS entry (abc.md §8). The till is a tab inside it, so the old
+       * separate "Cashier" entry is gone — and so is the case where both lit
+       * up at once. Whoever may take orders OR collect payment OR run a
+       * drawer has somewhere to click; the shell shows them their tabs.
+       */
       {
-        href: '/cashier',
-        label: 'Cashier',
-        icon: CreditCard,
-        permission: PERMISSIONS.PAYMENT_COLLECT,
-        // Exact, or `pathname.startsWith('/cashier/')` lights this up at the
-        // same time as POS for anyone holding both permissions.
-        exact: true,
+        href: '/cashier/pos',
+        label: 'POS',
+        icon: HandPlatter,
+        permission: PERMISSIONS.ORDER_CREATE,
+        anyOf: [PERMISSIONS.PAYMENT_COLLECT, PERMISSIONS.CASH_DRAWER_OPERATE, PERMISSIONS.CASH_DRAWER_MANAGE],
       },
       {
         href: '/dashboard/payment-details',
@@ -432,7 +440,9 @@ export function visibleSections(user: PermissionSubject): NavSection[] {
   const granted = permissionsFor(user)
   return NAV_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) => granted.has(item.permission)),
+    items: section.items.filter(
+      (item) => granted.has(item.permission) || (item.anyOf ?? []).some((p) => granted.has(p)),
+    ),
   })).filter((section) => section.items.length > 0)
 }
 
@@ -453,7 +463,9 @@ export function reachableNavItems(user: PermissionSubject): NavItem[] {
 export function firstReachablePath(user: PermissionSubject): string | null {
   const items = reachableNavItems(user)
   const home = landingFor(user.role)
-  if (items.some((item) => item.href === home)) return home
+  // A landing page may name a tab (`?tab=`); the entry that owns it is the path.
+  const homePath = home.split('?')[0]
+  if (items.some((item) => item.href === homePath)) return home
   return items[0]?.href ?? null
 }
 

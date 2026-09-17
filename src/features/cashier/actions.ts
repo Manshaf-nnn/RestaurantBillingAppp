@@ -51,6 +51,7 @@ async function assertBillBranch(
 /** Counter screens that must reflect a bill moving. */
 function revalidateCounter() {
   revalidatePath('/cashier')
+  revalidatePath('/cashier/pos')
   revalidatePath('/dashboard/orders')
   revalidatePath('/waiter')
 }

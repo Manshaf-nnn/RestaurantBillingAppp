@@ -474,9 +474,11 @@ async function main() {
   const tillItems = NAV_SECTIONS.flatMap((section) =>
     section.items.filter((item) => item.href.startsWith('/cashier')),
   )
+  // DELIBERATE behaviour change 2026-09 (abc.md §8): the till is a tab inside
+  // the POS, so the sidebar has ONE entry for the counter, not two.
   check(
-    'only two /cashier entries remain — POS and Cashier',
-    tillItems.length === 2,
+    'only one /cashier entry remains — the POS, with the till inside it',
+    tillItems.length === 1,
     tillItems.map((i) => `${i.label} → ${i.href}`).join(' | '),
   )
   check(
@@ -486,8 +488,8 @@ async function main() {
   )
   check('the POS entry is labelled POS', tillItems.some((item) => item.label === 'POS'))
   check(
-    'the Cashier entry is exact, so it does not light up on /cashier/pos',
-    tillItems.find((item) => item.href === '/cashier')?.exact === true,
+    'and whoever may collect payment reaches it even without order.create',
+    tillItems[0]?.anyOf?.includes(PERMISSIONS.PAYMENT_COLLECT) ?? false,
   )
   check(
     'the till is still switchable as a feature',

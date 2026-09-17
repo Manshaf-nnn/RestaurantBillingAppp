@@ -188,8 +188,10 @@ console.log('\n4. A pathname is filed under the entry that owns it\n')
   const pos = navItemForPath(OWNER, '/cashier/pos')
   check('POS is POS and not Cashier', pos?.href === '/cashier/pos', String(pos?.href))
 
+  // DELIBERATE behaviour change 2026-09 (abc.md §8): the till is a tab inside
+  // the POS, so the old URL has no entry of its own — it redirects.
   const cashier = navItemForPath(OWNER, '/cashier')
-  check('and Cashier is still Cashier', cashier?.href === '/cashier', String(cashier?.href))
+  check('the old till URL owns no entry — it redirects into the POS', cashier === null, String(cashier?.href))
 
   // /dashboard is exact, so it must not claim every screen beneath it.
   const dashboardChild = navItemForPath(OWNER, '/dashboard/orders')

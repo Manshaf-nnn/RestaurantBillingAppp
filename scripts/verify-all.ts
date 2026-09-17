@@ -262,6 +262,8 @@ const SERVICE = [
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // abc.md §8 — /cashier redirects into the POS; tabs by permission.
+  'pos-shell-test',
   // bugfix.md — the staff-codes page per branch, the pulse stream confined,
   // uploads checked by signature, cross-tenant writes through real actions.
   'security-runtime-test',

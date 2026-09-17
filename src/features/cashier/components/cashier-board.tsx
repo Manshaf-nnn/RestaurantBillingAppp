@@ -129,6 +129,7 @@ export function CashierBoard({
   branchName,
   tables = [],
   canAccept = false,
+  embedded = false,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
@@ -136,6 +137,8 @@ export function CashierBoard({
   user: { name: string; role: string }
   /** Holds order.accept: may say yes or no to a QR / online order (abc.md §5). */
   canAccept?: boolean
+  /** Inside the POS shell (abc.md §8): no ops-shell header of its own. */
+  embedded?: boolean
   /**
    * A way back to the dashboard, rendered by the page.
    *
@@ -508,7 +511,7 @@ export function CashierBoard({
   const outstanding = bills.reduce((sum, bill) => sum + outstandingOn(bill), 0)
 
   return (
-    <OpsShell title="Cashier" subtitle={restaurant.name} branch={branchName} user={user} actions={exit}>
+    <Frame embedded={embedded} title="Cashier" subtitle={restaurant.name} branch={branchName} user={user} actions={exit}>
       <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[
@@ -941,8 +944,27 @@ export function CashierBoard({
           )}
         </section>
       </div>
-    </OpsShell>
+    </Frame>
   )
+}
+
+/**
+ * The board on its own screen, or inside the POS (abc.md §8).
+ *
+ * Embedded, the POS shell already drew the header with the tab strip, so the
+ * board renders its content bare; on its own it wraps itself in the ops shell
+ * as it always did.
+ */
+function Frame({
+  embedded,
+  children,
+  ...shell
+}: {
+  embedded: boolean
+  children: React.ReactNode
+} & Omit<React.ComponentProps<typeof OpsShell>, 'children'>) {
+  if (embedded) return <div className="space-y-4">{children}</div>
+  return <OpsShell {...shell}>{children}</OpsShell>
 }
 
 

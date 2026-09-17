@@ -489,7 +489,8 @@ export const ROLE_HOME: Record<UserRole, string> = {
   OWNER: '/dashboard',
   MANAGER: '/dashboard',
   KITCHEN: '/kitchen',
-  CASHIER: '/cashier',
+  // The till is a tab inside the POS (abc.md §8).
+  CASHIER: '/cashier/pos?tab=cashier',
   WAITER: '/waiter',
 }
 

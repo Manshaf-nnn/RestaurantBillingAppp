@@ -247,6 +247,7 @@ export async function updatePaymentDestinations(
 
       revalidatePath('/dashboard/settings')
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
       return { id: user.restaurantId }
     },
     'Payment destinations saved.',
@@ -339,6 +340,7 @@ export async function updatePrinterSettings(input: unknown): Promise<ActionResul
 
       revalidatePath('/dashboard/settings')
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
       revalidatePath('/kitchen')
       return { id: user.restaurantId }
     },

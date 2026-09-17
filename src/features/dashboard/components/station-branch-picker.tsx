@@ -27,13 +27,18 @@ export function StationBranchPicker({
   description,
   branches,
   basePath,
+  query = {},
 }: {
   title: string
   description: string
   branches: Array<{ id: string; name: string }>
   /** e.g. `/kitchen`. The chosen branch is appended as `?branch=<id>`. */
   basePath: string
+  /** Anything else the choice must keep, e.g. the POS tab (abc.md §8). */
+  query?: Record<string, string>
 }) {
+  const hrefFor = (branchId: string) =>
+    `${basePath}?${new URLSearchParams({ ...query, branch: branchId }).toString()}`
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center gap-6 px-5 py-12">
       <header className="text-center">
@@ -45,7 +50,7 @@ export function StationBranchPicker({
         {branches.map((branch) => (
           <li key={branch.id}>
             <Link
-              href={`${basePath}?branch=${encodeURIComponent(branch.id)}`}
+              href={hrefFor(branch.id)}
               className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 transition-colors hover:bg-muted"
             >
               <MapPin className="size-4 shrink-0 text-muted-foreground" />

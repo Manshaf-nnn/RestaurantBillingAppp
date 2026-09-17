@@ -268,9 +268,12 @@ async function main() {
 
   const items = reachableNavItems(custom)
   check('a custom role produces a sidebar', items.length > 0, `${items.length} items`)
+  // An entry may name further permissions any ONE of which opens it (abc.md
+  // §8: the POS shell is reachable by whoever may take orders, collect payment
+  // or run a drawer). Shown means they hold its permission or one of those.
   check(
     'holding only these permissions, every item shown is one they hold',
-    items.every((item) => can(custom, item.permission)),
+    items.every((item) => can(custom, item.permission) || (item.anyOf ?? []).some((p) => can(custom, p))),
   )
   check(
     'a role with nothing ticked produces no sidebar at all',

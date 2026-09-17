@@ -229,8 +229,11 @@ console.log('\n── 7. Every surface that shows a bill reads the OWNER’s set
   check('every screen that loads a restaurant to print a bill reads its saved settings',
     faking.length === 0,
     faking.map((entry) => entry.file).join(', '))
+  // DELIBERATE behaviour change 2026-09 (abc.md §8): the till moved inside the
+  // POS shell, so /cashier is a redirect stub and one file now assembles the
+  // bill for both the order-taking and the cashier tabs — three screens, not four.
   check('…and it found the screens, so the check is not vacuous',
-    suppliers.length >= 4, `${suppliers.length} found`)
+    suppliers.length >= 3, `${suppliers.length} found`)
 
   const guestBill = fs.readFileSync('src/features/payments/components/guest-bill.tsx', 'utf8')
   check('the guest’s on-screen bill gates on the same switches, not on “is it zero”',

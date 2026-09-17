@@ -166,7 +166,8 @@ async function main() {
     for (const [label, board, page] of [
       ['kitchen', 'src/features/kitchen/components/kitchen-board.tsx', 'src/app/kitchen/page.tsx'],
       ['waiter', 'src/features/waiter/components/waiter-board.tsx', 'src/app/waiter/page.tsx'],
-      ['cashier', 'src/features/cashier/components/cashier-board.tsx', 'src/app/cashier/page.tsx'],
+      // abc.md §8: the till is a tab inside the POS shell; /cashier only redirects.
+      ['cashier', 'src/features/cashier/components/cashier-board.tsx', 'src/app/cashier/pos/page.tsx'],
     ] as const) {
       check(`the ${label} board passes it to the shell`, /branch=\{branchName\}/.test(codeOnly(board)))
       check(`the ${label} page resolves it`, /branchNameFor\(/.test(codeOnly(page)))

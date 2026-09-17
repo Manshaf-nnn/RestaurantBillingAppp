@@ -30,6 +30,7 @@ function revalidateHandover() {
   revalidatePath('/dashboard/handover')
   revalidatePath('/dashboard/cash-drawer')
   revalidatePath('/cashier')
+  revalidatePath('/cashier/pos')
   revalidatePath('/cashier/session')
 }
 

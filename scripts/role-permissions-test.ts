@@ -25,6 +25,7 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/role-permissions-test.ts
  */
 import { prisma } from '../src/server/db/prisma'
+import { posTabsFor } from '../src/features/cashier/pos-tabs'
 import {
   PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -143,7 +144,7 @@ async function main() {
     'a plain cashier can collect payment to begin with',
     can(before, PERMISSIONS.PAYMENT_COLLECT),
   )
-  check('and the till is in their sidebar', navFor(before).includes('/cashier'))
+  check('and the till is in their sidebar', navFor(before).includes('/cashier/pos') && posTabsFor(before).includes('cashier'))
 
   /*
    * "Front of house" — everything a cashier gets EXCEPT taking money. The whole
@@ -170,7 +171,11 @@ async function main() {
     'the role default put it back — this is the union bug',
   )
   check('nor even see payments', !can(after, PERMISSIONS.PAYMENT_VIEW))
-  check('the till is gone from their sidebar', !navFor(after).includes('/cashier'))
+  // DELIBERATE behaviour change 2026-09 (abc.md §8): the till is a tab inside
+  // the POS. They may still take orders, so the POS stays in the sidebar; the
+  // Cashier tab is what leaves.
+  check('the POS stays — they may still take orders', navFor(after).includes('/cashier/pos'))
+  check('but the Cashier tab is gone', !posTabsFor(after).includes('cashier'))
   check(
     'and everything else they had is untouched',
     can(after, PERMISSIONS.ORDER_CREATE) && can(after, PERMISSIONS.TABLE_VIEW),

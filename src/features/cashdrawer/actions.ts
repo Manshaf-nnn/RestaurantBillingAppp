@@ -60,6 +60,7 @@ function revalidateDrawer() {
   revalidatePath('/dashboard/cash-drawer')
   revalidatePath('/dashboard/petty-cash')
   revalidatePath('/cashier')
+  revalidatePath('/cashier/pos')
   revalidatePath('/cashier/session')
 }
 

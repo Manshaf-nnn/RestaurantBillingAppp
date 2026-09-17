@@ -251,6 +251,7 @@ export async function collectPayment(
       })
 
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
       revalidatePath('/dashboard/orders')
 
       return {
@@ -353,6 +354,7 @@ export async function refundOrderPayment(input: unknown): Promise<ActionResult<{
       })
 
       revalidatePath('/cashier')
+      revalidatePath('/cashier/pos')
       revalidatePath('/dashboard/orders')
       return { id: refund.id }
     },

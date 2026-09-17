@@ -235,7 +235,7 @@ export default async function DashboardPage({
 
           {stats.unpaidTotal > 0 ? (
             <Link
-              href="/cashier"
+              href="/cashier/pos?tab=cashier"
               className="flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 transition-colors hover:bg-primary/10"
             >
               <Receipt className="size-5 shrink-0 text-primary" />

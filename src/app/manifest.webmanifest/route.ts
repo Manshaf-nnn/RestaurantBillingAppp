@@ -22,7 +22,7 @@ export function GET() {
     ],
     shortcuts: [
       { name: 'Kitchen display', url: '/kitchen' },
-      { name: 'Cashier', url: '/cashier' },
+      { name: 'Cashier', url: '/cashier/pos?tab=cashier' },
       { name: 'Orders', url: '/dashboard/orders' },
     ],
   }

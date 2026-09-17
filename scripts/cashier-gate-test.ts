@@ -127,7 +127,14 @@ async function main() {
 
   console.log('\n── with no drawer open ──')
 
-  const atTill = await hit('/cashier', asCashier)
+  /*
+   * DELIBERATE behaviour change 2026-09 (abc.md §8). The till is a tab inside
+   * the POS now: /cashier hands over to /cashier/pos?tab=cashier, and it is
+   * the shell that gates. The rule is the same — no drawer, no till.
+   */
+  const handover = await hit('/cashier', asCashier)
+  check('/cashier hands over to the POS shell', (handover.location ?? '').includes('/cashier/pos') && (handover.location ?? '').includes('tab=cashier'), `status ${handover.status} → ${handover.location}`)
+  const atTill = await hit('/cashier/pos?tab=cashier', asCashier)
   check('a cashier is sent to the session screen', gated(atTill), `status ${atTill.status}`)
 
   const atPos = await hit('/cashier/pos', asCashier)
@@ -181,7 +188,7 @@ async function main() {
   const afterOpening = await hit('/dashboard', asCashier)
   check('the dashboard opens normally', !gated(afterOpening), `status ${afterOpening.status}`)
 
-  const tillAfter = await hit('/cashier', asCashier)
+  const tillAfter = await hit('/cashier/pos?tab=cashier', asCashier)
   check('and so does the till', !gated(tillAfter), `status ${tillAfter.status}`)
 
   const backToScreen = await hit('/cashier/session', asCashier)
