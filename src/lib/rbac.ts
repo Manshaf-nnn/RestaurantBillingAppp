@@ -141,6 +141,21 @@ export const PERMISSIONS = {
   // inventory — moving stock and changing what it cost are separate powers
   // from ordinary stock-keeping, so they are separate permissions.
   INVENTORY_ADJUST: 'inventory.adjust',
+  /**
+   * Ask for an adjustment rather than make one (stockMa.md).
+   *
+   * A storeman finds forty bottles where the system says forty-two and must be
+   * able to say so. Letting them correct it themselves would be the one thing
+   * the separation exists to prevent, so this raises an approval request and
+   * the stock moves only when somebody who may adjust signs it off.
+   *
+   * Granted explicitly rather than split from `inventory.adjust`, even though
+   * everyone who may adjust may obviously also ask. `no-parent-permission-
+   * actions.ts` walks every split pair, finds the feature selling the child
+   * and refuses any actions file its pages import that names the PARENT —
+   * and `stock-actions.ts` names `inventory.adjust` by right.
+   */
+  INVENTORY_ADJUST_REQUEST: 'inventory.adjustRequest',
   INVENTORY_WASTAGE: 'inventory.wastage',
   INVENTORY_TRANSFER: 'inventory.transfer',
   INVENTORY_COUNT: 'inventory.count',
@@ -298,6 +313,7 @@ const INVENTORY_MANAGER: Permission[] = [
   PERMISSIONS.INVENTORY_VIEW,
   PERMISSIONS.INVENTORY_MANAGE,
   PERMISSIONS.INVENTORY_ADJUST,
+  PERMISSIONS.INVENTORY_ADJUST_REQUEST,
   PERMISSIONS.INVENTORY_WASTAGE,
   PERMISSIONS.INVENTORY_WASTAGE_APPROVE,
   PERMISSIONS.INVENTORY_TRANSFER,
@@ -336,6 +352,53 @@ const PURCHASING_MANAGER: Permission[] = [
   PERMISSIONS.TRANSFER_VIEW,
   PERMISSIONS.REPORT_VIEW,
   PERMISSIONS.BRANCH_VIEW,
+]
+
+/**
+ * Keeps one location's store (stockMa.md).
+ *
+ * Everything a storeman does with their hands — receive a delivery, send a
+ * transfer, take one in, count a shelf, write off a spoiled crate, make a
+ * prepared item — and nothing that rewrites what any of it was worth. No
+ * balance adjustment, no cost edit, no signature on their own paperwork.
+ *
+ * ── Why no DASHBOARD_VIEW ──────────────────────────────────────────────────
+ *
+ * `/dashboard` is the sales screen: takings, collected, average order value,
+ * outstanding bills. A storeman has no reason to read the day's money, and
+ * the permission also splits into `APPROVALS_VIEW` and `TASKS_VIEW`. Their
+ * landing page is the stock they are responsible for, and the inventory
+ * report is their overview.
+ *
+ * ── Why the report permissions are named one by one ───────────────────────
+ *
+ * `REPORT_VIEW` splits into seven, two of which are cash and profit. The two
+ * that are about stock are granted directly instead.
+ */
+const STOCK_KEEPER: Permission[] = [
+  // Not derived: HANDOVER_VIEW splits from ORDER_VIEW, which they do not hold.
+  PERMISSIONS.HANDOVER_VIEW,
+  PERMISSIONS.BRANCH_VIEW,
+  PERMISSIONS.INVENTORY_VIEW,
+  PERMISSIONS.INVENTORY_EXPIRY_VIEW,
+  // Count and record; approving a count is what posts the variance, and that
+  // is somebody else's signature.
+  PERMISSIONS.INVENTORY_COUNT,
+  PERMISSIONS.INVENTORY_WASTAGE,
+  PERMISSIONS.INVENTORY_ADJUST_REQUEST,
+  PERMISSIONS.TRANSFER_VIEW,
+  PERMISSIONS.TRANSFER_REQUEST,
+  // Dispatch and receive, never approve — TRANSFER_APPROVE also closes and
+  // rejects, and reserves stock at the source.
+  PERMISSIONS.TRANSFER_DISPATCH,
+  PERMISSIONS.TRANSFER_RECEIVE,
+  PERMISSIONS.PURCHASE_VIEW,
+  PERMISSIONS.PURCHASE_RECEIVE,
+  PERMISSIONS.SUPPLIER_VIEW,
+  PERMISSIONS.PRODUCTION_VIEW,
+  PERMISSIONS.PRODUCTION_MANAGE,
+  PERMISSIONS.REPORT_INVENTORY,
+  PERMISSIONS.REPORT_VARIANCE,
 ]
 
 /** Moves boxes. Receives and dispatches, counts, but never adjusts a balance
@@ -458,6 +521,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   INVENTORY_MANAGER: withSplits(INVENTORY_MANAGER),
   PURCHASING_MANAGER: withSplits(PURCHASING_MANAGER),
   WAREHOUSE_STAFF: withSplits(WAREHOUSE_STAFF),
+  STOCK_KEEPER: withSplits(STOCK_KEEPER),
   ACCOUNTANT: withSplits(ACCOUNTANT),
   SUPER_ADMIN: ALL,
   OWNER: ALL,
@@ -472,6 +536,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   INVENTORY_MANAGER: 'Inventory manager',
   PURCHASING_MANAGER: 'Purchasing manager',
   WAREHOUSE_STAFF: 'Warehouse staff',
+  STOCK_KEEPER: 'Stock keeper',
   ACCOUNTANT: 'Accountant',
   SUPER_ADMIN: 'Super Admin',
   OWNER: 'Owner',
@@ -490,6 +555,8 @@ export const ROLE_HOME: Record<UserRole, string> = {
   INVENTORY_MANAGER: '/dashboard/inventory',
   PURCHASING_MANAGER: '/dashboard/purchases',
   WAREHOUSE_STAFF: '/dashboard/locations',
+  // The stock they are responsible for, not the day's takings.
+  STOCK_KEEPER: '/dashboard/inventory',
   ACCOUNTANT: '/dashboard/accounting',
   OWNER: '/dashboard',
   MANAGER: '/dashboard',
@@ -671,6 +738,7 @@ const BACK_OFFICE_ROLES: UserRole[] = [
   'INVENTORY_MANAGER',
   'PURCHASING_MANAGER',
   'WAREHOUSE_STAFF',
+  'STOCK_KEEPER',
   'ACCOUNTANT',
 ]
 

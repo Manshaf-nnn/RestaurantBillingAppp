@@ -43,6 +43,9 @@ enum UserRole {
   INVENTORY_MANAGER
   PURCHASING_MANAGER
   WAREHOUSE_STAFF
+  /// Keeps one location's store: receives, moves, counts, wastes, makes.
+  /// Never adjusts a balance or edits a cost — those go through approval.
+  STOCK_KEEPER
   ACCOUNTANT
 }
 

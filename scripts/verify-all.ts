@@ -70,6 +70,10 @@ const SERVICE = [
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
   'stock-location-test',
   'branch-scope-test',
+  // stockMa.md — the stock keeper: what they may and may not do, that they see
+  // one location and nothing without one, and that a correction they raise
+  // moves no stock until somebody else signs it.
+  'stock-keeper-test',
   'instructions-test',
   // redesignkitchenjob.md — prepared items: one-step Make Item, exact value
   // carried from raw stock into the prepared item, waste expensed separately,

@@ -33,6 +33,8 @@ export const adjustStockSchema = z.object({
   unit: z.enum(UNITS).optional(),
   direction: z.enum(['IN', 'OUT']),
   reason: z.string().trim().min(2, 'Give a reason').max(200),
+  /** Which shelf. Checked against what the caller may reach, never trusted. */
+  branchId: z.string().min(1).optional().or(z.literal('')),
 })
 
 export const openingBalanceSchema = z.object({

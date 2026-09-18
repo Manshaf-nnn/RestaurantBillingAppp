@@ -4,6 +4,7 @@ import type { ApprovalKind, ApprovalRequest, ApprovalStatus, Prisma } from '@pri
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { AUDIT_ACTIONS, audit } from '@/server/audit'
 
 /**
  * Approval workflow for sensitive actions.
@@ -159,7 +160,7 @@ export async function requestApproval(params: {
   })
   if (existing) return existing
 
-  return prisma.approvalRequest.create({
+  const request = await prisma.approvalRequest.create({
     data: {
       restaurantId: params.restaurantId,
       branchId: params.branchId ?? null,
@@ -173,6 +174,41 @@ export async function requestApproval(params: {
       status: 'PENDING',
     },
   })
+
+  /*
+   * Raising a request is an event worth recording (stockMa.md's audit list).
+   *
+   * `AUDIT_ACTIONS.APPROVAL_REQUESTED` had been declared and never emitted, so
+   * the trail began at the DECISION: the detail dialog's history — which reads
+   * `entity: 'ApprovalRequest'` — could not say when a request was raised or by
+   * whom, and "show me everything ever asked for" returned nothing.
+   *
+   * Emitted here rather than at the four call sites so every kind is covered
+   * by one line and none can be forgotten. A dedupe returns early above, so a
+   * retry writes no second row.
+   */
+  await audit({
+    restaurantId: params.restaurantId,
+    branchId: params.branchId ?? null,
+    userId: params.userId ?? null,
+    action: AUDIT_ACTIONS.APPROVAL_REQUESTED,
+    entity: 'ApprovalRequest',
+    entityId: request.id,
+    after: {
+      kind: params.kind,
+      of: params.entity,
+      ofId: params.entityId ?? null,
+      amount: params.amount ?? null,
+      reason: request.reason,
+      ...(params.payload &&
+      typeof params.payload === 'object' &&
+      !Array.isArray(params.payload)
+        ? (params.payload as Record<string, unknown>)
+        : {}),
+    },
+  })
+
+  return request
 }
 
 /**

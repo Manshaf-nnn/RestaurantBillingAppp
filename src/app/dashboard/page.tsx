@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import type { Metadata } from 'next'
 import {
   AlertTriangle,
@@ -37,9 +38,9 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { PeriodPicker } from '@/features/dashboard/components/period-picker'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
 import { formatMoney, localeForCurrency } from '@/lib/money'
-import { can, PERMISSIONS } from '@/lib/rbac'
+import { can, landingFor, PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { requirePagePermission } from '@/server/auth/guard'
+import { requirePagePermission, requirePageUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { flagForgottenDrawers } from '@/features/cashdrawer/service'
@@ -54,6 +55,17 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  /*
+   * Somebody who may not read the sales dashboard is sent to their own screen,
+   * not to a refusal.
+   *
+   * Every role held `dashboard.view` until the stock keeper (stockMa.md), whose
+   * landing page is the stock they look after. `/forbidden` is the right answer
+   * to a page you may not open, and the wrong one to a home page you never
+   * asked for — so the door is redirected rather than slammed.
+   */
+  const signedIn = await requirePageUser('/dashboard')
+  if (!can(signedIn, PERMISSIONS.DASHBOARD_VIEW)) redirect(landingFor(signedIn.role))
   const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard')
 
   /*

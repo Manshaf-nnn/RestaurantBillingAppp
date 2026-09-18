@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import type { StockUnit } from '@prisma/client'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
@@ -22,6 +23,7 @@ import {
 import { DECIDE_PERMISSION } from './permissions'
 import type { ApprovalDetailPayload } from './types'
 import { approveTransfer, closeTransfer } from '@/features/transfers/service'
+import { adjustStock } from '@/features/inventory/operations'
 
 /**
  * Rule on a request (recorrection.md §1).
@@ -77,7 +79,7 @@ export async function decideApprovalAction(
        */
       const target = await prisma.approvalRequest.findFirst({
         where: { id: data.approvalId, restaurantId: user.restaurantId },
-        select: { kind: true, branchId: true, entityId: true },
+        select: { kind: true, branchId: true, entityId: true, payload: true, requestedById: true, reason: true },
       })
       if (!target) throw new NotFoundError('Approval request')
       await assertRecordBranch(user, target, 'approval request')
@@ -91,6 +93,22 @@ export async function decideApprovalAction(
 
       const note = data.note || null
       const isTransfer = target.kind === 'STOCK_TRANSFER' && Boolean(target.entityId)
+      /*
+       * A stock adjustment somebody asked for rather than made (stockMa.md).
+       * The request row IS the record — there is no half-written entity to
+       * close — so only approval has a consequence; a refusal is the decision
+       * plus its mandatory note.
+       */
+      const adjustment =
+        target.kind === 'STOCK_ADJUSTMENT' && data.approve && target.branchId
+          ? (target.payload as {
+              reference?: string
+              itemId?: string
+              quantity?: number
+              unit?: StockUnit | null
+              direction?: 'IN' | 'OUT'
+            } | null)
+          : null
 
       const request = await decideApproval({
         restaurantId: user.restaurantId,
@@ -110,7 +128,27 @@ export async function decideApprovalAction(
          * failure, which left an APPROVED request pointing at a REQUESTED
          * transfer with nothing but a server log to say so.
          */
-        apply: isTransfer
+        apply: adjustment?.itemId && adjustment.quantity && adjustment.direction
+          ? async (tx) => {
+              await adjustStock({
+                restaurantId: user.restaurantId,
+                branchId: target.branchId!,
+                itemId: adjustment.itemId!,
+                quantity: adjustment.quantity!,
+                unit: adjustment.unit ?? undefined,
+                direction: adjustment.direction!,
+                reason: target.reason,
+                reference: adjustment.reference ?? null,
+                /*
+                 * The ledger names the person who found the discrepancy, not
+                 * the one who signed it off. Who signed it is on the approval
+                 * itself (`decidedById`) and in the audit row below.
+                 */
+                userId: target.requestedById ?? user.id,
+                tx,
+              })
+            }
+          : isTransfer
           ? async (tx) => {
               if (data.approve) {
                 await approveTransfer({

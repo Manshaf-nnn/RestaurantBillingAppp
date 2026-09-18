@@ -5,11 +5,15 @@ import { revalidatePath } from 'next/cache'
 import type { UserRole } from '@prisma/client'
 
 import { runAction, type ActionResult } from '@/lib/action'
+import { NotFoundError } from '@/lib/errors'
 import { minorUnitFactor } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { nextCounterValue } from '@/server/db/counters'
+import { requestApproval } from '@/features/approvals/service'
+import { toBaseUnits } from './units'
 import { requireRestaurant } from '@/server/db/tenant'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import {
@@ -48,9 +52,10 @@ async function costToMinor(restaurantId: string, value?: number): Promise<number
 export async function receiveStockAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
   return runAction(receiveStockSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
+    const branchId = await actingBranchId(user)
     const posted = await receiveStock({
       restaurantId: user.restaurantId,
-      branchId: await actingBranchId(user),
+      branchId,
       itemId: data.itemId,
       quantity: data.quantity,
       unit: data.unit,
@@ -60,7 +65,7 @@ export async function receiveStockAction(input: unknown): Promise<ActionResult<{
       userId: user.id,
     })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_RECEIVED, entity: 'InventoryItem', entityId: data.itemId,
       before: { balance: posted.balanceBefore },
       after: { balance: posted.balanceAfter, quantity: data.quantity, unit: data.unit },
@@ -78,23 +83,102 @@ export async function receiveStockAction(input: unknown): Promise<ActionResult<{
  * One event should have one way in.
  */
 
-export async function adjustStockAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
+/**
+ * A correction to a counted balance — applied, or asked for (stockMa.md §).
+ *
+ * One action, two outcomes, decided by what the caller may do rather than by
+ * which button they pressed:
+ *
+ *   holds `inventory.adjust`   → the movement is posted here and now
+ *   holds only the request one → an approval request, and nothing moves
+ *
+ * ── Why the value threshold is not consulted on the request path ───────────
+ *
+ * `needsApproval` exists to spare a manager the paperwork on a small
+ * correction. It was never a licence for somebody who may not correct a
+ * balance at all to correct a small one, so a storeman's adjustment goes to
+ * the desk whatever it is worth — including when approvals are switched off
+ * altogether. The consequence, worth knowing: a restaurant that has disabled
+ * approvals still accumulates these, and somebody holding
+ * `inventory.countApprove` has to work the queue.
+ */
+export async function adjustStockAction(
+  input: unknown,
+): Promise<ActionResult<{ status: 'APPLIED' | 'PENDING'; reference: string; balance: number | null }>> {
   return runAction(adjustStockSchema, input, async (data) => {
-    const user = await requirePermission(PERMISSIONS.INVENTORY_ADJUST)
+    const user = await requirePermission(PERMISSIONS.INVENTORY_ADJUST_REQUEST)
+    await assertBranchAccess(user, data.branchId || null)
+    const branchId = data.branchId || (await actingBranchId(user))
+
+    const item = await prisma.inventoryItem.findFirst({
+      where: { id: data.itemId, restaurantId: user.restaurantId, isActive: true },
+      select: { id: true, name: true, unit: true, purchaseUnit: true, consumptionUnit: true,
+        unitsPerPurchaseUnit: true, quantity: true, costPerUnit: true },
+    })
+    if (!item) throw new NotFoundError('Item')
+
+    /*
+     * Its own document number. Adjustments were the last stock document with
+     * none — transfers have TRF-, production PRD-, counts SC-, receipts GRN- —
+     * so a ledger row could not be traced back to what authorised it.
+     *
+     * It also makes the approval's dedupe key unique. `requestApproval`
+     * collapses a second PENDING request for the same (entity, entityId,
+     * kind); keyed on the item, a storeman's second correction would silently
+     * return the first and appear to have been recorded when it had not.
+     */
+    const seq = await prisma.$transaction((tx) => nextCounterValue(tx, user.restaurantId, 'stockAdjustment'))
+    const reference = `ADJ-${String(seq).padStart(4, '0')}`
+    const unit = data.unit ?? item.unit
+    // What the correction is worth, for the desk's amount column.
+    const amount = Math.round(Math.abs(toBaseUnits(data.quantity, unit, item)) * item.costPerUnit)
+
+    if (!can(user, PERMISSIONS.INVENTORY_ADJUST)) {
+      const request = await requestApproval({
+        restaurantId: user.restaurantId,
+        branchId,
+        kind: 'STOCK_ADJUSTMENT',
+        entity: 'StockAdjustment',
+        entityId: reference,
+        amount,
+        reason: data.reason,
+        userId: user.id,
+        payload: {
+          reference,
+          itemId: item.id,
+          itemName: item.name,
+          quantity: data.quantity,
+          unit,
+          direction: data.direction,
+          branchId,
+          balanceBefore: item.quantity,
+        },
+      })
+      // `requestApproval` writes the APPROVAL_REQUESTED audit row for every
+      // kind, so there is nothing to record a second time here.
+      revalidatePath('/dashboard/inventory/adjustments')
+      return { status: 'PENDING' as const, reference, balance: null }
+    }
+
     const posted = await adjustStock({
-      restaurantId: user.restaurantId, branchId: await actingBranchId(user),
+      restaurantId: user.restaurantId, branchId,
       itemId: data.itemId, quantity: data.quantity,
-      unit: data.unit, direction: data.direction, reason: data.reason, userId: user.id,
+      unit: data.unit, direction: data.direction, reason: data.reason,
+      reference, userId: user.id,
     })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_ADJUSTED, entity: 'InventoryItem', entityId: data.itemId,
       before: { balance: posted.balanceBefore },
-      after: { balance: posted.balanceAfter, direction: data.direction, reason: data.reason },
+      after: {
+        balance: posted.balanceAfter, reference, direction: data.direction,
+        quantity: data.quantity, unit, reason: data.reason,
+      },
     })
     revalidateInventory(data.itemId)
-    return { balance: posted.balanceAfter }
-  }, 'Stock adjusted.')
+    revalidatePath('/dashboard/inventory/adjustments')
+    return { status: 'APPLIED' as const, reference, balance: posted.balanceAfter }
+  }, 'Saved.')
 }
 
 /*
@@ -113,13 +197,14 @@ export async function adjustStockAction(input: unknown): Promise<ActionResult<{ 
 export async function setOpeningBalanceAction(input: unknown): Promise<ActionResult<{ balance: number }>> {
   return runAction(openingBalanceSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_ADJUST)
+    const branchId = await actingBranchId(user)
     const posted = await setOpeningBalance({
-      restaurantId: user.restaurantId, branchId: await actingBranchId(user),
+      restaurantId: user.restaurantId, branchId,
       itemId: data.itemId, quantity: data.quantity,
       unit: data.unit, unitCost: await costToMinor(user.restaurantId, data.unitCost), userId: user.id,
     })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_OPENING, entity: 'InventoryItem', entityId: data.itemId,
       after: { balance: posted.balanceAfter },
     })
@@ -150,12 +235,12 @@ export async function openStockCountAction(
 ): Promise<ActionResult<{ id: string; reference: string }>> {
   const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
   await assertBranchAccess(user, branchId ?? null)
+  const countAt = branchId || (await actingBranchId(user))
   const count = await openStockCount({
-    restaurantId: user.restaurantId, userId: user.id,
-    branchId: branchId || (await actingBranchId(user)),
+    restaurantId: user.restaurantId, userId: user.id, branchId: countAt,
   })
   await audit({
-    restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+    restaurantId: user.restaurantId, branchId: countAt, userId: user.id, actorName: user.name,
     action: AUDIT_ACTIONS.STOCK_COUNT_OPENED, entity: 'StockCount', entityId: count.id,
     after: { reference: count.reference },
   })
@@ -212,10 +297,12 @@ export async function cancelStockCountAction(
   stockCountId: string,
 ): Promise<ActionResult<{ id: string }>> {
   const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT)
-  await assertRecordBranch(user, await countBranch(user.restaurantId, stockCountId), 'stock count')
+  const countAt = await countBranch(user.restaurantId, stockCountId)
+  await assertRecordBranch(user, countAt, 'stock count')
   const count = await cancelStockCount(user.restaurantId, stockCountId)
   await audit({
-    restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+    restaurantId: user.restaurantId, branchId: countAt?.branchId ?? null,
+    userId: user.id, actorName: user.name,
     action: AUDIT_ACTIONS.STOCK_COUNT_CANCELLED, entity: 'StockCount', entityId: count.id,
     after: { reference: count.reference },
   })
@@ -242,11 +329,8 @@ export async function approveStockCountAction(
 ): Promise<ActionResult<{ adjusted: number; unchanged: number; valueDelta: number }>> {
   return runAction(approveCountSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_COUNT_APPROVE)
-    await assertRecordBranch(
-      user,
-      await countBranch(user.restaurantId, data.stockCountId),
-      'stock count',
-    )
+    const countAt = await countBranch(user.restaurantId, data.stockCountId)
+    await assertRecordBranch(user, countAt, 'stock count')
     const result = await approveStockCount({
       restaurantId: user.restaurantId, stockCountId: data.stockCountId,
       userId: user.id, notes: data.notes || null,
@@ -263,7 +347,8 @@ export async function approveStockCountAction(
       selfApprovalAllowed: SELF_APPROVERS.has(user.role),
     })
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId: countAt?.branchId ?? null,
+      userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_COUNT_APPROVED, entity: 'StockCount', entityId: data.stockCountId,
       after: {
         reference: result.count.reference,

@@ -52,6 +52,11 @@ export async function recordWastageAction(
   return runAction(wastageSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.INVENTORY_WASTAGE)
     await assertBranchAccess(user, data.branchId || null)
+    const wastedAt = await resolveStockLocation({
+      restaurantId: user.restaurantId,
+      requestedBranchId: data.branchId,
+      userBranchId: user.branchId,
+    })
 
     const record = await recordWastage({
       restaurantId: user.restaurantId,
@@ -62,11 +67,7 @@ export async function recordWastageAction(
       reasonNote: data.reasonNote || null,
       notes: data.notes || null,
       photoUrl: data.photoUrl || null,
-      branchId: await resolveStockLocation({
-        restaurantId: user.restaurantId,
-        requestedBranchId: data.branchId,
-        userBranchId: user.branchId,
-      }),
+      branchId: wastedAt,
       locationId: data.locationId || null,
       batchId: data.batchId || null,
       userId: user.id,
@@ -74,7 +75,7 @@ export async function recordWastageAction(
     })
 
     await audit({
-      restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+      restaurantId: user.restaurantId, branchId: wastedAt, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.STOCK_WASTAGE, entity: 'WastageRecord', entityId: record.id,
       after: {
         itemId: data.itemId, quantity: record.quantity,
@@ -116,7 +117,8 @@ export async function reviewWastageAction(
         note: data.note || null,
       })
       await audit({
-        restaurantId: user.restaurantId, userId: user.id, actorName: user.name,
+        restaurantId: user.restaurantId, branchId: target?.branchId ?? null,
+        userId: user.id, actorName: user.name,
         action: AUDIT_ACTIONS.STOCK_WASTAGE, entity: 'WastageRecord', entityId: record.id,
         after: { status: record.status, note: data.note || null },
       })

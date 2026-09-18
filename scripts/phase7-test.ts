@@ -22,7 +22,7 @@ async function throws(n: string, fn: () => Promise<unknown>, code?: string) {
 
 const ROLES = [
   'SUPER_ADMIN', 'OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'KITCHEN',
-  'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF', 'ACCOUNTANT',
+  'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER', 'ACCOUNTANT',
 ] as const
 
 async function main() {

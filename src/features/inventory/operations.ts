@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { StockUnit } from '@prisma/client'
+import type { Prisma, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
@@ -168,20 +168,39 @@ export async function setOpeningBalance(
   )
 }
 
-/** A manual correction in either direction. Always needs a reason. */
+/**
+ * A manual correction in either direction. Always needs a reason.
+ *
+ * `tx` is there so the correction can be posted INSIDE somebody else's
+ * transaction — specifically the approval decision (stockMa.md), where the
+ * ruling and its consequence must stand or fall together. Without it a failed
+ * post would leave an APPROVED request that moved nothing. Same shape as
+ * `approveTransfer`, which the approvals desk already calls this way.
+ *
+ * `reference` is the adjustment's own document number (ADJ-0007). Adjustments
+ * were the last stock document with no number at all, so a ledger row could
+ * not be traced back to the paperwork that authorised it.
+ */
 export async function adjustStock(
-  params: Simple & { direction: 'IN' | 'OUT'; reason: string },
+  params: Simple & {
+    direction: 'IN' | 'OUT'
+    reason: string
+    reference?: string | null
+    tx?: Prisma.TransactionClient
+  },
 ): Promise<PostedMovement> {
   if (params.reason.trim().length < 2) {
     throw new AppError('Give a reason for the adjustment', 400, 'ADJUSTMENT_NO_REASON')
   }
-  return prisma.$transaction((tx) =>
-    postMovement(tx, {
-      ...params,
+  const { tx, reference, ...rest } = params
+  const run = (client: Prisma.TransactionClient) =>
+    postMovement(client, {
+      ...rest,
       type: params.direction === 'IN' ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
       enteredUnit: params.unit,
       reason: params.reason.trim(),
-    }),
-  )
+      ...(reference ? { referenceType: 'StockAdjustment', referenceId: reference } : {}),
+    })
+  return tx ? run(tx) : prisma.$transaction(run)
 }
 

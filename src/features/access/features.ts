@@ -463,6 +463,22 @@ export const FEATURES: Feature[] = [
     routes: ['/dashboard/inventory/counts'],
   },
   {
+    key: 'stockAdjustments',
+    label: 'Stock adjustments',
+    group: 'Inventory',
+    description: 'Corrections to a counted balance. Raised here; applied when signed off.',
+    actions: [
+      { key: 'view', label: 'Report a difference', permission: PERMISSIONS.INVENTORY_ADJUST_REQUEST },
+      {
+        key: 'approve',
+        label: 'Apply directly',
+        permission: PERMISSIONS.INVENTORY_ADJUST,
+        hint: 'Posts the correction on the spot instead of sending it for sign-off.',
+      },
+    ],
+    routes: ['/dashboard/inventory/adjustments'],
+  },
+  {
     key: 'wastage',
     label: 'Wastage',
     group: 'Inventory',

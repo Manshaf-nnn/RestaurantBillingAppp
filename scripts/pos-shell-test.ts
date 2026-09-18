@@ -82,7 +82,7 @@ async function main() {
      * that gate turns away would be a tab nobody could reach.
      */
     const posGate = [PERMISSIONS.ORDER_CREATE, PERMISSIONS.PAYMENT_COLLECT, PERMISSIONS.CASH_DRAWER_OPERATE, PERMISSIONS.CASH_DRAWER_MANAGE]
-    const roles = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'KITCHEN', 'ACCOUNTANT', 'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF'] as const
+    const roles = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'KITCHEN', 'ACCOUNTANT', 'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER'] as const
     check('nobody is offered a tab on a screen they cannot open',
       roles.every((role) => posTabsFor(subject(role)).length === 0 || posGate.some((p) => can(subject(role), p))))
     check('everybody who may hand over can reach the screen that accepts it',

@@ -62,6 +62,7 @@ const ROLE_ALLOWED: Record<string, string[]> = {
     'INVENTORY_MANAGER',
     'PURCHASING_MANAGER',
     'WAREHOUSE_STAFF',
+    'STOCK_KEEPER',
     'ACCOUNTANT',
   ],
 }

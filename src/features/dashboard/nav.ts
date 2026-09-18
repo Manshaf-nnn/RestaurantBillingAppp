@@ -260,6 +260,12 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.INVENTORY_COUNT,
       },
       {
+        href: '/dashboard/inventory/adjustments',
+        label: 'Adjustments',
+        icon: Scale,
+        permission: PERMISSIONS.INVENTORY_ADJUST_REQUEST,
+      },
+      {
         href: '/dashboard/inventory/wastage',
         label: 'Wastage',
         icon: Trash2,

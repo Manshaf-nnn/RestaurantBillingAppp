@@ -665,7 +665,8 @@ async function main() {
   check(
     'a chef must have one',
     requiresOwnBranch('KITCHEN') && requiresOwnBranch('CASHIER') &&
-      requiresOwnBranch('WAITER') && requiresOwnBranch('WAREHOUSE_STAFF'),
+      requiresOwnBranch('WAITER') && requiresOwnBranch('WAREHOUSE_STAFF') &&
+      requiresOwnBranch('STOCK_KEEPER'),
   )
   check(
     'a manager need not — blank means group manager, which is a real job',
@@ -678,7 +679,7 @@ async function main() {
 
   // And the two agree: exactly the roles that need their own branch are the
   // ones that see nothing without one.
-  const blindWithoutOne = (['KITCHEN', 'CASHIER', 'WAITER', 'WAREHOUSE_STAFF'] as const).every(
+  const blindWithoutOne = (['KITCHEN', 'CASHIER', 'WAITER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER'] as const).every(
     (role) => (visibleBranchIds({ role, branchId: null }) ?? ['all']).length === 0,
   )
   check(
