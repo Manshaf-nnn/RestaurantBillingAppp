@@ -52,6 +52,18 @@ import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receip
 import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions'
 import { presentBill, collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import { recordPrint } from '@/features/printing/actions'
+import { TillLoyalty } from '@/features/loyalty/components/till-loyalty'
+
+/** A reward as the till lists it, before this bill's balance is applied. */
+export interface LoyaltyRewardOption {
+  id: string
+  name: string
+  description: string | null
+  pointsCost: number
+  value: number
+  minOrderAmount: number
+  expiresAt: string | null
+}
 import {
   holdBillAction,
   mergeBillsAction,
@@ -109,6 +121,8 @@ export interface CashierBill {
   tipAmount: number
   paidTotal: number
   items: Array<{ id: string; name: string; optionsLabel: string; quantity: number; lineTotal: number }>
+  /** The loyalty account on this bill, when it has one (loyalty spec). */
+  loyalty?: { customerId: string; customerName: string | null; points: number } | null
 }
 
 type BillFilter = 'ACTIVE' | 'DINE_IN' | 'TAKEAWAY' | 'HELD'
@@ -130,6 +144,7 @@ export function CashierBoard({
   tables = [],
   canAccept = false,
   embedded = false,
+  rewards = [],
 }: {
   initialBills: CashierBill[]
   todayTotal: number
@@ -157,6 +172,8 @@ export function CashierBoard({
   /** Free tables, so the dialog can take a dine-in order. */
   tables?: Array<{ id: string; number: string; area: string | null }>
   restaurant: ReceiptRestaurant
+  /** What guests can spend points on, loaded once for the screen. */
+  rewards?: LoyaltyRewardOption[]
 }) {
 
   /*
@@ -927,6 +944,7 @@ export function CashierBoard({
                 bill={selected}
                 restaurant={restaurant}
                 otherBills={bills.filter((bill) => bill.id !== selected.id && !bill.heldAt)}
+                rewards={rewards}
               />
               <BillPanel
                 key={`pay-${selected.id}`}
@@ -973,10 +991,12 @@ function BillingDetailPanel({
   bill,
   restaurant,
   otherBills,
+  rewards,
 }: {
   bill: CashierBill
   restaurant: ReceiptRestaurant
   otherBills: CashierBill[]
+  rewards: LoyaltyRewardOption[]
 }) {
   const [splitOpen, setSplitOpen] = React.useState(false)
   const [mergeOpen, setMergeOpen] = React.useState(false)
@@ -1127,6 +1147,29 @@ function BillingDetailPanel({
         onOpenChange={setSwapOpen}
         table={bill.tableId ? { id: bill.tableId, number: bill.tableNumber ?? '' } : null}
       />
+
+      {/*
+        Points and rewards for whoever this bill belongs to (loyalty spec).
+        Only when a guest is on it — an anonymous walk-in has no account, and
+        the cashier adds a phone at the door to give them one.
+      */}
+      {bill.loyalty && rewards.length > 0 ? (
+        <div className="px-4 pt-4">
+          <TillLoyalty
+            orderId={bill.id}
+            customerName={bill.loyalty.customerName}
+            points={bill.loyalty.points}
+            rewards={rewards.map((reward) => ({
+              ...reward,
+              affordable: bill.loyalty!.points >= reward.pointsCost,
+              pointsNeeded: Math.max(0, reward.pointsCost - bill.loyalty!.points),
+              meetsMinimum: bill.subtotal >= reward.minOrderAmount,
+            }))}
+            currency={restaurant.currency}
+            locale={restaurant.locale}
+          />
+        </div>
+      ) : null}
 
       <div className="grid gap-4 p-4 md:grid-cols-[1.1fr_0.9fr]">
         <div>

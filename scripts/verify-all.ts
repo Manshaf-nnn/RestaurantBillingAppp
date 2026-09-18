@@ -74,6 +74,11 @@ const SERVICE = [
   // one location and nothing without one, and that a correction they raise
   // moves no stock until somebody else signs it.
   'stock-keeper-test',
+  // loyalty — a rewards catalogue on top of the existing ledger: spending one
+  // is atomic and happens once, refusals explain themselves, cancelling and
+  // refunding unwind it, and every path leaves the balance equal to the sum
+  // of its entries.
+  'loyalty-rewards-test',
   'instructions-test',
   // redesignkitchenjob.md — prepared items: one-step Make Item, exact value
   // carried from raw stock into the prepared item, waste expensed separately,

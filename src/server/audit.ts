@@ -255,6 +255,10 @@ export const AUDIT_ACTIONS = {
   USER_DISABLED: 'user.disabled',
   PRICE_CHANGED: 'menu.price_changed',
   RECIPE_CHANGED: 'recipe.changed',
+  /** A hand correction to a guest's points, with its reason. */
+  LOYALTY_ADJUSTED: 'loyalty.adjusted',
+  /** A reward spent against a bill. */
+  LOYALTY_REDEEMED: 'loyalty.redeemed',
   APPROVAL_REQUESTED: 'approval.requested',
   APPROVAL_DECIDED: 'approval.decided',
   /**

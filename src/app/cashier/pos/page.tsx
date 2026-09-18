@@ -218,7 +218,7 @@ export default async function PosPage({
     startOfDay.setHours(0, 0, 0, 0)
     const branchIds = branchId ? [branchId] : selection.branchIds
 
-    const [menu, bills, tables, today] = await Promise.all([
+    const [menu, bills, tables, rewards, today] = await Promise.all([
       // The till sells its own branch's menu at its own branch's prices.
       getPublicMenu(user.restaurantId, restaurant.timezone, branchId),
       getCashierQueue(user.restaurantId, branchIds),
@@ -228,6 +228,17 @@ export default async function PosPage({
         select: { id: true, number: true, area: true },
         orderBy: { number: 'asc' },
       }),
+      // Loaded once for the screen rather than per bill (loyalty spec).
+      restaurant.loyaltyEnabled
+        ? prisma.loyaltyReward.findMany({
+            where: {
+              restaurantId: user.restaurantId,
+              isActive: true,
+              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+            },
+            orderBy: [{ pointsCost: 'asc' }, { name: 'asc' }],
+          })
+        : Promise.resolve([]),
       prisma.payment.aggregate({
         where: {
           restaurantId: user.restaurantId,
@@ -241,6 +252,23 @@ export default async function PosPage({
         _count: true,
       }),
     ])
+
+    /*
+     * One query for every account on the screen, rather than one per bill.
+     * A till with thirty open tabs would otherwise make thirty round trips to
+     * show a number beside each name.
+     */
+    const customerIds = [...new Set(bills.map((order) => order.customerId).filter((id): id is string => Boolean(id)))]
+    const points = new Map(
+      (customerIds.length
+        ? await prisma.customer.findMany({
+            where: { id: { in: customerIds }, restaurantId: user.restaurantId },
+            select: { id: true, name: true, loyaltyPoints: true },
+          })
+        : []
+      ).map((customer) => [customer.id, customer]),
+    )
+
 
     return (
       <div className="mx-auto w-full max-w-7xl p-4 pb-24 lg:pb-4">
@@ -288,6 +316,23 @@ export default async function PosPage({
               quantity: item.quantity,
               lineTotal: item.lineTotal,
             })),
+            // Who the bill belongs to, so the till can show their points.
+            loyalty: order.customerId
+              ? {
+                  customerId: order.customerId,
+                  customerName: points.get(order.customerId)?.name ?? order.customerName,
+                  points: points.get(order.customerId)?.loyaltyPoints ?? 0,
+                }
+              : null,
+          }))}
+          rewards={rewards.map((reward) => ({
+            id: reward.id,
+            name: reward.name,
+            description: reward.description,
+            pointsCost: reward.pointsCost,
+            value: reward.value,
+            minOrderAmount: reward.minOrderAmount,
+            expiresAt: reward.expiresAt?.toISOString() ?? null,
           }))}
         />
       </div>

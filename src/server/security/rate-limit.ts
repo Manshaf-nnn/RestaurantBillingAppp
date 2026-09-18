@@ -36,6 +36,17 @@ export const RATE_LIMITS = {
   placeOrder: { limit: 12, windowSeconds: 600 },
   /** per venue IP — sized for a full dining room, not one phone */
   placeOrderBurst: { limit: 240, windowSeconds: 600 },
+  /*
+   * A guest looking up their own points by phone.
+   *
+   * Tight on purpose. The lookup takes a phone number and no proof, so the
+   * only thing stopping somebody walking the number space and reading other
+   * people's balances is how often they may ask. A guest checks their own
+   * points once or twice a visit.
+   */
+  loyaltyLookup: { limit: 8, windowSeconds: 600 },
+  /** per venue IP — a dining room's worth of guests checking their points */
+  loyaltyLookupBurst: { limit: 120, windowSeconds: 600 },
   /** per guest device */
   serviceRequest: { limit: 10, windowSeconds: 300 },
   /** per venue IP */

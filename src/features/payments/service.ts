@@ -672,6 +672,16 @@ function buildInvoiceSnapshot(
   }
 }
 
+/**
+ * The marker that says a bill's loyalty has already been unwound.
+ *
+ * A stable token rather than the opening words of a sentence: the guard used
+ * to be `note.startsWith('Refunded in full')`, which a reworded note — or a
+ * translated one — would have turned off without anybody noticing, and the
+ * points would have come back twice.
+ */
+const REFUND_REVERSAL_MARK = '[loyalty-reversed]'
+
 export async function refundPayment(params: {
   restaurantId: string
   paymentId: string
@@ -816,42 +826,71 @@ export async function refundPayment(params: {
     })
 
     /*
-     * Every rupee came back, so the points it earned go back too (owner
-     * decision, 2026-09-13) — the mirror of `cancelOrder` returning redeemed
-     * points. Once, however many refunds it took to get here; and never below
-     * the balance the guest still holds, though the ledger records the full
-     * reversal so the books explain the difference.
+     * Every rupee came back, so the loyalty on the bill is unwound — both
+     * halves of it (owner decision 2026-09-13, extended for the rewards work).
+     *
+     *   the points it EARNED are taken back, because the sale did not happen;
+     *   the points it SPENT are given back, because the guest paid for a meal
+     *     they no longer have — `cancelOrder` has always done this, and a bill
+     *     that was refunded rather than cancelled left the guest short.
+     *
+     * Once, however many refunds it took to get here. The guard is the ledger
+     * itself — a RETURNED entry against this order that carries the marker —
+     * rather than the prefix of a sentence, which used to be the guard and
+     * would have been silently switched off by a reworded note.
      */
     if (paidTotal === 0 && payment.order.customerId) {
-      const earned = await tx.loyaltyEntry.findFirst({
-        where: { orderId: payment.orderId, kind: 'EARNED' },
-        select: { points: true },
-      })
-      const alreadyReversed = await tx.loyaltyEntry.findFirst({
-        where: { orderId: payment.orderId, kind: 'ADJUSTED', note: { startsWith: 'Refunded in full' } },
+      const reversed = await tx.loyaltyEntry.findFirst({
+        where: { orderId: payment.orderId, kind: 'RETURNED', note: { contains: REFUND_REVERSAL_MARK } },
         select: { id: true },
       })
-      if (earned && !alreadyReversed) {
+      if (!reversed) {
+        const entries = await tx.loyaltyEntry.findMany({
+          where: { orderId: payment.orderId, kind: { in: ['EARNED', 'REDEEMED'] } },
+          select: { points: true, kind: true },
+        })
+        const earned = entries
+          .filter((entry) => entry.kind === 'EARNED')
+          .reduce((total, entry) => total + entry.points, 0)
+        const spent = entries
+          .filter((entry) => entry.kind === 'REDEEMED')
+          .reduce((total, entry) => total + Math.abs(entry.points), 0)
+
         const holder = await tx.customer.findUnique({
           where: { id: payment.order.customerId },
           select: { loyaltyPoints: true, totalSpent: true },
         })
-        const take = Math.min(Math.max(0, earned.points), holder?.loyaltyPoints ?? 0)
+        /*
+         * Taking back more than they hold would drive the balance negative,
+         * so the take is clamped — and the ENTRY records what was actually
+         * moved, not what was owed, because the balance has to stay the sum
+         * of its entries.
+         */
+        const take = Math.min(Math.max(0, earned), holder?.loyaltyPoints ?? 0)
+        const net = spent - take
+
+        if (net !== 0) {
+          await tx.customer.update({
+            where: { id: payment.order.customerId },
+            data: { loyaltyPoints: { increment: net } },
+          })
+        }
         await tx.customer.update({
           where: { id: payment.order.customerId },
-          data: {
-            loyaltyPoints: { decrement: take },
-            totalSpent: { decrement: Math.min(payment.order.grandTotal, holder?.totalSpent ?? 0) },
-          },
+          data: { totalSpent: { decrement: Math.min(payment.order.grandTotal, holder?.totalSpent ?? 0) } },
         })
         await tx.loyaltyEntry.create({
           data: {
             restaurantId: params.restaurantId,
             customerId: payment.order.customerId,
             orderId: payment.orderId,
-            points: -take,
-            kind: 'ADJUSTED',
-            note: `Refunded in full — the ${earned.points} points earned on ${payment.order.orderNumber} taken back`,
+            points: net,
+            kind: 'RETURNED',
+            note:
+              `${payment.order.orderNumber} refunded in full — ` +
+              `${take} earned point${take === 1 ? '' : 's'} taken back` +
+              (spent > 0 ? `, ${spent} spent returned` : '') +
+              ` ${REFUND_REVERSAL_MARK}`,
             actorId: params.actorId,
           },
         })

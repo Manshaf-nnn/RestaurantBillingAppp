@@ -197,9 +197,16 @@ async function main() {
       await refundPayment({ restaurantId: S.restaurant.id, paymentId: payment.id, reason: 'all of it', actorId: S.owner.id })
     }
     const emptied = await prisma.customer.findUniqueOrThrow({ where: { id: customer.id } })
-    const reversal = await prisma.loyaltyEntry.findFirst({ where: { orderId: bill.id, kind: 'ADJUSTED' } })
+    /*
+     * DELIBERATE behaviour change 2026-09 (loyalty): the refund reversal is a
+     * RETURNED entry, not an ADJUSTED one. ADJUSTED is a hand correction — the
+     * kind a manager makes — and overloading it here meant the guard against a
+     * double reversal had to be the opening words of the note, which any
+     * rewording would have switched off. It is a kind plus a marker now.
+     */
+    const reversal = await prisma.loyaltyEntry.findFirst({ where: { orderId: bill.id, kind: 'RETURNED' } })
     check('every rupee back: the points it earned go back too', emptied.loyaltyPoints === 0 && reversal?.points === -1_650, `${emptied.loyaltyPoints} / ${reversal?.points}`)
-    check('…and the reversal happens once, whatever the refund count', (await prisma.loyaltyEntry.count({ where: { orderId: bill.id, kind: 'ADJUSTED' } })) === 1)
+    check('…and the reversal happens once, whatever the refund count', (await prisma.loyaltyEntry.count({ where: { orderId: bill.id, kind: 'RETURNED' } })) === 1)
   }
 
   console.log('\n── M3. Money on the bill means the bill does not change shape ──')

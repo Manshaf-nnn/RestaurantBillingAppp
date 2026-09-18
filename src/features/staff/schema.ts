@@ -81,7 +81,12 @@ export type CustomerInput = z.infer<typeof customerSchema>
 export const adjustLoyaltySchema = z.object({
   customerId: z.string().cuid(),
   points: z.coerce.number().int(),
-  reason: z.string().trim().max(160).optional(),
+  /*
+   * Required. A hand correction with no reason is the one ledger entry
+   * nobody can explain later, and it is the entry most likely to be
+   * questioned — the same rule stock adjustments have always had.
+   */
+  reason: z.string().trim().min(2, 'Give a reason for the adjustment').max(160),
 })
 
 export const couponSchema = z

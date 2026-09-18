@@ -680,6 +680,7 @@ model Restaurant {
   invoices         Invoice[]
   coupons          Coupon[]
   loyaltyEntries   LoyaltyEntry[]
+  loyaltyRewards   LoyaltyReward[]
   counters         RestaurantCounter[]
   tableSessions    TableSession[]
   printJobs        PrintJob[]
@@ -1958,6 +1959,44 @@ model Refund {
   @@index([orderId])
   @@index([paymentId])
   @@map("refunds")
+}
+
+/**
+ * Something a guest can spend points on (stockMa/loyalty).
+ *
+ * Points alone only ever bought a flat rate off a bill. A reward is the thing
+ * a guest actually recognises — "500 points: a free dessert", "1,000 points:
+ * 20% off, minimum spend 3,000" — so the catalogue carries what it costs, what
+ * it is worth, the smallest bill it may be used on, and when it stops being
+ * offered.
+ *
+ * Never deleted: a reward that has been redeemed is part of somebody's history,
+ * so it is retired with `isActive` and stays readable.
+ */
+model LoyaltyReward {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  /// What the guest pays, in points.
+  pointsCost Int
+  /// What it takes off the bill, in minor units.
+  value      Int
+  /// The smallest bill it may be used on, minor units. 0 means any.
+  minOrderAmount Int @default(0)
+  /// Stops being offered after this. Null means it runs until retired.
+  expiresAt DateTime?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, isActive])
+  @@map("loyalty_rewards")
 }
 
 /**

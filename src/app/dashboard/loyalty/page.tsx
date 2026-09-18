@@ -4,10 +4,12 @@ import { Award, Coins, Sparkles, Users } from 'lucide-react'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { EmptyState } from '@/components/ui/feedback'
 import { LoyaltyManager } from '@/features/loyalty/components/loyalty-manager'
+import { RewardsManager } from '@/features/loyalty/components/rewards-manager'
 import { getLoyaltyOverview } from '@/features/loyalty/queries'
 import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -16,9 +18,14 @@ export const metadata: Metadata = { title: 'Loyalty' }
 
 export default async function LoyaltyPage() {
   const user = await requirePagePermission(PERMISSIONS.LOYALTY_VIEW, '/dashboard/loyalty')
-  const [restaurant, overview] = await Promise.all([
+  const [restaurant, overview, rewards] = await Promise.all([
     requireRestaurant(user.restaurantId),
     getLoyaltyOverview(user.restaurantId, visibleBranchIds(user)),
+    // Retired ones included: an owner has to be able to find one to bring back.
+    prisma.loyaltyReward.findMany({
+      where: { restaurantId: user.restaurantId },
+      orderBy: [{ isActive: 'desc' }, { pointsCost: 'asc' }],
+    }),
   ])
 
   const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
@@ -61,6 +68,24 @@ export default async function LoyaltyPage() {
               earnRate: restaurant.loyaltyEarnRateX100 / 100,
               pointValue: restaurant.loyaltyPointValue / 100,
             }}
+          />
+        </div>
+
+        <div className="lg:col-span-3">
+          <RewardsManager
+            rewards={rewards.map((reward) => ({
+              id: reward.id,
+              name: reward.name,
+              description: reward.description,
+              pointsCost: reward.pointsCost,
+              value: reward.value,
+              minOrderAmount: reward.minOrderAmount,
+              expiresAt: reward.expiresAt?.toISOString() ?? null,
+              isActive: reward.isActive,
+            }))}
+            currency={restaurant.currency}
+            locale={locale}
+            canManage={can(user, PERMISSIONS.SETTINGS_MANAGE)}
           />
         </div>
 

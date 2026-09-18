@@ -19,6 +19,7 @@ import {
 } from '@/lib/rbac'
 import { tenantOrigin } from '@/lib/tenant-url'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
+import { adjustPoints } from '@/features/loyalty/service'
 import {
   assertBranchAccess,
   assertRecordBranch,
@@ -536,6 +537,15 @@ export async function saveCustomer(input: unknown): Promise<ActionResult<{ id: s
   )
 }
 
+/**
+ * A hand correction to a guest's points.
+ *
+ * The balance and its ledger move together, in `adjustPoints`. This used to
+ * write `Customer.loyaltyPoints` on its own and record nothing, so every
+ * correction made through this screen desynchronised the balance from the
+ * entries that are supposed to explain it — and tripped the accounting
+ * integrity check whose whole job is to notice that.
+ */
 export async function adjustLoyalty(input: unknown): Promise<ActionResult<{ points: number }>> {
   return runAction(
     adjustLoyaltySchema,
@@ -545,28 +555,33 @@ export async function adjustLoyalty(input: unknown): Promise<ActionResult<{ poin
 
       const customer = await prisma.customer.findFirst({
         where: { id: data.customerId, restaurantId: user.restaurantId },
+        select: { id: true, loyaltyPoints: true },
       })
       if (!customer) throw new NotFoundError('Customer')
 
-      const nextPoints = Math.max(0, customer.loyaltyPoints + data.points)
-      await prisma.customer.update({
-        where: { id: customer.id },
-        data: { loyaltyPoints: nextPoints },
+      const result = await adjustPoints({
+        restaurantId: user.restaurantId,
+        customerId: customer.id,
+        points: data.points,
+        note: data.reason,
+        actorId: user.id,
       })
 
       await audit({
         restaurantId: user.restaurantId,
         userId: user.id,
         actorName: user.name,
-        action: 'loyalty.adjusted',
+        action: AUDIT_ACTIONS.LOYALTY_ADJUSTED,
         entity: 'Customer',
         entityId: customer.id,
         before: { points: customer.loyaltyPoints },
-        after: { points: nextPoints, reason: data.reason },
+        // What was APPLIED, which is not always what was asked for: a
+        // deduction is capped at the balance.
+        after: { points: result.balance, applied: result.applied, reason: data.reason },
       })
 
       revalidatePath('/dashboard/customers')
-      return { points: nextPoints }
+      return { points: result.balance }
     },
     'Loyalty points updated.',
   )

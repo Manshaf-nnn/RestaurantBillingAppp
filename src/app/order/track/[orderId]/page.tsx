@@ -8,6 +8,7 @@ import { OrderTracker } from '@/features/orders/components/order-tracker'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
+import { GuestLoyalty } from '@/features/loyalty/components/guest-loyalty'
 import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
@@ -78,6 +79,22 @@ export default async function TrackOrderPage({
           })),
         }}
       />
+      {/*
+        Loyalty, on the screen the guest is already looking at (loyalty spec).
+        Only while the bill is unpaid: after settlement there is nothing to
+        spend a reward against, and the points earned are already theirs.
+      */}
+      {restaurant.loyaltyEnabled && order.paymentStatus === 'UNPAID' ? (
+        <div className="mx-auto w-full max-w-lg px-4 pb-6">
+          <GuestLoyalty
+            orderId={order.id}
+            slug={restaurant.slug}
+            currency={restaurant.currency}
+            locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+            knownPhone={order.customerPhone || null}
+          />
+        </div>
+      ) : null}
     </BrandTheme>
   )
 }
