@@ -110,6 +110,15 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script_stop: true          # stop at the first failing command
+          # The action's default is ten minutes, and on 2026-09-18 a deploy hit
+          # it exactly: one image layer stalled mid-download, the pull sat there
+          # printing the same progress line ten thousand times, and the step was
+          # killed at 10m03s with the old version still serving.
+          #
+          # The retry in the script is what actually fixes a stalled pull. This
+          # is the outer bound, raised so a slow-but-moving pull on a small box
+          # is not mistaken for a hung one.
+          command_timeout: 25m
           # The step's `env:` block below sets these on the RUNNER. This action
           # opens a fresh shell on the server, which inherits none of it, so
           # they have to be named here to be forwarded. Without this the script
@@ -158,7 +167,32 @@ jobs:
             export IMAGE_TAG="${{ needs.build.outputs.tag }}"
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            docker compose pull app
+            # Pull, and mean it.
+            #
+            # A single layer stalling is the failure that has actually happened
+            # here: the download makes no progress, the pull never returns, and
+            # the job dies on the command timeout with nothing deployed. Docker
+            # does not retry a stalled layer on its own, so each attempt gets
+            # its own wall clock and a fresh connection.
+            #
+            # `--quiet` because the progress ticker wrote ten thousand identical
+            # lines into the last failed log, burying the one line that says
+            # what went wrong.
+            pulled=0
+            for attempt in 1 2 3; do
+              echo "pull attempt ${attempt}…"
+              if timeout 300 docker compose pull --quiet app; then
+                pulled=1
+                break
+              fi
+              echo "pull attempt ${attempt} did not finish; retrying"
+              sleep 5
+            done
+            if [ "$pulled" != "1" ]; then
+              echo "The image could not be pulled after three attempts."
+              echo "The running version is untouched; nothing was deployed."
+              exit 1
+            fi
 
             # Migrations run BEFORE the new container takes traffic, in a
             # throwaway container on the new image. If this fails the deploy
