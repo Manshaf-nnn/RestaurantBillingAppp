@@ -11,6 +11,7 @@ import {
   ArrowRightLeft,
   Merge,
   PauseCircle,
+  Pencil,
   Percent,
   PlayCircle,
   Plus,
@@ -1011,8 +1012,7 @@ function BillingDetailPanel({
    * moment it happens, exactly as it hears about a guest's own edit.
    */
   const editable = bill.paidTotal === 0 && !bill.heldAt
-  const [addOpen, setAddOpen] = React.useState(false)
-  const [voiding, setVoiding] = React.useState<{ id: string; name: string } | null>(null)
+  const [editOpen, setEditOpen] = React.useState(false)
   const [splitOpen, setSplitOpen] = React.useState(false)
   const [mergeOpen, setMergeOpen] = React.useState(false)
   const [swapOpen, setSwapOpen] = React.useState(false)
@@ -1113,8 +1113,8 @@ function BillingDetailPanel({
           {!settled ? (
             <>
               {editable ? (
-                <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
-                  <Plus /> Add items
+                <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                  <Pencil /> Edit order
                 </Button>
               ) : null}
               <Button variant="outline" size="sm" onClick={() => setSplitOpen(true)}>
@@ -1155,17 +1155,12 @@ function BillingDetailPanel({
         bill={bill}
         restaurant={restaurant}
       />
-      <AddItemsDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
+      <EditOrderDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
         bill={bill}
         menu={menu}
         restaurant={restaurant}
-      />
-      <VoidLineDialog
-        line={voiding}
-        orderId={bill.id}
-        onClose={() => setVoiding(null)}
       />
       <MergeBillsDialog
         open={mergeOpen}
@@ -1215,15 +1210,6 @@ function BillingDetailPanel({
                   </span>
                   {item.optionsLabel ? (
                     <span className="block text-xs text-muted-foreground">{item.optionsLabel}</span>
-                  ) : null}
-                  {editable && bill.items.length > 1 ? (
-                    <button
-                      type="button"
-                      className="block text-xs text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
-                      onClick={() => setVoiding({ id: item.id, name: item.name })}
-                    >
-                      Cancel this item
-                    </button>
                   ) : null}
                 </span>
                 <span className="shrink-0 tabular-nums">
@@ -1893,14 +1879,22 @@ function DiscountDialog({
  * orders one till places.
  */
 /**
- * More dishes for a bill that already exists.
+ * Editing a bill after it was placed — one screen, both directions.
  *
- * The same picker and the same option chooser the new-order dialog uses, so
- * a cashier learns one screen. The lines are kept here until "Add to bill",
- * then sent as one request: one round trip, one event on the order's history,
- * one message to the kitchen — not one of each per dish.
+ * The customer wants another round, or no longer wants the curry. A cashier
+ * should not have to know which of two buttons that is: they open the order,
+ * see what is on it, take off what is not wanted and add what is. Two
+ * columns: what is on the bill now, each line with its own Cancel; and the
+ * menu, with the additions gathered until "Add to bill".
+ *
+ * Cancelling asks why, every time. The kitchen may already be cooking that
+ * dish and its cost has to land somewhere visible; the line stays on the
+ * ticket crossed out so nobody makes it, and the history says who took it
+ * back. The last dish on a bill cannot be cancelled here — that is cancelling
+ * the bill, which has its own guards. Additions go as one request: one round
+ * trip, one event, one message to the kitchen.
  */
-function AddItemsDialog({
+function EditOrderDialog({
   open,
   onOpenChange,
   bill,
@@ -1914,10 +1908,34 @@ function AddItemsDialog({
   restaurant: ReceiptRestaurant
 }) {
   const router = useRouter()
+  const money = (minor: number) => formatMoney(minor, restaurant.currency, restaurant.locale)
+
+  // ── taking a dish off ──
+  const [cancelling, setCancelling] = React.useState<{ id: string; name: string } | null>(null)
+  const [reason, setReason] = React.useState('')
+  const [voidPending, setVoidPending] = React.useState(false)
+
+  const confirmCancel = async () => {
+    if (!cancelling || reason.trim().length < 2) return
+    setVoidPending(true)
+    const result = await callAction(() =>
+      voidItemAction({ orderId: bill.id, itemId: cancelling.id, reason: reason.trim() }),
+    )
+    setVoidPending(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`${cancelling.name} taken off ${bill.orderNumber} — the kitchen has been told`)
+    setCancelling(null)
+    setReason('')
+    router.refresh()
+  }
+
+  // ── adding dishes ──
   const [cart, setCart] = React.useState<TakeawayLine[]>([])
   const [choosing, setChoosing] = React.useState<PublicMenuItem | null>(null)
-  const [pending, setPending] = React.useState(false)
-  const money = (minor: number) => formatMoney(minor, restaurant.currency, restaurant.locale)
+  const [addPending, setAddPending] = React.useState(false)
 
   const push = (item: PublicMenuItem, optionIds: string[], quantity: number, notes: string) => {
     const chosen = item.groups
@@ -1945,15 +1963,9 @@ function AddItemsDialog({
     push(item, [], 1, '')
   }
 
-  const close = () => {
-    setCart([])
-    setChoosing(null)
-    onOpenChange(false)
-  }
-
-  const submit = async () => {
+  const submitAdditions = async () => {
     if (cart.length === 0) return
-    setPending(true)
+    setAddPending(true)
     const result = await callAction(() =>
       addItemsToBillAction({
         orderId: bill.id,
@@ -1965,75 +1977,156 @@ function AddItemsDialog({
         })),
       }),
     )
-    setPending(false)
+    setAddPending(false)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
     toast.success(`${result.data.added} item${result.data.added === 1 ? '' : 's'} added to ${bill.orderNumber} — the kitchen has them`)
-    close()
+    setCart([])
     router.refresh()
   }
 
-  const total = cart.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0)
+  const close = () => {
+    setCart([])
+    setChoosing(null)
+    setCancelling(null)
+    setReason('')
+    onOpenChange(false)
+  }
+
+  const additions = cart.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0)
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Add to {bill.orderNumber}</DialogTitle>
+          <DialogTitle>Edit {bill.orderNumber}</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
-          <MenuPicker
-            menu={menu}
-            quantityOf={(id) => cart.reduce((sum, line) => (line.foodId === id ? sum + line.quantity : sum), 0)}
-            onAdd={add}
-            money={money}
-            compact
-          />
-          <div className="space-y-3 rounded-xl border bg-muted/30 p-3">
-            <p className="text-sm font-semibold">Adding</p>
-            {cart.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Tap a dish to add it.</p>
-            ) : (
-              <ul className="space-y-1.5 text-sm">
-                {cart.map((line) => (
-                  <li key={line.key} className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate">
-                      {line.quantity} × {line.name}
-                      {line.options.length > 0 ? (
-                        <span className="block text-xs text-muted-foreground">
-                          {line.options.map((option) => option.name).join(', ')}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      <span className="tabular-nums">{money(line.unitPrice * line.quantity)}</span>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Remove ${line.name}`}
-                        onClick={() => setCart((current) => current.filter((row) => row.key !== line.key))}
-                      >
-                        <X />
-                      </Button>
-                    </span>
+
+        <div className="grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+          {/* ── what is on the bill now ── */}
+          <div className="space-y-2 rounded-xl border bg-muted/30 p-3">
+            <p className="text-sm font-semibold">On the bill</p>
+            <ul className="divide-y text-sm">
+              {bill.items.map((item) => {
+                const isCancelling = cancelling?.id === item.id
+                return (
+                  <li key={item.id} className="py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0">
+                        <span className="font-medium">{item.quantity} × {item.name}</span>
+                        {item.optionsLabel ? (
+                          <span className="block text-xs text-muted-foreground">{item.optionsLabel}</span>
+                        ) : null}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="tabular-nums text-muted-foreground">{money(item.lineTotal)}</span>
+                        {bill.items.length > 1 && !isCancelling ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => {
+                              setCancelling({ id: item.id, name: item.name })
+                              setReason('')
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        ) : null}
+                      </span>
+                    </div>
+                    {isCancelling ? (
+                      <div className="mt-2 space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2">
+                        <p className="text-xs text-muted-foreground">
+                          It comes off the bill and shows crossed out in the kitchen so nobody makes it. Say why.
+                        </p>
+                        <Input
+                          autoFocus
+                          placeholder="Guest changed their mind"
+                          maxLength={200}
+                          value={reason}
+                          onChange={(event) => setReason(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void confirmCancel()
+                          }}
+                        />
+                        <div className="flex justify-end gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => setCancelling(null)}>Keep it</Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={voidPending || reason.trim().length < 2}
+                            loading={voidPending}
+                            onClick={confirmCancel}
+                          >
+                            Cancel item
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                   </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex items-center justify-between border-t pt-2 text-sm font-semibold">
-              <span>Adds</span>
-              <span className="tabular-nums">{money(total)}</span>
-            </div>
-            <Button className="w-full" disabled={cart.length === 0 || pending} loading={pending} onClick={submit}>
-              Add to bill
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              These go straight to the kitchen and onto the bill.
-            </p>
+                )
+              })}
+            </ul>
+            {bill.items.length === 1 ? (
+              <p className="text-xs text-muted-foreground">
+                The last dish cannot be cancelled here — cancel the whole bill instead.
+              </p>
+            ) : null}
+          </div>
+
+          {/* ── adding more ── */}
+          <div className="space-y-3">
+            <p className="text-sm font-semibold">Add more</p>
+            <MenuPicker
+              menu={menu}
+              quantityOf={(id) => cart.reduce((sum, line) => (line.foodId === id ? sum + line.quantity : sum), 0)}
+              onAdd={add}
+              money={money}
+              compact
+            />
+            {cart.length > 0 ? (
+              <div className="space-y-2 rounded-xl border bg-muted/30 p-3">
+                <ul className="space-y-1.5 text-sm">
+                  {cart.map((line) => (
+                    <li key={line.key} className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate">
+                        {line.quantity} × {line.name}
+                        {line.options.length > 0 ? (
+                          <span className="block text-xs text-muted-foreground">
+                            {line.options.map((option) => option.name).join(', ')}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        <span className="tabular-nums">{money(line.unitPrice * line.quantity)}</span>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Remove ${line.name}`}
+                          onClick={() => setCart((current) => current.filter((row) => row.key !== line.key))}
+                        >
+                          <X />
+                        </Button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex items-center justify-between border-t pt-2 text-sm font-semibold">
+                  <span>Adds</span>
+                  <span className="tabular-nums">{money(additions)}</span>
+                </div>
+                <Button className="w-full" disabled={addPending} loading={addPending} onClick={submitAdditions}>
+                  Add to bill
+                </Button>
+                <p className="text-xs text-muted-foreground">These go straight to the kitchen and onto the bill.</p>
+              </div>
+            ) : null}
           </div>
         </div>
+
         {choosing ? (
           <OptionDialog
             item={choosing}
@@ -2047,78 +2140,6 @@ function AddItemsDialog({
             }}
           />
         ) : null}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/**
- * Taking a dish off a bill after it was placed.
- *
- * A reason is required, always. The kitchen may already be cooking it and
- * its cost has to land somewhere visible; the line stays on the ticket
- * crossed out so nobody makes it, and the order's history says who took it
- * back and why. The last line on a bill cannot be cancelled this way — that
- * is cancelling the bill, which is its own act with its own guards.
- */
-function VoidLineDialog({
-  line,
-  orderId,
-  onClose,
-}: {
-  line: { id: string; name: string } | null
-  orderId: string
-  onClose: () => void
-}) {
-  const router = useRouter()
-  const [reason, setReason] = React.useState('')
-  const [pending, setPending] = React.useState(false)
-
-  React.useEffect(() => {
-    if (line) setReason('')
-  }, [line])
-
-  const confirm = async () => {
-    if (!line || reason.trim().length < 2) return
-    setPending(true)
-    const result = await callAction(() => voidItemAction({ orderId, itemId: line.id, reason: reason.trim() }))
-    setPending(false)
-    if (!result.ok) {
-      toast.error(result.error)
-      return
-    }
-    toast.success(`${line.name} taken off the bill — the kitchen has been told`)
-    onClose()
-    router.refresh()
-  }
-
-  return (
-    <Dialog open={line !== null} onOpenChange={(next) => (next ? null : onClose())}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Cancel {line?.name}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            It comes off the bill and shows crossed out on the kitchen display so nobody makes it. Say why.
-          </p>
-          <Input
-            autoFocus
-            placeholder="Guest changed their mind"
-            maxLength={200}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void confirm()
-            }}
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={onClose}>Keep it</Button>
-            <Button variant="destructive" disabled={pending || reason.trim().length < 2} loading={pending} onClick={confirm}>
-              Cancel item
-            </Button>
-          </div>
-        </div>
       </DialogContent>
     </Dialog>
   )

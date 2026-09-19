@@ -233,9 +233,13 @@ async function main() {
     check('and only one of them writes order lines', source.split('tx.orderItem.create(').length === 2)
 
     const till = readFileSync('src/features/cashier/components/cashier-board.tsx', 'utf8')
-    check('the till offers Add items on an unpaid bill', till.includes('<Plus /> Add items') && till.includes('addItemsToBillAction'))
-    check('and a way to cancel a line, with a reason', till.includes('Cancel this item') && till.includes('voidItemAction'))
-    check('both shut once money is on the bill', till.includes('const editable = bill.paidTotal === 0'))
+    // One door for both directions: the cashier opens the order and sees what
+    // is on it, takes off what is not wanted and adds what is.
+    check('the till offers Edit order on an unpaid bill', till.includes('<Pencil /> Edit order') && till.includes('function EditOrderDialog('))
+    check('which adds dishes', till.includes('addItemsToBillAction') && till.includes('Add to bill'))
+    check('and cancels a dish, with a reason', till.includes('voidItemAction') && till.includes('Say why.'))
+    check('the last dish is not cancellable there — that is cancelling the bill', till.includes('bill.items.length > 1 && !isCancelling'))
+    check('and it shuts once money is on the bill', till.includes('const editable = bill.paidTotal === 0'))
 
     const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
     check('the kitchen replaces its ticket from the update, so both doors reach it',
