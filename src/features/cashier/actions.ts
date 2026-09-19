@@ -17,7 +17,9 @@ import {
   resumeBillSchema,
   splitBillSchema,
   voidItemSchema,
+  addItemsSchema,
 } from './schema'
+import { addStaffOrderItems } from '@/features/orders/guest-additions'
 import {
   acceptGuestOrder,
   holdBill,
@@ -219,6 +221,59 @@ export async function mergeBillsAction(
  * no longer being charged for is the same class of authority as cancelling the
  * bill, and is not something every cashier should be able to do unsupervised.
  */
+/**
+ * Add dishes to a bill that already exists, from the till (order editing).
+ *
+ * A dine-in table asking for another round, a takeaway customer who forgot
+ * the drinks, a counter order corrected before it is paid. The same core the
+ * guest's phone uses, so the kitchen hears about these the way it hears about
+ * everything else: routed to the right section, costed, off stock, and on the
+ * ticket the moment they are written.
+ */
+export async function addItemsToBillAction(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; grandTotal: number; added: number }>> {
+  return runAction(
+    addItemsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.ORDER_CREATE)
+      await assertBillBranch(user, user.restaurantId, data.orderId)
+
+      const { order, added } = await addStaffOrderItems({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        items: data.items.map((item) => ({
+          foodId: item.foodId,
+          quantity: item.quantity,
+          optionIds: item.optionIds,
+          notes: item.notes || undefined,
+        })),
+        staffName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_ITEMS_ADDED,
+        entity: 'Order',
+        entityId: order.id,
+        after: {
+          added: added.map((line) => ({ name: line.name, quantity: line.quantity })),
+          grandTotal: order.grandTotal,
+        },
+      })
+
+      revalidateCounter()
+      // The service already told every board; nothing to broadcast twice.
+      return { orderId: order.id, grandTotal: order.grandTotal, added: added.length }
+    },
+    'Added to the bill.',
+  )
+}
+
 export async function voidItemAction(
   input: unknown,
 ): Promise<ActionResult<{ orderId: string; grandTotal: number }>> {

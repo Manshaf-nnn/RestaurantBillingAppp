@@ -216,6 +216,11 @@ const SERVICE = [
   // priced at the order's branch, routed and taken off stock only once the
   // kitchen has the order, totals re-derived, history kept, own session only.
   'guest-add-items-test',
+  // order editing — the till's door onto the same core: adding to a dine-in,
+  // takeaway or counter order routes and re-totals at once; cancelling a
+  // dish keeps it on the kitchen ticket crossed out; a paid bill refuses
+  // both; and the two doors are one function.
+  'order-edit-test',
   // abc.md §7 — a waiter call is one event per table and need (a partial
   // unique index, not a timer), acknowledged then resolved with who and
   // when, waiters and management told at the table's branch, history per site.

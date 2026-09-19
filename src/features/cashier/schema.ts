@@ -41,6 +41,22 @@ export const rejectGuestOrderSchema = z.object({
   reason: z.string().trim().min(2, 'Tell the guest why').max(200),
 })
 
+/** New dishes joining a bill from the till (order editing). */
+export const addItemsSchema = z.object({
+  orderId: z.string().min(1),
+  items: z
+    .array(
+      z.object({
+        foodId: z.string().min(1),
+        quantity: z.coerce.number().int().min(1).max(50),
+        optionIds: z.array(z.string()).default([]),
+        notes: z.string().trim().max(160).optional().or(z.literal('')),
+      }),
+    )
+    .min(1, 'Add at least one item')
+    .max(20),
+})
+
 export const voidItemSchema = z.object({
   orderId: z.string().min(1),
   itemId: z.string().min(1),

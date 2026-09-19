@@ -47,20 +47,34 @@ export interface AddedLine {
   quantity: number
 }
 
-export async function addGuestOrderItems(params: {
+/**
+ * New dishes joining an order that already exists — the guest's, from their
+ * phone, and the till's, from the counter. One core, two doors.
+ *
+ * The doors differ only in who may open them: a guest proves it is their order
+ * by session, a member of staff by permission and branch. Everything after
+ * that — pricing at the order's branch, routing to sections, pinning recipe
+ * versions, costing, taking stock, re-totalling and telling every board — is
+ * the same act and must not be written twice, or the kitchen would hear about
+ * one door's additions and not the other's.
+ */
+async function addOrderItems(params: {
   restaurantId: string
   orderId: string
-  /** The guest's own session; without one nothing here is theirs. */
-  guestSessionId: string | null
+  /** Who may reach this order: the guest's session, or nothing extra for staff. */
+  owner: Prisma.OrderWhereInput
   items: DraftItemInput[]
+  /** Who is adding, for the order's history. */
+  addedBy: string
+  /** What to say when the bill is already paid. */
+  paidMessage: string
 }): Promise<{ order: Order; added: AddedLine[] }> {
-  if (!params.guestSessionId) throw new NotFoundError('Order')
   if (params.items.length === 0) {
     throw new AppError('Choose something to add first', 400, 'EMPTY_ADDITION')
   }
 
   const order = await prisma.order.findFirst({
-    where: { id: params.orderId, restaurantId: params.restaurantId, guestSessionId: params.guestSessionId },
+    where: { id: params.orderId, restaurantId: params.restaurantId, ...params.owner },
     select: { id: true, status: true, paymentStatus: true, placedAt: true, branchId: true },
   })
   if (!order) throw new NotFoundError('Order')
@@ -68,7 +82,7 @@ export async function addGuestOrderItems(params: {
     throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
   }
   if (order.paymentStatus !== 'UNPAID') {
-    throw new AppError('This bill has been paid — ask a member of staff to add to it.', 409, 'ORDER_PAID')
+    throw new AppError(params.paidMessage, 409, 'ORDER_PAID')
   }
   // Signed books do not quietly change (§59).
   await assertPeriodOpen(prisma, params.restaurantId, order.placedAt)
@@ -85,7 +99,7 @@ export async function addGuestOrderItems(params: {
       throw new AppError('This order can no longer be changed.', 409, 'ORDER_LOCKED')
     }
     if (now.paymentStatus !== 'UNPAID') {
-      throw new AppError('This bill has been paid — ask a member of staff to add to it.', 409, 'ORDER_PAID')
+      throw new AppError(params.paidMessage, 409, 'ORDER_PAID')
     }
 
     // Priced at the order's own branch, as the original lines were.
@@ -158,7 +172,7 @@ export async function addGuestOrderItems(params: {
         events: {
           create: {
             status: recalculated.status,
-            note: `Customer added ${created.map((line) => `${line.quantity} × ${line.name}`).join(', ')}`,
+            note: `${params.addedBy} added ${created.map((line) => `${line.quantity} × ${line.name}`).join(', ')}`,
           },
         },
       },
@@ -171,4 +185,44 @@ export async function addGuestOrderItems(params: {
   if (payload) realtime.orderUpdated(params.restaurantId, payload)
 
   return { order: updated, added }
+}
+
+/** From the guest's phone: theirs by session, and only theirs. */
+export async function addGuestOrderItems(params: {
+  restaurantId: string
+  orderId: string
+  /** The guest's own session; without one nothing here is theirs. */
+  guestSessionId: string | null
+  items: DraftItemInput[]
+}): Promise<{ order: Order; added: AddedLine[] }> {
+  if (!params.guestSessionId) throw new NotFoundError('Order')
+  return addOrderItems({
+    restaurantId: params.restaurantId,
+    orderId: params.orderId,
+    owner: { guestSessionId: params.guestSessionId },
+    items: params.items,
+    addedBy: 'Customer',
+    paidMessage: 'This bill has been paid — ask a member of staff to add to it.',
+  })
+}
+
+/**
+ * From the till: any unpaid order at a branch the cashier may reach. The
+ * permission and the branch are the caller's to check; this only insists on
+ * the tenant.
+ */
+export async function addStaffOrderItems(params: {
+  restaurantId: string
+  orderId: string
+  items: DraftItemInput[]
+  staffName: string
+}): Promise<{ order: Order; added: AddedLine[] }> {
+  return addOrderItems({
+    restaurantId: params.restaurantId,
+    orderId: params.orderId,
+    owner: {},
+    items: params.items,
+    addedBy: params.staffName,
+    paidMessage: 'This bill has been paid — refund it before adding to it.',
+  })
 }
