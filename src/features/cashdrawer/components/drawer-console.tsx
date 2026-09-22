@@ -25,6 +25,7 @@ import { MANUAL_MOVEMENT_TYPES, MOVEMENT_TYPES } from '../movement-types'
 import type { DrawerPageData } from '../queries'
 import type { DrawerClosure } from '../closure'
 import { ClosurePreview } from './closure-preview'
+import { DenominationGrid } from './denomination-grid'
 import { callAction } from '@/lib/use-action'
 
 /**
@@ -332,39 +333,11 @@ function OpenDrawerPanel({
         description="Count what is physically in the drawer, note by note. The system works out the rest."
       >
         {/*
-          A grid of counts, not a total box (correctionA.md §4).
-
-          Two things follow from counting this way rather than typing a sum.
-          The arithmetic stops being the cashier's — "six 500s and four 100s"
-          is a fact about the drawer, where "3,400" is a fact plus a sum, and
-          the sum is where the mistakes live. And a disputed close becomes
-          checkable afterwards: "the drawer was 2,000 short" is an accusation,
-          "there were four 500s where the count says six" is a conversation.
+          A grid of counts, not a total box (correctionA.md §4). The same grid
+          the shift handover counts with, so the two ways of ending a till
+          cannot drift into counting differently.
         */}
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {data.denominations.map((d) => (
-            <div key={d.value} className="flex items-center gap-2">
-              <span className="w-20 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
-                {d.label}
-                <span className="ml-1 text-[10px] uppercase">{d.kind === 'coin' ? 'c' : ''}</span>
-              </span>
-              <span className="text-muted-foreground">×</span>
-              <Input
-                inputMode="numeric"
-                placeholder="0"
-                aria-label={`How many ${d.label} ${d.kind}s`}
-                value={counts[String(d.value)] ?? ''}
-                onChange={(e) =>
-                  setCounts((c) => ({ ...c, [String(d.value)]: e.target.value.replace(/\D/g, '') }))
-                }
-                className="h-9"
-              />
-              <span className="w-24 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
-                {money(d.value * (Number(counts[String(d.value)] ?? '') || 0))}
-              </span>
-            </div>
-          ))}
-        </div>
+        <DenominationGrid denominations={data.denominations} counts={counts} onChange={setCounts} money={money} />
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-4 py-3">
           <span className="text-sm font-medium">Cash counted</span>

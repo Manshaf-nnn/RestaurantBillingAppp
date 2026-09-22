@@ -18,8 +18,8 @@ import {
   scopeToOne,
   selectedBranch,
 } from '@/features/dashboard/selected-branch'
-import { ShiftHandoverPanel } from '@/features/handover/components/shift-handover'
-import { listShiftHandovers } from '@/features/handover/shift-service'
+import { ShiftPanel } from '@/features/shifts/components/shift-panel'
+import { loadShiftPanel } from '@/features/shifts/panel-data'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { readPaperWidths } from '@/features/printing/paper'
@@ -339,59 +339,40 @@ export default async function PosPage({
     )
   }
 
-  // ── Shift handover ────────────────────────────────────────────────────────
+  // ── Shift ─────────────────────────────────────────────────────────────────
   /*
    * The same screen the dashboard mounts, on the till where the person
-   * finishing a shift is actually standing (recorrection.md §2).
+   * finishing a shift is actually standing (recorrection.md §2,
+   * shifthandover.md "UI").
    *
-   * It is the SAME component reading the SAME service — `ShiftHandoverPanel`
-   * over `listShiftHandovers` — so there is one handover system with two
-   * doors onto it, and a handover started here is the one the dashboard
-   * shows. Nothing about the flow, its guards, its notifications or its
-   * audit trail is re-implemented here.
+   * It is the SAME component over the SAME loader — `ShiftPanel` over
+   * `loadShiftPanel` — so there is one shift system with two doors onto it,
+   * and a shift started or handed over here is the one the dashboard shows.
+   * Nothing about the flow, its guards, its notifications or its audit trail
+   * is re-implemented here.
    */
   if (tab === 'handover') {
-    /*
-     * Who may read the whole floor's handovers, exactly as the dashboard
-     * decides it: somebody who manages staff or drawers. Everyone else sees
-     * the ones they were part of.
-     */
-    const seesAll = can(user, PERMISSIONS.CASH_DRAWER_MANAGE) || can(user, PERMISSIONS.STAFF_MANAGE)
-    const [history, waiting] = await Promise.all([
-      listShiftHandovers({
-        restaurantId: user.restaurantId,
-        branchIds: branchId ? [branchId] : selection.branchIds,
-        participantId: seesAll ? undefined : user.id,
-        limit: 40,
-      }),
-      // Waiting on THIS person, whatever counter they are standing at: a
-      // handover to you is yours to answer wherever you are.
-      listShiftHandovers({
-        restaurantId: user.restaurantId,
-        participantId: user.id,
-        status: 'PENDING_ACCEPTANCE',
-        limit: 10,
-      }),
-    ])
+    const panel = await loadShiftPanel({
+      user,
+      timeZone: restaurant.timezone,
+      selection: branchId ? { ...selection, branchId, branchIds: [branchId] } : selection,
+      searchParams: params,
+    })
 
     return (
       <div className="mx-auto w-full max-w-7xl p-4 pb-24 lg:pb-4">
         <AutoRefresh intervalMs={15000} />
         {header}
         <p className="mb-4 text-sm text-muted-foreground">
-          Hand your shift to whoever is taking over — with your till, if you have one. They see the
-          same summary and accept or decline it on their own screen.
+          Your shift, and the handover when it ends — with your till, if you have one. Whoever takes
+          over sees the same summary and accepts or declines it on their own screen.
         </p>
-        <ShiftHandoverPanel
+        <ShiftPanel
+          data={panel}
           viewerId={user.id}
           viewerName={user.name}
-          waiting={waiting.filter((row) => row.toId === user.id)}
-          mine={waiting.find((row) => row.fromId === user.id) ?? null}
-          history={history}
-          canCancelOthers={seesAll}
           currency={restaurant.currency}
           locale={locale}
-          branchId={branchId}
         />
       </div>
     )

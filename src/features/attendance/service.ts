@@ -249,7 +249,7 @@ export async function closeShift(
 
   const endedAt = at ?? shift.lastActionAt ?? shift.clockInAt
 
-  await prisma.staffShift.updateMany({
+  const closed = await prisma.staffShift.updateMany({
     // Compare-and-swap on the key rather than the id: a shift closed by another
     // request in between must not be closed twice with a second reason.
     where: { id: shift.id, activeShiftKey: { not: null } },
@@ -259,6 +259,19 @@ export async function closeShift(
       activeShiftKey: null,
     },
   })
+
+  /*
+   * The rostered shift this session was working is over with it
+   * (shifthandover.md §3). Only the request that actually closed the session
+   * moves the assignment, and only from STARTED — so a session closed twice
+   * in a race, or a manager's later correction, cannot flip it again.
+   */
+  if (closed.count > 0) {
+    await prisma.shiftAssignment.updateMany({
+      where: { staffShift: { id: shift.id }, status: 'STARTED' },
+      data: { status: 'COMPLETED' },
+    })
+  }
 }
 
 /** Close whoever is signed in on this session's account. Used on sign-out. */

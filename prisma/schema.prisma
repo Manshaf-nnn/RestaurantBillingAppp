@@ -599,10 +599,10 @@ model Restaurant {
   currency               String    @default("INR")
 
   /// basis points — 500 = 5.00%
-  taxRateBps       Int     @default(500)
-  taxLabel         String  @default("GST")
-  taxInclusive     Boolean @default(false)
-  serviceChargeBps Int     @default(0)
+  taxRateBps        Int     @default(500)
+  taxLabel          String  @default("GST")
+  taxInclusive      Boolean @default(false)
+  serviceChargeBps  Int     @default(0)
   /// The owner's expected food-cost share of sales, in basis points
   /// (3000 = 30%). Null means no target set; the variance screen compares
   /// against it when present. acCal.md §8.
@@ -669,76 +669,78 @@ model Restaurant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users            User[]
-  categories       Category[]
-  foods            Food[]
-  tables           RestaurantTable[]
-  customers        Customer[]
-  orders           Order[]
-  payments         Payment[]
-  refunds          Refund[]
-  invoices         Invoice[]
-  coupons          Coupon[]
-  loyaltyEntries   LoyaltyEntry[]
-  loyaltyRewards   LoyaltyReward[]
-  counters         RestaurantCounter[]
-  tableSessions    TableSession[]
-  printJobs        PrintJob[]
-  expenseCategories ExpenseCategory[]
-  outgoingPayments  OutgoingPayment[]
-  accountantNotes   AccountantNote[]
-  bankStatements    BankStatement[]
+  users              User[]
+  categories         Category[]
+  foods              Food[]
+  tables             RestaurantTable[]
+  customers          Customer[]
+  orders             Order[]
+  payments           Payment[]
+  refunds            Refund[]
+  invoices           Invoice[]
+  coupons            Coupon[]
+  loyaltyEntries     LoyaltyEntry[]
+  loyaltyRewards     LoyaltyReward[]
+  counters           RestaurantCounter[]
+  tableSessions      TableSession[]
+  printJobs          PrintJob[]
+  expenseCategories  ExpenseCategory[]
+  outgoingPayments   OutgoingPayment[]
+  accountantNotes    AccountantNote[]
+  bankStatements     BankStatement[]
   bankStatementLines BankStatementLine[]
-  dailyCloses      DailyClose[]
-  accountingPeriods AccountingPeriod[]
-  reservations     Reservation[]
-  reviews          Review[]
-  feedback         Feedback[]
-  shiftNotes       ShiftNote[]
-  instructions     BranchInstruction[]
-  units            Unit[]
-  stockCategories  InventoryCategory[]
-  supplierPayments SupplierPayment[]
-  foodBranches     FoodBranch[]
-  kitchenStations  KitchenStation[]
-  suppliers        Supplier[]
-  inventoryItems   InventoryItem[]
-  stockMovements   StockMovement[]
-  purchases        Purchase[]
-  notifications    Notification[]
-  auditLogs        AuditLog[]
-  serviceRequests  ServiceRequest[]
-  shifts           StaffShift[]
-  mediaBackups     MediaBackup[]
-  mediaAssets      MediaAsset[]
-  invites          Invite[]
-  websiteConnection WebsiteConnection?
-  staffRoles       StaffRole[]
-  menuSnapshots    RestaurantMenuSnapshot[]
-  branches         Branch[]
-  cashDrawers      CashDrawerSession[]
-  cashRegisters    CashRegister[]
-  pettyCash        PettyCashRequest[]
-  cashHandovers    CashHandover[]
-  shiftHandovers   ShiftHandover[]
-  storageLocations StorageLocation[]
-  stockCounts      StockCount[]
-  recipes          Recipe[]
-  goodsReceipts    GoodsReceipt[]
-  purchaseReturns  PurchaseReturn[]
-  stockBatches     StockBatch[]
-  wastageRecords   WastageRecord[]
-  inventoryStock   InventoryStock[]
-  stockTransfers   StockTransfer[]
-  productionOrders ProductionOrder[]
-  productionSpecs  ProductionSpec[]
-  approvalRequests ApprovalRequest[]
-  outboxEvents     OutboxEvent[]
-  errorLogs        ErrorLog[]
-  jobs             Job[]
+  dailyCloses        DailyClose[]
+  accountingPeriods  AccountingPeriod[]
+  reservations       Reservation[]
+  reviews            Review[]
+  feedback           Feedback[]
+  shiftNotes         ShiftNote[]
+  instructions       BranchInstruction[]
+  units              Unit[]
+  stockCategories    InventoryCategory[]
+  supplierPayments   SupplierPayment[]
+  foodBranches       FoodBranch[]
+  kitchenStations    KitchenStation[]
+  suppliers          Supplier[]
+  inventoryItems     InventoryItem[]
+  stockMovements     StockMovement[]
+  purchases          Purchase[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  serviceRequests    ServiceRequest[]
+  shifts             StaffShift[]
+  mediaBackups       MediaBackup[]
+  mediaAssets        MediaAsset[]
+  invites            Invite[]
+  websiteConnection  WebsiteConnection?
+  staffRoles         StaffRole[]
+  menuSnapshots      RestaurantMenuSnapshot[]
+  branches           Branch[]
+  cashDrawers        CashDrawerSession[]
+  cashRegisters      CashRegister[]
+  pettyCash          PettyCashRequest[]
+  cashHandovers      CashHandover[]
+  shiftHandovers     ShiftHandover[]
+  shiftTemplates     ShiftTemplate[]
+  shiftAssignments   ShiftAssignment[]
+  storageLocations   StorageLocation[]
+  stockCounts        StockCount[]
+  recipes            Recipe[]
+  goodsReceipts      GoodsReceipt[]
+  purchaseReturns    PurchaseReturn[]
+  stockBatches       StockBatch[]
+  wastageRecords     WastageRecord[]
+  inventoryStock     InventoryStock[]
+  stockTransfers     StockTransfer[]
+  productionOrders   ProductionOrder[]
+  productionSpecs    ProductionSpec[]
+  approvalRequests   ApprovalRequest[]
+  outboxEvents       OutboxEvent[]
+  errorLogs          ErrorLog[]
+  jobs               Job[]
   /// [ApprovalPolicy] — thresholds above which an action needs a second
   /// pair of eyes. Null means the built-in defaults apply.
-  approvalPolicy   Json?
+  approvalPolicy     Json?
   /// [LiveBoardPolicy] — the live floor board's waiting-time bands, customer
   /// tiers, return-gap days and alert timings. Null means the built-in
   /// defaults apply, which is why the board works before anyone configures it.
@@ -746,7 +748,7 @@ model Restaurant {
   /// Separate from `approvalPolicy` on purpose: that one answers "how much is
   /// worth a second pair of eyes", which is a different question from "how long
   /// is too long to wait for food".
-  liveBoardPolicy  Json?
+  liveBoardPolicy    Json?
 
   @@index([isActive])
   @@map("restaurants")
@@ -754,38 +756,30 @@ model Restaurant {
 
 /**
  * The transactional outbox (production.md §5).
- *
  * ── The problem it solves ───────────────────────────────────────────────────
- *
  * Realtime used to be fire-and-forget: `realtime.orderCreated(...)` was called
  * AFTER the transaction committed, and on the serverless host it is a no-op
  * because no Socket.IO server exists there. So the event describing an order
  * had no durable existence anywhere. If it was not delivered, it was gone, and
  * nothing could say afterwards what had happened or replay it.
- *
  * A row here is written INSIDE the same transaction as the order, payment or
  * stock movement it describes. The two commit together or roll back together,
  * so an event can never describe something that did not happen, and something
  * that happened can never lack its event. That is the whole point: realtime
  * failure must not lose an order.
- *
  * ── How it is read ──────────────────────────────────────────────────────────
- *
  * `/api/pulse?since=<seq>` returns the rows after a cursor, and the client
  * dedups on `id`. Note carefully what the cursor is and is not: `seq` orders
  * events and identifies them, but a Postgres sequence hands out numbers at
  * INSERT time while visibility arrives at COMMIT time, so a slow transaction
  * can commit seq 10 after seq 11 is already visible. A reader that trusted the
  * cursor alone could step over it.
- *
  * It does not have to, because the pulse token is still there and is derived
  * from `MAX(updatedAt)` — it cannot miss a change, only fail to name it. The
  * two halves have different jobs and cover each other's weakness: the token
  * guarantees the client learns SOMETHING changed, the outbox tells it WHAT and
  * lets it dedup. A skipped event still triggers a refresh.
- *
  * ── Retention ───────────────────────────────────────────────────────────────
- *
  * Trimmed by the `outbox-trim` background job. This is a delivery log, not a
  * second copy of the business record — the order, payment and movement are the
  * facts, and they are kept elsewhere for ever.
@@ -932,88 +926,88 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  /*
+  /**
    * MFA for privileged accounts (production.md §14).
-   *
    * The secret is stored encrypted, not hashed: TOTP verification needs the
    * original to recompute the code, so it cannot be a one-way digest the way a
    * password is. `mfaEnabledAt` is the switch — a secret exists from the moment
    * enrolment starts, and only counts once the user has proved they can read a
    * code from it, which stops a half-finished enrolment locking someone out.
    */
-  mfaSecret     String?
-  mfaEnabledAt  DateTime?
-  mfaRecoveryCodes MfaRecoveryCode[]
-  errorLogs           ErrorLog[]
-  sessions            Session[]
-  tokens              VerificationToken[]
-  auditLogs           AuditLog[]
-  notifications       Notification[]
-  createdOrders       Order[]             @relation("OrderCreatedBy")
-  servedOrders        Order[]             @relation("OrderServedBy")
-  receivedPayments    Payment[]           @relation("PaymentReceivedBy")
-  refundsIssued       Refund[]            @relation("RefundIssuedBy")
-  outgoingCreated     OutgoingPayment[]   @relation("OutgoingPaymentCreatedBy")
-  outgoingSubmitted   OutgoingPayment[]   @relation("OutgoingPaymentSubmittedBy")
-  outgoingDecided     OutgoingPayment[]   @relation("OutgoingPaymentDecidedBy")
-  outgoingPaid        OutgoingPayment[]   @relation("OutgoingPaymentPaidBy")
-  accountantNotes     AccountantNote[]    @relation("AccountantNoteAuthor")
-  bankStatementsUploaded BankStatement[]  @relation("BankStatementUploadedBy")
-  bankLinesMatched    BankStatementLine[] @relation("BankLineMatchedBy")
-  stockMovements      StockMovement[]
-  shifts              StaffShift[]
-  shiftsAdjusted      StaffShift[]        @relation("ShiftAdjustedBy")
-  handledRequests     ServiceRequest[]    @relation("RequestHandledBy")
-  createdRequests     ServiceRequest[]    @relation("RequestCreatedBy")
-  acknowledgedRequests ServiceRequest[]   @relation("RequestAcknowledgedBy")
-  createdInvites      Invite[]
-  accessLinks         Invite[]            @relation("InviteForUser")
-  staffRolesCreated   StaffRole[]         @relation("StaffRoleCreatedBy")
-  branchId            String?
+  mfaSecret              String?
+  mfaEnabledAt           DateTime?
+  mfaRecoveryCodes       MfaRecoveryCode[]
+  errorLogs              ErrorLog[]
+  sessions               Session[]
+  tokens                 VerificationToken[]
+  auditLogs              AuditLog[]
+  notifications          Notification[]
+  createdOrders          Order[]               @relation("OrderCreatedBy")
+  servedOrders           Order[]               @relation("OrderServedBy")
+  receivedPayments       Payment[]             @relation("PaymentReceivedBy")
+  refundsIssued          Refund[]              @relation("RefundIssuedBy")
+  outgoingCreated        OutgoingPayment[]     @relation("OutgoingPaymentCreatedBy")
+  outgoingSubmitted      OutgoingPayment[]     @relation("OutgoingPaymentSubmittedBy")
+  outgoingDecided        OutgoingPayment[]     @relation("OutgoingPaymentDecidedBy")
+  outgoingPaid           OutgoingPayment[]     @relation("OutgoingPaymentPaidBy")
+  accountantNotes        AccountantNote[]      @relation("AccountantNoteAuthor")
+  bankStatementsUploaded BankStatement[]       @relation("BankStatementUploadedBy")
+  bankLinesMatched       BankStatementLine[]   @relation("BankLineMatchedBy")
+  stockMovements         StockMovement[]
+  shifts                 StaffShift[]
+  shiftsAdjusted         StaffShift[]          @relation("ShiftAdjustedBy")
+  handledRequests        ServiceRequest[]      @relation("RequestHandledBy")
+  createdRequests        ServiceRequest[]      @relation("RequestCreatedBy")
+  acknowledgedRequests   ServiceRequest[]      @relation("RequestAcknowledgedBy")
+  createdInvites         Invite[]
+  accessLinks            Invite[]              @relation("InviteForUser")
+  staffRolesCreated      StaffRole[]           @relation("StaffRoleCreatedBy")
+  branchId               String?
   /// Short human code a member of staff can be identified by — on a waiter
   /// link, a printed docket, or when an owner asks "who served table 4?".
   /// Unique within a restaurant, never across restaurants.
-  staffCode           String?
+  staffCode              String?
   /// The code this person signs in with, and the plaintext of their password.
   /// Separate from staffCode on purpose: that one is a sequence and would be
   /// guessable as a credential. Readable by the owner so a lost card can be
   /// reprinted — the same secret is already in that person's pocket.
-  signInCode          String?
-  branch              Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  supplierPayments    SupplierPayment[]   @relation("SupplierPaymentBy")
-  instructionsGiven   BranchInstruction[] @relation("InstructionAuthor")
-  instructionsAssigned BranchInstruction[] @relation("InstructionAssignee")
-  instructionsDone    BranchInstruction[] @relation("InstructionCompleter")
-  drawersOpened       CashDrawerSession[] @relation("DrawerOpenedBy")
-  drawersClosed       CashDrawerSession[] @relation("DrawerClosedBy")
-  drawersReviewed     CashDrawerSession[] @relation("DrawerReviewedBy")
-  cashMovements       CashMovement[]      @relation("CashMovementBy")
-  pettyRequested      PettyCashRequest[]  @relation("PettyRequestedBy")
-  pettyDecided        PettyCashRequest[]  @relation("PettyDecidedBy")
-  pettyPaid           PettyCashRequest[]  @relation("PettyPaidBy")
-  handoversGiven      CashHandover[]      @relation("HandoverFrom")
-  handoversReceived   CashHandover[]      @relation("HandoverTo")
-  shiftHandoversGiven    ShiftHandover[] @relation("ShiftHandoverFrom")
-  shiftHandoversReceived ShiftHandover[] @relation("ShiftHandoverTo")
-  countsCounted       StockCount[]        @relation("CountCountedBy")
-  countsApproved      StockCount[]        @relation("CountApprovedBy")
-  recipesCreated      Recipe[]            @relation("RecipeCreatedBy")
-  purchasesCreated    Purchase[]          @relation("PurchaseCreatedBy")
-  purchasesApproved   Purchase[]          @relation("PurchaseApprovedBy")
-  receiptsReceived    GoodsReceipt[]      @relation("ReceiptReceivedBy")
-  returnsCreated      PurchaseReturn[]    @relation("ReturnCreatedBy")
-  wastageCreated      WastageRecord[]     @relation("WastageCreatedBy")
-  wastageApproved     WastageRecord[]     @relation("WastageApprovedBy")
-  locationsManaged    Branch[]            @relation("LocationManager")
-  transfersRequested  StockTransfer[]     @relation("TransferRequestedBy")
-  transfersApproved   StockTransfer[]     @relation("TransferApprovedBy")
-  transfersDispatched StockTransfer[]     @relation("TransferDispatchedBy")
-  transfersReceived   StockTransfer[]     @relation("TransferReceivedBy")
-  productionRequested ProductionOrder[]   @relation("ProductionRequestedBy")
-  productionApproved  ProductionOrder[]   @relation("ProductionApprovedBy")
-  approvalsRequested  ApprovalRequest[]   @relation("ApprovalRequestedBy")
-  approvalsDecided    ApprovalRequest[]   @relation("ApprovalDecidedBy")
-  kitchenStations     KitchenStationStaff[]
+  signInCode             String?
+  branch                 Branch?               @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  supplierPayments       SupplierPayment[]     @relation("SupplierPaymentBy")
+  instructionsGiven      BranchInstruction[]   @relation("InstructionAuthor")
+  instructionsAssigned   BranchInstruction[]   @relation("InstructionAssignee")
+  instructionsDone       BranchInstruction[]   @relation("InstructionCompleter")
+  drawersOpened          CashDrawerSession[]   @relation("DrawerOpenedBy")
+  drawersClosed          CashDrawerSession[]   @relation("DrawerClosedBy")
+  drawersReviewed        CashDrawerSession[]   @relation("DrawerReviewedBy")
+  cashMovements          CashMovement[]        @relation("CashMovementBy")
+  pettyRequested         PettyCashRequest[]    @relation("PettyRequestedBy")
+  pettyDecided           PettyCashRequest[]    @relation("PettyDecidedBy")
+  pettyPaid              PettyCashRequest[]    @relation("PettyPaidBy")
+  handoversGiven         CashHandover[]        @relation("HandoverFrom")
+  handoversReceived      CashHandover[]        @relation("HandoverTo")
+  shiftHandoversGiven    ShiftHandover[]       @relation("ShiftHandoverFrom")
+  shiftHandoversReceived ShiftHandover[]       @relation("ShiftHandoverTo")
+  shiftAssignments       ShiftAssignment[]     @relation("ShiftAssignee")
+  countsCounted          StockCount[]          @relation("CountCountedBy")
+  countsApproved         StockCount[]          @relation("CountApprovedBy")
+  recipesCreated         Recipe[]              @relation("RecipeCreatedBy")
+  purchasesCreated       Purchase[]            @relation("PurchaseCreatedBy")
+  purchasesApproved      Purchase[]            @relation("PurchaseApprovedBy")
+  receiptsReceived       GoodsReceipt[]        @relation("ReceiptReceivedBy")
+  returnsCreated         PurchaseReturn[]      @relation("ReturnCreatedBy")
+  wastageCreated         WastageRecord[]       @relation("WastageCreatedBy")
+  wastageApproved        WastageRecord[]       @relation("WastageApprovedBy")
+  locationsManaged       Branch[]              @relation("LocationManager")
+  transfersRequested     StockTransfer[]       @relation("TransferRequestedBy")
+  transfersApproved      StockTransfer[]       @relation("TransferApprovedBy")
+  transfersDispatched    StockTransfer[]       @relation("TransferDispatchedBy")
+  transfersReceived      StockTransfer[]       @relation("TransferReceivedBy")
+  productionRequested    ProductionOrder[]     @relation("ProductionRequestedBy")
+  productionApproved     ProductionOrder[]     @relation("ProductionApprovedBy")
+  approvalsRequested     ApprovalRequest[]     @relation("ApprovalRequestedBy")
+  approvalsDecided       ApprovalRequest[]     @relation("ApprovalDecidedBy")
+  kitchenStations        KitchenStationStaff[]
 
   @@unique([email])
   @@unique([restaurantId, staffCode])
@@ -1037,13 +1031,11 @@ model Session {
   /**
    * Lineage. Set ONLY when this row was revoked by rotation, naming the row
    * that replaced it.
-   *
    * This is what lets a refresh tell "just rotated by a sibling request" from
    * "revoked because the user logged out": the first has a successor, the
    * second does not. Without it, two tabs refreshing at once made the loser
    * delete the winner's brand-new cookie and send the user to the login screen
    * with a live session still in this table.
-   *
    * No relation and no index on purpose: a successor is fetched by primary
    * key, and a future purge must be free to delete old rows without nulling
    * anything.
@@ -1181,12 +1173,10 @@ model Invite {
 
 /**
  * A restaurant's own website, connected to TableFlow (websiteconnect.md).
- *
  * One row per restaurant, holding the credential its website presents. The
  * key itself is shown to the operator exactly once and never stored: what is
  * stored is its SHA-256, the same rule refresh tokens follow, so a database
  * leak yields nothing that can read a menu or place an order.
- *
  * The row IS the connection. Delete it and the key stops working on the next
  * request; regenerate and the old key is dead the moment the new hash lands.
  * There is deliberately no `isActive` flag — a disabled-but-present credential
@@ -1377,13 +1367,13 @@ model FoodBranch {
 /// the restaurant, so a later edit to the package does not silently re-scope
 /// every tenant already on it.
 model FeaturePackage {
-  id          String  @id @default(cuid())
-  name        String  @unique
+  id          String   @id @default(cuid())
+  name        String   @unique
   description String?
   /// Feature keys from `src/features/access/features.ts`.
   featureKeys String[] @default([])
-  isActive    Boolean @default(true)
-  sortOrder   Int     @default(0)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1527,6 +1517,7 @@ model RestaurantTable {
 
   /// Numbers restart per branch, which is why this is not [restaurantId, number].
   sessions TableSession[]
+
   @@unique([restaurantId, branchId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, branchId])
@@ -1632,8 +1623,8 @@ model Order {
   grandTotal      Int @default(0)
   paidTotal       Int @default(0)
 
-  taxRateBps       Int @default(0)
-  serviceChargeBps Int @default(0)
+  taxRateBps       Int     @default(0)
+  serviceChargeBps Int     @default(0)
   /// Whether the prices on this bill already contained tax when it was placed.
   /// Snapshotted like `taxRateBps` above and for the same reason: every
   /// recompute used to read the restaurant's CURRENT setting, so flipping the
@@ -1703,7 +1694,7 @@ model Order {
   /// waiting, not of one dish, and per-item priority would make the audit
   /// trail's before/after ambiguous. Stations sort by priority, then by how
   /// long the item has been waiting.
-  priority       OrderPriority         @default(NORMAL)
+  priority OrderPriority @default(NORMAL)
 
   /// Deduplicates a resubmitted order.
   ///
@@ -1843,13 +1834,13 @@ model ServiceRequest {
   /// index on (tableId, type) WHERE status <> 'RESOLVED', written in SQL
   /// because Prisma cannot express the predicate.
   branchId         String?
-  branch           Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  branch           Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
   requestedByName  String?
   createdById      String?
-  createdBy        User?    @relation("RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy        User?     @relation("RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   acknowledgedAt   DateTime?
   acknowledgedById String?
-  acknowledgedBy   User?    @relation("RequestAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  acknowledgedBy   User?     @relation("RequestAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, status, createdAt])
   @@index([restaurantId, branchId, status, createdAt])
@@ -1936,13 +1927,13 @@ model Refund {
   paymentId    String
   payment      Payment    @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
-  amount Int
+  amount      Int
   /// How the money went back — normally the method it arrived by.
-  method PaymentMethod
+  method      PaymentMethod
   /// Inherited from the payment being refunded: money goes back where it came
   /// from, so re-pointing a method later cannot send an old refund elsewhere.
   destination String?
-  reason String
+  reason      String
 
   refundedById String?
   refundedBy   User?   @relation("RefundIssuedBy", fields: [refundedById], references: [id], onDelete: SetNull)
@@ -1963,13 +1954,11 @@ model Refund {
 
 /**
  * Something a guest can spend points on (stockMa/loyalty).
- *
  * Points alone only ever bought a flat rate off a bill. A reward is the thing
  * a guest actually recognises — "500 points: a free dessert", "1,000 points:
  * 20% off, minimum spend 3,000" — so the catalogue carries what it costs, what
  * it is worth, the smallest bill it may be used on, and when it stops being
  * offered.
- *
  * Never deleted: a reward that has been redeemed is part of somebody's history,
  * so it is retired with `isActive` and stays readable.
  */
@@ -1982,13 +1971,13 @@ model LoyaltyReward {
   description String?
 
   /// What the guest pays, in points.
-  pointsCost Int
+  pointsCost     Int
   /// What it takes off the bill, in minor units.
-  value      Int
+  value          Int
   /// The smallest bill it may be used on, minor units. 0 means any.
-  minOrderAmount Int @default(0)
+  minOrderAmount Int       @default(0)
   /// Stops being offered after this. Null means it runs until retired.
-  expiresAt DateTime?
+  expiresAt      DateTime?
 
   isActive Boolean @default(true)
 
@@ -2001,7 +1990,6 @@ model LoyaltyReward {
 
 /**
  * Why a loyalty balance is what it is (§72).
- *
  * `Customer.loyaltyPoints` used to be a bare number three code paths
  * incremented and decremented — no history, no way to answer "where did this
  * guest's points go". Every earn, spend and give-back is a signed row now;
@@ -2033,7 +2021,6 @@ model LoyaltyEntry {
 
 /**
  * Named counters, one row per (restaurant, key) — e.g. `invoice:2026`.
- *
  * Invoice numbers used to come from `count(*) this year + 1`, which two
  * simultaneous settlements both compute identically: one bill settles, the
  * other dies on the unique constraint. An atomic upsert-increment cannot
@@ -2089,7 +2076,7 @@ model RestaurantCounter {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   key          String
-  value        Int    @default(0)
+  value        Int        @default(0)
 
   @@id([restaurantId, key])
   @@map("restaurant_counters")
@@ -2123,12 +2110,10 @@ model ExpenseCategory {
 /**
  * Money leaving the business, with a life: DRAFT → SUBMITTED → APPROVED or
  * REJECTED (owner's pen, never the submitter's) → PAID → possibly REVERSED.
- *
  * Its own model, deliberately — the codebase has ruled three times that a
  * request with a life after approval does not fit ApprovalRequest ("has no
  * vocabulary for it"; see PettyCashRequest). Only the rule worth borrowing is
  * borrowed: the approver is never the requester.
- *
  * A PAID row is immutable. kind SUPPLIER creates the ordinary
  * SupplierPayment ledger row at payment time (the supplier balance math and
  * its pinned tests never change); kind EXPENSE IS the expense record.
@@ -2216,21 +2201,21 @@ model OutgoingPayment {
  * honestly reconstructed after the fact.
  */
 model TableSession {
-  id           String     @id @default(cuid())
+  id           String          @id @default(cuid())
   restaurantId String
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branchId     String
   tableId      String
   table        RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Restrict)
 
-  status     TableSessionStatus @default(OPEN)
-  guestCount Int?
-  openedAt   DateTime  @default(now())
-  closedAt   DateTime?
+  status         TableSessionStatus @default(OPEN)
+  guestCount     Int?
+  openedAt       DateTime           @default(now())
+  closedAt       DateTime?
   /// The table's id while the sitting is OPEN, NULL once it closes — so the
   /// unique index below is what stops two first orders at one table opening
   /// two sittings. The same idiom as `CashDrawerSession.activeRegisterKey`.
-  activeTableKey String? @unique
+  activeTableKey String?            @unique
 
   orders Order[]
 
@@ -2279,14 +2264,14 @@ model AccountingPeriod {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  periodStart DateTime
-  periodEnd   DateTime
-  status      AccountingPeriodStatus @default(CLOSED)
-  closedById  String?
-  closedAt    DateTime @default(now())
+  periodStart  DateTime
+  periodEnd    DateTime
+  status       AccountingPeriodStatus @default(CLOSED)
+  closedById   String?
+  closedAt     DateTime               @default(now())
   reopenedById String?
   reopenedAt   DateTime?
-  notes       String?
+  notes        String?
 
   @@index([restaurantId, periodStart, periodEnd])
   @@map("accounting_periods")
@@ -2409,6 +2394,7 @@ model Supplier {
   priceHistory  PurchasePriceHistory[] @relation("PriceHistorySupplier")
 
   outgoingPayments OutgoingPayment[]
+
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive])
   @@map("suppliers")
@@ -2451,7 +2437,7 @@ model InventoryItem {
 
   /// Weighted average cost per base unit, minor units. Recomputed on receipt.
   /// A CACHE of stockValue / quantity, rounded — display and fallback only.
-  costPerUnit      Int  @default(0)
+  costPerUnit      Int     @default(0)
   /// What the stock on hand is WORTH, minor units, exact. The ledger moves
   /// this with every movement: receipts add at their price, issues subtract
   /// at the running average, and the pennies that per-unit rounding used to
@@ -2622,6 +2608,7 @@ model Purchase {
   payments  SupplierPayment[]
 
   outgoingPayments OutgoingPayment[]
+
   @@unique([restaurantId, number])
   @@index([restaurantId, status])
   @@index([restaurantId, supplierId, createdAt])
@@ -3024,6 +3011,9 @@ enum ShiftCloseReason {
   BRANCH_CHANGE
   /// A manager closed or corrected it by hand.
   MANUAL
+  /// Their handover was accepted: the next person now holds the shift
+  /// (shifthandover.md §4). Closed at the moment of acceptance.
+  HANDOVER
 }
 
 /// How a shift came to exist.
@@ -3032,6 +3022,96 @@ enum ShiftSource {
   LOGIN
   /// Added by a manager for somebody who worked without signing in.
   MANUAL
+}
+
+/// Where a rostered shift is in its life (shifthandover.md §2–3).
+enum ShiftAssignmentStatus {
+  PLANNED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+/// A kind of shift the owner defines — "Day 08:00–16:00", "Night 18:00–02:00"
+/// (shifthandover.md §1).
+///
+/// Times are wall-clock strings in the restaurant's own zone; the concrete
+/// instants are computed when a person is assigned to a date, because the same
+/// template on a clock-change day is a different length. `endTime` at or
+/// before `startTime` means the shift runs into the next day.
+///
+/// `branchId` null = every location: the ordinary "Day" shift a group runs at
+/// all its sites, without defining it once per site.
+model ShiftTemplate {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  name      String
+  /// "HH:mm" in the restaurant's timezone.
+  startTime String
+  /// "HH:mm"; at or before startTime = overnight.
+  endTime   String
+  /// Who may be rostered onto it. Never empty.
+  roles     UserRole[]
+  isActive  Boolean    @default(true)
+  sortOrder Int        @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments ShiftAssignment[]
+  staffShifts StaffShift[]
+
+  /// A NULL branch does not collide in Postgres; the service checks that case.
+  @@unique([restaurantId, branchId, name])
+  @@index([restaurantId, isActive, sortOrder])
+  @@map("shift_templates")
+}
+
+/// One person rostered onto one shift on one day (shifthandover.md §2).
+///
+/// `role` and the scheduled instants are snapshots: the rota is what was
+/// agreed, and neither a later role change nor an edited template rewrites it.
+/// Starting it links a `StaffShift` (the actual session); the row itself never
+/// records actual times.
+model ShiftAssignment {
+  id           String        @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId       String
+  user         User          @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: Restrict)
+  role         UserRole
+  templateId   String
+  template     ShiftTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  /// The rota day, in the restaurant's timezone.
+  date             DateTime @db.Date
+  scheduledStartAt DateTime
+  scheduledEndAt   DateTime
+
+  status ShiftAssignmentStatus @default(PLANNED)
+  notes  String?
+
+  createdById   String?
+  cancelledById String?
+  cancelReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  /// The session that worked it, once started.
+  staffShift StaffShift?
+
+  /// The same person cannot be put on the same shift twice on one day.
+  @@unique([userId, templateId, date])
+  @@index([restaurantId, branchId, date])
+  @@index([userId, date])
+  @@index([restaurantId, date, status])
+  @@map("shift_assignments")
 }
 
 /// Attendance: who was working, where, and for how long.
@@ -3071,15 +3151,15 @@ model StaffShift {
   userId       String
   user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  clockInAt  DateTime  @default(now())
-  clockOutAt DateTime?
+  clockInAt    DateTime  @default(now())
+  clockOutAt   DateTime?
   /// The last time this person did something. The shift's honest end.
   lastActionAt DateTime?
-  notes      String?
+  notes        String?
   /// Required. A shift with no branch would appear on no branch's tab, which
   /// loses the attendance rather than merely mislabelling it.
-  branch     Branch    @relation(fields: [branchId], references: [id])
-  branchId   String
+  branch       Branch    @relation(fields: [branchId], references: [id])
+  branchId     String
 
   /// The day this shift is counted under, in the restaurant's timezone, stamped
   /// when it opens. A shift that runs 18:00 → 01:30 stays on the opening day
@@ -3093,6 +3173,23 @@ model StaffShift {
 
   source   ShiftSource       @default(LOGIN)
   closedBy ShiftCloseReason?
+
+  /// ── The rostered shift this session is working (shifthandover.md §3) ──
+  ///
+  /// Nullable: signing in still opens an attendance row whether or not anybody
+  /// rostered the person. Unique: one assignment is worked by one session, so
+  /// two concurrent "start my shift" presses cannot both link to it.
+  assignmentId     String?          @unique
+  assignment       ShiftAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  templateId       String?
+  template         ShiftTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  scheduledStartAt DateTime?
+  scheduledEndAt   DateTime?
+  /// The role they held when the shift started, so a later role change does
+  /// not rewrite who was on the floor that night.
+  roleAtStart      UserRole?
+  /// Handovers that ended this shift (at most one accepted, but attempts too).
+  handoversFrom    ShiftHandover[]
 
   adjustedClockInAt  DateTime?
   adjustedClockOutAt DateTime?
@@ -3171,10 +3268,13 @@ model Branch {
   pettyCash        PettyCashRequest[]
   cashHandovers    CashHandover[]
   shiftHandovers   ShiftHandover[]
+  shiftTemplates   ShiftTemplate[]
+  shiftAssignments ShiftAssignment[]
   reservations     Reservation[]
   errorLogs        ErrorLog[]
 
   outgoingPayments OutgoingPayment[]
+
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])
   @@map("branches")
@@ -3429,9 +3529,9 @@ model CashHandover {
   variance       Int
   note           String?
 
-  status     CashHandoverStatus @default(PENDING)
-  createdAt  DateTime           @default(now())
-  acceptedAt DateTime?
+  status        CashHandoverStatus @default(PENDING)
+  createdAt     DateTime           @default(now())
+  acceptedAt    DateTime?
   /// The shift handover this till change was part of, when there was one.
   shiftHandover ShiftHandover?
 
@@ -3467,7 +3567,18 @@ model ShiftHandover {
   toUser     User   @relation("ShiftHandoverTo", fields: [toUserId], references: [id], onDelete: Restrict)
 
   /// The outgoing person's open attendance shift at the time, when they had one.
+  /// A real link (shifthandover.md §4): accepting the handover ends that shift.
   fromShiftId String?
+  fromShift   StaffShift? @relation(fields: [fromShiftId], references: [id], onDelete: SetNull)
+
+  /// ── One in flight per person, both directions ─────────────────────────
+  ///
+  /// The `activeShiftKey` idiom: the user ids while PENDING_ACCEPTANCE, NULL
+  /// once settled. Two handovers from the same person, or two waiting on the
+  /// same receiver, cannot both exist — the database says so, not a check
+  /// that two requests could pass at once.
+  pendingFromKey String?       @unique
+  pendingToKey   String?       @unique
   /// The till, when the outgoing person had one. One cash handover belongs to
   /// at most one shift handover.
   cashHandoverId String?       @unique
@@ -3652,6 +3763,7 @@ model Recipe {
   productionOrders ProductionOrder[]
 
   consumedByOptions VariantOption[] @relation("OptionConsumption")
+
   @@index([restaurantId, foodId, isActive])
   @@index([restaurantId, producesItemId, isActive])
   @@map("recipes")
@@ -4249,26 +4361,26 @@ model ProductionSpecItem {
 
 /// One production run at a production house.
 model ProductionOrder {
-  id           String          @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  id              String          @id @default(cuid())
+  restaurantId    String
+  restaurant      Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   /// The production house doing the work.
-  branchId     String
-  branch       Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchId        String
+  branch          Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
   /// The make-ahead recipe being made.
-  recipeId     String?
-  recipe       Recipe?         @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  recipeId        String?
+  recipe          Recipe?         @relation(fields: [recipeId], references: [id], onDelete: SetNull)
   /// The recipe's name at the time, so a finished job stays readable even if the
   /// recipe is later renamed, superseded or archived.
-  recipeName   String?
+  recipeName      String?
   /// Deprecated: replaced by `recipeId`. Kept so the backfill stays repairable.
-  specId       String?
-  spec         ProductionSpec? @relation(fields: [specId], references: [id], onDelete: SetNull)
+  specId          String?
+  spec            ProductionSpec? @relation(fields: [specId], references: [id], onDelete: SetNull)
   /// What this run produced (redesignkitchenjob.md). Written on every run since
   /// the Make Item flow and backfilled from production_outputs; a legacy run
   /// that never completed has none.
-  outputItemId String?
-  outputItem   InventoryItem?  @relation("ProducedItem", fields: [outputItemId], references: [id], onDelete: SetNull)
+  outputItemId    String?
+  outputItem      InventoryItem?  @relation("ProducedItem", fields: [outputItemId], references: [id], onDelete: SetNull)
   /// The form's request key: the same batch submitted twice is recorded once.
   clientRequestId String?
 
@@ -4445,18 +4557,15 @@ model ApprovalRequest {
 /// failure to record an error must never turn into a second error.
 /**
  * What went wrong, and enough context to act on it (production.md §7, §12).
- *
  * §7 asks that every important error carry a request id, a timestamp, the
  * operation, the restaurant, the branch where applicable, the user where
  * appropriate, and useful information. This row used to carry the restaurant
  * and the route and nothing else, which made "a page failed for somebody
  * somewhere" the most an operator could ever learn.
- *
  * Worse, almost nothing reached it: only exceptions that escaped to Next's
  * `onRequestError` were persisted, and Server Actions — the majority of every
  * mutation in this application — were merely `console.error`'d by `runAction`
  * and then discarded. The commonest failures were the ones nobody could see.
- *
  * Secrets never land here: everything written goes through `redact()` first,
  * the same filter the audit log uses.
  */
@@ -4472,24 +4581,24 @@ model ErrorLog {
   user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   /// The number shown to the user; the join key back to this row.
-  digest  String?
+  digest    String?
   /// Correlates every log line and error from ONE request. Generated at
   /// ingress so a report of "it broke at 14:32" becomes a single lookup.
   requestId String?
-  route   String?
+  route     String?
   /// The named thing that was being attempted — 'collectPayment',
   /// 'receiveGoods'. A route says which screen; this says which operation,
   /// and a Server Action has no route worth the name.
   operation String?
-  kind    String
+  kind      String
   /// ERROR for something that broke, WARNING for something that coped, and
   /// CRITICAL for the money-and-stock integrity failures §7 singles out.
   severity  String  @default("ERROR")
-  message String
-  stack   String?
+  message   String
+  stack     String?
   /// The record involved, when there was one — the order that would not settle.
-  entity   String?
-  entityId String?
+  entity    String?
+  entityId  String?
 
   /// §12 asks for safe investigation and resolution: an operator marks a row
   /// dealt with rather than deleting it, so the history of what went wrong and
@@ -4510,19 +4619,15 @@ model ErrorLog {
 
 /**
  * The one background job queue (production.md §4, §13).
- *
  * ── Why this exists at all ──────────────────────────────────────────────────
- *
  * ARCHITECTURE.md states, correctly, that this system has no queues, no cron
  * and no workers by design: every deferred effect is computed lazily on read.
  * That rule earned its place and most of it still holds.
- *
  * It cannot hold for everything §13 asks for. A nightly integrity check across
  * every tenant, error-log retention, outbox trimming and backup verification
  * are not things a page render should do on somebody's behalf — they are slow,
  * they are not tied to any request, and computing them lazily means they
  * happen when a guest is waiting for a menu.
- *
  * So: ONE table, ONE scheduled function draining it, no worker process and no
  * queue library. Claiming is `FOR UPDATE SKIP LOCKED`, so two overlapping runs
  * of the scheduler cannot take the same job.
@@ -4548,8 +4653,8 @@ model Job {
 
   startedAt  DateTime?
   finishedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   /// Stops a recurring job being queued twice: the scheduler upserts on this.
   dedupeKey String? @unique
@@ -4569,7 +4674,6 @@ enum JobStatus {
 
 /**
  * A recovery code — the way back in when the authenticator is on a lost phone.
- *
  * Stored hashed, exactly like a password, and single-use. Without these, MFA on
  * the platform super-admin is a way to lock the owner out of their own
  * platform permanently, which is a worse outcome than the one it prevents.
@@ -4589,7 +4693,6 @@ model MfaRecoveryCode {
 
 /**
  * Platform-wide switches the operator owns (production.md §8 Maintenance).
- *
  * Deliberately a tiny key/value table rather than a settings model with a
  * column per switch: the alternative is a migration every time the operator
  * needs a new flag, which in practice means the flag never gets added.
@@ -4605,28 +4708,26 @@ model PlatformSetting {
 
 /**
  * A restore test, and what it proved (production.md §10).
- *
  * §10 asks the Backups page to show the last restore test and its result, and
  * is explicit that the application must not pretend to perform backups the
  * database provider actually performs. Neon owns the backups and the PITR
  * window; what the application can honestly own is the record of somebody
  * having checked that a restore works.
- *
  * A backup nobody has ever restored is a belief, not a backup.
  */
 model RestoreTest {
-  id          String   @id @default(cuid())
+  id           String    @id @default(cuid())
   /// What was restored — a Neon branch name, a dump file.
-  target      String
+  target       String
   /// PASSED, FAILED, or PARTIAL when it restored but something did not verify.
-  outcome     String
+  outcome      String
   /// The point in time restored to, when the test was a PITR restore.
-  restoredTo  DateTime?
-  durationSec Int?
-  notes       String?
-  testedById  String?
+  restoredTo   DateTime?
+  durationSec  Int?
+  notes        String?
+  testedById   String?
   testedByName String?
-  createdAt   DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
   @@index([createdAt])
   @@map("restore_tests")

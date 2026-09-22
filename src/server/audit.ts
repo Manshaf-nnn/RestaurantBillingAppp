@@ -175,6 +175,14 @@ export const AUDIT_ACTIONS = {
   SHIFT_HANDOVER_COMPLETED: 'shiftHandover.completed',
   SHIFT_HANDOVER_REJECTED: 'shiftHandover.rejected',
   SHIFT_HANDOVER_CANCELLED: 'shiftHandover.cancelled',
+  /** shifthandover.md §1–3 — templates, the rota, and a session starting/ending. */
+  SHIFT_TEMPLATE_CREATED: 'shiftTemplate.created',
+  SHIFT_TEMPLATE_UPDATED: 'shiftTemplate.updated',
+  SHIFT_ASSIGNED: 'shift.assigned',
+  SHIFT_ASSIGNMENT_UPDATED: 'shift.assignment_updated',
+  SHIFT_ASSIGNMENT_CANCELLED: 'shift.assignment_cancelled',
+  SHIFT_STARTED: 'shift.started',
+  SHIFT_ENDED: 'shift.ended',
   REGISTER_CREATED: 'cashRegister.created',
   REGISTER_TOGGLED: 'cashRegister.toggled',
 

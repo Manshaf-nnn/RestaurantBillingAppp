@@ -152,7 +152,7 @@ async function main() {
       const orders = await hit(`/cashier/pos?${q}`, asOwner)
       check('the POS renders for an owner', orders.status === 200, `status ${orders.status}`)
       check('with the tab strip', orders.body.includes('data-testid="pos-tabs"'))
-      check('showing every tab', orders.body.includes('>Orders<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<') && orders.body.includes('>Shift Handover<'))
+      check('showing every tab', orders.body.includes('>Orders<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<') && orders.body.includes('>Shift<'))
       check('and the order-taking screen', /Tap a dish to add it/.test(orders.body))
 
       const cashier = await hit(`/cashier/pos?${q}&tab=cashier`, asOwner)
@@ -165,7 +165,7 @@ async function main() {
       // recorrection.md §2 — the same handover screen the dashboard mounts,
       // on the till where the person finishing a shift is standing.
       const handover = await hit(`/cashier/pos?${q}&tab=handover`, asOwner)
-      check('the Shift Handover tab renders', handover.status === 200, `status ${handover.status}`)
+      check('the Shift tab renders', handover.status === 200, `status ${handover.status}`)
       check('with the flow on it', /Start handover/.test(handover.body))
       check('and the history section', /Handover history/.test(handover.body))
       /*
@@ -180,7 +180,7 @@ async function main() {
       check('inside the shell, not a second screen', handover.body.includes('data-testid="pos-tabs"'))
 
       const page = readFileSync('src/app/cashier/pos/page.tsx', 'utf8')
-      check('it mounts the existing panel, not a copy of it', page.includes('<ShiftHandoverPanel') && page.includes("from '@/features/handover/shift-service'"))
+      check('it mounts the existing panel, not a copy of it', page.includes('<ShiftPanel') && page.includes("from '@/features/shifts/panel-data'"))
     }
 
     console.log('\n── 4. A tab they may not open ──')

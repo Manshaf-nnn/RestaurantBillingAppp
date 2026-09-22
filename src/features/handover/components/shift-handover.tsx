@@ -14,7 +14,13 @@ import { ItemPicker } from '@/components/ui/item-picker'
 import { Label } from '@/components/ui/label'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard } from '@/features/dashboard/components/page-header'
-import { formatMoney, minorUnitFactor } from '@/lib/money'
+import {
+  DenominationGrid,
+  countsToNumbers,
+  physicalTotal,
+  type DenominationCounts,
+} from '@/features/cashdrawer/components/denomination-grid'
+import { formatMoney } from '@/lib/money'
 import { callAction } from '@/lib/use-action'
 import {
   acceptShiftHandoverAction,
@@ -23,13 +29,13 @@ import {
   rejectShiftHandoverAction,
   startShiftHandoverAction,
 } from '../shift-actions'
-import type { HandoverPreview, HandoverSummary, ShiftHandoverView } from '../shift-types'
+import type { HandoverDone, HandoverPreview, HandoverSummary, ShiftHandoverView } from '../shift-types'
 
 /**
- * The shift handover, for every role (recorrection.md §2).
+ * The shift handover, for every role (recorrection.md §2, shifthandover.md §4).
  *
- *   [Start handover] → Select who takes over → Review → Confirm
- *   Waiting for you: Review & accept · Reject (with a reason)
+ *   [Start handover] → Select who takes over → Review & count → Confirm → Pending acceptance
+ *   Waiting for you: Review → Accept · Reject (with a reason)
  *   Yours in progress: waiting on them · Withdraw
  *   History
  *
@@ -38,6 +44,13 @@ import type { HandoverPreview, HandoverSummary, ShiftHandoverView } from '../shi
  * screens and a walk across the floor between them, with nothing telling the
  * receiver anything had happened. Now the receiver is notified, and the
  * accepting is done where the summary is.
+ *
+ * ── The till is counted blind ─────────────────────────────────────────────
+ *
+ * The count step is a grid of notes and coins and nothing else. What the
+ * system expected, and the gap, are not on this screen until the handover is
+ * confirmed — the server does not even send them to the person counting. A
+ * count taken with the target in view is not a count.
  */
 
 const STATUS: Record<ShiftHandoverView['status'], { label: string; variant: 'secondary' | 'warning' | 'success' | 'destructive' }> = {
@@ -57,6 +70,7 @@ export function ShiftHandoverPanel({
   currency,
   locale,
   branchId,
+  showHistory = true,
 }: {
   viewerId: string
   viewerName: string
@@ -70,6 +84,8 @@ export function ShiftHandoverPanel({
   locale: string
   /** The switcher's choice, for somebody who works across every location. */
   branchId: string | null
+  /** The Shift tab renders the history itself, with filters. */
+  showHistory?: boolean
 }) {
   const router = useRouter()
   const [starting, setStarting] = React.useState(false)
@@ -141,15 +157,17 @@ export function ShiftHandoverPanel({
         }
       >
         {mine ? (
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <Badge variant="warning"><Clock /> waiting</Badge>
-            <span>
-              Waiting for <strong>{mine.toName}</strong> to accept · started <LocalDateTime value={mine.createdAt} />
-              {mine.summary.drawer ? ` · till counted ${money(mine.summary.drawer.countedCash ?? 0)}` : ''}
-            </span>
-            <Button variant="outline" size="sm" className="ml-auto" loading={busy === mine.id} onClick={() => cancel(mine)}>
-              Withdraw
-            </Button>
+          <div className="space-y-2 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge variant="warning"><Clock /> waiting</Badge>
+              <span>
+                Waiting for <strong>{mine.toName}</strong> to accept · started <LocalDateTime value={mine.createdAt} />
+              </span>
+              <Button variant="outline" size="sm" className="ml-auto" loading={busy === mine.id} onClick={() => cancel(mine)}>
+                Withdraw
+              </Button>
+            </div>
+            {mine.summary.drawer ? <Reconciliation drawer={mine.summary.drawer} money={money} /> : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -158,57 +176,20 @@ export function ShiftHandoverPanel({
         )}
       </SectionCard>
 
-      <SectionCard title="Handover history" description="Who handed over to whom, and what was decided.">
-        {history.length === 0 ? (
-          <EmptyState title="No handovers yet" description="Every handover — accepted, rejected or withdrawn — is listed here." />
-        ) : (
-          <div className="-mx-2 overflow-x-auto px-2">
-            <table className="w-full min-w-[40rem] text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="pb-2 pr-3 font-medium">Date</th>
-                  <th className="pb-2 pr-3 font-medium">Outgoing</th>
-                  <th className="pb-2 pr-3 font-medium">Receiving</th>
-                  <th className="pb-2 pr-3 font-medium">Location</th>
-                  <th className="pb-2 pr-3 font-medium">Shift</th>
-                  <th className="pb-2 pr-3 font-medium">Till</th>
-                  <th className="pb-2 pr-3 font-medium">Status</th>
-                  <th className="pb-2" />
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {history.map((row) => {
-                  const status = STATUS[row.status]
-                  const own = row.fromId === viewerId
-                  return (
-                    <tr key={row.id} data-status={row.status}>
-                      <td className="py-2 pr-3 text-muted-foreground"><LocalDateTime value={row.createdAt} /></td>
-                      <td className="py-2 pr-3">{row.fromName}</td>
-                      <td className="py-2 pr-3">{row.toName}</td>
-                      <td className="py-2 pr-3">{row.branchName}</td>
-                      <td className="py-2 pr-3 text-muted-foreground">
-                        {row.summary.shift ? <>since <LocalDateTime value={row.summary.shift.clockInAt} /></> : '—'}
-                      </td>
-                      <td className="py-2 pr-3 tabular-nums">
-                        {row.cash ? `${money(row.cash.countedAmount)}${row.cash.variance ? ` (${row.cash.variance > 0 ? '+' : '−'}${money(Math.abs(row.cash.variance))})` : ''}` : '—'}
-                      </td>
-                      <td className="py-2 pr-3"><Badge variant={status.variant}>{status.label}</Badge></td>
-                      <td className="py-2 text-right">
-                        <span className="flex justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => setDetails(row)}>Details</Button>
-                          {row.status === 'PENDING_ACCEPTANCE' && (own || canCancelOthers) && row.id !== mine?.id ? (
-                            <Button variant="outline" size="sm" loading={busy === row.id} onClick={() => cancel(row)}>Withdraw</Button>
-                          ) : null}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </SectionCard>
+      {showHistory ? (
+        <SectionCard title="Handover history" description="Who handed over to whom, and what was decided.">
+          <HandoverHistoryTable
+            rows={history}
+            viewerId={viewerId}
+            mineId={mine?.id ?? null}
+            canCancelOthers={canCancelOthers}
+            busy={busy}
+            money={money}
+            onDetails={setDetails}
+            onCancel={cancel}
+          />
+        </SectionCard>
+      ) : null}
 
       <StartHandoverDialog
         open={starting}
@@ -226,34 +207,123 @@ export function ShiftHandoverPanel({
         locale={locale}
       />
 
-      <Dialog open={details !== null} onOpenChange={(next) => (next ? null : setDetails(null))}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
-          {details ? (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex flex-wrap items-center gap-2">
-                  {details.fromName} → {details.toName}
-                  <Badge variant={STATUS[details.status].variant}>{STATUS[details.status].label}</Badge>
-                </DialogTitle>
-                <DialogDescription>
-                  {details.branchName} · <LocalDateTime value={details.createdAt} />
-                  {details.decidedAt ? <> · decided <LocalDateTime value={details.decidedAt} />{details.decidedByName ? ` by ${details.decidedByName}` : ''}</> : null}
-                </DialogDescription>
-              </DialogHeader>
-              {details.rejectReason ? (
-                <Alert variant="destructive" title="Not accepted">{details.rejectReason}</Alert>
-              ) : null}
-              {details.notes ? <p className="text-sm">“{details.notes}”</p> : null}
-              <SummaryView summary={details.summary} currency={currency} locale={locale} />
-            </>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <HandoverDetailsDialog row={details} onClose={() => setDetails(null)} currency={currency} locale={locale} />
     </div>
   )
 }
 
-/* ── the wizard: Select → Review → Confirm ────────────────────────────────── */
+/* ── the history table, shared with the Shift tab's filtered history ─────── */
+
+export function HandoverHistoryTable({
+  rows,
+  viewerId,
+  mineId,
+  canCancelOthers,
+  busy,
+  money,
+  onDetails,
+  onCancel,
+}: {
+  rows: ShiftHandoverView[]
+  viewerId: string
+  mineId: string | null
+  canCancelOthers: boolean
+  busy: string | null
+  money: (minor: number) => string
+  onDetails: (row: ShiftHandoverView) => void
+  onCancel: (row: ShiftHandoverView) => void
+}) {
+  if (rows.length === 0) {
+    return <EmptyState title="No handovers yet" description="Every handover — accepted, rejected or withdrawn — is listed here." />
+  }
+  return (
+    <div className="-mx-2 overflow-x-auto px-2">
+      <table className="w-full min-w-[40rem] text-sm">
+        <thead>
+          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <th className="pb-2 pr-3 font-medium">Date</th>
+            <th className="pb-2 pr-3 font-medium">Outgoing</th>
+            <th className="pb-2 pr-3 font-medium">Receiving</th>
+            <th className="pb-2 pr-3 font-medium">Location</th>
+            <th className="pb-2 pr-3 font-medium">Shift</th>
+            <th className="pb-2 pr-3 font-medium">Till</th>
+            <th className="pb-2 pr-3 font-medium">Status</th>
+            <th className="pb-2" />
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {rows.map((row) => {
+            const status = STATUS[row.status]
+            const own = row.fromId === viewerId
+            return (
+              <tr key={row.id} data-status={row.status}>
+                <td className="py-2 pr-3 text-muted-foreground"><LocalDateTime value={row.createdAt} /></td>
+                <td className="py-2 pr-3">{row.fromName}</td>
+                <td className="py-2 pr-3">{row.toName}</td>
+                <td className="py-2 pr-3">{row.branchName}</td>
+                <td className="py-2 pr-3 text-muted-foreground">
+                  {row.templateName ?? (row.summary.shift ? <>since <LocalDateTime value={row.summary.shift.clockInAt} /></> : '—')}
+                </td>
+                <td className="py-2 pr-3 tabular-nums">
+                  {row.cash ? `${money(row.cash.countedAmount)}${row.cash.variance ? ` (${row.cash.variance > 0 ? '+' : '−'}${money(Math.abs(row.cash.variance))})` : ''}` : '—'}
+                </td>
+                <td className="py-2 pr-3"><Badge variant={status.variant}>{status.label}</Badge></td>
+                <td className="py-2 text-right">
+                  <span className="flex justify-end gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => onDetails(row)}>Details</Button>
+                    {row.status === 'PENDING_ACCEPTANCE' && (own || canCancelOthers) && row.id !== mineId ? (
+                      <Button variant="outline" size="sm" loading={busy === row.id} onClick={() => onCancel(row)}>Withdraw</Button>
+                    ) : null}
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export function HandoverDetailsDialog({
+  row,
+  onClose,
+  currency,
+  locale,
+}: {
+  row: ShiftHandoverView | null
+  onClose: () => void
+  currency: string
+  locale: string
+}) {
+  return (
+    <Dialog open={row !== null} onOpenChange={(next) => (next ? null : onClose())}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+        {row ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex flex-wrap items-center gap-2">
+                {row.fromName} → {row.toName}
+                <Badge variant={STATUS[row.status].variant}>{STATUS[row.status].label}</Badge>
+              </DialogTitle>
+              <DialogDescription>
+                {row.branchName} · <LocalDateTime value={row.createdAt} />
+                {row.decidedAt ? <> · decided <LocalDateTime value={row.decidedAt} />{row.decidedByName ? ` by ${row.decidedByName}` : ''}</> : null}
+              </DialogDescription>
+            </DialogHeader>
+            {row.rejectReason ? (
+              <Alert variant="destructive" title="Not accepted">{row.rejectReason}</Alert>
+            ) : null}
+            {row.notes ? <p className="text-sm">“{row.notes}”</p> : null}
+            <SummaryView summary={row.summary} currency={currency} locale={locale} />
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* ── the wizard: Select → Review & count → Confirm ───────────────────────── */
 
 function StartHandoverDialog({
   open,
@@ -275,23 +345,21 @@ function StartHandoverDialog({
   const [preview, setPreview] = React.useState<HandoverPreview | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [toUserId, setToUserId] = React.useState('')
-  const [counted, setCounted] = React.useState('')
-  const [reason, setReason] = React.useState('')
+  const [counts, setCounts] = React.useState<DenominationCounts>({})
   const [notes, setNotes] = React.useState('')
   const [busy, setBusy] = React.useState(false)
-  const [doneTo, setDoneTo] = React.useState('')
+  const [done, setDone] = React.useState<{ to: string; drawer: HandoverDone['drawer'] } | null>(null)
 
   const money = (minor: number) => formatMoney(minor, currency, locale)
-  const factor = minorUnitFactor(currency)
 
-  // Fresh each time it opens: the drawer's expected cash moves with every sale.
+  // Fresh each time it opens: the drawer moves with every sale.
   React.useEffect(() => {
     if (!open) return
     setStep('select')
     setToUserId('')
-    setCounted('')
-    setReason('')
+    setCounts({})
     setNotes('')
+    setDone(null)
     setPreview(null)
     setLoading(true)
     void callAction(() => previewShiftHandoverAction({ branchId: branchId ?? '' })).then((result) => {
@@ -302,9 +370,9 @@ function StartHandoverDialog({
   }, [open, branchId])
 
   const receiver = preview?.receivers.find((r) => r.id === toUserId) ?? null
-  const countedMinor = counted.trim() && Number.isFinite(Number(counted)) ? Math.round(Number(counted) * factor) : null
-  const gap = preview?.summary.drawer && countedMinor !== null ? countedMinor - preview.summary.drawer.expectedCash : null
-  const countOk = !preview?.hasDrawer || (countedMinor !== null && countedMinor >= 0)
+  const counted = preview ? physicalTotal(preview.denominations, counts) : 0
+  const anyCounted = Object.keys(countsToNumbers(counts)).length > 0
+  const countOk = !preview?.hasDrawer || anyCounted
 
   const confirm = async () => {
     if (!preview || !toUserId || !countOk) return
@@ -314,8 +382,7 @@ function StartHandoverDialog({
         toUserId,
         branchId: preview.branchId,
         notes,
-        countedAmount: preview.hasDrawer ? Number(counted) : null,
-        varianceReason: reason,
+        counts: preview.hasDrawer ? countsToNumbers(counts) : null,
       }),
     )
     setBusy(false)
@@ -323,7 +390,7 @@ function StartHandoverDialog({
       toast.error(result.error)
       return
     }
-    setDoneTo(receiver?.name ?? 'them')
+    setDone({ to: receiver?.name ?? 'them', drawer: result.data.drawer })
     setStep('done')
     router.refresh()
   }
@@ -340,7 +407,7 @@ function StartHandoverDialog({
               ? `Step 1 of 3 — at ${preview?.branchName ?? 'your location'}. Only people who can do your job here are listed.`
               : step === 'review'
                 ? 'Step 2 of 3 — this is what they will see. Confirm to hand over; nothing changes until you do.'
-                : `Waiting for ${doneTo} to accept. They have been notified.`}
+                : `Waiting for ${done?.to ?? 'them'} to accept. They have been notified.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -389,35 +456,26 @@ function StartHandoverDialog({
             <SummaryView summary={preview.summary} currency={currency} locale={locale} />
 
             {preview.hasDrawer && preview.summary.drawer ? (
-              <div className="space-y-3 rounded-lg border p-3">
-                <p className="text-sm font-medium">Your till goes with your shift. Count it.</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="sh-count">You counted</Label>
-                    <Input
-                      id="sh-count"
-                      inputMode="decimal"
-                      placeholder="0.00"
-                      value={counted}
-                      onChange={(event) => setCounted(event.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Expected {money(preview.summary.drawer.expectedCash)}
-                      {gap !== null && gap !== 0 ? ` · ${gap > 0 ? 'over' : 'short'} by ${money(Math.abs(gap))}` : ''}
-                    </p>
-                  </div>
-                  {gap !== null && gap !== 0 ? (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="sh-reason">Why is it {gap > 0 ? 'over' : 'short'}?</Label>
-                      <Input
-                        id="sh-reason"
-                        value={reason}
-                        onChange={(event) => setReason(event.target.value)}
-                        placeholder="A handover is a close. It needs the same explanation."
-                      />
-                    </div>
-                  ) : null}
+              <div className="space-y-3 rounded-lg border p-3" data-testid="handover-count">
+                <p className="text-sm font-medium">Your till goes with your shift. Count it, note by note.</p>
+                <DenominationGrid
+                  denominations={preview.denominations}
+                  counts={counts}
+                  onChange={setCounts}
+                  money={money}
+                  idPrefix="sh-count"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-4 py-3">
+                  <span className="text-sm font-medium">Cash counted</span>
+                  <span className="text-xl font-bold tabular-nums">{money(counted)}</span>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {/*
+                    Said out loud, because a cashier who expects to see a
+                    variance and does not will assume the screen is broken.
+                  */}
+                  The difference against what the system expected is worked out when you confirm, and shown on your handover card.
+                </p>
               </div>
             ) : null}
 
@@ -443,12 +501,59 @@ function StartHandoverDialog({
         ) : null}
 
         {step === 'done' ? (
-          <div className="flex justify-end">
-            <Button onClick={onClose}>Done</Button>
+          <div className="space-y-3">
+            {done?.drawer ? (
+              <div className="rounded-lg border p-3 text-sm" data-testid="handover-reconciliation">
+                <p className="mb-2 font-medium">Your till, reconciled</p>
+                <Reconciliation
+                  drawer={{
+                    countedCash: done.drawer.countedCash,
+                    expectedCash: done.drawer.expectedCash,
+                    variance: done.drawer.variance,
+                    needsReview: done.drawer.needsReview,
+                  }}
+                  money={money}
+                />
+              </div>
+            ) : null}
+            <div className="flex justify-end">
+              <Button onClick={onClose}>Done</Button>
+            </div>
           </div>
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Counted against expected — shown only once the count has been submitted. */
+function Reconciliation({
+  drawer,
+  money,
+}: {
+  drawer: { countedCash: number | null; expectedCash: number | null; variance: number | null; needsReview?: boolean }
+  money: (minor: number) => string
+}) {
+  if (drawer.countedCash === null || drawer.expectedCash === null || drawer.variance === null) return null
+  const over = drawer.variance > 0
+  return (
+    <dl className="grid grid-cols-3 gap-2 text-sm">
+      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+        <dt className="text-xs text-muted-foreground">Counted</dt>
+        <dd className="font-semibold tabular-nums">{money(drawer.countedCash)}</dd>
+      </div>
+      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+        <dt className="text-xs text-muted-foreground">Expected</dt>
+        <dd className="font-semibold tabular-nums">{money(drawer.expectedCash)}</dd>
+      </div>
+      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+        <dt className="text-xs text-muted-foreground">{drawer.variance === 0 ? 'Balanced' : over ? 'Over' : 'Short'}</dt>
+        <dd className={`font-semibold tabular-nums ${drawer.variance === 0 ? '' : over ? 'text-success' : 'text-destructive'}`}>
+          {drawer.variance === 0 ? '✓' : money(Math.abs(drawer.variance))}
+        </dd>
+        {drawer.needsReview ? <dd className="text-xs text-muted-foreground">Waiting for a manager’s review</dd> : null}
+      </div>
+    </dl>
   )
 }
 
@@ -556,29 +661,56 @@ function ReviewDialog({
 
 export function SummaryView({ summary, currency, locale }: { summary: HandoverSummary; currency: string; locale: string }) {
   const money = (minor: number) => formatMoney(minor, currency, locale)
+  const drawer = summary.drawer
+  const pendingWork = [
+    summary.orders.pending ? `${summary.orders.pending} order${summary.orders.pending === 1 ? '' : 's'} waiting to be accepted` : null,
+    summary.transfers?.toDispatch ? `${summary.transfers.toDispatch} transfer${summary.transfers.toDispatch === 1 ? '' : 's'} to dispatch` : null,
+    summary.transfers?.toReceive ? `${summary.transfers.toReceive} transfer${summary.transfers.toReceive === 1 ? '' : 's'} to receive` : null,
+    summary.deliveriesToReceive ? `${summary.deliveriesToReceive} deliver${summary.deliveriesToReceive === 1 ? 'y' : 'ies'} to receive` : null,
+  ].filter((line): line is string => line !== null)
+
   return (
     <div className="space-y-3 text-sm" data-testid="handover-summary">
       <div className="grid gap-2 sm:grid-cols-3">
         <Stat label="Location" value={summary.branchName} />
         <Stat label="Orders today" value={String(summary.orders.today)} hint={`${summary.orders.open} still open`} />
         <Stat
-          label="On shift since"
+          label={summary.shift?.templateName ? `${summary.shift.templateName} shift — since` : 'On shift since'}
           value={summary.shift ? <LocalDateTime value={summary.shift.clockInAt} /> : '—'}
         />
       </div>
 
-      {summary.drawer ? (
-        <div className="rounded-lg border p-3">
-          <p className="font-medium">Till {summary.drawer.sessionNumber}{summary.drawer.registerName ? ` · ${summary.drawer.registerName}` : ''}</p>
-          <p className="text-muted-foreground">
-            Opened with {money(summary.drawer.openingFloat)} · expected {money(summary.drawer.expectedCash)}
-            {summary.drawer.countedCash !== null ? ` · counted ${money(summary.drawer.countedCash)}` : ''}
-            {summary.drawer.variance !== null && summary.drawer.variance !== 0
-              ? ` · ${summary.drawer.variance > 0 ? 'over' : 'short'} by ${money(Math.abs(summary.drawer.variance))}`
-              : summary.drawer.variance === 0
-                ? ' · balanced'
-                : ''}
-          </p>
+      {drawer ? (
+        <div className="rounded-lg border p-3" data-testid="handover-drawer">
+          <p className="font-medium">Till {drawer.sessionNumber}{drawer.registerName ? ` · ${drawer.registerName}` : ''}</p>
+          <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-muted-foreground sm:grid-cols-3">
+            <dt>Opening cash</dt><dd className="tabular-nums">{money(drawer.openingFloat)}</dd>
+            {drawer.cashSales !== undefined ? (<><dt>Cash sales</dt><dd className="tabular-nums">{money(drawer.cashSales)}</dd></>) : null}
+            {drawer.refunds !== undefined ? (<><dt>Cash refunds</dt><dd className="tabular-nums">{money(drawer.refunds)}</dd></>) : null}
+            {drawer.cashIn !== undefined ? (<><dt>Cash in</dt><dd className="tabular-nums">{money(drawer.cashIn)}</dd></>) : null}
+            {drawer.cashOut !== undefined ? (<><dt>Cash out</dt><dd className="tabular-nums">{money(drawer.cashOut)}</dd></>) : null}
+            {drawer.movements !== undefined ? (<><dt>Movements</dt><dd className="tabular-nums">{drawer.movements}</dd></>) : null}
+          </dl>
+          {drawer.expectedCash !== null && drawer.countedCash !== null && drawer.variance !== null ? (
+            <div className="mt-2">
+              <Reconciliation drawer={drawer} money={money} />
+            </div>
+          ) : drawer.expectedCash !== null ? (
+            <p className="mt-1 text-muted-foreground">Expected {money(drawer.expectedCash)}</p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">Expected cash and the difference are shown once the count is submitted.</p>
+          )}
+        </div>
+      ) : null}
+
+      {pendingWork.length > 0 ? (
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Still to do</p>
+          <ul className="divide-y rounded-lg border">
+            {pendingWork.map((line) => (
+              <li key={line} className="px-3 py-1.5">{line}</li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

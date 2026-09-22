@@ -259,9 +259,9 @@ export const FEATURES: Feature[] = [
   },
   {
     key: 'handover',
-    label: 'Shift handover',
+    label: 'Shift',
     group: 'Overview',
-    description: 'Notes passed from one shift to the next.',
+    description: 'Your shift, your handover, and the histories of both.',
     actions: [{ key: 'view', permission: PERMISSIONS.HANDOVER_VIEW }],
     routes: ['/dashboard/handover'],
   },
@@ -597,6 +597,22 @@ export const FEATURES: Feature[] = [
       '/dashboard/links',
       '/dashboard/locations/[branchId]/staff',
     ],
+  },
+  {
+    key: 'shifts',
+    label: 'Shifts',
+    group: 'People',
+    description: 'Shift templates, the rota, and the shift and handover histories (shifthandover.md).',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.SHIFT_ASSIGN },
+      {
+        key: 'edit',
+        label: 'Templates',
+        permission: PERMISSIONS.SHIFT_TEMPLATE_MANAGE,
+        hint: 'Defining the kinds of shift. Rostering people onto them comes with "view".',
+      },
+    ],
+    routes: ['/dashboard/shifts'],
   },
   {
     key: 'reviews',

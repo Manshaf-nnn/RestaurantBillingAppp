@@ -115,7 +115,7 @@ async function main() {
       toUserId: to.id, timeZone: TZ, ...extra,
     })
   const accept = (by: U, id: string) =>
-    acceptShiftHandover({ restaurantId: restaurant.id, handoverId: id, user: person(by), actor: actor(by) })
+    acceptShiftHandover({ restaurantId: restaurant.id, handoverId: id, user: person(by), actor: actor(by) , timeZone: TZ })
   const reject = (by: U, id: string, reason: string) =>
     rejectShiftHandover({ restaurantId: restaurant.id, handoverId: id, user: person(by), actor: actor(by), reason })
   const cancel = (by: U, id: string, mayCancelOthers = false) =>
@@ -157,7 +157,7 @@ async function main() {
     await refuses('across sites', () => start(w1, w3), /HANDOVER_CROSSES_BRANCH/)
     await refuses('a second one while yours is in flight', () => start(w1, m1), /HANDOVER_ALREADY_PENDING/)
     await refuses('to somebody who already has one waiting', () => start(w4, w2), /HANDOVER_ALREADY_PENDING/)
-    await refuses('another restaurant cannot see it', () => acceptShiftHandover({ restaurantId: 'someone-else', handoverId: first.id, user: person(w2), actor: actor(w2) }), /not found|Handover/i)
+    await refuses('another restaurant cannot see it', () => acceptShiftHandover({ restaurantId: 'someone-else', handoverId: first.id, user: person(w2), actor: actor(w2) , timeZone: TZ }), /not found|Handover/i)
     await refuses('another site cannot see it', () => accept(w3, first.id), /another location|Forbidden/i)
     await refuses('only the receiver accepts', () => accept(m1, first.id), /somebody else/i)
   }

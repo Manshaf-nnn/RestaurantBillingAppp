@@ -250,6 +250,9 @@ const SERVICE = [
   // (confirm requests it, accept takes it, reject declines it, withdraw
   // re-opens the outgoing drawer), notifications, participant-scoped history.
   'shift-handover-test',
+  // shifthandover.md — templates, the rota, starting a rostered shift, the
+  // blind till count, and accept ending the shift.
+  'shift-management-test',
   'feature-access-test',
   // correctionA.md §5/§6/§7 — every screen names the location it is acting on
   // (including the one-location case, where the switcher renders no menu), and

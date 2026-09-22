@@ -69,6 +69,10 @@ const TYPES = [
   'invoices',
   'analytics',
   'variance',
+  // shifthandover.md
+  'shift-assignments',
+  'shift-sessions',
+  'shift-handovers',
 ]
 
 const minted: string[] = []
@@ -260,7 +264,7 @@ async function main() {
     })
     const theirCookie = await signIn(exporter)
 
-    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables']
+    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables', 'shift-assignments', 'shift-sessions', 'shift-handovers']
     for (const type of gated) {
       const response = await fetch(`${BASE}/api/reports/export?type=${type}&format=csv`, {
         headers: { cookie: theirCookie },

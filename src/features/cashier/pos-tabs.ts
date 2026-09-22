@@ -18,7 +18,7 @@ export const POS_TAB_LABEL: Record<PosTab, string> = {
   orders: 'Orders',
   cashier: 'Cashier',
   drawer: 'Drawer',
-  handover: 'Shift Handover',
+  handover: 'Shift',
 }
 
 /** The tabs this person may open, in the order they are shown. */

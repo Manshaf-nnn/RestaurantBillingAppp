@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { CashHandover, UserRole } from '@prisma/client'
+import type { CashHandover, Prisma, UserRole } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { canAccessBranch } from '@/lib/rbac'
@@ -12,6 +12,7 @@ import {
   type DrawerActor,
 } from '@/features/cashdrawer/service'
 import { nextSessionNumber } from '@/features/cashdrawer/registers'
+import { sanitiseCounts, totalFromCounts } from '@/features/cashdrawer/denominations'
 import { getFundBalance } from '@/features/pettycash/service'
 
 /**
@@ -62,28 +63,57 @@ export const HANDOVER_ROLES = new Set<UserRole>(['CASHIER', 'MANAGER', 'ADMIN', 
 /**
  * Count the drawer, close it, and offer it to the next cashier.
  *
- * The variance rule is the same as a normal close, deliberately: a handover is
- * a close, and letting it skip the explanation would make it the way to close a
- * short drawer without saying anything.
+ * ── The count is notes and coins, and the variance is worked out after ────
+ *
+ * The till screens post a denomination map, never a total: the sum is the
+ * server's, and so is the comparison. What the system expected is not shown
+ * to the person counting until the count is committed (shifthandover.md
+ * "Cash drawer — critical") — the same rule as `closeDrawer`, for the same
+ * reason: a count taken with the target in view is not a count.
+ *
+ * DELIBERATE behaviour change 2026-09 (shifthandover.md §Cash drawer): no
+ * variance reason is demanded here any more. The cashier cannot explain a gap
+ * they have not been shown. Over the threshold the session still stops in
+ * PENDING_REVIEW, exactly as a normal close does, and the explanation is the
+ * reviewer's to record. `countedAmount` stays accepted for callers that
+ * already hold a total (the API, the tests).
  */
 export async function requestHandover(params: {
   restaurantId: string
   sessionId: string
   toUserId: string
-  countedAmount: number
+  /** Minor units, when the caller already has a total. */
+  countedAmount?: number | null
+  /** Face value in minor units → how many. What the till screens post. */
+  counts?: Record<string, number> | null
   varianceReason?: string | null
   note?: string | null
   userId: string
   actor: HandoverActor
 }): Promise<CashHandover> {
-  if (params.countedAmount < 0) {
-    throw new AppError('Counted cash cannot be negative', 400, 'HANDOVER_BAD_COUNT')
-  }
   if (params.toUserId === params.userId) {
     throw new AppError('Hand over to somebody else', 400, 'HANDOVER_SELF')
   }
 
   const session = await requireOpenSession(params.restaurantId, params.sessionId, params.actor)
+
+  const restaurant = await prisma.restaurant.findUniqueOrThrow({
+    where: { id: params.restaurantId },
+    select: { currency: true },
+  })
+  const counted =
+    params.counts && Object.keys(params.counts).length > 0
+      ? sanitiseCounts(restaurant.currency, params.counts)
+      : null
+  const countedAmount = counted
+    ? totalFromCounts(restaurant.currency, counted)
+    : params.countedAmount ?? null
+  if (countedAmount === null) {
+    throw new AppError('Count the drawer first', 400, 'HANDOVER_NO_COUNT')
+  }
+  if (countedAmount < 0) {
+    throw new AppError('Counted cash cannot be negative', 400, 'HANDOVER_BAD_COUNT')
+  }
 
   const incoming = await prisma.user.findFirst({
     where: {
@@ -162,46 +192,45 @@ export async function requestHandover(params: {
     )
   }
 
-  const totals = await computeDrawerTotals(session.id)
-  const variance = params.countedAmount - totals.expectedCash
-
-  /*
-   * A handover is a close, so it stops for review on the same threshold.
-   *
-   * Without this, "Hand over" was the documented way round the variance
-   * review: a cashier short by any amount could pass the till on and their
-   * session would go straight to CLOSED, while the same count entered on the
-   * Close screen would have waited for a manager. The till is released either
-   * way, so the next person is never held up by somebody else's shortfall.
-   */
-  const needsReview = await varianceNeedsReview(params.restaurantId, variance)
-
-  // Same rule as closing: only a gap big enough to matter has to be explained.
   const reason = params.varianceReason?.trim() || null
-  if (needsReview && (!reason || reason.length < 2)) {
-    throw new AppError(
-      'That is a big enough difference to explain before handing the till on.',
-      400,
-      'DRAWER_NO_VARIANCE_REASON',
-    )
-  }
 
   return prisma.$transaction(async (tx) => {
-    await tx.cashDrawerSession.update({
-      where: { id: session.id },
+    /*
+     * The session row is locked before the expected figure is read, so a sale
+     * landing between "compute" and "close" cannot make the snapshot describe
+     * a drawer that no longer exists. `updateMany` with the status in the
+     * WHERE is the second lock: a close racing this one matches no row.
+     */
+    await tx.$queryRaw`SELECT "id" FROM "cash_drawer_sessions" WHERE "id" = ${session.id} FOR UPDATE`
+    const totals = await computeDrawerTotals(session.id, tx)
+    const variance = countedAmount - totals.expectedCash
+
+    /*
+     * A handover is a close, so it stops for review on the same threshold.
+     * The till is released either way, so the next person is never held up
+     * by somebody else's shortfall.
+     */
+    const needsReview = await varianceNeedsReview(params.restaurantId, variance)
+
+    const closed = await tx.cashDrawerSession.updateMany({
+      where: { id: session.id, status: 'OPEN' },
       data: {
         status: needsReview ? 'PENDING_REVIEW' : 'CLOSED',
         closedAt: new Date(),
         closedById: params.userId,
-        countedCash: params.countedAmount,
+        countedCash: countedAmount,
         expectedCash: totals.expectedCash,
         variance,
         varianceReason: reason,
+        ...(counted ? { closingCounts: counted as Prisma.InputJsonValue } : {}),
         closingNote: params.note?.trim() || `Handed over to another cashier`,
         activeRegisterKey: null,
         activeCashierKey: null,
       },
     })
+    if (closed.count === 0) {
+      throw new AppError('That drawer is no longer open', 409, 'DRAWER_NOT_OPEN')
+    }
 
     return tx.cashHandover.create({
       data: {
@@ -212,7 +241,7 @@ export async function requestHandover(params: {
         fromUserId: params.userId,
         toUserId: incoming.id,
         expectedAmount: totals.expectedCash,
-        countedAmount: params.countedAmount,
+        countedAmount,
         variance,
         note: params.note?.trim() || null,
       },

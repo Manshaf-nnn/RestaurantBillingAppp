@@ -5,6 +5,7 @@ import { requirePermission } from '@/server/auth/guard'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AppError, toAppError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
+import { buildShiftExport, isShiftExportType } from '@/features/shifts/export'
 import { getReportSummary } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
@@ -102,6 +103,29 @@ export async function GET(request: NextRequest) {
      */
     const selection = await selectedBranch(user, Object.fromEntries(params))
     const { branchIds } = selection
+
+    /*
+     * shifthandover.md — the rota, the worked sessions, and the handovers.
+     * Behind the rota permission, the same one that opens /dashboard/shifts:
+     * a download must never be the way around a screen's gate.
+     */
+    if (isShiftExportType(type)) {
+      await requirePermission(PERMISSIONS.SHIFT_ASSIGN)
+      const built = await buildShiftExport({
+        type,
+        restaurantId: user.restaurantId,
+        timeZone: restaurant.timezone,
+        from: canonicalRange.from,
+        to: canonicalRange.to,
+        branchIds,
+        staffId: params.get('staff') || undefined,
+        templateId: params.get('shift') || undefined,
+        status: params.get('status') || undefined,
+        q: params.get('q') || undefined,
+        money,
+      })
+      return respond(built.name, built.columns, built.rows, format, stamp)
+    }
 
     if (type === 'drawers' || type === 'petty') {
       /*

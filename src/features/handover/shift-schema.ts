@@ -28,6 +28,12 @@ export const startShiftHandoverSchema = z.object({
     .nullable()
     .optional(),
   varianceReason: shortText,
+  /**
+   * Face value in minor units → how many were counted (shifthandover.md
+   * "Cash drawer — critical"). The till screens post this and never a total,
+   * so the sum is the server's and the variance is never shown before it is.
+   */
+  counts: z.record(z.string(), z.number().int().min(0).max(100_000)).nullable().optional(),
 })
 
 export const shiftHandoverIdSchema = z.object({

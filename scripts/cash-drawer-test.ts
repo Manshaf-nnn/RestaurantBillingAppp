@@ -56,6 +56,7 @@ import {
 } from '../src/features/pettycash/service'
 import {
   acceptHandover,
+  declineHandover,
   listHandoverCandidates,
   requestHandover,
 } from '../src/features/handover/cash-service'
@@ -1241,19 +1242,32 @@ async function main() {
    * reason; a gap past it is refused without one, exactly as at the close form
    * — "Hand over" must never be the softer door.
    */
-  await refuses(
-    'a big gap still needs a reason before handing the till on',
-    () =>
-      requestHandover({
-        restaurantId: restaurant.id,
-        sessionId: annSession.id,
-        toUserId: boss.id,
-        countedAmount: annExpected - 900_00,
-        userId: ann.id,
-        actor: actorFor(ann),
-      }),
-    /big enough difference/i,
-  )
+  /*
+   * DELIBERATE behaviour change 2026-09 (shifthandover.md "Cash drawer —
+   * critical"): no reason is demanded at handover any more, because the
+   * person counting is not shown the expected figure before the count is
+   * submitted. The threshold still bites — the session stops for review —
+   * so "Hand over" is still not the softer door. Pinned as a preview of the
+   * figures rather than a refusal, on a throwaway second till.
+   */
+  {
+    const spareTill = await createRegister({ restaurantId: restaurant.id, branchId: colombo.id, name: `Spare ${stamp}` })
+    const short = await openDrawer({ restaurantId: restaurant.id, branchId: colombo.id, registerId: spareTill.id, openingFloat: 5_000_00, userId: boss.id, userBranchId: boss.branchId })
+    const gap = await requestHandover({
+      restaurantId: restaurant.id,
+      sessionId: short.id,
+      toUserId: ann.id,
+      countedAmount: 5_000_00 - 900_00,
+      userId: boss.id,
+      actor: actorFor(boss),
+    })
+    const stopped = await prisma.cashDrawerSession.findUniqueOrThrow({ where: { id: short.id } })
+    check('a big gap no longer needs a reason up front — the count is blind', gap.variance === -900_00 && stopped.varianceReason === null)
+    check('but it still stops for a manager, exactly as a normal close', stopped.status === 'PENDING_REVIEW')
+    // Declined by the receiver, so nothing re-opens in the owner's name and
+    // the rest of the suite finds him without a drawer.
+    await declineHandover({ restaurantId: restaurant.id, handoverId: gap.id, userId: ann.id, actor: actorFor(ann) })
+  }
 
   const handover = await requestHandover({
     restaurantId: restaurant.id,

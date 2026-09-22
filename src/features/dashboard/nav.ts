@@ -150,7 +150,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         href: '/dashboard/handover',
-        label: 'Shift handover',
+        label: 'Shift',
         icon: ClipboardList,
         permission: PERMISSIONS.HANDOVER_VIEW,
       },
@@ -327,6 +327,14 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/customers/analytics', label: 'Customer insights', icon: UserSearch, permission: PERMISSIONS.CUSTOMER_ANALYTICS },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
+      {
+        // The rota: who works which shift, where (shifthandover.md §1–2).
+        href: '/dashboard/shifts',
+        label: 'Shifts',
+        icon: CalendarClock,
+        permission: PERMISSIONS.SHIFT_ASSIGN,
+        anyOf: [PERMISSIONS.SHIFT_ASSIGN, PERMISSIONS.SHIFT_TEMPLATE_MANAGE],
+      },
       {
         // Next to Staff, because "who works here" and "what may they do" are
         // the same question asked twice.

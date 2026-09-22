@@ -126,6 +126,12 @@ export const PERMISSIONS = {
   /** Choose which staff may sign off requests at each location (§9). */
   APPROVALS_MANAGE: 'approvals.manage',
   HANDOVER_VIEW: 'handover.view',
+  /** See your own shift, start the one you were rostered on, read your own history (shifthandover.md §3). */
+  SHIFT_VIEW: 'shift.view',
+  /** Put staff on the rota at a location you may manage (shifthandover.md §2). */
+  SHIFT_ASSIGN: 'shift.assign',
+  /** Define the kinds of shift — Day, Night, custom (shifthandover.md §1). Owner/admin. */
+  SHIFT_TEMPLATE_MANAGE: 'shift.templates',
   RECIPE_VIEW: 'recipe.view',
   LOYALTY_VIEW: 'loyalty.view',
   QR_VIEW: 'qr.view',
@@ -249,7 +255,10 @@ const MANAGER: Permission[] = ALL.filter(
     p !== PERMISSIONS.CASH_VARIANCE_REVIEW &&
     // Money leaving the business is signed off by the owner/admin — the
     // manager may be the person who raised it.
-    p !== PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
+    p !== PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE &&
+    // The kinds of shift are the owner's to define (shifthandover.md §1); a
+    // manager rosters people onto them at their own site.
+    p !== PERMISSIONS.SHIFT_TEMPLATE_MANAGE,
 )
 
 // A cashier handles money at the till, not the restaurant's buying. They are
@@ -475,6 +484,8 @@ const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   [PERMISSIONS.TASKS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.APPROVALS_VIEW, PERMISSIONS.DASHBOARD_VIEW],
   [PERMISSIONS.HANDOVER_VIEW, PERMISSIONS.ORDER_VIEW],
+  // shifthandover.md §3 — whoever hands a shift on has a shift to see.
+  [PERMISSIONS.SHIFT_VIEW, PERMISSIONS.HANDOVER_VIEW],
   [PERMISSIONS.RECIPE_VIEW, PERMISSIONS.MENU_VIEW],
   [PERMISSIONS.LOYALTY_VIEW, PERMISSIONS.SETTINGS_VIEW],
   [PERMISSIONS.QR_VIEW, PERMISSIONS.SETTINGS_VIEW],

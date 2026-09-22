@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { Prisma, ShiftHandover, UserRole } from '@prisma/client'
+import type { Prisma, ShiftHandover, ShiftHandoverStatus, UserRole } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { ROLE_LABELS, canAccessBranch } from '@/lib/rbac'
@@ -8,6 +8,10 @@ import { prisma } from '@/server/db/prisma'
 import { notify } from '@/server/notifications'
 import { computeDrawerTotals } from '@/features/cashdrawer/service'
 import { listInstructions } from '@/features/instructions/service'
+import { closeShift } from '@/features/attendance/service'
+import { linkReceiverShift } from '@/features/shifts/service'
+import { listTransfers } from '@/features/transfers/queries'
+import { listAwaitingDelivery } from '@/features/purchasing/queries'
 import { listShiftNotes } from './queries'
 import {
   HANDOVER_ROLES,
@@ -146,75 +150,124 @@ export async function listEligibleReceivers(params: {
 /**
  * What the shift looks like right now, for Review and for the record.
  *
- * Built on the server from the ledger, the attendance row, the orders and
- * the open tasks and notes — never posted from the client, so the snapshot
- * on the row is what the system saw and not what a browser said.
+ * Built on the server from the ledger, the attendance row, the orders, the
+ * open tasks and notes, and what is waiting in transfers and deliveries —
+ * never posted from the client, so the snapshot on the row is what the
+ * system saw and not what a browser said.
+ *
+ * `revealExpected` is the one thing that differs by reader (shifthandover.md
+ * "Cash drawer — critical"): the person operating the drawer is not sent the
+ * expected figure before their count is submitted — null on the wire, not
+ * merely unrendered — while a manager reading the same preview is.
  */
 export async function buildHandoverSummary(params: {
   restaurantId: string
   branchId: string
   user: HandoverPerson
   timeZone: string
+  revealExpected: boolean
 }): Promise<{ summary: HandoverSummary; sessionId: string | null; shiftId: string | null }> {
   const dayStart = startOfDayIn(params.timeZone)
 
-  const [branch, shift, session, ordersToday, ordersOpen, tasks, notes] = await Promise.all([
-    prisma.branch.findFirst({
-      where: { id: params.branchId, restaurantId: params.restaurantId },
-      select: { name: true },
-    }),
-    prisma.staffShift.findUnique({
-      where: { activeShiftKey: params.user.id },
-      select: { id: true, clockInAt: true, restaurantId: true },
-    }),
-    prisma.cashDrawerSession.findUnique({
-      where: { activeCashierKey: params.user.id },
-      include: { register: { select: { name: true } } },
-    }),
-    prisma.order.count({
-      where: { restaurantId: params.restaurantId, branchId: params.branchId, placedAt: { gte: dayStart } },
-    }),
-    prisma.order.count({
-      where: {
+  const [branch, shift, session, ordersToday, ordersOpen, ordersPending, tasks, notes, transfers, deliveries] =
+    await Promise.all([
+      prisma.branch.findFirst({
+        where: { id: params.branchId, restaurantId: params.restaurantId },
+        select: { name: true },
+      }),
+      prisma.staffShift.findUnique({
+        where: { activeShiftKey: params.user.id },
+        select: {
+          id: true,
+          clockInAt: true,
+          restaurantId: true,
+          scheduledStartAt: true,
+          scheduledEndAt: true,
+          template: { select: { name: true } },
+        },
+      }),
+      prisma.cashDrawerSession.findUnique({
+        where: { activeCashierKey: params.user.id },
+        include: { register: { select: { name: true } } },
+      }),
+      prisma.order.count({
+        where: { restaurantId: params.restaurantId, branchId: params.branchId, placedAt: { gte: dayStart } },
+      }),
+      prisma.order.count({
+        where: {
+          restaurantId: params.restaurantId,
+          branchId: params.branchId,
+          status: { in: [...OPEN_ORDER_STATUSES] },
+        },
+      }),
+      prisma.order.count({
+        where: { restaurantId: params.restaurantId, branchId: params.branchId, status: 'PENDING' },
+      }),
+      listInstructions({
         restaurantId: params.restaurantId,
+        user: { role: params.user.role, branchId: params.user.branchId },
         branchId: params.branchId,
-        status: { in: [...OPEN_ORDER_STATUSES] },
-      },
-    }),
-    listInstructions({
-      restaurantId: params.restaurantId,
-      user: { role: params.user.role, branchId: params.user.branchId },
-      branchId: params.branchId,
-      status: 'OPEN',
-      limit: 20,
-    }),
-    listShiftNotes(params.restaurantId, [params.branchId]),
-  ])
+        status: 'OPEN',
+        limit: 20,
+      }),
+      listShiftNotes(params.restaurantId, [params.branchId]),
+      listTransfers({ restaurantId: params.restaurantId, branchId: params.branchId, limit: 200 }),
+      listAwaitingDelivery({ restaurantId: params.restaurantId, branchId: params.branchId }),
+    ])
   if (!branch) throw new NotFoundError('Location')
 
   const drawer =
     session && session.restaurantId === params.restaurantId && session.status === 'OPEN'
       ? session
       : null
-  const totals = drawer ? await computeDrawerTotals(drawer.id) : null
+  const [totals, movements] = drawer
+    ? await Promise.all([
+        computeDrawerTotals(drawer.id),
+        prisma.cashMovement.count({ where: { sessionId: drawer.id } }),
+      ])
+    : [null, 0]
+
+  const ownShift = shift && shift.restaurantId === params.restaurantId ? shift : null
 
   return {
     sessionId: drawer?.id ?? null,
-    shiftId: shift && shift.restaurantId === params.restaurantId ? shift.id : null,
+    shiftId: ownShift?.id ?? null,
     summary: {
       branchName: branch.name,
-      shift: shift && shift.restaurantId === params.restaurantId ? { clockInAt: shift.clockInAt.toISOString() } : null,
-      drawer: drawer
+      shift: ownShift
         ? {
-            sessionNumber: drawer.sessionNumber,
-            registerName: drawer.register?.name ?? null,
-            openingFloat: drawer.openingFloat,
-            expectedCash: totals?.expectedCash ?? 0,
-            countedCash: null,
-            variance: null,
+            clockInAt: ownShift.clockInAt.toISOString(),
+            templateName: ownShift.template?.name ?? null,
+            scheduledStartAt: ownShift.scheduledStartAt?.toISOString() ?? null,
+            scheduledEndAt: ownShift.scheduledEndAt?.toISOString() ?? null,
           }
         : null,
-      orders: { today: ordersToday, open: ordersOpen },
+      drawer:
+        drawer && totals
+          ? {
+              sessionNumber: drawer.sessionNumber,
+              registerName: drawer.register?.name ?? null,
+              openingFloat: drawer.openingFloat,
+              cashSales: totals.cashSales,
+              refunds: totals.byType.CASH_REFUND ?? 0,
+              cashIn: totals.cashIn,
+              cashOut: totals.cashOut,
+              movements,
+              expectedCash: params.revealExpected ? totals.expectedCash : null,
+              countedCash: null,
+              variance: null,
+              counts: null,
+              needsReview: false,
+            }
+          : null,
+      orders: { today: ordersToday, open: ordersOpen, pending: ordersPending },
+      transfers: {
+        toDispatch: transfers.filter((t) => t.status === 'APPROVED' && t.fromBranchId === params.branchId).length,
+        toReceive: transfers.filter(
+          (t) => ['DISPATCHED', 'IN_TRANSIT', 'RECEIVED'].includes(t.status) && t.toBranchId === params.branchId,
+        ).length,
+      },
+      deliveriesToReceive: deliveries.length,
       tasks: tasks.map((task) => ({
         id: task.id,
         title: task.title,
@@ -249,8 +302,10 @@ export async function startShiftHandover(params: {
   branchId: string
   toUserId: string
   notes?: string | null
-  /** Minor units. Required when the outgoing person has a drawer open. */
+  /** Minor units, for callers that already hold a total. */
   countedAmount?: number | null
+  /** Face value in minor units → how many. What the wizard posts. */
+  counts?: Record<string, number> | null
   varianceReason?: string | null
   timeZone: string
 }): Promise<ShiftHandover> {
@@ -294,17 +349,23 @@ export async function startShiftHandover(params: {
     )
   }
 
+  // The stored snapshot carries the real figures: it is written at
+  // submission, which is exactly when the outgoing person may see them.
   const built = await buildHandoverSummary({
     restaurantId: params.restaurantId,
     branchId: params.branchId,
     user: params.from,
     timeZone: params.timeZone,
+    revealExpected: true,
   })
   const summary = built.summary
 
   let cashHandoverId: string | null = null
   if (built.sessionId && summary.drawer) {
-    if (params.countedAmount === null || params.countedAmount === undefined) {
+    const hasCount =
+      (params.counts && Object.keys(params.counts).length > 0) ||
+      (params.countedAmount !== null && params.countedAmount !== undefined)
+    if (!hasCount) {
       throw new AppError('Count the drawer before handing your shift over — the till goes with it', 400, 'HANDOVER_NO_COUNT')
     }
     if (!HANDOVER_ROLES.has(receiver.role)) {
@@ -314,29 +375,49 @@ export async function startShiftHandover(params: {
       restaurantId: params.restaurantId,
       sessionId: built.sessionId,
       toUserId: receiver.id,
-      countedAmount: params.countedAmount,
+      countedAmount: params.countedAmount ?? null,
+      counts: params.counts ?? null,
       varianceReason: params.varianceReason ?? null,
       note: params.notes ?? null,
       userId: params.from.id,
       actor: params.actor,
     })
     cashHandoverId = cash.id
+    const closed = await prisma.cashDrawerSession.findUnique({
+      where: { id: built.sessionId },
+      select: { status: true, closingCounts: true },
+    })
     summary.drawer.countedCash = cash.countedAmount
+    summary.drawer.expectedCash = cash.expectedAmount
     summary.drawer.variance = cash.variance
+    summary.drawer.counts = (closed?.closingCounts as Record<string, number> | null) ?? null
+    summary.drawer.needsReview = closed?.status === 'PENDING_REVIEW'
   }
 
-  const row = await prisma.shiftHandover.create({
-    data: {
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
-      fromUserId: params.from.id,
-      toUserId: receiver.id,
-      fromShiftId: built.shiftId,
-      cashHandoverId,
-      summary: summary as unknown as Prisma.InputJsonValue,
-      notes: params.notes?.trim() || null,
-    },
-  })
+  let row: ShiftHandover
+  try {
+    row = await prisma.shiftHandover.create({
+      data: {
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
+        fromUserId: params.from.id,
+        toUserId: receiver.id,
+        fromShiftId: built.shiftId,
+        cashHandoverId,
+        // The lock behind the friendly check above: one in flight per
+        // person, either way round, however many requests land together.
+        pendingFromKey: params.from.id,
+        pendingToKey: receiver.id,
+        summary: summary as unknown as Prisma.InputJsonValue,
+        notes: params.notes?.trim() || null,
+      },
+    })
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2002') {
+      throw new AppError('A handover is already waiting — for you or for them. Settle that one first.', 409, 'HANDOVER_ALREADY_PENDING')
+    }
+    throw error
+  }
 
   // Told, not left to find out. `notify` was used for forgotten drawers and
   // never for a handover; the receiver is the one person who has to act.
@@ -361,7 +442,8 @@ export async function acceptShiftHandover(params: {
   handoverId: string
   user: HandoverPerson
   actor: HandoverActor
-}): Promise<{ handover: ShiftHandover; sessionId: string | null }> {
+  timeZone: string
+}): Promise<{ handover: ShiftHandover; sessionId: string | null; linkedAssignmentId: string | null }> {
   const row = await requireShiftHandover(params.restaurantId, params.handoverId, params.user)
   if (row.status !== 'PENDING_ACCEPTANCE') {
     throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
@@ -387,11 +469,25 @@ export async function acceptShiftHandover(params: {
   const now = new Date()
   const settled = await prisma.shiftHandover.updateMany({
     where: { id: row.id, status: 'PENDING_ACCEPTANCE' },
-    data: { status: 'COMPLETED', decidedAt: now, decidedById: params.user.id },
+    data: { status: 'COMPLETED', decidedAt: now, decidedById: params.user.id, pendingFromKey: null, pendingToKey: null },
   })
   if (settled.count === 0) {
     throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
   }
+
+  /*
+   * Responsibility has moved (shifthandover.md §4). The outgoing person's
+   * shift ends here, at the moment of acceptance, and its rostered
+   * assignment completes with it. Nothing about orders, payments, stock or
+   * cash is touched: those rows are history and keep their owners.
+   */
+  if (row.fromShiftId) await closeShift(row.fromShiftId, 'HANDOVER', now)
+  const linkedAssignmentId = await linkReceiverShift({
+    restaurantId: params.restaurantId,
+    user: { id: params.user.id, role: params.user.role, branchId: params.user.branchId },
+    branchId: row.branchId,
+    timeZone: params.timeZone,
+  })
 
   await notify({
     restaurantId: params.restaurantId,
@@ -404,7 +500,7 @@ export async function acceptShiftHandover(params: {
   })
 
   const handover = await prisma.shiftHandover.findUniqueOrThrow({ where: { id: row.id } })
-  return { handover, sessionId }
+  return { handover, sessionId, linkedAssignmentId }
 }
 
 /**
@@ -446,7 +542,7 @@ export async function rejectShiftHandover(params: {
   const now = new Date()
   const settled = await prisma.shiftHandover.updateMany({
     where: { id: row.id, status: 'PENDING_ACCEPTANCE' },
-    data: { status: 'REJECTED', rejectReason: reason, decidedAt: now, decidedById: params.user.id },
+    data: { status: 'REJECTED', rejectReason: reason, decidedAt: now, decidedById: params.user.id, pendingFromKey: null, pendingToKey: null },
   })
   if (settled.count === 0) {
     throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
@@ -514,7 +610,7 @@ export async function cancelShiftHandover(params: {
   const now = new Date()
   const settled = await prisma.shiftHandover.updateMany({
     where: { id: row.id, status: 'PENDING_ACCEPTANCE' },
-    data: { status: 'CANCELLED', decidedAt: now, decidedById: params.user.id },
+    data: { status: 'CANCELLED', decidedAt: now, decidedById: params.user.id, pendingFromKey: null, pendingToKey: null },
   })
   if (settled.count === 0) {
     throw new AppError('That handover has already been settled', 409, 'HANDOVER_SETTLED')
@@ -545,9 +641,16 @@ export async function listShiftHandovers(params: {
   restaurantId: string
   branchIds?: string[] | null
   participantId?: string
-  status?: 'PENDING_ACCEPTANCE'
+  status?: ShiftHandoverStatus
+  /** Either name, for the history's search box. */
+  q?: string
+  from?: Date
+  to?: Date
+  /** The rostered shift the outgoing person was on. */
+  templateId?: string
   limit?: number
 }): Promise<ShiftHandoverView[]> {
+  const term = params.q?.trim()
   const rows = await prisma.shiftHandover.findMany({
     where: {
       restaurantId: params.restaurantId,
@@ -556,6 +659,22 @@ export async function listShiftHandovers(params: {
         ? { OR: [{ fromUserId: params.participantId }, { toUserId: params.participantId }] }
         : {}),
       ...(params.status ? { status: params.status } : {}),
+      ...(params.from || params.to
+        ? { createdAt: { ...(params.from ? { gte: params.from } : {}), ...(params.to ? { lte: params.to } : {}) } }
+        : {}),
+      ...(params.templateId ? { fromShift: { templateId: params.templateId } } : {}),
+      ...(term
+        ? {
+            AND: [
+              {
+                OR: [
+                  { fromUser: { name: { contains: term, mode: 'insensitive' } } },
+                  { toUser: { name: { contains: term, mode: 'insensitive' } } },
+                ],
+              },
+            ],
+          }
+        : {}),
     },
     orderBy: { createdAt: 'desc' },
     take: params.limit ?? 50,
@@ -563,7 +682,8 @@ export async function listShiftHandovers(params: {
       fromUser: { select: { name: true } },
       toUser: { select: { name: true } },
       branch: { select: { name: true } },
-      cashHandover: { select: { countedAmount: true, variance: true, status: true } },
+      fromShift: { select: { template: { select: { name: true } } } },
+      cashHandover: { select: { countedAmount: true, expectedAmount: true, variance: true, status: true } },
     },
   })
   const deciderIds = [...new Set(rows.map((r) => r.decidedById).filter((id): id is string => Boolean(id)))]
@@ -579,7 +699,9 @@ export async function listShiftHandovers(params: {
     fromName: row.fromUser.name,
     toId: row.toUserId,
     toName: row.toUser.name,
+    branchId: row.branchId,
     branchName: row.branch.name,
+    templateName: row.fromShift?.template?.name ?? null,
     createdAt: row.createdAt.toISOString(),
     decidedAt: row.decidedAt?.toISOString() ?? null,
     decidedByName: row.decidedById ? nameOf.get(row.decidedById) ?? null : null,
@@ -587,7 +709,12 @@ export async function listShiftHandovers(params: {
     notes: row.notes,
     summary: row.summary as unknown as HandoverSummary,
     cash: row.cashHandover
-      ? { countedAmount: row.cashHandover.countedAmount, variance: row.cashHandover.variance, status: row.cashHandover.status }
+      ? {
+          countedAmount: row.cashHandover.countedAmount,
+          expectedAmount: row.cashHandover.expectedAmount,
+          variance: row.cashHandover.variance,
+          status: row.cashHandover.status,
+        }
       : null,
   }))
 }

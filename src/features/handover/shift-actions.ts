@@ -10,6 +10,7 @@ import { requireRestaurant } from '@/server/db/tenant'
 import { minorUnitFactor } from '@/lib/money'
 import { resolveBranchId } from '@/features/branches/service'
 import type { DrawerActor } from '@/features/cashdrawer/service'
+import { denominationsFor } from '@/features/cashdrawer/denominations'
 import {
   previewShiftHandoverSchema,
   rejectShiftHandoverSchema,
@@ -24,7 +25,7 @@ import {
   rejectShiftHandover,
   startShiftHandover,
 } from './shift-service'
-import type { HandoverPreview } from './shift-types'
+import type { HandoverDone, HandoverPreview, HandoverSummary } from './shift-types'
 
 /**
  * The shift handover (recorrection.md §2). Every action is gated on
@@ -95,6 +96,10 @@ export async function previewShiftHandoverAction(
         branchId,
         user: personFor(user),
         timeZone: restaurant.timezone,
+        // The person counting is not shown the target (shifthandover.md
+        // "Cash drawer — critical"); somebody who manages drawers already
+        // sees expected cash on every other screen.
+        revealExpected: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
       })
       const receivers = await listEligibleReceivers({
         restaurantId: user.restaurantId,
@@ -108,6 +113,7 @@ export async function previewShiftHandoverAction(
         summary: built.summary,
         receivers,
         hasDrawer: built.sessionId !== null,
+        denominations: denominationsFor(restaurant.currency).map((d) => ({ value: d.value, label: d.label, kind: d.kind })),
       }
     },
   )
@@ -116,7 +122,7 @@ export async function previewShiftHandoverAction(
 /** Confirm: hand the shift (and the till, when there is one) to somebody. */
 export async function startShiftHandoverAction(
   input: unknown,
-): Promise<ActionResult<{ id: string; cashHandoverId: string | null }>> {
+): Promise<ActionResult<{ id: string; cashHandoverId: string | null; drawer: HandoverDone['drawer'] }>> {
   return runAction(
     startShiftHandoverSchema,
     input,
@@ -136,6 +142,7 @@ export async function startShiftHandoverAction(
           data.countedAmount === null || data.countedAmount === undefined
             ? null
             : Math.round(data.countedAmount * minorUnitFactor(restaurant.currency)),
+        counts: data.counts ?? null,
         varianceReason: data.varianceReason || null,
         timeZone: restaurant.timezone,
       })
@@ -152,7 +159,23 @@ export async function startShiftHandoverAction(
       })
 
       revalidateHandover()
-      return { id: handover.id, cashHandoverId: handover.cashHandoverId }
+      /*
+       * The count is submitted, so the reconciliation may now be shown to
+       * the person who counted (shifthandover.md "Cash drawer — critical").
+       */
+      const stored = (handover.summary as unknown as HandoverSummary).drawer
+      return {
+        id: handover.id,
+        cashHandoverId: handover.cashHandoverId,
+        drawer: stored
+          ? {
+              countedCash: stored.countedCash ?? 0,
+              expectedCash: stored.expectedCash ?? 0,
+              variance: stored.variance ?? 0,
+              needsReview: stored.needsReview ?? false,
+            }
+          : null,
+      }
     },
     'Handed over. They review and accept it on their screen.',
   )
@@ -166,11 +189,13 @@ export async function acceptShiftHandoverAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.HANDOVER_VIEW)
+      const restaurant = await requireRestaurant(user.restaurantId)
       const { handover, sessionId } = await acceptShiftHandover({
         restaurantId: user.restaurantId,
         handoverId: data.handoverId,
         user: personFor(user),
         actor: actorFor(user),
+        timeZone: restaurant.timezone,
       })
       await audit({
         restaurantId: user.restaurantId,

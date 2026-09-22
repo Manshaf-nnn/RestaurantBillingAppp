@@ -510,6 +510,8 @@ async function main() {
           createdById: rand() < 0.4 ? users.WAITER : null,
           subtotal,
           discountTotal,
+          // orders_discount_split: the seeded 10% off is a manual discount.
+          manualDiscount: discountTotal,
           serviceCharge,
           taxTotal,
           grandTotal,
