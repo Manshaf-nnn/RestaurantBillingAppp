@@ -444,6 +444,14 @@ enum TransferStatus {
   CANCELLED
 }
 
+/// What a run makes (pro.b.md §3, §8). Stored and shown; the system has no
+/// other semi/finished concept — a prepared item is an ordinary InventoryItem
+/// with `isPrepared` — so this is a label on the run, not a branch in the logic.
+enum ProductionType {
+  SEMI_FINISHED
+  FINISHED
+}
+
 enum ProductionStatus {
   DRAFT
   PLANNED
@@ -1174,6 +1182,18 @@ enum InviteMode {
   /// screen that reboots and must come straight back up. The link IS the
   /// credential and has to be treated like one.
   SHARED_DEVICE
+  /// One link for a whole role: anybody who HOLDS that role signs in with
+  /// their own email and code (sidebar.md — role links).
+  ///
+  /// Neither mode above could express this. PERSONAL is one named person, so
+  /// a ten-person kitchen needed ten links and a new one every time somebody
+  /// joined. SHARED_DEVICE asks for no credential at all, so everybody shares
+  /// one synthetic account and the audit trail cannot say who did anything.
+  ///
+  /// This is the middle: the link says WHICH role, the person proves WHO they
+  /// are, and somebody on a different role is refused by name. The link alone
+  /// is worth nothing, and every action is still filed under a real account.
+  ROLE
 }
 
 /// Short-lived invite links that create a temporary staff session for a role.
@@ -4161,10 +4181,11 @@ model PurchasePriceHistory {
 
 /// A batch or lot of stock, with its own expiry.
 ///
-/// Only created for items with `trackBatches` on. Most restaurant stock does
-/// not need it — nobody lots their salt — but anything with a short life or a
-/// recall risk does, and for those the batch is what makes "which delivery was
-/// this from?" answerable.
+/// Every receipt creates one (pro.b.md §5) — a purchase line, a quick
+/// purchase, a production run's output — so production can draw the oldest
+/// delivery first at that delivery's own price. `trackBatches` still decides
+/// whether the item's screens ask for a batch number and an expiry; the lot
+/// itself no longer waits on the flag.
 ///
 /// `remainingQty` is decremented as the batch is drawn down. It is a cache of
 /// the batch's own movements in the same way an item balance is, and is written
@@ -4199,6 +4220,8 @@ model StockBatch {
   wastage           WastageRecord[]     @relation("WastageBatch")
   transferLines     StockTransferLine[]
   productionOutputs ProductionOutput[]
+  /// Production runs that drew from this lot (pro.b.md §9).
+  consumedBy        ProductionConsumptionLot[] @relation("ConsumedFromBatch")
 
   @@unique([itemId, batchNo])
   @@index([restaurantId, expiryDate])
@@ -4541,12 +4564,24 @@ model ProductionOrder {
   productionDate DateTime?
   expiryDate     DateTime?
   notes          String?
+  /// Semi-finished or finished (pro.b.md §3). A label, see the enum.
+  productionType ProductionType @default(SEMI_FINISHED)
+  /// When the kitchen wants it, entered on the order (pro.b.md §3).
+  requiredDate   DateTime?
+  /// Output lost while making it, in the output's unit, as entered at
+  /// completion (pro.b.md §6). Explains a yield short of the plan; it never
+  /// moves stock, because there was never finished stock to waste — its cost
+  /// is carried by what did come out (§7). Ingredient waste is `wastage[]`.
+  wastageQty     Float?
 
   requestedById String?
   requestedBy   User?     @relation("ProductionRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
   approvedById  String?
   approvedBy    User?     @relation("ProductionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   approvedAt    DateTime?
+  /// When the ingredients were ISSUED (pro.b.md §4) — the moment stock left.
+  /// Null while the plan is only a plan. Set by `issueIngredients`; a batch
+  /// completed without a separate issue is stamped at completion.
   startedAt     DateTime?
   completedAt   DateTime?
 
@@ -4584,11 +4619,47 @@ model ProductionConsumption {
   unitCost Int        @default(0)
   lineCost Int        @default(0)
 
+  /// Which lots this line drew from, oldest first (pro.b.md §4, §9).
+  lots ProductionConsumptionLot[]
+
   createdAt DateTime @default(now())
 
   @@index([orderId])
   @@index([itemId])
   @@map("production_consumption")
+}
+
+/// One lot's share of one consumed ingredient (pro.b.md §4, §5, §9).
+///
+/// 12 kg of chicken drawn as 5 kg @ 12.00 and 7 kg @ 12.80 is two rows. This
+/// is what makes a production batch traceable back to the deliveries it was
+/// made from, and what makes its cost the cost of those deliveries rather than
+/// an average of everything on the shelf.
+///
+/// `batchId` is null for the one layer that has no lot: stock received before
+/// every receipt created one. That remainder is valued at the item's running
+/// average and the row says so, rather than pretending a lot existed.
+model ProductionConsumptionLot {
+  id            String                @id @default(cuid())
+  consumptionId String
+  consumption   ProductionConsumption @relation(fields: [consumptionId], references: [id], onDelete: Cascade)
+  batchId       String?
+  batch         StockBatch?           @relation("ConsumedFromBatch", fields: [batchId], references: [id], onDelete: SetNull)
+  /// The lot number as it was, so the trace survives the lot being deleted.
+  batchNo       String?
+
+  /// Base units taken from this lot.
+  quantity Float
+  /// That lot's own cost per base unit, minor units.
+  unitCost Int
+  /// quantity × unitCost, minor units, rounded.
+  lineCost Int
+
+  createdAt DateTime @default(now())
+
+  @@index([consumptionId])
+  @@index([batchId])
+  @@map("production_consumption_lots")
 }
 
 /// Finished goods a run produced.

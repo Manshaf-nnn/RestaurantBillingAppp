@@ -256,6 +256,10 @@ export const AUDIT_ACTIONS = {
    * the only trace of a job moving was the row changing shape.
    */
   PRODUCTION_STARTED: 'production.started',
+  /** Ingredients issued to a batch — the moment stock left (pro.b.md §4). */
+  PRODUCTION_ISSUED: 'production.issued',
+  /** How a prepared item is made was saved or changed (pro.b.md §1). */
+  PRODUCTION_RECIPE_SAVED: 'production.recipe_saved',
   PRODUCTION_CANCELLED: 'production.cancelled',
   PRODUCTION_SPEC_UPDATED: 'production.spec_updated',
   /// Legacy: approval left the production flow. Kept so historic rows written

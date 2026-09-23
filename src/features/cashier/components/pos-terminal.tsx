@@ -21,6 +21,7 @@ import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
 import { findCustomerAction } from '@/features/customers/actions'
 import { CustomerFormDialog } from '@/features/customers/components/customer-form-dialog'
+import { GuestPanel } from '@/features/customers/components/guest-panel'
 import { printReceipt } from '@/features/printing/print'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
@@ -91,6 +92,7 @@ export function PosTerminal({
   servers = [],
   currentUserId,
   customerCategories = [],
+  loyalty,
 }: {
   menu: PublicMenu
   currency: string
@@ -106,12 +108,20 @@ export function PosTerminal({
   /** Who can be credited with serving it. */
   servers?: Array<{ id: string; name: string; role: string }>
   currentUserId?: string
+  /** The programme's own settings, so points can be spent here (pro.A.md §10). */
+  loyalty?: { enabled: boolean; pointValue: number }
 }) {
   const [type, setType] = React.useState<OrderType>(initialType)
   const [lines, setLines] = React.useState<Line[]>([])
   const [name, setName] = React.useState('')
   const [phone, setPhone] = React.useState('')
   const [notes, setNotes] = React.useState('')
+  /** The offer the cashier tapped, by code — re-checked at placement. */
+  const [couponCode, setCouponCode] = React.useState('')
+  /** What that offer is worth on this basket, lifted out of `GuestPanel`. */
+  const [couponAmount, setCouponAmount] = React.useState(0)
+  /** Points the guest chose to spend. `placeOrder` clamps it again. */
+  const [redeemPoints, setRedeemPoints] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
   const [discounting, setDiscounting] = React.useState<Line | null>(null)
   const [picked, setPicked] = React.useState<{ id: string; name: string; loyaltyPoints: number } | null>(null)
@@ -260,6 +270,22 @@ export function PosTerminal({
   const subtotal = gross - lineDiscounts
   const count = lines.reduce((total, l) => total + l.quantity, 0)
 
+  /*
+   * What the guest will actually be asked for (pro.A.md §4, §10).
+   *
+   * An estimate, and labelled as one: the server re-evaluates the offer and
+   * re-clamps the points when the order is placed, and tax and service charge
+   * are added on the bill. But a cashier who taps an offer has to see the
+   * number move, or there is no way to tell whether it worked — which is the
+   * whole complaint this answers.
+   *
+   * Clamped in the same order the engine uses: the coupon comes off first,
+   * then points, and neither can take the bill below zero.
+   */
+  const couponOff = Math.min(couponAmount, subtotal)
+  const pointsOff = Math.min(redeemPoints * (loyalty?.pointValue ?? 0), subtotal - couponOff)
+  const dueNow = Math.max(0, subtotal - couponOff - pointsOff)
+
   /** Clear the till for the next guest. */
   const startNew = () => {
     setBill(null)
@@ -267,6 +293,9 @@ export function PosTerminal({
     setName('')
     setPhone('')
     setNotes('')
+    setCouponCode('')
+    setCouponAmount(0)
+    setRedeemPoints(0)
     setTableId('')
     setGuests('')
     setCartOpen(false)
@@ -302,12 +331,34 @@ export function PosTerminal({
         customerName: name,
         customerPhone: phone,
         notes,
+        /*
+         * The offer the cashier chose from this guest's list (pro.A.md §4).
+         * Sent as a code because that is what `placeOrder` re-evaluates — the
+         * list on screen is a convenience, the coupon engine is the authority.
+         */
+        couponCode,
+        /*
+         * Points to spend (pro.A.md §10). `staffOrderSchema` has accepted this
+         * since placement-time redemption was built and nothing ever sent it,
+         * so a guest's points could only be spent from a different screen
+         * after the bill existed.
+         */
+        redeemPoints,
         idempotencyKey: idempotencyKey.current,
         items: lines.map((l) => ({
           foodId: l.item.id,
           quantity: l.quantity,
           optionIds: l.options.map((option) => option.id),
           notes: l.notes,
+          /*
+           * The per-line discount, at last. It was collected by the dialog and
+           * subtracted from the subtotal on screen, and then dropped here — so
+           * the cashier saw one figure, told the guest that figure, and the
+           * kitchen printed another. `staffOrderSchema` defaults it to 0,
+           * which is why nothing ever errored.
+           */
+          discount: l.discount,
+          discountReason: l.discountReason,
         })),
       }),
     )
@@ -340,7 +391,7 @@ export function PosTerminal({
      * wrapping, so it grows and the menu — which is tiles, and reflows
      * happily — gives up the width.
      */
-    <div className="grid gap-4 lg:grid-cols-[1fr_26rem] lg:items-start xl:grid-cols-[1fr_30rem]">
+    <div className="grid gap-4 lg:grid-cols-[1fr_30rem] lg:items-start xl:grid-cols-[1fr_34rem]">
       {/* ── menu side ────────────────────────────────────────────────────── */}
       <div className="space-y-4">
         <OrderTypeChips value={type} onChange={setType} />
@@ -466,6 +517,24 @@ export function PosTerminal({
                   <span>Subtotal</span>
                   <span className="tabular-nums">{money(subtotal)}</span>
                 </div>
+                {couponOff > 0 ? (
+                  <div className="-mt-2 flex items-center justify-between text-sm text-emerald-600 dark:text-emerald-400">
+                    <span>Offer · {couponCode}</span>
+                    <span className="tabular-nums">−{money(couponOff)}</span>
+                  </div>
+                ) : null}
+                {pointsOff > 0 ? (
+                  <div className="-mt-2 flex items-center justify-between text-sm text-emerald-600 dark:text-emerald-400">
+                    <span>{redeemPoints.toLocaleString()} points</span>
+                    <span className="tabular-nums">−{money(pointsOff)}</span>
+                  </div>
+                ) : null}
+                {couponOff > 0 || pointsOff > 0 ? (
+                  <div className="-mt-1 flex items-center justify-between border-t border-border pt-2 text-base font-semibold">
+                    <span>To pay</span>
+                    <span className="tabular-nums">{money(dueNow)}</span>
+                  </div>
+                ) : null}
                 <p className="-mt-2 text-xs text-muted-foreground">
                   Tax and service charge are added on the bill.
                 </p>
@@ -571,16 +640,34 @@ export function PosTerminal({
                       says who it belongs to, or offers to add them — through
                       the same shared form the CRM uses.
                     */}
-                    {picked ? (
-                      <p className="flex flex-wrap items-center gap-1.5 text-xs">
-                        <Badge variant="success" size="sm">{picked.name}</Badge>
-                        {picked.loyaltyPoints > 0 ? (
-                          <span className="text-muted-foreground">
-                            {picked.loyaltyPoints.toLocaleString()} points
-                          </span>
-                        ) : null}
-                      </p>
-                    ) : null}
+                    {/*
+                      The name, the points, the offers this number qualifies
+                      for, and what those points are worth on THIS bill — one
+                      component, shared with the Cashier tab's New order
+                      dialog, because a guest must not get a different answer
+                      depending on which screen the cashier opened.
+                    */}
+                    <GuestPanel
+                      customer={picked}
+                      lines={lines.map((l) => ({
+                        foodId: l.item.id,
+                        categoryId: l.item.categoryId,
+                        quantity: l.quantity,
+                        lineTotal: Math.max(0, unitOf(l) * l.quantity - l.discount),
+                      }))}
+                      branchId={branchId}
+                      currency={currency}
+                      locale={restaurant.locale}
+                      couponCode={couponCode}
+                      onCouponChange={(code, amount) => {
+                        setCouponCode(code)
+                        setCouponAmount(amount)
+                      }}
+                      redeemPoints={redeemPoints}
+                      onRedeemPointsChange={setRedeemPoints}
+                      loyalty={loyalty}
+                      discountableTotal={subtotal}
+                    />
                     {/*
                       Always here, not only once a number is typed
                       (pro.A.md §5, §6). A cashier looking for "where do I add
@@ -612,7 +699,7 @@ export function PosTerminal({
                 </div>
 
                 <Button className="w-full" size="lg" onClick={submit} disabled={busy || count === 0}>
-                  {busy ? 'Sending…' : `Send to kitchen & bill · ${money(subtotal)}`}
+                  {busy ? 'Sending…' : `Send to kitchen & bill · ${money(dueNow)}`}
                 </Button>
               </div>
             </>

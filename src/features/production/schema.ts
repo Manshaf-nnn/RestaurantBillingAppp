@@ -51,6 +51,8 @@ export type ProduceItemInput = z.infer<typeof produceItemSchema>
  * `completeBatchSchema`, and the gap between the two is the yield variance
  * that the one-step flow has no way to express.
  */
+export const PRODUCTION_TYPES = ['SEMI_FINISHED', 'FINISHED'] as const
+
 export const startBatchSchema = z.object({
   clientRequestId: z.string().min(8).max(64),
   branchId: z.string().min(1, 'Choose where this is being made'),
@@ -65,7 +67,47 @@ export const startBatchSchema = z.object({
     .array(line.extend({ note: z.string().trim().max(200).optional() }))
     .max(20)
     .default([]),
+  /** The production order's own fields (pro.b.md §3). */
+  productionType: z.enum(PRODUCTION_TYPES).default('SEMI_FINISHED'),
+  /** "YYYY-MM-DD", or nothing. */
+  requiredDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a date')
+    .optional()
+    .or(z.literal('')),
   notes: z.string().trim().max(500).optional(),
+})
+
+/**
+ * Save a recipe without starting anything (pro.b.md §1).
+ *
+ * Step 1 of the flow: what the thing is and how it is made. The same lines a
+ * batch is planned from, so a recipe and the order made from it cannot
+ * disagree about what goes in.
+ */
+export const saveProductionRecipeSchema = z.object({
+  output: z.object({
+    itemId: z.string().min(1).nullable().optional(),
+    name: z.string().trim().min(2, 'Name what this makes').max(80),
+    /** The produced item's category — the recipe's "Category" (§1). */
+    category: z.string().trim().max(60).optional().or(z.literal('')),
+    quantity: z.coerce.number().positive('Say how much one batch makes').max(1_000_000_000),
+    unit: z.enum(STOCK_UNITS),
+  }),
+  ingredients: z.array(line).min(1, 'Add at least one ingredient').max(60),
+  /** Instructions (§1) — `Recipe.prepNotes`. */
+  instructions: z.string().trim().max(2000).optional(),
+})
+
+/**
+ * Issue ingredients to a batch (pro.b.md §4) — the moment stock leaves.
+ *
+ * `lines` overrides the quantity per ingredient (the "Issue qty" column).
+ * Absent means the plan in full, which is what "Issue All (FIFO)" sends.
+ */
+export const issueIngredientsSchema = z.object({
+  batchId: z.string().min(1),
+  lines: z.array(line).max(60).optional(),
 })
 
 export const completeBatchSchema = z.object({
@@ -81,6 +123,11 @@ export const completeBatchSchema = z.object({
     .nullable()
     .optional(),
   varianceNote: z.string().trim().max(300).optional(),
+  /**
+   * Output lost while making it, in `actualUnit` (pro.b.md §6). Explains the
+   * gap between planned and actual; it never moves stock — see the schema.
+   */
+  wastageQuantity: z.coerce.number().min(0).max(1_000_000_000).optional(),
   notes: z.string().trim().max(500).optional(),
 })
 

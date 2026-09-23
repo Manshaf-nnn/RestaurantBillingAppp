@@ -2,7 +2,9 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ArrowRightLeft, ChefHat, LayoutDashboard, LogOut, MapPin, RefreshCw, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
+import { ArrowRightLeft, ChefHat, LayoutDashboard, LogOut, MapPin, RefreshCw, Volume2, VolumeX, Wifi, WifiOff,
+  UserRoundPlus,
+} from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -186,6 +188,18 @@ export function OpsShell({
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                {/*
+                  Handing the counter over (sidebar.md — role links).
+                  The middleware sends a signed-in person away from the login
+                  page, so without this the next cashier had no way to reach
+                  the form and was silently dropped into the app as whoever
+                  worked the last shift. `?switch=1` asks for the form anyway.
+                */}
+                <DropdownMenuItem asChild>
+                  <Link href="/login?switch=1">
+                    <UserRoundPlus /> Sign in as someone else
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem destructive onClick={() => void logout()}>
                   <LogOut /> Sign out
                 </DropdownMenuItem>

@@ -12,7 +12,7 @@ import { requireRestaurant } from '@/server/db/tenant'
 import { assertBranchAccess } from '@/server/auth/guard'
 import { NotFoundError } from '@/lib/errors'
 import { minorUnitFactor } from '@/lib/money'
-import { redeemReward } from './service'
+import { redeemPointsOnOrder, redeemReward } from './service'
 
 /*
  * Not exported. A 'use server' module may only export async functions — Next
@@ -184,5 +184,63 @@ export async function redeemLoyaltyReward(
       return { pointsSpent: result.pointsSpent, discount: result.discount, balance: result.balance }
     },
     'Reward applied.',
+  )
+}
+
+const redeemPointsSchema = z.object({
+  orderId: z.string().cuid(),
+  points: z.coerce.number().int().min(1, 'Say how many points to take off').max(1_000_000),
+})
+
+/**
+ * Spend a number of points against a bill that already exists.
+ *
+ * The sibling of `redeemLoyaltyReward`, and guarded identically
+ * (`PAYMENT_COLLECT`, not `DISCOUNT_APPLY`): the cashier is not deciding to
+ * take money off, the guest is spending something they already own.
+ *
+ * Both exist because a catalogue reward is the right thing to show a guest —
+ * "500 points, a free dessert" — and the wrong thing to show a cashier whose
+ * customer has 1,340 points and says "take some off". A restaurant that never
+ * writes a reward still has a loyalty programme, and until now had no way to
+ * let anybody spend from it at the counter.
+ */
+export async function redeemLoyaltyPoints(
+  input: unknown,
+): Promise<ActionResult<{ pointsSpent: number; discount: number; balance: number }>> {
+  return runAction(
+    redeemPointsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PAYMENT_COLLECT)
+      const order = await prisma.order.findFirst({
+        where: { id: data.orderId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      if (!order) throw new NotFoundError('Order')
+      await assertBranchAccess(user, order.branchId)
+
+      const result = await redeemPointsOnOrder({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        points: data.points,
+        actorId: user.id,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.LOYALTY_REDEEMED,
+        entity: 'Order',
+        entityId: data.orderId,
+        after: { pointsSpent: result.pointsSpent, discount: result.discount },
+      })
+
+      revalidatePath('/cashier/pos')
+      return result
+    },
+    'Points applied.',
   )
 }

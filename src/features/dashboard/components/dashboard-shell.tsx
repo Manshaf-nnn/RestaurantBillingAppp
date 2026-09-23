@@ -22,6 +22,7 @@ import {
   Wifi,
   WifiOff,
   X,
+  UserRoundPlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -666,6 +667,18 @@ export function DashboardShell({
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                {/*
+                  Handing the counter over (sidebar.md — role links).
+                  The middleware sends a signed-in person away from the login
+                  page, so without this the next cashier had no way to reach
+                  the form and was silently dropped into the app as whoever
+                  worked the last shift. `?switch=1` asks for the form anyway.
+                */}
+                <DropdownMenuItem asChild>
+                  <Link href="/login?switch=1">
+                    <UserRoundPlus /> Sign in as someone else
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem destructive onClick={() => void logout()}>
                   <LogOut /> Sign out
                 </DropdownMenuItem>

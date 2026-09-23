@@ -184,6 +184,14 @@ export function OrderTracker({
               ? `${item.name} has been served`
               : `${next.servedQty} of ${payload.quantity} × ${item.name} served`,
           )
+        } else if (next.status === 'PREPARING' && before.status === 'QUEUED') {
+          /*
+           * The kitchen has put this dish on. It is the one rung with no
+           * counter behind it — nothing is finished yet — so without this the
+           * pill would change with nothing said, which on a phone in a pocket
+           * is the same as not happening.
+           */
+          toast.message(`${item.name} is being prepared`)
         }
       }
       return { ...current, [payload.itemId]: next }

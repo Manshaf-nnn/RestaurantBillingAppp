@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Check, ChevronDown, Copy, Plus, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { Check, ChevronDown, Copy, Link as LinkIcon, Plus, ShieldCheck, Trash2, Users } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/primitives'
 import { callAction } from '@/lib/use-action'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 
 import {
   ACTION_LABELS,
@@ -20,6 +22,8 @@ import {
   type Feature,
 } from '../features'
 import { createRole, deleteRole, duplicateRole, setRoleActive, updateRole } from '../actions'
+import { roleSignInLink } from '../link-actions'
+import { CopyLink } from '@/features/staff/components/copy-link'
 
 export interface RoleRow {
   id: string
@@ -32,6 +36,8 @@ export interface RoleRow {
   permissions: string[]
   isActive: boolean
   memberCount: number
+  /** The role's own sign-in link, when it has one (sidebar.md — role links). */
+  signInUrl: string | null
 }
 
 export interface PresetOption {
@@ -88,6 +94,7 @@ export function RoleBuilder({
   const [creating, setCreating] = React.useState(false)
   const [copying, setCopying] = React.useState<RoleRow | 'preset' | null>(null)
   const [busy, setBusy] = React.useState<string | null>(null)
+  const router = useRouter()
 
   const grantableSet = React.useMemo(() => new Set(grantable), [grantable])
 
@@ -95,6 +102,23 @@ export function RoleBuilder({
     setBusy(role.id)
     await callAction(() => setRoleActive({ id: role.id, isActive: !role.isActive }))
     setBusy(null)
+  }
+
+  /*
+   * For roles that existed before links did. New roles are minted one at
+   * creation, so this button is only ever seen on older rows.
+   */
+  async function makeLink(role: RoleRow) {
+    setBusy(role.id)
+    const result = await callAction(() => roleSignInLink({ staffRoleId: role.id }))
+    setBusy(null)
+    if (result.ok) {
+      await navigator.clipboard.writeText(result.data.url).catch(() => undefined)
+      toast.success('Sign-in link created and copied')
+      router.refresh()
+    } else {
+      toast.error(result.error)
+    }
   }
 
   async function remove(role: RoleRow) {
@@ -177,6 +201,39 @@ export function RoleBuilder({
                   </p>
                 </div>
               </div>
+
+              {/*
+                The link everybody on this role signs in with.
+                Shown on the card because this is where somebody is thinking
+                about the role — it used to live on a different screen, which
+                is why most roles never got one.
+              */}
+              {role.isActive ? (
+                <div className="mt-3 rounded-lg border border-border bg-muted/30 p-2.5">
+                  {role.signInUrl ? (
+                    <>
+                      <p className="mb-1.5 text-xs text-muted-foreground">
+                        Sign-in link · anybody on this role uses their own email and code
+                      </p>
+                      <CopyLink url={role.signInUrl} />
+                    </>
+                  ) : (
+                    <>
+                      <p className="mb-1.5 text-xs text-muted-foreground">
+                        No sign-in link yet. One link serves everybody on this role.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === role.id}
+                        onClick={() => makeLink(role)}
+                      >
+                        <LinkIcon /> Create sign-in link
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ) : null}
 
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setEditing(role)}>

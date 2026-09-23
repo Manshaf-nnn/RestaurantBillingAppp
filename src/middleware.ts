@@ -320,9 +320,28 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // ── 4. staff auth screens: signed-in staff skip them ──────────────────────
+  /*
+   * ── 4. staff auth screens ─────────────────────────────────────────────────
+   *
+   * A signed-in person who lands on the login page is normally somebody who
+   * bookmarked it, and sending them to the dashboard is right.
+   *
+   * It was also the only answer, and on a shared till that is a trap. One
+   * screen serves a whole shift: the cashier who worked the morning is still
+   * signed in, the person taking over opens the login page, and the browser
+   * bounces them into the app AS THE PREVIOUS PERSON. There was no way to
+   * reach the form — every route to it redirected — so orders, drawer
+   * movements and audit rows were filed under whoever last used the machine.
+   *
+   * `?switch=1` says "I know somebody is signed in, I want the form". The
+   * shell's own "Sign in as someone else" is what sets it, so the escape is
+   * discoverable rather than a URL somebody has to know. Signing in overwrites
+   * the session cookies, so the handover is atomic and a failed attempt leaves
+   * the current person exactly where they were.
+   */
   if (AUTH_PAGES.includes(pathname)) {
-    if (staffClaims) return NextResponse.redirect(requestUrl(request, '/dashboard'))
+    const switching = request.nextUrl.searchParams.get('switch') === '1'
+    if (staffClaims && !switching) return NextResponse.redirect(requestUrl(request, '/dashboard'))
     return NextResponse.next()
   }
 

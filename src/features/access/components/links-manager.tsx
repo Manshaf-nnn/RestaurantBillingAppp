@@ -3,7 +3,7 @@
 import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import { toast } from 'sonner'
-import { Copy, KeyRound, Link2, Monitor, Plus, RefreshCw, Trash2, UserRound } from 'lucide-react'
+import { Copy, KeyRound, Link2, Monitor, Plus, RefreshCw, Trash2, UserRound, Users } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,7 @@ import {
 export interface LinkRow {
   id: string
   label: string | null
-  mode: 'PERSONAL' | 'SHARED_DEVICE'
+  mode: 'PERSONAL' | 'SHARED_DEVICE' | 'ROLE'
   role: string
   roleLabel: string
   staffRoleName: string | null
@@ -160,6 +160,9 @@ export function LinksManager({
                     <div className="flex items-start gap-2">
                       {row.mode === 'PERSONAL' ? (
                         <UserRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                      ) : row.mode === 'ROLE' ? (
+                        // A whole role, not one person and not a wall screen.
+                        <Users className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                       ) : (
                         <Monitor className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                       )}
@@ -193,7 +196,11 @@ export function LinksManager({
                   </TableCell>
 
                   <TableCell className="hidden lg:table-cell text-sm">
-                    {row.mode === 'PERSONAL' ? (
+                    {row.mode === 'ROLE' ? (
+                      <span className="text-xs text-muted-foreground">
+                        Everybody on {row.staffRoleName ?? row.roleLabel}, with their own code
+                      </span>
+                    ) : row.mode === 'PERSONAL' ? (
                       <>
                         <span className="block truncate text-xs">{row.userEmail}</span>
                         {row.signInCode ? (

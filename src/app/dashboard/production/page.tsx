@@ -16,10 +16,10 @@ export const metadata: Metadata = { title: 'Kitchen Production' }
 /**
  * Kitchen Production (redesignkitchenjob.md).
  *
- * Make a prepared item from stock, see what has been made, see the runs. Any
- * branch may produce; the branch switcher picks where. The form no longer
- * offers its own location select (recorrection.md §3) — it names the location
- * it is acting on and points at the switcher to change it.
+ * Recipe → check stock → production order → issue (FIFO) → complete → stock
+ * (pro.b.md). Any branch may produce; the branch switcher picks where. The
+ * recipe is the restaurant's — every branch sees it — and what a run makes
+ * is stocked only where it was made.
  */
 export default async function ProductionPage({
   searchParams,
@@ -27,7 +27,8 @@ export default async function ProductionPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const user = await requirePagePermission(PERMISSIONS.PRODUCTION_VIEW, '/dashboard/production')
-  const selection = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const selection = await selectedBranch(user, params)
   const scoped = scopeToOne(selection)
 
   const [restaurant, branches] = await Promise.all([
@@ -52,6 +53,17 @@ export default async function ProductionPage({
   const money = (m: number) => formatMoney(m, restaurant.currency)
   const canManage = can(user, PERMISSIONS.PRODUCTION_MANAGE)
 
+  /*
+   * "Make more" from an item's page lands on step 3 with its recipe (pro.b.md
+   * §12) — another batch of the same item, never a duplicate item. `recipe`
+   * opens step 1 to edit how it is made.
+   */
+  const makeId = typeof params.make === 'string' ? params.make : typeof params.recipe === 'string' ? params.recipe : null
+  const makeItem = makeId ? data.items.find((item) => item.id === makeId) ?? null : null
+  const prefill = makeItem
+    ? { itemId: makeItem.id, name: makeItem.name, step: (typeof params.make === 'string' ? 3 : 1) as 1 | 3 }
+    : null
+
   return (
     <>
       <PageHeader
@@ -73,6 +85,7 @@ export default async function ProductionPage({
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         canManage={canManage}
+        prefill={prefill}
       />
 
       <AutoRefresh scope="catalog" intervalMs={10000} />

@@ -235,28 +235,34 @@ async function main() {
     )
   }
 
-  console.log('\n── 6. The screen has one verb ──')
+  console.log('\n── 6. The screen is the six-step flow (pro.b.md §11) ──')
   {
+    // DELIBERATE behaviour change 2026-09 (pro.b.md): Make an Item is the
+    // first three screens — recipe, stock check, order — and the order's own
+    // page is the last three. The one-verb pins of recorrection.md §3 gave way
+    // to that; what they protected (nothing moves at Create) still holds.
     const form = readFileSync('src/features/production/components/make-item-form.tsx', 'utf8')
     check('no "Make it now"', !form.includes('Make it now'))
     check('no "What did you make?"', !form.includes('What did you make?'))
     check('no location select on the form', !form.includes('Made at') && !/<select[^>]*value=\{branch\}/.test(form))
     check('it names the location it is acting on', form.includes('Making at'))
-    check('one submit: Create prepared item', form.includes('Create prepared item') && form.includes('startBatchAction') && !form.includes('produceItemAction'))
-    // DELIBERATE behaviour change 2026-09 (aO.md §5): the yield is asked for
-    // once, on the prepared item's own page, not a second time on the form
-    // that just asked what was being aimed for.
-    check('Create leads to the item page, which asks what came out', form.includes('router.push(`/dashboard/production/items/') && !form.includes('Made it already?'))
+    check('three steps: Recipe Setup, Check Available Stock, Create Production Order',
+      form.includes('Recipe Setup') && form.includes('Check Available Stock') && form.includes('Create Production Order'))
+    check('step 1 saves the recipe and step 3 creates the order — never the one-shot',
+      form.includes('saveProductionRecipeAction') && form.includes('startBatchAction') && !form.includes('produceItemAction'))
+    check('costs are the FIFO walk the issue uses', form.includes('walkFifo'))
+    check('Create Order leads to the order page, where the ingredients are issued',
+      form.includes('router.push(`/dashboard/production/${data.id}`)'))
     check('the old open-batches card is gone', !existsSync('src/features/production/components/open-batches.tsx'))
 
     const done = readFileSync('src/features/production/components/mark-done-form.tsx', 'utf8')
-    check('Mark Done sends the variance reason from the enum', done.includes('varianceReason: needsReason && reason ? reason : undefined'))
+    check('Complete Production sends the variance reason from the enum', done.includes('varianceReason: needsReason && reason ? reason : undefined'))
     check("and requires a reason AND a note when the figures differ", done.includes("(!needsReason || (reason !== '' && note.trim().length > 0))"))
+    check('and asks for the wastage quantity (§6)', done.includes('Wastage Quantity') && done.includes('wastageQuantity'))
 
     const workspace = readFileSync('src/features/production/components/production-workspace.tsx', 'utf8')
-    check('batches in progress are rows on Prepared Items, not a card above the tabs', !workspace.includes('OpenBatches') && workspace.includes('openBatches={data.openBatches}'))
-    // DELIBERATE behaviour change 2026-09 (aO.md §5): the row opens the item's
-    // own page rather than a dialog.
+    check('orders in progress are listed under the steps, each linking to its own page',
+      !workspace.includes('OpenBatches') && workspace.includes('/dashboard/production/${batch.id}'))
     const table = readFileSync('src/features/production/components/prepared-items-table.tsx', 'utf8')
     check('and each row opens the item\'s page', table.includes('/dashboard/production/items/${row.id}'))
   }

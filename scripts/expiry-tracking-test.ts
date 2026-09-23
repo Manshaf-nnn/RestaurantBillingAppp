@@ -159,13 +159,19 @@ async function main() {
       .some((row) => row.itemId === yoghurt.id),
   )
 
-  console.log('\n── an item that does not expire creates nothing ──')
+  console.log('\n── an item that does not expire gets a dateless lot, and no place on the board ──')
 
+  // DELIBERATE behaviour change 2026-09 (pro.b.md §5): every receipt is a
+  // lot, so production can draw the oldest delivery first at its own price.
+  // What this section protected still holds — a non-perishable never appears
+  // on the expiry board — but the lot exists, undated.
   const rice = await mkItem('Rice')
   await deliver(rice.id, 20, null)
+  const riceLots = await prisma.stockBatch.findMany({ where: { itemId: rice.id } })
+  check('one dateless lot for a non-perishable', riceLots.length === 1 && riceLots[0].expiryDate === null, String(riceLots.length))
   check(
-    'no batch for a non-perishable',
-    (await prisma.stockBatch.count({ where: { itemId: rice.id } })) === 0,
+    'and it never reaches the board',
+    !(await listExpiringStock({ restaurantId: shop.id, branchId: main.id, periodDays: 30 })).some((row) => row.itemId === rice.id),
   )
 
   console.log('\n── the supplier price list teaches the item its pack size ──')

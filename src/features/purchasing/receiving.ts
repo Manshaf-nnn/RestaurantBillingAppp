@@ -268,7 +268,16 @@ export async function receiveGoods(params: {
          * both flags together, and this is the safety net for rows that predate
          * it.
          */
-        if (purchaseItem.item.trackBatches || purchaseItem.item.trackExpiry) {
+        /*
+         * Every delivery is a lot. DELIBERATE behaviour change 2026-09
+         * (pro.b.md §5): this was gated on `trackBatches || trackExpiry`, so
+         * FIFO could only ever see the deliveries of items somebody had
+         * remembered to flag, and a production run drawing chicken that was
+         * never flagged had no layers to draw from. A lot is a cheap row, and
+         * a delivery that leaves none is a delivery whose price is lost the
+         * moment it is blended into the average.
+         */
+        {
           const batchNo =
             line.batchNo?.trim().toUpperCase() ||
             // A tracked item delivered without a supplier lot number still needs

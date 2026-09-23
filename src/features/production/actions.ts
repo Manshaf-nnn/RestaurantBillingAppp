@@ -11,12 +11,22 @@ import { prisma } from '@/server/db/prisma'
 import {
   cancelBatchSchema,
   completeBatchSchema,
+  issueIngredientsSchema,
   makeMoreSchema,
   produceItemSchema,
+  saveProductionRecipeSchema,
   startBatchSchema,
 } from './schema'
-import { cancelBatch, completeBatch, makeMore, produceItem, startBatch } from './service'
-import type { ProduceItemResult, StartBatchResult } from './types'
+import {
+  cancelBatch,
+  completeBatch,
+  issueIngredients,
+  makeMore,
+  produceItem,
+  saveProductionRecipe,
+  startBatch,
+} from './service'
+import type { IssueIngredientsResult, ProduceItemResult, StartBatchResult } from './types'
 
 /**
  * Make a prepared item (redesignkitchenjob.md).
@@ -119,6 +129,8 @@ export async function startBatchAction(
           ingredients: data.ingredients,
           waste: data.waste,
         },
+        productionType: data.productionType,
+        requiredDate: data.requiredDate ? new Date(`${data.requiredDate}T00:00:00.000Z`) : null,
         notes: data.notes,
       })
 
@@ -149,16 +161,154 @@ export async function startBatchAction(
             item: batch.item.name,
             planned: data.output.quantity,
             unit: data.output.unit,
+            productionType: data.productionType,
+            requiredDate: data.requiredDate || null,
           },
         })
       }
 
       revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/${batch.id}`)
       revalidatePath('/dashboard/inventory')
       return batch
     },
-    'Prepared item created.',
+    'Production order created.',
   )
+}
+
+/**
+ * Step 1 — save how a prepared item is made (pro.b.md §1). Nothing moves.
+ */
+export async function saveProductionRecipeAction(
+  input: unknown,
+): Promise<ActionResult<{ recipeId: string | null; item: { id: string; name: string; unit: string; isNew: boolean } }>> {
+  return runAction(
+    saveProductionRecipeSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
+      const branchId = await branchFor(user)
+
+      const result = await saveProductionRecipe({
+        restaurantId: user.restaurantId,
+        branchId,
+        userId: user.id,
+        output: data.output,
+        ingredients: data.ingredients,
+        instructions: data.instructions,
+      })
+
+      if (result.item.isNew) {
+        await audit({
+          restaurantId: user.restaurantId,
+          branchId,
+          userId: user.id,
+          actorName: user.name,
+          action: AUDIT_ACTIONS.INVENTORY_PREPARED_ITEM_CREATED,
+          entity: 'InventoryItem',
+          entityId: result.item.id,
+          after: { name: result.item.name, unit: result.item.unit },
+        })
+      }
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.PRODUCTION_RECIPE_SAVED,
+        entity: 'InventoryItem',
+        entityId: result.item.id,
+        after: {
+          recipeId: result.recipeId,
+          yield: { quantity: data.output.quantity, unit: data.output.unit },
+          ingredients: data.ingredients,
+        },
+      })
+
+      revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/items/${result.item.id}`)
+      return result
+    },
+    'Recipe saved.',
+  )
+}
+
+/**
+ * Step 4 — issue the ingredients (pro.b.md §4). This is where stock leaves,
+ * from the oldest lots first, and the batch's own branch decides, not one
+ * posted alongside.
+ */
+export async function issueIngredientsAction(
+  input: unknown,
+): Promise<ActionResult<IssueIngredientsResult>> {
+  return runAction(
+    issueIngredientsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PRODUCTION_MANAGE)
+      const batch = await prisma.productionOrder.findFirst({
+        where: { id: data.batchId, restaurantId: user.restaurantId },
+        select: { branchId: true },
+      })
+      if (!batch) throw new NotFoundError('Batch')
+      await assertBranchAccess(user, batch.branchId)
+
+      const result = await issueIngredients({
+        restaurantId: user.restaurantId,
+        batchId: data.batchId,
+        userId: user.id,
+        lines: data.lines,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: batch.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.PRODUCTION_ISSUED,
+        entity: 'ProductionOrder',
+        entityId: result.orderId,
+        after: {
+          number: result.number,
+          totalValue: result.totalValue,
+          consumed: result.consumed.map((line) => ({
+            item: line.name,
+            quantity: line.quantity,
+            value: line.value,
+            lots: line.lots,
+          })),
+        },
+      })
+
+      revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/${result.orderId}`)
+      revalidatePath('/dashboard/inventory')
+      return result
+    },
+    'Ingredients issued.',
+  )
+}
+
+/**
+ * Which branch step 1 writes a new prepared item's home to. The switcher's
+ * choice when there is one, else the person's own — the same fallback the
+ * production page itself uses.
+ */
+async function branchFor(user: Awaited<ReturnType<typeof requirePermission>>): Promise<string> {
+  const { selectedBranch, scopeToOne } = await import('@/features/dashboard/selected-branch')
+  const selection = await selectedBranch(user)
+  const chosen = scopeToOne(selection) ?? user.branchId
+  if (chosen) {
+    await assertBranchAccess(user, chosen)
+    return chosen
+  }
+  const fallback = await prisma.branch.findFirst({
+    where: { restaurantId: user.restaurantId, deletedAt: null, isActive: true },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true },
+  })
+  if (!fallback) throw new NotFoundError('Branch')
+  return fallback.id
 }
 
 /**
@@ -197,6 +347,7 @@ export async function completeBatchAction(
         actualUnit: data.actualUnit ?? null,
         varianceReason: data.varianceReason ?? null,
         varianceNote: data.varianceNote,
+        wastageQuantity: data.wastageQuantity ?? null,
         notes: data.notes,
       })
 
@@ -212,17 +363,21 @@ export async function completeBatchAction(
           after: {
             number: result.number,
             actual: data.actualQuantity,
+            wastage: data.wastageQuantity ?? null,
             reason: data.varianceReason ?? null,
+            totalCost: result.totalValue,
+            unitCost: result.unitCost,
           },
         })
       }
 
       revalidatePath('/dashboard/production')
+      revalidatePath(`/dashboard/production/${result.orderId}`)
       revalidatePath(`/dashboard/production/items/${result.item.id}`)
       revalidatePath('/dashboard/inventory')
       return result
     },
-    'Batch finished.',
+    'Production completed.',
   )
 }
 

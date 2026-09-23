@@ -5,6 +5,7 @@ import type { StockBatch } from '@prisma/client'
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { roundQty } from '@/lib/quantity'
+import { walkFifo } from './fifo-walk'
 
 /**
  * Batch and expiry tracking.
@@ -274,3 +275,104 @@ export function assertBatchNo(batchNo: string): string {
   return trimmed
 }
 
+
+/**
+ * What one outbound draw of `quantity` comes to, oldest receipt first.
+ *
+ * ── FIFO, beside FEFO, and why it is its own function ───────────────────────
+ *
+ * `allocateFefo` orders by expiry and exists so a sale eats the lot that will
+ * spoil first. Production (pro.b.md §5) asks a different question: what did
+ * the stock we are using up actually cost, delivery by delivery. That is
+ * receipt order, and an undated lot on the shelf for a month must come before
+ * a dated one that arrived yesterday — the opposite of what FEFO would say.
+ *
+ * ── The layer that has no lot ───────────────────────────────────────────────
+ *
+ * Every receipt creates a lot from now on, but stock received before that has
+ * none. Rather than a backfill that invents lot prices, that stock is treated
+ * as one layer valued at the item's running average, drawn only after every
+ * real lot is exhausted, and reported separately so the trace can say "this
+ * part had no lot". Its cost is honest — the average IS what that stock is
+ * worth on the books — and it disappears on its own as the old stock is used.
+ *
+ * `shortfall` is what even that could not cover. The caller has already run
+ * `assertSufficient`, so it is zero in practice; it is returned rather than
+ * thrown for the same reason `allocateFefo` returns it.
+ */
+export interface FifoAllocation {
+  /** Real lots, oldest receipt first, each with its own price. */
+  lots: BatchAllocation[]
+  /** Stock on hand that no lot accounts for, at the running average. */
+  remainder: { quantity: number; unitCost: number } | null
+  shortfall: number
+  /** The exact value of everything allocated, minor units, unrounded. */
+  totalValue: number
+}
+
+export async function allocateFifo(
+  db: TxClient | typeof prisma,
+  params: { restaurantId: string; itemId: string; quantity: number; branchId: string },
+): Promise<FifoAllocation> {
+  if (!(params.quantity > 0)) {
+    throw new AppError('Quantity must be above zero', 400, 'STOCK_BAD_QUANTITY')
+  }
+
+  const [batches, item, held] = await Promise.all([
+    db.stockBatch.findMany({
+      where: {
+        restaurantId: params.restaurantId,
+        itemId: params.itemId,
+        branchId: params.branchId,
+        remainingQty: { gt: 0 },
+      },
+      // Receipt order, then creation order for two receipts in the same instant.
+      orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+    }),
+    db.inventoryItem.findFirst({
+      where: { id: params.itemId, restaurantId: params.restaurantId },
+      select: { quantity: true, stockValue: true, costPerUnit: true },
+    }),
+    db.inventoryStock.aggregate({
+      where: { itemId: params.itemId, branchId: params.branchId },
+      _sum: { available: true },
+    }),
+  ])
+
+  /*
+   * How much of this branch's balance no lot explains. Only that much may be
+   * drawn as the average-priced layer; anything beyond it is a real shortfall,
+   * whatever the item-wide balance says.
+   */
+  const lotted = batches.reduce((sum, batch) => sum + batch.remainingQty, 0)
+  const unlotted = Math.max(0, roundQty((held._sum.available ?? 0) - lotted))
+  const average =
+    item && item.quantity > 0 ? Number(item.stockValue) / item.quantity : (item?.costPerUnit ?? 0)
+
+  // The same walk the screens preview with, on the same list.
+  const draw = walkFifo({
+    lots: batches.map((batch) => ({
+      batchId: batch.id,
+      batchNo: batch.batchNo,
+      remaining: batch.remainingQty,
+      unitCost: batch.unitCost,
+    })),
+    quantity: params.quantity,
+    unlotted,
+    averageCost: average,
+  })
+
+  const byId = new Map(batches.map((batch) => [batch.id, batch]))
+  return {
+    lots: draw.lots.map((lot) => ({
+      batchId: lot.batchId!,
+      batchNo: lot.batchNo!,
+      expiryDate: byId.get(lot.batchId!)?.expiryDate ?? null,
+      quantity: lot.quantity,
+      unitCost: lot.unitCost,
+    })),
+    remainder: draw.remainder ? { quantity: draw.remainder.quantity, unitCost: draw.remainder.unitCost } : null,
+    shortfall: draw.shortfall,
+    totalValue: draw.totalValue,
+  }
+}

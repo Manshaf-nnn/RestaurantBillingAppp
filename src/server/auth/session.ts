@@ -4,6 +4,7 @@ import { cookies, headers } from 'next/headers'
 import type { Prisma, Session, UserRole } from '@prisma/client'
 
 import { permissionsSoldByFeatures } from '@/features/access/features'
+import { BRANCH_COOKIE } from '@/features/dashboard/selected-branch'
 import { guardLocks, prisma } from '@/server/db/prisma'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
@@ -313,6 +314,26 @@ export async function createSession(
     // the browser closes. The twelve-hour row is the real bound either way.
     cookieOptions(persistent ? REFRESH_COOKIE_MAX_AGE(scope) : undefined),
   )
+
+  /*
+   * A new person gets a clean slate, not the last one's view.
+   *
+   * The branch switcher remembers its choice in a cookie, which outlives a
+   * sign-out. On a shared till that meant the cashier taking over opened the
+   * app on whatever location the previous shift was looking at — and because a
+   * write with no URL reads the same cookie (`scopeToOne`), an order or a
+   * stock adjustment could land on it.
+   *
+   * It was never a leak: `selectedBranch` re-checks the value against
+   * `visibleBranchIds`, so a branch the new person may not see is discarded.
+   * It was simply the wrong branch, silently, for somebody who had just
+   * arrived and had chosen nothing.
+   *
+   * Cleared HERE because this is the one place every sign-in ends — password,
+   * staff code, personal link, role link, device link. Clearing it in the
+   * login action alone would have fixed one of five doors.
+   */
+  if (scope === 'staff') store.delete(BRANCH_COOKIE)
 
   await prisma.user.update({
     where: { id: userId },

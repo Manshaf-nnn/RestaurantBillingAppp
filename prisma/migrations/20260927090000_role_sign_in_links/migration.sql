@@ -1,0 +1,16 @@
+-- One sign-in link per role, for everybody who holds it.
+--
+-- Neither existing mode could express this. PERSONAL names one person, so a
+-- ten-person kitchen needed ten links and another one every time somebody
+-- joined. SHARED_DEVICE asks for no credential, so the whole shift shares one
+-- synthetic account and the audit trail cannot say who did anything.
+--
+-- ROLE is the middle: the link says which role, the person proves who they are
+-- with their own email and sign-in code, and somebody on a different role is
+-- refused. `Invite.staffRoleId` and `Invite.role` already exist — this only
+-- adds the mode that reads them without a `userId`.
+--
+-- Additive. No row changes, and no statement here uses the new value: adding
+-- an enum value and using it in one transaction is what PostgreSQL refuses, so
+-- it is only ever written at runtime, after this has committed.
+ALTER TYPE "InviteMode" ADD VALUE IF NOT EXISTS 'ROLE';

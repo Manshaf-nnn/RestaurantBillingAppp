@@ -74,6 +74,10 @@ const SERVICE = [
   // person, the POS rename across all six persisted columns, and the
   // POS_OPEN_DRAWER split.
   'staff-access-test',
+  // pro.A.md §4/§10 — a targeted offer reaches the till from a phone number,
+  // points are spendable both at placement and on an open bill, and the ledger
+  // still explains the balance afterwards.
+  'pos-offers-test',
   // stockMa.md — the stock keeper: what they may and may not do, that they see
   // one location and nothing without one, and that a correction they raise
   // moves no stock until somebody else signs it.
@@ -105,6 +109,11 @@ const SERVICE = [
   // and a history that keeps in-progress and cancelled runs with what each
   // consumed.
   'production-flow-test',
+  // pro.b.md §4/§5/§7/§18 — the six-step flow: creating an order moves
+  // nothing; issuing draws the oldest lots first at each lot's own price and
+  // records which; completion costs the actual output from what was issued
+  // and stocks it at this branch only; the second tap of anything is refused.
+  'production-fifo-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',
@@ -133,6 +142,10 @@ const SERVICE = [
   'dashboard-period-test',
   'role-permissions-test',
   'access-links-test',
+  // Role links — one link per role that everybody on it signs in through with
+  // their own code, and the escape that lets a second person reach the login
+  // form on a shared till.
+  'role-link-test',
   'pos-billing-test',
   // AUDIT.md Slice 2 — tips, refund rows, discount split, counters, loyalty ledger.
   'payment-model-test',

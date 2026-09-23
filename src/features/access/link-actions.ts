@@ -15,7 +15,7 @@ import { issueSignInCode } from '@/features/staff/codes'
 
 import { joinUrl } from './links'
 import { tenantOrigin } from '@/lib/tenant-url'
-import { assertNoEscalation, requireRole, resolveRoleBranch } from './service'
+import { assertNoEscalation, mintRoleLink, requireRole, resolveRoleBranch } from './service'
 import { createLinkSchema, linkIdSchema } from './link-schema'
 
 function refresh() {
@@ -355,5 +355,55 @@ export async function revokeAccessLink(input: unknown): Promise<ActionResult<{ i
       return { id: data.id }
     },
     'Link revoked.',
+  )
+}
+
+/**
+ * The sign-in link that belongs to a role (sidebar.md — role links).
+ *
+ * ── Why an owner should not have to build this by hand ──────────────────────
+ *
+ * Everything needed already existed — `Invite.staffRoleId`, the join page, the
+ * code check — and reaching it meant leaving the role builder, opening a
+ * second screen and re-describing the role you had just made. So the link that
+ * every role obviously wants was the one nobody made, and roles went out with
+ * no way for their members to sign in except the general login.
+ *
+ * ── One live link per role ──────────────────────────────────────────────────
+ *
+ * Reused rather than minted. Pressing the button twice must not leave two
+ * valid URLs for one role, because the second is then a credential nobody
+ * knows exists and revoking the first does nothing. Rotating is a separate,
+ * deliberate act — `regenerateAccessLink` on the Links screen.
+ *
+ * Guards are `vetLink`'s, unchanged: rank, escalation, and a branch resolved
+ * by the same helper the role builder uses.
+ */
+export async function roleSignInLink(
+  input: unknown,
+): Promise<ActionResult<{ url: string; created: boolean }>> {
+  return runAction(
+    z.object({ staffRoleId: z.string().cuid() }),
+    input,
+    async (data) => {
+      const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
+      const result = await mintRoleLink(admin, data.staffRoleId)
+
+      if (result.created) {
+        await audit({
+          restaurantId: admin.restaurantId,
+          userId: admin.id,
+          actorName: admin.name,
+          action: AUDIT_ACTIONS.STAFF_INVITED,
+          entity: 'StaffRole',
+          entityId: data.staffRoleId,
+          after: { mode: 'ROLE' },
+        })
+      }
+
+      refresh()
+      revalidatePath('/dashboard/roles')
+      return result
+    },
   )
 }

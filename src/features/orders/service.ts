@@ -1120,6 +1120,8 @@ export async function deriveOrderStatus(params: {
       status: next,
       actorId: params.actorId ?? null,
       actorName: params.actorName ?? null,
+      // Read off the lines — so it is not written back onto them.
+      derived: true,
     })
   }
   return target
@@ -1340,6 +1342,94 @@ export async function progressItems(params: {
 }
 
 /**
+ * One line goes on the heat: the rung between accepted and prepared.
+ *
+ * ── Why this is a status flip and not a counter ─────────────────────────────
+ *
+ * `preparedQty` counts plates FINISHED. A cook putting three burgers on the
+ * grill has finished none of them, so there is no counter that can carry
+ * "started" — ticking one to say so would tell the guest a burger was ready.
+ * So this is the one rung that writes the status directly, and it writes
+ * nothing else: the counters stay where they are, and `rowStatusFromCounters`
+ * keeps agreeing with the row, because a line with `preparedQty` 0 and status
+ * PREPARING is exactly the case its last branch returns unchanged.
+ *
+ * ── Why only from QUEUED ────────────────────────────────────────────────────
+ *
+ * Progress only moves forward (abc.md §6). A line with a plate already made is
+ * past "started", and a READY line dragged back to PREPARING would tell a
+ * guest their food had un-cooked itself. Anything that is not QUEUED is left
+ * alone and reported as unchanged, so a second tap — a double click, two
+ * cooks on two screens, a retried request — moves nothing rather than
+ * failing at one of them: the state it asks for is already true.
+ *
+ * Database first, then the broadcast, then the order catches up with its
+ * lines through `deriveOrderStatus` — the same order as every other writer
+ * here, so a screen never hears about a change that has not been committed.
+ */
+export async function startItem(params: {
+  restaurantId: string
+  orderId: string
+  itemId: string
+  actorId?: string | null
+  actorName?: string | null
+}): Promise<{ changed: boolean; status: OrderItem['status'] }> {
+  const item = await prisma.orderItem.findFirst({
+    where: { id: params.itemId, order: { id: params.orderId, restaurantId: params.restaurantId } },
+    select: {
+      id: true, status: true, quantity: true, preparedQty: true, servedQty: true, preparingAt: true,
+      order: { select: { status: true, branchId: true } },
+    },
+  })
+  if (!item) throw new NotFoundError('Order item')
+  if (item.order.status === 'PENDING') {
+    throw new AppError(
+      'This order has not been accepted yet — accept it before the kitchen starts',
+      409,
+      'ORDER_NOT_ACCEPTED',
+    )
+  }
+  if (item.order.status === 'CANCELLED' || item.order.status === 'COMPLETED') {
+    throw new AppError(`This order is ${item.order.status.toLowerCase()}`, 409, 'ORDER_CLOSED')
+  }
+  if (item.status === 'CANCELLED') {
+    throw new AppError('That line was taken off this order', 409, 'ITEM_CANCELLED')
+  }
+  // Already started, already made, already out: nothing to do, and nothing wrong.
+  if (item.status !== 'QUEUED') return { changed: false, status: item.status }
+
+  await prisma.orderItem.update({
+    where: { id: item.id },
+    data: {
+      status: 'PREPARING',
+      // First time only — never rewrite when it was actually started.
+      ...(item.preparingAt === null ? { preparingAt: new Date() } : {}),
+    },
+  })
+
+  realtime.orderItemStatus(params.restaurantId, {
+    orderId: params.orderId,
+    itemId: item.id,
+    branchId: item.order.branchId,
+    status: 'PREPARING',
+    quantity: item.quantity,
+    preparedQty: item.preparedQty,
+    servedQty: item.servedQty,
+  })
+
+  // Let the order catch up with its items — `deriveOrderStatus` owns that,
+  // one direction only; read it before changing this.
+  await deriveOrderStatus({
+    restaurantId: params.restaurantId,
+    orderId: params.orderId,
+    actorId: params.actorId ?? null,
+    actorName: params.actorName ?? null,
+  })
+
+  return { changed: true, status: 'PREPARING' }
+}
+
+/**
  * The kitchen commits to an order (aO.md §1, abc.md §5).
  *
  * One place for what "accepted" means to the rest of the system: the dishes
@@ -1433,6 +1523,11 @@ export async function updateOrderStatus(params: {
    * Only `acceptGuestOrder` passes it, after the ORDER_ACCEPT check.
    */
   gate?: 'cashier'
+  /**
+   * This move was READ OFF the lines, so it must not be written back onto
+   * them. Only `deriveOrderStatus` passes it — see the cascade below.
+   */
+  derived?: boolean
 }): Promise<Order> {
   const order = await prisma.order.findFirst({
     where: { id: params.orderId, restaurantId: params.restaurantId },
@@ -1558,21 +1653,41 @@ export async function updateOrderStatus(params: {
      * READY line with `preparedQty` 0 would make the floor's Remaining wrong
      * and the guest's "3 of 3 ready" impossible (abc.md §6).
      */
+    /*
+     * ── Never cascade a move the lines themselves caused ──────────────────
+     *
+     * DELIBERATE behaviour change 2026-09 (item-level Preparing): a derived
+     * status no longer writes back onto the lines it was read from.
+     *
+     * `deriveOrderStatus` walks the order up BEHIND its lines. Writing that
+     * move back down would contradict the reading it came from: one cook
+     * pressing Preparing on the burgers derives the order to PREPARING, and
+     * the cascade would then start the untouched rice on the same ticket —
+     * the very flattening the routed/unrouted rule above exists to prevent,
+     * arriving by the back door in unrouted mode.
+     *
+     * Skipping is safe for all three, not just the one that was wrong: a
+     * derived READY means every line already reads READY or SERVED, and a
+     * derived SERVED means every line is SERVED, so their cascades had
+     * nothing left to write anyway. Only a supervisor moving the ORDER by
+     * hand still cascades, which is what that gesture means.
+     */
     const cascadeAt = utc(new Date())
-    if (params.status === 'PREPARING' && !routed) {
+    if (params.derived) {
+      // Nothing: the lines are already where this status was read from.
+    } else if (params.status === 'PREPARING' && !routed) {
       await tx.$executeRaw`
         UPDATE order_items SET status = 'PREPARING', "updatedAt" = ${cascadeAt}
          WHERE "orderId" = ${order.id} AND status = 'QUEUED'
       `
-    }
-    if (params.status === 'READY' && !routed) {
+    } else if (params.status === 'READY' && !routed) {
       await tx.$executeRaw`
         UPDATE order_items
            SET status = 'READY', "preparedQty" = quantity, "updatedAt" = ${cascadeAt}
          WHERE "orderId" = ${order.id} AND status IN ('QUEUED', 'PREPARING')
       `
     }
-    if (params.status === 'SERVED') {
+    if (!params.derived && params.status === 'SERVED') {
       await tx.$executeRaw`
         UPDATE order_items
            SET status = 'SERVED', "preparedQty" = quantity, "servedQty" = quantity, "updatedAt" = ${cascadeAt}

@@ -218,6 +218,11 @@ export default async function PosPage({
             id: category.id,
             name: category.name,
           }))}
+          // What a point is worth, so the till can spend them (pro.A.md §10).
+          loyalty={{
+            enabled: restaurant.loyaltyEnabled,
+            pointValue: restaurant.loyaltyPointValue,
+          }}
         />
       </div>
     )
@@ -318,7 +323,11 @@ export default async function PosPage({
             heldAt: order.heldAt ? order.heldAt.toISOString() : null,
             holdReason: order.holdReason,
             subtotal: order.subtotal,
-            discountTotal: order.discountTotal + order.loyaltyDiscount,
+            // Kept apart. Adding them made the till show one "Discount" row
+            // covering both what the restaurant gave and what the guest spent
+            // their own points on (pro.A.md §10).
+            discountTotal: order.discountTotal,
+            loyaltyDiscount: order.loyaltyDiscount,
             serviceCharge: order.serviceCharge,
             taxTotal: order.taxTotal,
             grandTotal: order.grandTotal,
@@ -364,6 +373,11 @@ export default async function PosPage({
             minOrderAmount: reward.minOrderAmount,
             expiresAt: reward.expiresAt?.toISOString() ?? null,
           }))}
+          // What a point is worth, so the till can spend them (pro.A.md §10).
+          loyalty={{
+            enabled: restaurant.loyaltyEnabled,
+            pointValue: restaurant.loyaltyPointValue,
+          }}
         />
       </div>
     )

@@ -571,11 +571,9 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
            * dateless and the board treats it as "no expiry recorded", which
            * is the truth of what was keyed.
            */
-          const tracked = await tx.inventoryItem.findFirst({
-            where: { id: line.itemId, restaurantId: user.restaurantId, trackBatches: true },
-            select: { id: true },
-          })
-          if (tracked) {
+          // DELIBERATE behaviour change 2026-09 (pro.b.md §5): every purchase
+          // is a lot, whatever the item's flag says — see `receiving.ts`.
+          {
             await upsertBatch(tx, {
               restaurantId: user.restaurantId,
               itemId: line.itemId,

@@ -219,6 +219,149 @@ export async function redeemReward(params: {
 }
 
 /**
+ * Spend a number of points against a bill, at the restaurant's own rate.
+ *
+ * ── Why this exists alongside rewards ──────────────────────────────────────
+ *
+ * A reward is a named offer — "500 points, a free dessert" — and it is the
+ * right thing to put in front of a guest. It is the wrong thing to put in
+ * front of a cashier whose customer has 1,340 points and says "take some off".
+ * The restaurant already has a rate for that (`loyaltyPointValue`), the
+ * settings screen already asks for it, and `discounts.ts` has had the
+ * arithmetic since the ledger was built — with, until now, nothing calling it.
+ *
+ * `websiteconnect.md` says why it was left unwired rather than finished:
+ * "spending points is a till operation, where a person checks who is asking".
+ * This is that till operation.
+ *
+ * ── Everything sharp is borrowed from `redeemReward` ───────────────────────
+ *
+ * The same order lock, the same refusals, the same conditional debit so two
+ * bills racing for one balance cannot both win, the same ledger row, the same
+ * single money writer. The only differences are that the amount comes from a
+ * rate rather than a catalogue row, and that this one is deliberately NOT
+ * idempotent by marker: "take 200 points off" twice is a cashier asking for
+ * 400 points off, which is a legitimate thing to want. The guard against a
+ * double-tap is the balance itself and the room left on the bill.
+ */
+export async function redeemPointsOnOrder(params: {
+  restaurantId: string
+  orderId: string
+  points: number
+  actorId?: string | null
+}): Promise<{ pointsSpent: number; discount: number; balance: number }> {
+  const wanted = Math.floor(params.points)
+  if (!Number.isFinite(wanted) || wanted <= 0) {
+    throw new AppError('Say how many points to take off', 400, 'LOYALTY_NO_POINTS')
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await guardLocks(tx)
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId} FOR UPDATE`
+
+    const order = await tx.order.findFirst({
+      where: { id: params.orderId, restaurantId: params.restaurantId },
+      select: {
+        id: true, orderNumber: true, customerId: true, status: true,
+        paymentStatus: true, subtotal: true, loyaltyDiscount: true,
+      },
+    })
+    if (!order) throw new NotFoundError('Order')
+    if (!order.customerId) {
+      throw new AppError(
+        'This bill has no guest on it — add their phone number first',
+        400,
+        'LOYALTY_NO_CUSTOMER',
+      )
+    }
+    if (order.status === 'CANCELLED') {
+      throw new AppError('That bill was cancelled', 409, 'ORDER_CANCELLED')
+    }
+    if (order.paymentStatus !== 'UNPAID') {
+      throw new AppError(
+        'This bill has been paid — points have to be spent before it is settled',
+        409,
+        'ORDER_PAID',
+      )
+    }
+
+    const restaurant = await tx.restaurant.findUniqueOrThrow({
+      where: { id: params.restaurantId },
+      select: { loyaltyEnabled: true, loyaltyPointValue: true },
+    })
+    if (!restaurant.loyaltyEnabled) {
+      throw new AppError('Loyalty is switched off', 400, 'LOYALTY_OFF')
+    }
+    if (restaurant.loyaltyPointValue <= 0) {
+      throw new AppError(
+        'A point is worth nothing until somebody sets its value in Settings',
+        400,
+        'LOYALTY_NO_RATE',
+      )
+    }
+
+    /*
+     * Never more than the bill can absorb. Points that would hand back change
+     * in cash are left on the account rather than burnt — the same rule
+     * `redeemReward` applies, and the reason `recalculateOrderTotals` returns
+     * anything it cannot use.
+     */
+    const room = Math.max(0, order.subtotal - order.loyaltyDiscount)
+    if (room <= 0) {
+      throw new AppError('This bill is already fully covered', 409, 'LOYALTY_NO_ROOM')
+    }
+    const affordableByBill = Math.floor(room / restaurant.loyaltyPointValue)
+    if (affordableByBill <= 0) {
+      throw new AppError('This bill is too small to take a point off', 409, 'LOYALTY_NO_ROOM')
+    }
+    const points = Math.min(wanted, affordableByBill)
+    const discount = Math.min(points * restaurant.loyaltyPointValue, room)
+
+    // Conditional, so a balance cannot be driven negative by two tills at once.
+    const spent = await tx.customer.updateMany({
+      where: { id: order.customerId, loyaltyPoints: { gte: points } },
+      data: { loyaltyPoints: { decrement: points } },
+    })
+    if (spent.count === 0) {
+      const holder = await tx.customer.findUniqueOrThrow({
+        where: { id: order.customerId },
+        select: { loyaltyPoints: true },
+      })
+      throw new AppError(
+        `Only ${holder.loyaltyPoints} points on that account`,
+        409,
+        'LOYALTY_INSUFFICIENT',
+      )
+    }
+
+    await tx.loyaltyEntry.create({
+      data: {
+        restaurantId: params.restaurantId,
+        customerId: order.customerId,
+        orderId: order.id,
+        points: -points,
+        kind: 'REDEEMED',
+        note: `${points} points on ${order.orderNumber}`,
+        actorId: params.actorId ?? null,
+      },
+    })
+
+    await tx.order.update({
+      where: { id: order.id },
+      data: { loyaltyDiscount: order.loyaltyDiscount + discount },
+    })
+    // The one writer for a bill's money, exactly as the reward path uses it.
+    await recalculateOrderTotals(tx, order.id)
+
+    const holder = await tx.customer.findUniqueOrThrow({
+      where: { id: order.customerId },
+      select: { loyaltyPoints: true },
+    })
+    return { pointsSpent: points, discount, balance: holder.loyaltyPoints }
+  })
+}
+
+/**
  * A hand correction to somebody's balance.
  *
  * ── Why this exists as a service ──────────────────────────────────────────

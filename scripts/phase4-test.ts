@@ -263,8 +263,14 @@ async function main() {
   ok('an unlabelled tracked delivery is numbered after its GRN',
     Boolean(fallback?.batchNo.startsWith(r4.receipt.number)), fallback?.batchNo)
 
-  const untracked = await prisma.stockBatch.count({ where: { itemId: rice.id } })
-  ok('an untracked item creates no batches', untracked === 0)
+  // DELIBERATE behaviour change 2026-09 (pro.b.md §5): every receipt is a
+  // lot now, so production can draw the oldest delivery first at its own
+  // price. An untracked item's lot is dateless and numbered after its GRN;
+  // the expiry board ignores it because it has no date, not because it is
+  // missing.
+  const untrackedLots = await prisma.stockBatch.findMany({ where: { itemId: rice.id } })
+  ok('an untracked item gets a lot per delivery, dateless', untrackedLots.length >= 1 && untrackedLots.every((b) => b.expiryDate === null), String(untrackedLots.length))
+  ok('and the untracked lot never reaches the expiry board', !expiring.some((e) => e.itemId === rice.id))
 
   console.log('\n── 12. Tenant isolation ─────────────────────────────────')
   await throws('creating a PO for another tenant’s item is refused',

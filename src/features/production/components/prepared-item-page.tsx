@@ -2,17 +2,14 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { Timer } from 'lucide-react'
-import { toast } from 'sonner'
+import { Plus, Timer } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { LocalDateTime } from '@/components/local-time'
 import { SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { UNIT_LABELS, formatQuantity } from '@/features/inventory/units'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
-import { MakeMoreForm } from './make-more-form'
-import { MarkDoneForm } from './mark-done-form'
+import { Button } from '@/components/ui/button'
 import { ProductionHistory } from './production-history'
 import type { PreparedItemPageData } from '../types'
 
@@ -25,13 +22,12 @@ import type { PreparedItemPageData } from '../types'
  *
  *   what is this and how much is here      — the name and Current Stock
  *   what goes into it and what does it cost — Ingredients, with Production Cost
- *   how much did you make                  — one card per batch waiting
- *   make more                              — quantity, unit, one step
+ *   what is in progress                    — each order, one click to it
+ *   make more                              — a new production order from the recipe
  *   what happened before                   — this item's full history
  *
- * There is no second "what did you make?" anywhere: Create asks how much is
- * being aimed for, this page asks what came out, and those are different
- * questions asked at different moments.
+ * Issuing and completing happen on the order's own page (pro.b.md §4–§8),
+ * because the order is what the kitchen carries from step 3 onwards.
  */
 export function PreparedItemPage({
   data,
@@ -46,7 +42,6 @@ export function PreparedItemPage({
   locale: string
   canManage: boolean
 }) {
-  const router = useRouter()
   const { item, stock, recipe } = data
 
   const money = (minor: number) => formatMoney(Math.round(minor), currency, locale)
@@ -77,7 +72,7 @@ export function PreparedItemPage({
 
       <SectionCard
         title="Ingredients"
-        description="How this item is made, costed at today’s running averages. The run itself re-reads the ledger and is the figure of record."
+        description="How this item is made, costed FIFO from the lots on this shelf today. The issue re-reads them and is the figure of record."
         actions={recipe ? <Badge variant="secondary">Recipe v{recipe.version}</Badge> : null}
       >
         {recipe ? (
@@ -87,7 +82,7 @@ export function PreparedItemPage({
                 <tr className="border-b border-border text-left text-muted-foreground">
                   <th className="pb-2 font-medium">Ingredient</th>
                   <th className="pb-2 text-right font-medium">Quantity</th>
-                  <th className="pb-2 text-right font-medium">Unit cost</th>
+                  <th className="pb-2 text-right font-medium">Current cost (FIFO)</th>
                   <th className="pb-2 text-right font-medium">Cost</th>
                   <th className="pb-2 text-right font-medium">On hand</th>
                 </tr>
@@ -135,53 +130,27 @@ export function PreparedItemPage({
 
       {data.openBatches.length > 0 ? (
         <SectionCard
-          title={data.openBatches.length === 1 ? 'A batch is waiting' : `${data.openBatches.length} batches are waiting`}
-          description="Nothing has left stock for these yet. That happens when you say what came out."
+          title={data.openBatches.length === 1 ? 'A production order is in progress' : `${data.openBatches.length} production orders are in progress`}
+          description="Issue the ingredients and complete production on the order’s own page."
           actions={<Badge variant="warning"><Timer /> in progress</Badge>}
         >
-          <div className="space-y-3">
+          <ul className="divide-y divide-border">
             {data.openBatches.map((batch) => (
-              <div key={batch.id} className="rounded-lg border border-border p-3">
-                <p className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="font-medium">{batch.number}</span>
+              <li key={batch.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                <span>
+                  <span className="font-mono text-xs text-muted-foreground">{batch.number}</span>{' '}
                   <span className="text-muted-foreground">
-                    aiming {batch.plannedQty} {batch.unit ? UNIT_LABELS[batch.unit] : ''} · started{' '}
-                    <LocalDateTime value={batch.startedAt} />
+                    planned {batch.plannedQty} {batch.unit ? UNIT_LABELS[batch.unit].toLowerCase() : ''} · <LocalDateTime value={batch.startedAt} />
                     {batch.branchName ? ` · ${batch.branchName}` : ''}
                   </span>
-                </p>
-                {batch.ingredients.length > 0 ? (
-                  <p className="mb-2 text-xs text-muted-foreground">
-                    Will consume:{' '}
-                    {batch.ingredients
-                      .map((line) => `${line.name ?? 'an item'} ${line.quantity} ${UNIT_LABELS[line.unit].toLowerCase()}`)
-                      .join(', ')}
-                  </p>
-                ) : null}
-                {canManage ? (
-                  <MarkDoneForm
-                    batch={{ id: batch.id, number: batch.number, plannedQty: batch.plannedQty, unit: batch.unit }}
-                    units={item.units}
-                    compact
-                    onDone={(result) => {
-                      toast.success(
-                        `${result.number} done — ${formatQuantity(result.producedQty, result.item.unit)} into stock`,
-                      )
-                      router.refresh()
-                    }}
-                    onCancelled={() => {
-                      toast.success('Batch abandoned — nothing had moved')
-                      router.refresh()
-                    }}
-                  />
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Somebody who manages production says how much came out.
-                  </p>
-                )}
-              </div>
+                  {batch.issued ? <Badge variant="warning" size="sm" className="ml-2">issued</Badge> : null}
+                </span>
+                <Button size="sm" asChild>
+                  <Link href={`/dashboard/production/${batch.id}`}>{batch.issued ? 'Complete production' : 'Issue ingredients'}</Link>
+                </Button>
+              </li>
             ))}
-          </div>
+          </ul>
         </SectionCard>
       ) : null}
 
@@ -189,16 +158,19 @@ export function PreparedItemPage({
         <SectionCard
           id="make-more"
           title="Add Production — Make More"
-          description="Making it again the same way. The ingredients above are scaled to the amount you enter and the production completes in one step."
+          description="Another batch of this item, from its recipe: planned quantity, type and date on the next screen, then issue and complete on the order. Never a duplicate item."
         >
-          <MakeMoreForm
-            itemId={item.id}
-            itemName={item.name}
-            branchId={branchId}
-            units={item.units}
-            defaultUnit={recipe?.yieldUnit ?? item.unit}
-            hasRecipe={recipe !== null && recipe.lines.length > 0}
-          />
+          {recipe && recipe.lines.length > 0 ? (
+            <Button asChild>
+              <Link href={`/dashboard/production?make=${item.id}`}><Plus /> New production order</Link>
+            </Button>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              There is no recipe on file for {item.name} yet —{' '}
+              <Link href={`/dashboard/production?recipe=${item.id}`} className="underline">set it up on Recipe Setup</Link>{' '}
+              and Make More can repeat it.
+            </p>
+          )}
         </SectionCard>
       ) : null}
 

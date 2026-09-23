@@ -9,13 +9,13 @@ import {
   guardLocks, isUniqueViolation, prisma, uniqueViolationTargets, type TxClient,
 } from '@/server/db/prisma'
 import { requireBranch } from '@/features/branches/service'
-import { upsertBatch } from '@/features/inventory/batches'
+import { allocateFifo, upsertBatch } from '@/features/inventory/batches'
 import { postMovement } from '@/features/inventory/ledger'
 import { assertSufficient } from '@/features/inventory/location-stock'
 import { UNIT_LABELS, UnitConversionError, toBaseUnits } from '@/features/inventory/units'
 import { recordWastageWithin } from '@/features/inventory/wastage'
 import { saveRecipe } from '@/features/recipes/service'
-import type { ProduceItemResult, StartBatchResult } from './types'
+import type { IssueIngredientsResult, ProduceItemResult, StartBatchResult } from './types'
 
 /**
  * Kitchen production: making a prepared item out of stock (redesignkitchenjob.md).
@@ -32,9 +32,11 @@ import type { ProduceItemResult, StartBatchResult } from './types'
  *
  * ── An inventory transformation, not cost of sales ─────────────────────────
  *
- * The ingredients leave the ledger at their running average and EXACTLY that
- * value arrives in the prepared item: raw value down, prepared value up, the
- * restaurant's stock is worth the same before and after. Nothing is expensed.
+ * The ingredients leave the ledger at what they actually cost — the lots they
+ * were delivered in, oldest first, each at its own price (pro.b.md §5) — and
+ * EXACTLY that value arrives in the prepared item: raw value down, prepared
+ * value up, the restaurant's stock is worth the same before and after. Nothing
+ * is expensed.
  * Cost of sales happens later, when a dish that uses the prepared item is
  * sold and `reconcileOrderDepletion` consumes it like any other ingredient —
  * which is also why there is no second costing path here. A prepared item is
@@ -85,6 +87,12 @@ export interface ProduceItemParams {
   /** Why the yield differed. Only meaningful when finishing a batch. */
   varianceReason?: ProductionVarianceReason | null
   varianceNote?: string | null
+  /**
+   * Output lost while making it, in the item's base unit (pro.b.md §6).
+   * Recorded, never moved: there was no finished stock to waste, and its cost
+   * is carried by what did come out (§7).
+   */
+  wastageQty?: number | null
 }
 
 export async function produceItem(params: ProduceItemParams): Promise<ProduceItemResult> {
@@ -96,6 +104,12 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
 
   const resolved = await resolvePreparedItem(params)
   const producedBase = convertOrRefuse(params.output.quantity, params.output.unit, resolved.item, 'produced')
+  // Wastage is answered in the same unit as the output (pro.b.md §6) and kept
+  // in the item's base unit beside it, so the two figures add up on the row.
+  const wastageBase =
+    params.wastageQty !== null && params.wastageQty !== undefined && params.wastageQty > 0
+      ? convertOrRefuse(params.wastageQty, params.output.unit, resolved.item, 'wastage')
+      : params.wastageQty !== null && params.wastageQty !== undefined ? 0 : null
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -168,6 +182,7 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
                 actualQty: producedBase,
                 varianceReason: params.varianceReason ?? null,
                 varianceNote: params.varianceNote?.trim() || null,
+                wastageQty: wastageBase,
                 notes: params.notes?.trim() || null,
                 productionDate: now,
                 completedAt: now,
@@ -183,12 +198,14 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
             const row = await tx.productionOrder.findUniqueOrThrow({
               where: { id: params.batchId! },
             })
-            // Measured against what was planned when the batch was started.
+            // Measured against what was planned when the batch was started. A
+            // batch finished without a separate issue is issued now (§4).
+            const startedAt = row.startedAt ?? now
             await tx.productionOrder.update({
               where: { id: row.id },
-              data: { variance: producedBase - row.plannedQty },
+              data: { variance: roundQty(producedBase - row.plannedQty), startedAt },
             })
-            return { ...row, variance: producedBase - row.plannedQty }
+            return { ...row, variance: roundQty(producedBase - row.plannedQty), startedAt }
           })()
         : await tx.productionOrder.create({
             data: {
@@ -204,9 +221,11 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
               plannedQty: producedBase,
               actualQty: producedBase,
               variance: 0,
+              wastageQty: wastageBase,
               notes: params.notes?.trim() || null,
               requestedById: params.userId,
               productionDate: now,
+              startedAt: now,
               completedAt: now,
             },
           })
@@ -217,59 +236,50 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
       const reference = { referenceType: 'ProductionOrder', referenceId: order.id }
 
       /*
-       * Ingredients leave, in a fixed order. `postMovement` locks each item row;
-       * two runs touching the same items in different orders would deadlock,
-       * and the lock timeout would turn a busy kitchen into a flaky one.
+       * What went in (pro.b.md §4, §10).
+       *
+       * Issued earlier, as its own step: the consumption rows already exist,
+       * stock already left, and the value is what those rows say. Nothing is
+       * drawn again — that would be the double deduction §10 forbids.
+       *
+       * Not issued: it happens now, inside this transaction, so a batch
+       * finished in one go is still "consumption + cost + stock + completion,
+       * all or nothing".
        */
-      const consumed: ProduceItemResult['consumed'] = []
-      let totalValue = 0
-      const lines = [...params.ingredients].sort((a, b) => a.itemId.localeCompare(b.itemId))
-      for (const line of lines) {
-        const ingredient = byId.get(line.itemId)!
-        const base = convertOrRefuse(line.quantity, line.unit, ingredient, 'used')
-
-        // Production never draws a shelf below zero, whatever the negative-stock
-        // setting says: a run is planned against what is actually there.
-        await assertSufficient(tx, {
-          restaurantId: params.restaurantId,
-          itemId: ingredient.id,
-          branchId: params.branchId,
-          quantity: base,
-          itemName: ingredient.name,
-        })
-
-        const posted = await postMovement(tx, {
-          restaurantId: params.restaurantId,
-          itemId: ingredient.id,
-          type: 'PRODUCTION_CONSUMPTION',
+      const issued = await tx.productionConsumption.findMany({
+        where: { orderId: order.id },
+        include: { item: { select: { name: true, unit: true } }, lots: true },
+        orderBy: { createdAt: 'asc' },
+      })
+      let consumed: ProduceItemResult['consumed']
+      let totalValue: number
+      if (issued.length > 0) {
+        consumed = issued.map((line) => ({
+          itemId: line.itemId,
+          name: line.item.name,
           quantity: line.quantity,
-          enteredUnit: line.unit,
-          reason,
-          ...reference,
+          unit: line.item.unit,
+          value: line.lineCost,
+          lots: line.lots.map((lot) => ({
+            batchNo: lot.batchNo,
+            quantity: lot.quantity,
+            unitCost: lot.unitCost,
+            lineCost: lot.lineCost,
+          })),
+        }))
+        totalValue = issued.reduce((sum, line) => sum + line.lineCost, 0)
+      } else {
+        const drawn = await consumeIngredients(tx, {
+          restaurantId: params.restaurantId,
           branchId: params.branchId,
           userId: params.userId,
+          orderId: order.id,
+          reason,
+          lines: params.ingredients,
+          byId,
         })
-
-        // The EXACT value the ledger removed — not quantity × a rounded cache.
-        totalValue += posted.valueMoved
-
-        await tx.productionConsumption.create({
-          data: {
-            orderId: order.id,
-            itemId: ingredient.id,
-            quantity: base,
-            unit: ingredient.unit,
-            unitCost: posted.movement.unitCost,
-            lineCost: Math.round(posted.valueMoved),
-          },
-        })
-        consumed.push({
-          itemId: ingredient.id,
-          name: ingredient.name,
-          quantity: base,
-          unit: ingredient.unit,
-          value: Math.round(posted.valueMoved),
-        })
+        consumed = drawn.consumed
+        totalValue = drawn.totalValue
       }
 
       // Waste: thrown away, expensed, never part of the item's value.
@@ -302,9 +312,10 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
        * the value channel; the per-unit figure on the movement is derived from
        * it, not the other way round.
        */
-      const batchNumber = resolved.item.trackBatches
-        ? `${jobNumber}-${now.toISOString().slice(0, 10).replace(/-/g, '')}`
-        : null
+      // Every run is a lot of the thing it made, so a later recipe drawing
+      // on it draws FIFO at THIS run's cost (pro.b.md §5, §8). DELIBERATE
+      // behaviour change 2026-09: it was gated on `trackBatches`.
+      const batchNumber = `${jobNumber}-${now.toISOString().slice(0, 10).replace(/-/g, '')}`
       const produced = await postMovement(tx, {
         restaurantId: params.restaurantId,
         itemId: resolved.item.id,
@@ -321,7 +332,7 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
       const unitCost = produced.movement.unitCost
 
       let batchId: string | null = null
-      if (resolved.item.trackBatches && batchNumber) {
+      {
         const batch = await upsertBatch(tx, {
           restaurantId: params.restaurantId,
           itemId: resolved.item.id,
@@ -431,12 +442,137 @@ function validateShape(params: ProduceItemParams) {
   }
 }
 
+/**
+ * Ingredients leave, oldest lot first, each at its own price (pro.b.md §4, §5).
+ *
+ * The one place stock is drawn for production, whether that happens at the
+ * issue step or at completion. Two callers, one function, so the two paths
+ * cannot cost differently.
+ *
+ * ── Order ───────────────────────────────────────────────────────────────────
+ *
+ * Lines are sorted by item id before anything moves. `postMovement` locks each
+ * item row; two runs touching the same items in different orders would
+ * deadlock, and the lock timeout would turn a busy kitchen into a flaky one.
+ *
+ * ── What is recorded ────────────────────────────────────────────────────────
+ *
+ * One ledger movement per ingredient, valued at the lots it drew — the ledger
+ * subtracts exactly that, so the pool and the lots agree about what left. One
+ * consumption row per ingredient, and under it one row per lot: which
+ * delivery, how much, at what price. That is the trace §9 asks for, and it is
+ * what the order page shows after "Issue All (FIFO)".
+ */
+async function consumeIngredients(
+  tx: TxClient,
+  params: {
+    restaurantId: string
+    branchId: string
+    userId: string | null
+    orderId: string
+    reason: string
+    lines: Array<{ itemId: string; quantity: number; unit: StockUnit }>
+    byId: Map<string, InventoryItem>
+  },
+): Promise<{ consumed: ProduceItemResult['consumed']; totalValue: number }> {
+  const reference = { referenceType: 'ProductionOrder', referenceId: params.orderId }
+  const consumed: ProduceItemResult['consumed'] = []
+  let totalValue = 0
+
+  const lines = [...params.lines].sort((a, b) => a.itemId.localeCompare(b.itemId))
+  for (const line of lines) {
+    const ingredient = params.byId.get(line.itemId)
+    if (!ingredient) throw new NotFoundError('Ingredient')
+    const base = convertOrRefuse(line.quantity, line.unit, ingredient, 'used')
+
+    // Production never draws a shelf below zero, whatever the negative-stock
+    // setting says: a run is planned against what is actually there.
+    await assertSufficient(tx, {
+      restaurantId: params.restaurantId,
+      itemId: ingredient.id,
+      branchId: params.branchId,
+      quantity: base,
+      itemName: ingredient.name,
+    })
+
+    // Which lots, in receipt order, and what they come to.
+    const allocation = await allocateFifo(tx, {
+      restaurantId: params.restaurantId,
+      itemId: ingredient.id,
+      branchId: params.branchId,
+      quantity: base,
+    })
+
+    const posted = await postMovement(tx, {
+      restaurantId: params.restaurantId,
+      itemId: ingredient.id,
+      type: 'PRODUCTION_CONSUMPTION',
+      quantity: line.quantity,
+      enteredUnit: line.unit,
+      // The lots' own value, and exactly those lots drawn down.
+      totalValue: allocation.totalValue,
+      allocations: allocation.lots,
+      reason: params.reason,
+      ...reference,
+      branchId: params.branchId,
+      userId: params.userId,
+    })
+
+    // The EXACT value the ledger removed — the lots' value, capped by the
+    // pool. Not quantity × a rounded cache.
+    totalValue += posted.valueMoved
+
+    const lots = [
+      ...allocation.lots.map((lot) => ({
+        batchId: lot.batchId,
+        batchNo: lot.batchNo,
+        quantity: lot.quantity,
+        unitCost: lot.unitCost,
+        lineCost: Math.round(lot.quantity * lot.unitCost),
+      })),
+      ...(allocation.remainder
+        ? [
+            {
+              batchId: null,
+              batchNo: null,
+              quantity: allocation.remainder.quantity,
+              unitCost: allocation.remainder.unitCost,
+              lineCost: Math.round(allocation.remainder.quantity * allocation.remainder.unitCost),
+            },
+          ]
+        : []),
+    ]
+
+    await tx.productionConsumption.create({
+      data: {
+        orderId: params.orderId,
+        itemId: ingredient.id,
+        quantity: base,
+        unit: ingredient.unit,
+        unitCost: posted.movement.unitCost,
+        lineCost: Math.round(posted.valueMoved),
+        lots: { create: lots },
+      },
+    })
+    consumed.push({
+      itemId: ingredient.id,
+      name: ingredient.name,
+      quantity: base,
+      unit: ingredient.unit,
+      value: Math.round(posted.valueMoved),
+      lots: lots.map(({ batchNo, quantity, unitCost, lineCost }) => ({ batchNo, quantity, unitCost, lineCost })),
+    })
+  }
+
+  return { consumed, totalValue }
+}
+
 /** Unit conversion with the item's name in the refusal, so the cook knows which row. */
 function convertOrRefuse(
   quantity: number,
   unit: StockUnit,
   item: InventoryItem,
-  what: 'produced' | 'used',
+  what: 'produced' | 'used' | 'wastage',
 ): number {
   try {
     return roundQty(toBaseUnits(quantity, unit, item))
@@ -679,6 +815,9 @@ export async function startBatch(params: {
   userId: string | null
   clientRequestId: string
   plan: BatchPlan
+  /** The order's own fields (pro.b.md §3). */
+  productionType?: 'SEMI_FINISHED' | 'FINISHED'
+  requiredDate?: Date | null
   notes?: string | null
 }): Promise<StartBatchResult> {
   if (!params.plan.name.trim()) throw new AppError('Name what is being made', 400, 'PRODUCTION_NO_NAME')
@@ -742,6 +881,8 @@ export async function startBatch(params: {
         outputItemId: resolved.item.id,
         unit: params.plan.unit,
         plannedQty: params.plan.quantity,
+        productionType: params.productionType ?? 'SEMI_FINISHED',
+        requiredDate: params.requiredDate ?? null,
         notes: params.notes?.trim() || null,
         requestedById: params.userId,
         productionDate: new Date(),
@@ -778,6 +919,8 @@ async function rememberRecipe(params: {
   userId: string | null
   item: InventoryItem
   plan: BatchPlan
+  /** Step 1's instructions (pro.b.md §1) — `Recipe.prepNotes`. Undefined leaves them alone. */
+  instructions?: string | null
 }): Promise<{ id: string } | null> {
   const current = await prisma.recipe.findFirst({
     where: {
@@ -790,8 +933,10 @@ async function rememberRecipe(params: {
     include: { ingredients: { select: { inventoryItemId: true, quantity: true, unit: true } } },
   })
 
+  const notes = params.instructions === undefined ? undefined : params.instructions?.trim() || null
   const same =
     current !== null &&
+    (notes === undefined || (current.prepNotes ?? null) === notes) &&
     current.yieldQty === params.plan.quantity &&
     current.yieldUnit === params.plan.unit &&
     current.ingredients.length === params.plan.ingredients.length &&
@@ -810,6 +955,7 @@ async function rememberRecipe(params: {
       name: params.item.name,
       yieldQty: params.plan.quantity,
       yieldUnit: params.plan.unit,
+      prepNotes: notes === undefined ? (current?.prepNotes ?? null) : notes,
       ingredients: params.plan.ingredients.map((line) => ({
         inventoryItemId: line.itemId,
         quantity: line.quantity,
@@ -859,6 +1005,8 @@ export async function completeBatch(params: {
   actualUnit?: StockUnit | null
   varianceReason?: ProductionVarianceReason | null
   varianceNote?: string | null
+  /** Output lost, in `actualUnit` (pro.b.md §6). */
+  wastageQuantity?: number | null
   overrides?: BatchPlan['ingredients']
   notes?: string | null
 }): Promise<ProduceItemResult> {
@@ -889,6 +1037,7 @@ export async function completeBatch(params: {
     waste: plan.waste,
     varianceReason: params.varianceReason ?? null,
     varianceNote: params.varianceNote ?? null,
+    wastageQty: params.wastageQuantity ?? null,
     notes: params.notes ?? batch.notes,
   })
 }
@@ -997,16 +1146,217 @@ export async function listOpenBatches(params: {
   })
 }
 
-/** Abandon a batch that was never made. Nothing to reverse: nothing moved. */
+/**
+ * Abandon a batch that was never made. Nothing to reverse: nothing moved.
+ *
+ * ── Not once the ingredients are out (pro.b.md §10) ────────────────────────
+ *
+ * After an issue, stock has left and there is no finished stock yet. Letting
+ * that be cancelled would leave exactly the state §10 forbids — ingredients
+ * deducted, nothing made — with the value gone from the books. And putting
+ * the ingredients back would be a lie in most kitchens: an abandoned pot is
+ * not un-cooked. So the only door out of an issued batch is completion, which
+ * may record that nothing came out, and the cost of that is on the record.
+ */
 export async function cancelBatch(params: {
   restaurantId: string
   batchId: string
 }): Promise<void> {
   const cancelled = await prisma.productionOrder.updateMany({
-    where: { id: params.batchId, restaurantId: params.restaurantId, status: 'IN_PROGRESS' },
+    where: {
+      id: params.batchId,
+      restaurantId: params.restaurantId,
+      status: 'IN_PROGRESS',
+      startedAt: null,
+    },
     data: { status: 'CANCELLED' },
   })
   if (cancelled.count === 0) {
+    const row = await prisma.productionOrder.findFirst({
+      where: { id: params.batchId, restaurantId: params.restaurantId },
+      select: { status: true, startedAt: true },
+    })
+    if (row?.status === 'IN_PROGRESS' && row.startedAt) {
+      throw new AppError(
+        'The ingredients have already been issued — complete the batch and record what came out',
+        409,
+        'PRODUCTION_ISSUED_CANNOT_CANCEL',
+      )
+    }
     throw new AppError('That batch is not in progress', 409, 'PRODUCTION_NOT_IN_PROGRESS')
+  }
+}
+
+/**
+ * Issue the ingredients to a batch — start production (pro.b.md §4).
+ *
+ * The moment stock leaves. Before this the order is a plan; after it the
+ * kitchen is cooking and the ingredients are gone from the shelf, drawn from
+ * the oldest lots first at each lot's own price, with the split on the record.
+ *
+ * ── Once ────────────────────────────────────────────────────────────────────
+ *
+ * Claimed with `updateMany` on `startedAt IS NULL`, the same shape completion
+ * uses on its status: two cooks pressing Issue All at once cannot both draw.
+ * The loser is told the ingredients are already out, not shown an error.
+ *
+ * ── Issue quantities ────────────────────────────────────────────────────────
+ *
+ * `lines` overrides the plan per ingredient — the "Issue qty" column — for the
+ * cook who genuinely used a different amount. It must name only ingredients
+ * the plan has: a new ingredient is a recipe change, not an issue. Absent, the
+ * plan goes out in full, which is "Issue All (FIFO)".
+ */
+export async function issueIngredients(params: {
+  restaurantId: string
+  batchId: string
+  userId: string | null
+  lines?: Array<{ itemId: string; quantity: number; unit: StockUnit }>
+}): Promise<IssueIngredientsResult> {
+  const batch = await prisma.productionOrder.findFirst({
+    where: { id: params.batchId, restaurantId: params.restaurantId },
+  })
+  if (!batch) throw new NotFoundError('Batch')
+  if (batch.status !== 'IN_PROGRESS') {
+    throw new AppError('That batch is not in progress', 409, 'PRODUCTION_NOT_IN_PROGRESS')
+  }
+  if (batch.startedAt) {
+    throw new AppError('The ingredients for this batch have already been issued', 409, 'PRODUCTION_ALREADY_ISSUED')
+  }
+  const plan = batch.plan as unknown as BatchPlan | null
+  if (!plan) throw new AppError('That batch has no plan to issue', 409, 'PRODUCTION_NO_PLAN')
+
+  const planned = new Map(plan.ingredients.map((line) => [line.itemId, line]))
+  const lines = params.lines ?? plan.ingredients
+  if (lines.length === 0) throw new AppError('Nothing to issue', 400, 'PRODUCTION_NO_INGREDIENTS')
+  const seen = new Set<string>()
+  for (const line of lines) {
+    if (!planned.has(line.itemId)) {
+      throw new AppError(
+        'Only ingredients on the plan can be issued — change the recipe to add one',
+        400,
+        'PRODUCTION_ISSUE_NOT_PLANNED',
+      )
+    }
+    if (!(line.quantity > 0)) {
+      throw new AppError('Every issued ingredient needs a quantity above zero', 400, 'PRODUCTION_BAD_QUANTITY')
+    }
+    if (seen.has(line.itemId)) {
+      throw new AppError('An ingredient is listed twice — combine the lines', 400, 'PRODUCTION_DUPLICATE_LINE')
+    }
+    seen.add(line.itemId)
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await guardLocks(tx)
+
+    const now = new Date()
+    const claimed = await tx.productionOrder.updateMany({
+      where: {
+        id: batch.id,
+        restaurantId: params.restaurantId,
+        status: 'IN_PROGRESS',
+        startedAt: null,
+      },
+      data: { startedAt: now },
+    })
+    if (claimed.count === 0) {
+      throw new AppError('The ingredients for this batch have already been issued', 409, 'PRODUCTION_ALREADY_ISSUED')
+    }
+
+    const ids = lines.map((line) => line.itemId)
+    const rows = await tx.inventoryItem.findMany({
+      where: { id: { in: ids }, restaurantId: params.restaurantId, isActive: true },
+    })
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    for (const id of ids) if (!byId.has(id)) throw new NotFoundError('Ingredient')
+
+    const { consumed, totalValue } = await consumeIngredients(tx, {
+      restaurantId: params.restaurantId,
+      branchId: batch.branchId,
+      userId: params.userId,
+      orderId: batch.id,
+      reason: `Issued for ${batch.recipeName ?? plan.name} (${batch.number})`,
+      lines,
+      byId,
+    })
+
+    // What has gone out so far, so the order page can show Total Issued Cost.
+    // The final figure is written again at completion, from the same rows.
+    await tx.productionOrder.update({
+      where: { id: batch.id },
+      data: { totalCost: Math.round(totalValue) },
+    })
+
+    return {
+      orderId: batch.id,
+      number: batch.number,
+      issuedAt: now.toISOString(),
+      consumed,
+      totalValue: Math.round(totalValue),
+    }
+  })
+}
+
+/**
+ * Save how a prepared item is made, without making any (pro.b.md §1).
+ *
+ * Step 1 of the flow. The item is found or created and its category set; the
+ * recipe is written through the recipes domain's own writer so its versioning
+ * rule holds — edited in place until a run has costed against it, superseded
+ * after. Nothing here touches stock.
+ */
+export async function saveProductionRecipe(params: {
+  restaurantId: string
+  branchId: string
+  userId: string | null
+  output: { itemId?: string | null; name: string; category?: string | null; quantity: number; unit: StockUnit }
+  ingredients: Array<{ itemId: string; quantity: number; unit: StockUnit }>
+  instructions?: string | null
+}): Promise<{ recipeId: string | null; item: { id: string; name: string; unit: StockUnit; isNew: boolean } }> {
+  if (!params.output.name.trim()) throw new AppError('Name what this makes', 400, 'PRODUCTION_NO_NAME')
+  if (!(params.output.quantity > 0)) throw new AppError('Say how much one batch makes', 400, 'PRODUCTION_NO_QUANTITY')
+  if (params.ingredients.length === 0) throw new AppError('Add at least one ingredient', 400, 'PRODUCTION_NO_INGREDIENTS')
+  const seen = new Set<string>()
+  for (const line of params.ingredients) {
+    if (!(line.quantity > 0)) throw new AppError('Every ingredient needs a quantity above zero', 400, 'PRODUCTION_BAD_QUANTITY')
+    if (seen.has(line.itemId)) throw new AppError('An ingredient is listed twice — combine the lines', 400, 'PRODUCTION_DUPLICATE_LINE')
+    seen.add(line.itemId)
+  }
+  if (params.output.itemId && seen.has(params.output.itemId)) {
+    throw new AppError('Something cannot be made out of itself', 400, 'PRODUCTION_SELF_REFERENCE')
+  }
+
+  await requireBranch(params.restaurantId, params.branchId)
+
+  const resolved = await resolvePreparedItem({
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
+    output: { itemId: params.output.itemId ?? null, name: params.output.name, unit: params.output.unit },
+  })
+  convertOrRefuse(params.output.quantity, params.output.unit, resolved.item, 'produced')
+
+  const category = params.output.category?.trim() || null
+  if (category && category !== resolved.item.category) {
+    await prisma.inventoryItem.update({ where: { id: resolved.item.id }, data: { category } })
+  }
+
+  const recipe = await rememberRecipe({
+    restaurantId: params.restaurantId,
+    userId: params.userId,
+    item: resolved.item,
+    plan: {
+      name: resolved.item.name,
+      quantity: params.output.quantity,
+      unit: params.output.unit,
+      itemId: resolved.item.id,
+      ingredients: params.ingredients,
+    },
+    instructions: params.instructions ?? null,
+  })
+
+  return {
+    recipeId: recipe?.id ?? null,
+    item: { id: resolved.item.id, name: resolved.item.name, unit: resolved.item.unit, isNew: resolved.created },
   }
 }

@@ -1,11 +1,12 @@
 import 'server-only'
 
-import type { Prisma } from '@prisma/client'
+import type { Prisma, StockUnit } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import { acceptableUnits, toBaseUnits } from '@/features/inventory/units'
 import { roundQty } from '@/lib/quantity'
 import { visibleBranchIds } from '@/lib/rbac'
+import { fifoCostFor } from './costing'
 import type {
   OpenBatch, PrepRecipe, PrepRecipeLine, PreparedItemPageData, PreparedItemRow, ProductionHistoryRow,
   ProductionWorkspaceData, WorkspaceItem,
@@ -67,6 +68,10 @@ function toHistoryRow(run: HistoryRun, names: Map<string, string>): ProductionHi
     madeBy: run.requestedBy?.name ?? null,
     branchName: run.branch.name,
     wasteCount: run._count.wastage,
+    plannedQty: run.plannedQty,
+    actualQty: run.outputs[0]?.quantity ?? run.actualQty ?? null,
+    wastageQty: run.wastageQty,
+    batchNumber: run.batchNumber,
     consumed,
   }
 }
@@ -87,6 +92,7 @@ function toOpenBatch(b: BatchRun, names: Map<string, string>): OpenBatch {
     ingredients: ((b.plan as { ingredients?: PrepRecipeLine[] } | null)?.ingredients ?? []).map((line) => ({
       itemId: line.itemId, quantity: line.quantity, unit: line.unit, name: names.get(line.itemId),
     })),
+    issued: b.startedAt !== null,
   }
 }
 
@@ -110,7 +116,7 @@ export async function getProductionWorkspace(params: {
   const dayStart = startOfToday(params.timeZone ?? 'UTC')
   const branchWhere = branchId ? { branchId } : {}
 
-  const [items, onHand, runsByItem, recent, today, openBatches, prepRecipes] = await Promise.all([
+  const [items, onHand, runsByItem, recent, today, openBatches, prepRecipes, lots] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId, isActive: true },
       orderBy: { name: 'asc' },
@@ -154,14 +160,34 @@ export async function getProductionWorkspace(params: {
     prisma.recipe.findMany({
       where: { restaurantId, producesItemId: { not: null }, isActive: true, archivedAt: null },
       select: {
-        id: true, version: true, producesItemId: true, yieldQty: true, yieldUnit: true,
+        id: true, version: true, producesItemId: true, yieldQty: true, yieldUnit: true, prepNotes: true,
         ingredients: {
           select: { inventoryItemId: true, quantity: true, unit: true },
           orderBy: { sortOrder: 'asc' },
         },
       },
     }),
+    /*
+     * Every lot on this branch's shelf, oldest receipt first (pro.b.md §5).
+     * One read for the whole screen; the form walks them per ingredient. No
+     * branch chosen means no lots — a preview cannot be honest about a shelf
+     * it has not been told about.
+     */
+    branchId
+      ? prisma.stockBatch.findMany({
+          where: { restaurantId, branchId, remainingQty: { gt: 0 } },
+          select: { id: true, itemId: true, batchNo: true, remainingQty: true, unitCost: true },
+          orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+        })
+      : Promise.resolve([]),
   ])
+
+  const lotsByItem = new Map<string, WorkspaceItem['lots']>()
+  for (const lot of lots) {
+    const list = lotsByItem.get(lot.itemId) ?? []
+    list.push({ batchId: lot.id, batchNo: lot.batchNo, remaining: lot.remainingQty, unitCost: lot.unitCost })
+    lotsByItem.set(lot.itemId, list)
+  }
 
   const available = new Map<string, number>()
   for (const row of onHand) available.set(row.itemId, roundQty(row._sum.available ?? 0))
@@ -182,6 +208,15 @@ export async function getProductionWorkspace(params: {
     unitCost: item.quantity > 0 ? Number(item.stockValue) / item.quantity : item.costPerUnit,
     available: available.get(item.id) ?? 0,
     isPrepared: item.isPrepared,
+    category: item.category,
+    lots: lotsByItem.get(item.id) ?? [],
+    unlotted: Math.max(
+      0,
+      roundQty((available.get(item.id) ?? 0) - (lotsByItem.get(item.id) ?? []).reduce((sum, lot) => sum + lot.remaining, 0)),
+    ),
+    nextUnitCost:
+      lotsByItem.get(item.id)?.[0]?.unitCost ??
+      (item.quantity > 0 ? Math.round(Number(item.stockValue) / item.quantity) : item.costPerUnit),
   }))
 
   const prepared: PreparedItemRow[] = items
@@ -223,6 +258,7 @@ export async function getProductionWorkspace(params: {
             ingredients: r.ingredients
               .filter((line) => line.inventoryItemId)
               .map((line) => ({ itemId: line.inventoryItemId!, quantity: line.quantity, unit: line.unit })),
+            instructions: r.prepNotes,
           },
         ]),
     ),
@@ -320,28 +356,42 @@ export async function getPreparedItemPage(params: {
 
   let costed: PreparedItemPageData['recipe'] = null
   if (recipe) {
-    const lines = recipe.ingredients
-      .filter((line) => line.inventoryItemId)
-      .map((line) => {
-        const ingredient = ingredientById.get(line.inventoryItemId!) ?? null
-        const unitCost = ingredient
-          ? ingredient.quantity > 0 ? Number(ingredient.stockValue) / ingredient.quantity : ingredient.costPerUnit
-          : 0
-        let base = 0
-        if (ingredient) {
-          try { base = roundQty(toBaseUnits(line.quantity, line.unit, ingredient)) } catch { base = 0 }
-        }
-        return {
-          itemId: line.inventoryItemId!,
-          name: ingredient?.name ?? names.get(line.inventoryItemId!) ?? 'Retired item',
-          quantity: line.quantity,
-          unit: line.unit,
-          itemUnit: ingredient?.unit ?? null,
-          unitCost,
-          lineCost: Math.round(base * unitCost),
-          available: availableById.get(line.inventoryItemId!) ?? 0,
-        }
-      })
+    /*
+     * Costed FIFO, per line, for the quantity the recipe needs (pro.b.md §1):
+     * the same reader the issue draws through, so this is what a batch would
+     * cost right now, delivery by delivery. Without a branch there is no
+     * shelf to walk, and the running average stands in.
+     */
+    const lines = await Promise.all(
+      recipe.ingredients
+        .filter((line) => line.inventoryItemId)
+        .map(async (line) => {
+          const ingredient = ingredientById.get(line.inventoryItemId!) ?? null
+          const average = ingredient
+            ? ingredient.quantity > 0 ? Number(ingredient.stockValue) / ingredient.quantity : ingredient.costPerUnit
+            : 0
+          let base = 0
+          if (ingredient) {
+            try { base = roundQty(toBaseUnits(line.quantity, line.unit, ingredient)) } catch { base = 0 }
+          }
+          const fifo =
+            ingredient && branchId && base > 0
+              ? await fifoCostFor(prisma, {
+                  restaurantId, itemId: ingredient.id, branchId, quantity: line.quantity, unit: line.unit,
+                }).catch(() => null)
+              : null
+          return {
+            itemId: line.inventoryItemId!,
+            name: ingredient?.name ?? names.get(line.inventoryItemId!) ?? 'Retired item',
+            quantity: line.quantity,
+            unit: line.unit,
+            itemUnit: ingredient?.unit ?? null,
+            unitCost: fifo ? fifo.unitCost : average,
+            lineCost: fifo ? Math.round(fifo.totalCost) : Math.round(base * average),
+            available: availableById.get(line.inventoryItemId!) ?? 0,
+          }
+        }),
+    )
     const productionCost = lines.reduce((sum, l) => sum + l.lineCost, 0)
     let yieldBase = recipe.yieldQty
     try { yieldBase = roundQty(toBaseUnits(recipe.yieldQty, recipe.yieldUnit ?? item.unit, item)) } catch { /* per recipe unit */ }
@@ -416,7 +466,10 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
       recipe: { select: { producesItem: { select: { id: true, name: true, unit: true } } } },
       requestedBy: { select: { name: true } },
       consumption: {
-        include: { item: { select: { id: true, name: true, unit: true } } },
+        include: {
+          item: { select: { id: true, name: true, unit: true } },
+          lots: { orderBy: { createdAt: 'asc' } },
+        },
         orderBy: { lineCost: 'desc' },
       },
       outputs: {
@@ -433,6 +486,73 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
   const output = order.outputItem ?? order.outputs[0]?.item ?? order.recipe?.producesItem ?? null
   const materialCost = order.consumption.reduce((sum, line) => sum + line.lineCost, 0)
   const wasteCost = order.wastage.reduce((sum, record) => sum + record.costValue, 0)
+
+  /*
+   * The plan, costed FIFO for what it will take (pro.b.md §4) — the Ingredients
+   * table before anything is issued: Required, Issue qty, FIFO cost, Total.
+   * Once issued, the consumption rows are the record and this is empty.
+   */
+  const planLines = (order.plan as { ingredients?: Array<{ itemId: string; quantity: number; unit: string }> } | null)
+    ?.ingredients ?? []
+  const planIds = planLines.map((line) => line.itemId)
+  const [planItems, planStock] = planIds.length
+    ? await Promise.all([
+        prisma.inventoryItem.findMany({
+          where: { id: { in: planIds }, restaurantId: params.restaurantId },
+          select: { id: true, name: true, unit: true, purchaseUnit: true, unitsPerPurchaseUnit: true, costPerUnit: true },
+        }),
+        prisma.inventoryStock.groupBy({
+          by: ['itemId'],
+          where: { restaurantId: params.restaurantId, itemId: { in: planIds }, branchId: order.branchId },
+          _sum: { available: true },
+        }),
+      ])
+    : [[], []]
+  const planItemById = new Map(planItems.map((row) => [row.id, row]))
+  const planAvailable = new Map(planStock.map((row) => [row.itemId, roundQty(row._sum.available ?? 0)]))
+  const plan =
+    order.status === 'IN_PROGRESS' && order.consumption.length === 0
+      ? await Promise.all(
+          planLines.map(async (line) => {
+            const item = planItemById.get(line.itemId) ?? null
+            const fifo = item
+              ? await fifoCostFor(prisma, {
+                  restaurantId: params.restaurantId,
+                  itemId: item.id,
+                  branchId: order.branchId,
+                  quantity: line.quantity,
+                  unit: line.unit as StockUnit,
+                }).catch(() => null)
+              : null
+            return {
+              itemId: line.itemId,
+              name: item?.name ?? 'Retired item',
+              quantity: line.quantity,
+              unit: line.unit,
+              itemUnit: (item?.unit ?? null) as string | null,
+              base: fifo?.quantity ?? 0,
+              available: planAvailable.get(line.itemId) ?? 0,
+              unitCost: fifo?.unitCost ?? item?.costPerUnit ?? 0,
+              lineCost: fifo ? Math.round(fifo.totalCost) : 0,
+              shortfall: fifo?.allocation.shortfall ?? 0,
+            }
+          }),
+        )
+      : []
+
+  /*
+   * Where things stand now (pro.b.md §8, the sixth screen): what this branch
+   * holds of the finished item, and of each ingredient the run drew on.
+   */
+  const afterIds = [...new Set([...(output ? [output.id] : []), ...order.consumption.map((line) => line.itemId)])]
+  const afterStock = afterIds.length
+    ? await prisma.inventoryStock.groupBy({
+        by: ['itemId'],
+        where: { restaurantId: params.restaurantId, itemId: { in: afterIds }, branchId: order.branchId },
+        _sum: { available: true },
+      })
+    : []
+  const afterById = new Map(afterStock.map((row) => [row.itemId, roundQty(row._sum.available ?? 0)]))
 
   return {
     id: order.id,
@@ -460,6 +580,15 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
     madeBy: order.requestedBy?.name ?? null,
     completedAt: order.completedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
+    /* pro.b.md §3–§6: the order's own fields, and where it is in the flow. */
+    productionType: order.productionType as string,
+    requiredDate: order.requiredDate?.toISOString() ?? null,
+    startedAt: order.startedAt?.toISOString() ?? null,
+    wastageQty: order.wastageQty,
+    issued: order.consumption.length > 0,
+    plan,
+    /** Balances at this branch now — the finished item and each ingredient. */
+    stockNow: Object.fromEntries(afterById),
     consumption: order.consumption.map((line) => ({
       id: line.id,
       itemId: line.itemId,
@@ -468,6 +597,13 @@ export async function getProductionRun(params: { restaurantId: string; orderId: 
       unit: line.unit as string,
       unitCost: line.unitCost,
       lineCost: line.lineCost,
+      lots: line.lots.map((lot) => ({
+        id: lot.id,
+        batchNo: lot.batchNo,
+        quantity: lot.quantity,
+        unitCost: lot.unitCost,
+        lineCost: lot.lineCost,
+      })),
     })),
     outputs: order.outputs.map((out) => ({
       id: out.id,

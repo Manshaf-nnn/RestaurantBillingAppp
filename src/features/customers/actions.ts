@@ -20,12 +20,14 @@ import {
   setCustomerCategoryActive,
   updateCustomer,
 } from './service'
-import { countSegment, type CustomerSegment } from './segments'
+import { countSegment, describeSegment, type CustomerSegment } from './segments'
+import { offersForCustomer, type OfferForCustomer } from './discounts'
 import {
   createCampaignSchema,
   customerCategoryIdSchema,
   customerSegmentSchema,
   findCustomerSchema,
+  offersForCustomerSchema,
   saveCustomerCategorySchema,
   saveCustomerSchema,
   setCustomerCategoryActiveSchema,
@@ -140,6 +142,49 @@ export async function findCustomerAction(
         loyaltyPoints: found.loyaltyPoints,
       },
     }
+  })
+}
+
+/**
+ * What this guest can be offered, right now, on this basket (pro.A.md §4).
+ *
+ * Called from both order forms the moment a phone resolves to somebody. The
+ * cart is sent with it because half the answer depends on it — a minimum spend
+ * is not a property of the offer, it is a question about the basket — and
+ * because the amount shown has to be the amount taken.
+ *
+ * `DISCOUNT_APPLY`, because this is the list of discounts somebody may hand
+ * out. A cashier without it takes the order at full price, which is what that
+ * permission means. It is not `CUSTOMER_VIEW`: reading a guest's name and
+ * reading what money may be taken off are different powers.
+ */
+export async function offersForCustomerAction(
+  input: unknown,
+): Promise<ActionResult<{ offers: OfferForCustomer[] }>> {
+  return runAction(offersForCustomerSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.DISCOUNT_APPLY)
+    await assertCustomerReach(user, data.customerId)
+
+    const restaurant = await prisma.restaurant.findUniqueOrThrow({
+      where: { id: user.restaurantId },
+      select: { timezone: true },
+    })
+
+    const offers = await offersForCustomer({
+      restaurantId: user.restaurantId,
+      customerId: data.customerId,
+      branchId: data.branchId || null,
+      subtotal: data.lines.reduce((total, line) => total + line.lineTotal, 0),
+      lines: data.lines.map((line) => ({
+        foodId: line.foodId ?? null,
+        categoryId: line.categoryId ?? null,
+        quantity: line.quantity,
+        lineTotal: line.lineTotal,
+      })),
+      timeZone: restaurant.timezone,
+    })
+
+    return { offers }
   })
 }
 
@@ -357,6 +402,45 @@ export async function countCustomerSegmentAction(
  * unchanged, and the discount only ever touches future orders. Historical
  * invoices are not reachable from here at all.
  */
+/**
+ * A code nobody had to think of, that still reads as something.
+ *
+ * Not exported: a 'use server' module may only export async functions meant to
+ * be called from a browser, and handing out coupon codes is not one.
+ *
+ * Shaped from the group the offer names — REGULARS-7K3Q, LAPSED-2M8P — so the
+ * Coupons screen stays readable and an owner can still tell two campaigns
+ * apart at a glance. The tail is what makes it unique; the head is only there
+ * so it is not a meaningless string. Ambiguous characters are left out because
+ * these do end up read aloud occasionally, and 0/O and 1/I are where that goes
+ * wrong.
+ */
+async function freeCampaignCode(restaurantId: string, segment: CustomerSegment): Promise<string> {
+  const head =
+    (segment.kind ? segment.kind.toUpperCase() : describeSegment(segment).toUpperCase())
+      .replace(/[^A-Z]/g, '')
+      .slice(0, 8) || 'OFFER'
+
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const tail = () =>
+    Array.from({ length: 4 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('')
+
+  /*
+   * A handful of attempts, then let the unique index decide. Looping forever
+   * on a collision would turn a full code space into a hung request, and the
+   * caller's P2002 catch already turns the last word into a clear refusal.
+   */
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = `${head}-${tail()}`
+    const taken = await prisma.coupon.findFirst({
+      where: { restaurantId, code: candidate },
+      select: { id: true },
+    })
+    if (!taken) return candidate
+  }
+  return `${head}-${Date.now().toString(36).toUpperCase().slice(-6)}`
+}
+
 export async function createCustomerCampaignAction(
   input: unknown,
 ): Promise<ActionResult<{ id: string; code: string; reaches: number }>> {
@@ -386,7 +470,21 @@ export async function createCustomerCampaignAction(
         segment,
       })
 
-      const code = data.code.trim().toUpperCase()
+      /*
+       * A code the owner did not have to invent (pro.A.md §4).
+       *
+       * `Coupon.code` is how redemption finds the row, so it cannot go away —
+       * but a targeted offer is never typed by a guest, it is offered to the
+       * cashier when the phone is recognised. Generated from the group the
+       * offer names plus a short random tail, so the Coupons screen still
+       * reads as something rather than as a UUID, and retried on the unique
+       * index rather than checked first: two owners pressing the button at the
+       * same second is exactly the race a pre-check loses.
+       */
+      const code = data.code?.trim()
+        ? data.code.trim().toUpperCase()
+        : await freeCampaignCode(user.restaurantId, segment)
+
       try {
         const coupon = await prisma.coupon.create({
           data: {

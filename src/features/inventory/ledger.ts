@@ -10,7 +10,7 @@ import { EVENTS } from '@/lib/realtime/events'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
 import { applyLocationDelta } from './location-stock'
-import { allocateFefo, consumeBatches } from './batches'
+import { allocateFefo, consumeBatches, type BatchAllocation } from './batches'
 
 /**
  * The stock ledger.
@@ -115,10 +115,27 @@ export interface PostMovementParams {
    * 65 minor units a gram, but 6.50 over 1,000 g is 0.65 — which `unitCost`,
    * an integer, cannot say, and rounding it to 1 would book a run at 54% more
    * than it consumed. Production passes what its ingredients were actually
-   * worth and this wins over `unitCost` when both are given. Ignored on
-   * outbound movements, which are always valued at the running average.
+   * worth and this wins over `unitCost` when both are given.
+   *
+   * DELIBERATE behaviour change 2026-09 (pro.b.md §5): honoured on OUTBOUND
+   * movements too, when a caller supplies it. It used to be ignored there and
+   * every issue left at the running average. Production now values what it
+   * consumes at the lots it actually drew — oldest first, each at its own
+   * price — and hands that exact figure here. Every other caller passes
+   * nothing and gets the average, exactly as before. Capped at the value on
+   * hand, so no caller can remove more worth than the shelf holds.
    */
   totalValue?: number
+  /**
+   * Which lots this outbound movement draws from, already decided
+   * (pro.b.md §4, §5).
+   *
+   * When given, exactly these lots are drawn down and the FEFO pass below is
+   * skipped, so a lot is never decremented twice. Production allocates by
+   * receipt date and records the split on its own trace rows; this is how
+   * the split reaches the lots. Ignored on inbound movements.
+   */
+  allocations?: BatchAllocation[]
   reason?: string | null
   notes?: string | null
   referenceType?: string | null
@@ -349,7 +366,14 @@ export async function postMovement(
    * the balance for stock received before batch tracking was turned on, and
    * refusing the movement would block a sale over a bookkeeping detail.
    */
-  if (item.trackBatches && signed < 0) {
+  if (signed < 0 && params.allocations) {
+    /*
+     * The caller decided which lots, and by what rule (pro.b.md §5: oldest
+     * receipt first, for production). Regardless of `trackBatches` — a lot
+     * that exists is a lot that was drawn from, whatever the item's flag says.
+     */
+    await consumeBatches(tx, params.allocations)
+  } else if (item.trackBatches && signed < 0) {
     if (params.batchId) {
       await tx.stockBatch.update({
         where: { id: params.batchId },
@@ -493,13 +517,28 @@ function valueUpdate(
   }
 
   const out = Math.min(-signedBase, prevQty)
-  const outValue = prevQty > 0 ? (prevValue * out) / prevQty : 0
+  /*
+   * The value leaving: what the caller measured, if it measured it, else the
+   * pro-rata slice of the pool. DELIBERATE behaviour change 2026-09
+   * (pro.b.md §5) — production hands in the value of the lots it actually
+   * drew. Never more than the pool holds: a lot's recorded price can exceed
+   * the average only because later receipts were cheaper, and taking the
+   * lot's full price out of a smaller pool would leave a negative worth on
+   * stock that is still on the shelf.
+   */
+  const measured =
+    explicitTotalValue !== undefined && explicitTotalValue >= 0
+      ? Math.min(explicitTotalValue, prevValue)
+      : null
+  const outValue = measured ?? (prevQty > 0 ? (prevValue * out) / prevQty : 0)
   const nextQty = prevQty + signedBase
   const nextValue = nextQty <= 0 ? 0 : Math.max(0, prevValue - outValue)
   return {
     // The average itself is deliberately not recomputed on the way out.
     item: { stockValue: roundQty(nextValue) },
-    movementUnitCost: explicitUnitCost ?? Math.round(average),
+    movementUnitCost:
+      explicitUnitCost ??
+      (measured !== null && out > 0 ? Math.round(measured / out) : Math.round(average)),
     valueMoved: outValue,
   }
 }

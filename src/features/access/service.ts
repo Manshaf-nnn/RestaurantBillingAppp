@@ -5,6 +5,7 @@ import type { UserRole } from '@prisma/client'
 import { ForbiddenError, NotFoundError } from '@/lib/errors'
 import {
   ROLE_LABELS,
+  assignableRoles,
   ROLE_PERMISSIONS,
   permissionsFor,
   requiresOwnBranch,
@@ -14,6 +15,9 @@ import {
 } from '@/lib/rbac'
 import type { TenantUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { generateToken } from '@/server/auth/password'
+import { tenantOrigin } from '@/lib/tenant-url'
+import { joinUrl } from './links'
 
 export interface RoleSummary {
   id: string
@@ -27,6 +31,14 @@ export interface RoleSummary {
   isActive: boolean
   memberCount: number
   createdAt: string
+  /**
+   * The sign-in link for everybody on this role (sidebar.md — role links).
+   *
+   * Null when the role has none. On the card it is a URL to copy; opening it
+   * asks for the member's own email and code and refuses anybody not on the
+   * role, so it is shareable in a way a password never is.
+   */
+  signInUrl: string | null
 }
 
 /**
@@ -152,9 +164,27 @@ export async function listRoles(
     include: {
       branch: { select: { name: true } },
       _count: { select: { members: true } },
+      /*
+       * The role's own sign-in link. At most one is ever live per role — the
+       * action below reuses rather than mints — so taking the newest active
+       * one is taking the one.
+       */
+      invites: {
+        where: { mode: 'ROLE', isActive: true },
+        select: { token: true },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+      },
     },
     orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
   })
+
+  // One read for the whole list, so the origin is not re-derived per row.
+  const home = await prisma.restaurant.findUnique({
+    where: { id: restaurantId },
+    select: { customDomain: true, customDomainVerifiedAt: true },
+  })
+  const origin = tenantOrigin(home)
 
   return roles.map((role) => ({
     id: role.id,
@@ -168,6 +198,7 @@ export async function listRoles(
     isActive: role.isActive,
     memberCount: role._count.members,
     createdAt: role.createdAt.toISOString(),
+    signInUrl: role.invites[0] ? joinUrl(role.invites[0].token, origin) : null,
   }))
 }
 
@@ -183,4 +214,83 @@ export async function listRoles(
 export function templateFor(admin: TenantUser, preset: UserRole): string[] {
   const held = permissionsFor(admin)
   return (ROLE_PERMISSIONS[preset] as Permission[]).filter((p) => held.has(p))
+}
+
+/**
+ * The sign-in link that belongs to a role (sidebar.md — role links).
+ *
+ * Lives here rather than in `link-actions.ts` because two callers need it and
+ * a `'use server'` module cannot export a plain helper: `createRole` mints one
+ * with every new role, and `roleSignInLink` makes one for the roles that
+ * already existed.
+ *
+ * ── One live link per role ──────────────────────────────────────────────────
+ *
+ * Reused, never duplicated. A second valid URL for one role is a credential
+ * nobody knows exists, and revoking the first would do nothing about it.
+ * Rotating is a separate, deliberate act on the Links screen.
+ *
+ * ── The guards are the role builder's own ───────────────────────────────────
+ *
+ * Rank, escalation and branch, checked against the ADMIN minting it — because
+ * a link is an account: walking through one produces a session, so it can only
+ * ever hand out something its maker could hand out directly.
+ */
+export async function mintRoleLink(
+  admin: TenantUser,
+  staffRoleId: string,
+): Promise<{ url: string; created: boolean }> {
+  const role = await requireRole(admin.restaurantId, staffRoleId)
+
+  const home = await prisma.restaurant.findUnique({
+    where: { id: admin.restaurantId },
+    select: { customDomain: true, customDomainVerifiedAt: true },
+  })
+  const origin = tenantOrigin(home)
+
+  const existing = await prisma.invite.findFirst({
+    where: {
+      restaurantId: admin.restaurantId,
+      staffRoleId: role.id,
+      mode: 'ROLE',
+      isActive: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { token: true },
+  })
+  if (existing) return { url: joinUrl(existing.token, origin), created: false }
+
+  if (!assignableRoles(admin.role).includes(role.preset)) {
+    throw new ForbiddenError(`You cannot create a link for the ${ROLE_LABELS[role.preset]} role`)
+  }
+  if (!role.isActive) throw new ForbiddenError('That role is switched off')
+  // Handing out a role is granting it.
+  assertNoEscalation(admin, role.permissions)
+  const branchId = await resolveRoleBranch(admin, role.branchId, role.preset)
+
+  const link = await prisma.invite.create({
+    data: {
+      token: generateToken(24),
+      restaurantId: admin.restaurantId,
+      role: role.preset,
+      mode: 'ROLE',
+      branchId,
+      staffRoleId: role.id,
+      // No `userId`: that is the whole difference from a personal link. This
+      // one admits whoever proves they are on the role.
+      userId: null,
+      label: role.name,
+      /*
+       * No expiry. A role link is a fixture — pinned up in a staff room, saved
+       * to a home screen — and one that dies in thirty days dies mid-shift
+       * with nobody around to reissue it. Switching the role off closes it,
+       * and it can be rotated on demand.
+       */
+      expiresAt: null,
+      createdById: admin.id,
+    },
+    select: { token: true },
+  })
+
+  return { url: joinUrl(link.token, origin), created: true }
 }

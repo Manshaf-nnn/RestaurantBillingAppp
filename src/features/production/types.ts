@@ -27,6 +27,18 @@ export interface WorkspaceItem {
   /** On hand at the chosen branch, base units. */
   available: number
   isPrepared: boolean
+  /** The item's category — the recipe's "Category" (pro.b.md §1). */
+  category: string | null
+  /**
+   * The lots still on this branch's shelf, oldest receipt first, each at its
+   * own price (pro.b.md §5). The screens walk these with `walkFifo` — the same
+   * walk the issue runs — so a preview is a dry run of the draw.
+   */
+  lots: Array<{ batchId: string; batchNo: string; remaining: number; unitCost: number }>
+  /** Base units on hand here that no lot accounts for; drawn last, at `unitCost`. */
+  unlotted: number
+  /** The oldest lot's own price — what the next unit costs. The stock check's column. */
+  nextUnitCost: number
 }
 
 export interface PreparedItemRow {
@@ -66,6 +78,11 @@ export interface ProductionHistoryRow {
   madeBy: string | null
   branchName: string
   wasteCount: number
+  /** What was aimed for, what came out, and what was lost (pro.b.md §13). */
+  plannedQty: number
+  actualQty: number | null
+  wastageQty: number | null
+  batchNumber: string | null
   /**
    * What left stock, in the ingredient's own unit. For a batch still in
    * progress, what its plan will take; empty for a cancelled batch — nothing
@@ -94,6 +111,8 @@ export interface PrepRecipe {
   yieldQty: number
   yieldUnit: StockUnit | null
   ingredients: PrepRecipeLine[]
+  /** Step 1's instructions (pro.b.md §1). */
+  instructions: string | null
 }
 
 /** A batch created and not yet marked done. Nothing in it has moved. */
@@ -108,8 +127,10 @@ export interface OpenBatch {
   branchName: string | null
   startedAt: string
   notes: string | null
-  /** What Mark Done will consume. */
+  /** What completion will consume — or what was issued already (pro.b.md §4). */
   ingredients: PrepRecipeLine[]
+  /** Stock has already left for this order. */
+  issued: boolean
 }
 
 export interface ProductionWorkspaceData {
@@ -199,7 +220,15 @@ export interface ProduceItemResult {
   }
   /** Base units of the item. */
   producedQty: number
-  consumed: Array<{ itemId: string; name: string; quantity: number; unit: StockUnit; value: number }>
+  consumed: Array<{
+    itemId: string
+    name: string
+    quantity: number
+    unit: StockUnit
+    value: number
+    /** Which lots it came from, oldest first (pro.b.md §9). Null batchNo = the unlotted remainder. */
+    lots?: Array<{ batchNo: string | null; quantity: number; unitCost: number; lineCost: number }>
+  }>
   wasted: Array<{ itemId: string; name: string; quantity: number; unit: StockUnit; value: number }>
   /** Exactly what left the ingredients, minor units — and exactly what the item gained. */
   totalValue: number
@@ -223,4 +252,14 @@ export interface StartBatchResult {
     /** Created by this Create rather than found. */
     isNew: boolean
   }
+}
+
+/** What issuing hands back (pro.b.md §4). Flat, so it can cross the action boundary. */
+export interface IssueIngredientsResult {
+  orderId: string
+  number: string
+  issuedAt: string
+  consumed: ProduceItemResult['consumed']
+  /** Exactly what left the ingredients, minor units, rounded. */
+  totalValue: number
 }

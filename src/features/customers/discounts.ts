@@ -111,7 +111,14 @@ export async function evaluate(
 
   if (coupon.minOrderAmount && context.subtotal < coupon.minOrderAmount) {
     const short = coupon.minOrderAmount - context.subtotal
-    return reject(`Spend ${(short / 100).toFixed(2)} more to use that code`)
+    /*
+     * Grouped, because a cashier now reads this off the screen to a guest
+     * (pro.A.md §4). "Spend 4000.00 more" is a number nobody says out loud;
+     * "Spend 4,000 more" is. The minor units are dropped deliberately — a
+     * shortfall is a rough figure meant to sell one more dish, and the exact
+     * paise are noise in a spoken sentence.
+     */
+    return reject(`Spend ${Math.ceil(short / 100).toLocaleString('en-US')} more to use that code`)
   }
 
   if (coupon.customerGroup) {
@@ -194,6 +201,136 @@ export async function evaluate(
   amount = Math.min(amount, base)
 
   return { ok: true, amount: Math.max(0, amount), eligibleLineTotal: eligibleTotal }
+}
+
+/** One offer, as the till should show it. */
+export interface OfferForCustomer {
+  id: string
+  code: string
+  description: string | null
+  type: Coupon['type']
+  value: number
+  minOrderAmount: number
+  /** True when it applies to the basket as it stands right now. */
+  ok: boolean
+  /** Why not, when it does not. The cashier reads this out. */
+  reason?: string
+  /** What it would take off this basket. Zero while `ok` is false. */
+  amount: number
+}
+
+/**
+ * Which offers this guest can actually use (pro.A.md §4).
+ *
+ * ── The gap this closes ─────────────────────────────────────────────────────
+ *
+ * An owner could aim a discount at "regulars who have not been in for a month"
+ * and the system would enforce it perfectly — for anybody who happened to TYPE
+ * the code. Nothing ever told the guest what it was, and nothing told the
+ * cashier either. A coupon was reachable only by knowing a string that was
+ * never communicated, so a campaign created on the customers screen reached
+ * nobody and looked, from the till, exactly like no campaign at all.
+ *
+ * The cashier already asks for a phone number. That number is the answer.
+ *
+ * ── Why this runs `evaluate` rather than a query ────────────────────────────
+ *
+ * It would be quicker to select the coupons whose segment matches and stop
+ * there. It would also be a second opinion. `evaluate` is what placement runs,
+ * and it knows fourteen ways an offer can be refused — hours of the day, days
+ * of the week, per-customer limits, scope, branch. A list built from a
+ * narrower rule would show offers that are then refused at the moment of
+ * payment, in front of the guest, which is worse than showing nothing.
+ *
+ * So every candidate goes through the same function, with the basket as it
+ * stands. The ones that fail are returned too, with their reason: "spend 500
+ * more" is a sentence that sells another dish, and hiding it sells nothing.
+ *
+ * The candidate set is narrowed in SQL first — active, in date, this branch or
+ * every branch — because those are cheap and exact. What is left is a handful
+ * of rows per restaurant.
+ */
+export async function offersForCustomer(params: {
+  restaurantId: string
+  customerId: string
+  branchId?: string | null
+  subtotal: number
+  lines: BasketLine[]
+  now?: Date
+  timeZone?: string
+}): Promise<OfferForCustomer[]> {
+  const now = params.now ?? new Date()
+
+  const candidates = await prisma.coupon.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      isActive: true,
+      AND: [
+        { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+        { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
+        /*
+         * A null branch means every location. Narrowed here rather than left
+         * to `evaluate` only so a fifty-branch group does not read fifty
+         * irrelevant rows on every keystroke; `evaluate` still checks it.
+         */
+        { OR: [{ branchId: null }, ...(params.branchId ? [{ branchId: params.branchId }] : [])] },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+  })
+
+  const context: DiscountContext = {
+    restaurantId: params.restaurantId,
+    subtotal: params.subtotal,
+    lines: params.lines,
+    branchId: params.branchId ?? null,
+    customerId: params.customerId,
+    now,
+    timeZone: params.timeZone,
+  }
+
+  const offers = await Promise.all(
+    candidates.map(async (coupon) => {
+      const result = await evaluate(coupon, context)
+      return {
+        id: coupon.id,
+        code: coupon.code,
+        description: coupon.description,
+        type: coupon.type,
+        value: coupon.value,
+        minOrderAmount: coupon.minOrderAmount,
+        ok: result.ok,
+        reason: result.reason,
+        amount: result.amount,
+        /** Kept out of the return type — only used to sort below. */
+        targeted: coupon.segment !== null || coupon.customerGroup !== null,
+      }
+    }),
+  )
+
+  /*
+   * What this guest can use, first. Then near misses, which are worth saying
+   * out loud. An offer refused for a reason they cannot change — the wrong
+   * group, already used — is dropped: reading "that offer is not for this
+   * customer" to somebody standing at the till is worse than silence.
+   */
+  const actionable = offers.filter(
+    (offer) =>
+      offer.ok ||
+      offer.reason?.startsWith('Spend ') ||
+      offer.reason === 'Nothing in this order qualifies for that code' ||
+      offer.reason === 'No item from that category is in this order',
+  )
+
+  return actionable
+    .sort((a, b) => {
+      if (a.ok !== b.ok) return a.ok ? -1 : 1
+      // A discount aimed at this person beats a general one worth the same.
+      if (a.targeted !== b.targeted) return a.targeted ? -1 : 1
+      return b.amount - a.amount
+    })
+    .map(({ targeted: _targeted, ...offer }) => offer)
 }
 
 /** Points earned and what they are worth, from the restaurant's own settings. */

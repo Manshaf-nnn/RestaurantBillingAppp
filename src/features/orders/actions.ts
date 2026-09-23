@@ -48,6 +48,7 @@ import {
   deriveOrderStatus,
   placeOrder as placeOrderService,
   progressItems,
+  startItem,
   updateOrderStatus as updateOrderStatusService,
   serveWholeOrder,
   toOrderPayload,
@@ -757,35 +758,17 @@ export async function updateItemStatus(input: unknown): Promise<ActionResult<{ i
     if (!item) throw new NotFoundError('Order item')
 
     if (data.status === 'PREPARING') {
-      // Only from the queue: a line with plates already made is past "started".
-      if (item.status === 'QUEUED') {
-        await prisma.orderItem.update({
-          where: { id: item.id },
-          data: {
-            status: 'PREPARING',
-            // Only the first time it reaches a state — never rewrite when it
-            // was actually started.
-            ...(item.preparingAt === null ? { preparingAt: new Date() } : {}),
-          },
-        })
-        realtime.orderItemStatus(user.restaurantId, {
-          orderId: data.orderId,
-          itemId: item.id,
-          branchId: item.order.branchId,
-          status: 'PREPARING',
-          quantity: item.quantity,
-          preparedQty: item.preparedQty,
-          servedQty: item.servedQty,
-        })
-        // Let the order catch up with its items — `deriveOrderStatus` owns
-        // that, one direction only; read it before changing this.
-        await deriveOrderStatus({
-          restaurantId: user.restaurantId,
-          orderId: data.orderId,
-          actorId: user.id,
-          actorName: user.name,
-        })
-      }
+      // The one rung with no counter behind it — `startItem` owns the rule
+      // that it is only ever taken from QUEUED, so a second tap moves nothing.
+      await startItem({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        itemId: item.id,
+        actorId: user.id,
+        actorName: user.name,
+      })
+      revalidatePath('/kitchen')
+      revalidatePath('/waiter')
       return { id: item.id }
     }
 
@@ -945,6 +928,8 @@ export interface StaffOrderBill {
   }>
   subtotal: number
   discountTotal: number
+  /** What points took off, kept apart from the rest (pro.A.md §10). */
+  loyaltyDiscount: number
   serviceCharge: number
   taxTotal: number
   grandTotal: number
@@ -1108,6 +1093,7 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
         })),
         subtotal: order.subtotal,
         discountTotal: order.discountTotal,
+        loyaltyDiscount: order.loyaltyDiscount,
         serviceCharge: order.serviceCharge,
         taxTotal: order.taxTotal,
         grandTotal: order.grandTotal,

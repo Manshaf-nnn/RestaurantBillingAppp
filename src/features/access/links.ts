@@ -190,6 +190,20 @@ export async function resolveLink(token: string): Promise<ResolvedLink> {
     if (!invite.user || !invite.user.isActive || invite.user.deletedAt) throw dead
   }
 
+  /*
+   * A ROLE link whose custom role is switched off is dead, not demoted.
+   *
+   * Everywhere else a disabled StaffRole falls back to its preset, so a member
+   * keeps working with the built-in permissions rather than a blank screen.
+   * That reasoning inverts here: this link's whole meaning is "people on THIS
+   * role", and silently widening it to "people on the preset it was based on"
+   * would let a Senior POS link admit every POS user the moment somebody
+   * switched the role off. Switching a role off has to close its door.
+   */
+  if (invite.mode === 'ROLE' && invite.staffRoleId && !invite.staffRole?.isActive) {
+    throw dead
+  }
+
   return {
     id: invite.id,
     mode: invite.mode,

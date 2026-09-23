@@ -220,3 +220,103 @@ export async function joinAsDevice(input: unknown): Promise<ActionResult<never>>
     redirect(landingFor(deviceRole))
   })
 }
+
+/**
+ * Signing in through a ROLE link (sidebar.md — role links).
+ *
+ * ── What this is for ────────────────────────────────────────────────────────
+ *
+ * An owner builds a role — "Senior POS", "Kitchen" — and wants one link they
+ * can put on the staff-room wall, which everybody on that role uses with their
+ * own credentials. Neither existing mode did that: PERSONAL is one named
+ * person, and SHARED_DEVICE asks for no credential and pools the whole shift
+ * into one synthetic account.
+ *
+ * ── Why it can only ever admit, never promote ───────────────────────────────
+ *
+ * `joinWithCode` WRITES the link's role onto the account, because a personal
+ * link is an owner handing one named person a job. This one must not, and that
+ * asymmetry is the security property: a role link is public by nature —
+ * pinned up, photographed, forwarded — and if it granted its role, anybody who
+ * could sign in at all would collect the role by opening it.
+ *
+ * So the role is a FILTER here. The person is admitted because they already
+ * hold it, and refused by name if they do not. Their account is not touched.
+ *
+ * The branch is not written either, for the same reason: a link for the Kandy
+ * kitchen must not move a Colombo cook to Kandy because they opened the wrong
+ * poster.
+ */
+export async function joinWithRole(input: unknown): Promise<ActionResult<never>> {
+  return runAction(joinSchema, input, async (data) => {
+    await enforceRateLimit('login')
+
+    const link = await resolveLink(data.token)
+    if (link.mode !== 'ROLE') throw new UnauthorizedError('This link does not work that way')
+
+    const person = await prisma.user.findFirst({
+      where: {
+        restaurantId: link.restaurantId,
+        email: data.email.trim().toLowerCase(),
+        deletedAt: null,
+      },
+      select: {
+        id: true, email: true, passwordHash: true, isActive: true, role: true,
+        name: true, restaurantId: true, branchId: true, staffRoleId: true,
+      },
+    })
+
+    /*
+     * The same shape as `joinWithCode`: a dummy hash is verified when nobody
+     * matched, so a wrong email and a wrong code cost the same time and give
+     * the same answer. Whether an address exists in this restaurant is not
+     * something a link handed out on a wall should reveal.
+     */
+    const hash = person?.passwordHash ?? (await hashPassword(generateToken(12)))
+    const codeMatches = await verifyPassword(normaliseCode(data.code), hash)
+
+    if (!person || !person.isActive || !codeMatches) {
+      throw new UnauthorizedError('That email and code do not match')
+    }
+
+    /*
+     * Do they hold the role this link is for?
+     *
+     * A custom role is matched by id — "Senior POS" is not "POS", and a link
+     * for one must not admit the other. A link with no custom role is matched
+     * on the preset, which is what a link for a plain built-in role means.
+     */
+    const holdsIt = link.staffRoleId
+      ? person.staffRoleId === link.staffRoleId
+      : person.role === link.role
+
+    if (!holdsIt) {
+      /*
+       * Named, deliberately. This person has already proved who they are, so
+       * there is nothing left to protect by being vague — and "you are not on
+       * this role" is the one message that tells them to ask the owner rather
+       * than retype their code.
+       */
+      throw new UnauthorizedError(
+        `This link is for ${link.staffRoleName ?? link.roleLabel}. Your account is not on that role — ask a manager.`,
+      )
+    }
+
+    await createSession(person.id)
+    await stampUse(link.id)
+
+    await audit({
+      restaurantId: person.restaurantId,
+      branchId: person.branchId,
+      userId: person.id,
+      actorName: person.name,
+      action: AUDIT_ACTIONS.LOGIN,
+      entity: 'User',
+      entityId: person.id,
+      after: { via: 'role-link', role: link.staffRoleName ?? link.roleLabel },
+    })
+
+    // Where THEIR account can go, not where the link was minted for.
+    redirect(landingFor(person.role))
+  })
+}

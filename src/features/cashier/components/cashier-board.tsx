@@ -58,6 +58,7 @@ import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions
 import { presentBill, collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import { recordPrint } from '@/features/printing/actions'
 import { TillLoyalty } from '@/features/loyalty/components/till-loyalty'
+import { GuestPanel } from '@/features/customers/components/guest-panel'
 import { addItemsToBillAction, attachCustomerToBillAction, setItemDiscountAction, voidItemAction } from '../actions'
 import { findCustomerAction, saveCustomerAction } from '@/features/customers/actions'
 import { useRouter } from 'next/navigation'
@@ -97,6 +98,8 @@ import { OptionDialog } from './option-dialog'
 interface TakeawayLine {
   key: string
   foodId: string
+  /** Which category it belongs to — a category-scoped offer needs this. */
+  categoryId: string | null
   name: string
   quantity: number
   /** The dish's price plus whatever was chosen on it. */
@@ -122,7 +125,17 @@ export interface CashierBill {
   heldAt: string | null
   holdReason: string | null
   subtotal: number
+  /** Coupon + manual + per-item. NOT loyalty — that is its own line below. */
   discountTotal: number
+  /**
+   * What points took off (pro.A.md §10).
+   *
+   * Its own field because it is its own thing: the guest paid for it with
+   * something they earned, and folding it into `discountTotal` — which is what
+   * this screen did — made a bill say the restaurant had given away money it
+   * had not.
+   */
+  loyaltyDiscount: number
   serviceCharge: number
   taxTotal: number
   grandTotal: number
@@ -182,6 +195,7 @@ export function CashierBoard({
   canAccept = false,
   embedded = false,
   rewards = [],
+  loyalty,
 }: {
   initialBills: CashierBill[]
   todayTotal: number
@@ -213,6 +227,8 @@ export function CashierBoard({
   restaurant: ReceiptRestaurant
   /** What guests can spend points on, loaded once for the screen. */
   rewards?: LoyaltyRewardOption[]
+  /** The programme's own settings, so points can be spent here (pro.A.md §10). */
+  loyalty?: { enabled: boolean; pointValue: number }
 }) {
 
   /*
@@ -259,6 +275,11 @@ export function CashierBoard({
    * resolves to the same order rather than a second one.
    */
   const orderKey = React.useRef(newOrderKey())
+  /** The offer chosen from this guest's list, and what it is worth here. */
+  const [takeawayCoupon, setTakeawayCoupon] = React.useState('')
+  const [takeawayCouponAmount, setTakeawayCouponAmount] = React.useState(0)
+  /** Points the guest chose to spend on this order. */
+  const [takeawayPoints, setTakeawayPoints] = React.useState(0)
   const [customerName, setCustomerName] = React.useState('')
   const [customerPhone, setCustomerPhone] = React.useState('')
   const [knownCustomer, setKnownCustomer] = React.useState<{ id: string; name: string; loyaltyPoints: number } | null>(null)
@@ -417,6 +438,18 @@ export function CashierBoard({
     [takeawayCart],
   )
 
+  /*
+   * An estimate of what the guest will be asked for — the server re-evaluates
+   * the offer and re-clamps the points when the order is placed. Clamped in
+   * the engine's own order: the coupon first, then points, never below zero.
+   */
+  const takeawayCouponOff = Math.min(takeawayCouponAmount, takeawayTotal)
+  const takeawayPointsOff = Math.min(
+    takeawayPoints * (loyalty?.pointValue ?? 0),
+    takeawayTotal - takeawayCouponOff,
+  )
+  const takeawayDue = Math.max(0, takeawayTotal - takeawayCouponOff - takeawayPointsOff)
+
   /** Ask when there is a size to pick; add straight away when there is not. */
   const addTakeawayItem = (item: PublicMenuItem) => {
     if (item.groups.length > 0) {
@@ -445,7 +478,10 @@ export function CashierBoard({
       if (!found) {
         return [
           ...current,
-          { key, foodId: item.id, name: item.name, quantity, unitPrice, options: chosen, notes: lineNotes },
+          {
+            key, foodId: item.id, categoryId: item.categoryId ?? null, name: item.name,
+            quantity, unitPrice, options: chosen, notes: lineNotes,
+          },
         ]
       }
       return current.map((line) =>
@@ -496,6 +532,10 @@ export function CashierBoard({
       customerPhone: customerPhone.trim(),
       customerEmail: '',
       notes,
+      // The same three the Orders tab now sends. This dialog looked the guest
+      // up and then threw the answer away (pro.A.md §4, §10).
+      couponCode: takeawayCoupon,
+      redeemPoints: takeawayPoints,
       idempotencyKey: orderKey.current,
       items,
     }))
@@ -509,6 +549,9 @@ export function CashierBoard({
 
     setTakeawayOpen(false)
     setTakeawayCart([])
+    setTakeawayCoupon('')
+    setTakeawayCouponAmount(0)
+    setTakeawayPoints(0)
     setCustomerName('')
     setCustomerPhone('')
     setNotes('')
@@ -553,6 +596,7 @@ export function CashierBoard({
         holdReason: null,
         subtotal: bill.subtotal,
         discountTotal: bill.discountTotal,
+        loyaltyDiscount: bill.loyaltyDiscount,
         serviceCharge: bill.serviceCharge,
         taxTotal: bill.taxTotal,
         grandTotal: bill.grandTotal,
@@ -663,13 +707,17 @@ export function CashierBoard({
       </div>
 
       <Dialog open={takeawayOpen} onOpenChange={setTakeawayOpen}>
-        <DialogContent className="max-w-4xl">
+        {/*
+          Wider, and the order side wider within it: this column now carries
+          the guest, their offers and the points box as well as the cart.
+        */}
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>Create an order</DialogTitle>
             <DialogDescription>Tap a dish to add it, then send it straight to the kitchen.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+          <div className="grid gap-4 lg:grid-cols-[1fr_1.15fr]">
             <div className="space-y-3">
               <OrderTypeChips value={orderType} onChange={setOrderType} />
 
@@ -730,6 +778,51 @@ export function CashierBoard({
                   }}
                   placeholder="+91 98765 43210"
                 />
+                {/*
+                  The form was mounted here and had no way to open — nothing
+                  ever called `setAddCustomerOpen(true)`. The Orders tab has
+                  had this button since the shared form was built.
+                */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => setAddCustomerOpen(true)}
+                >
+                  <UserPlus /> {knownCustomer ? 'Edit customer' : 'Add customer'}
+                </Button>
+                {/*
+                  The same panel the Orders tab shows (pro.A.md §4, §10). This
+                  dialog already looked the guest up — `knownCustomer` has been
+                  set here since the lookup was added — and then rendered
+                  nothing at all, so the cashier saw a phone number and no name,
+                  no points and no offers.
+                */}
+                <div className="mt-2">
+                  <GuestPanel
+                    customer={knownCustomer}
+                    lines={takeawayCart.map((line) => ({
+                      foodId: line.foodId,
+                      categoryId: line.categoryId,
+                      quantity: line.quantity,
+                      lineTotal: line.unitPrice * line.quantity,
+                    }))}
+                    branchId={branchIds && branchIds.length === 1 ? branchIds[0] : null}
+                    currency={restaurant.currency}
+                    locale={restaurant.locale}
+                    couponCode={takeawayCoupon}
+                    onCouponChange={(code, amount) => {
+                      setTakeawayCoupon(code)
+                      setTakeawayCouponAmount(amount)
+                    }}
+                    redeemPoints={takeawayPoints}
+                    onRedeemPointsChange={setTakeawayPoints}
+                    loyalty={loyalty}
+                    discountableTotal={takeawayTotal}
+                    compact
+                  />
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium">Kitchen note</label>
@@ -793,9 +886,21 @@ export function CashierBoard({
                     ))}
                   </div>
                 )}
+                {takeawayCouponOff > 0 ? (
+                  <div className="mt-2 flex items-center justify-between text-sm text-emerald-600 dark:text-emerald-400">
+                    <span>Offer · {takeawayCoupon}</span>
+                    <span className="tabular-nums">−{formatMoney(takeawayCouponOff, restaurant.currency, restaurant.locale)}</span>
+                  </div>
+                ) : null}
+                {takeawayPointsOff > 0 ? (
+                  <div className="mt-1 flex items-center justify-between text-sm text-emerald-600 dark:text-emerald-400">
+                    <span>{takeawayPoints.toLocaleString()} points</span>
+                    <span className="tabular-nums">−{formatMoney(takeawayPointsOff, restaurant.currency, restaurant.locale)}</span>
+                  </div>
+                ) : null}
                 <div className="mt-3 flex items-center justify-between border-t pt-2 font-semibold">
                   <span>Total</span>
-                  <span className="tabular-nums">{formatMoney(takeawayTotal, restaurant.currency, restaurant.locale)}</span>
+                  <span className="tabular-nums">{formatMoney(takeawayDue, restaurant.currency, restaurant.locale)}</span>
                 </div>
               </div>
 
@@ -1039,6 +1144,7 @@ export function CashierBoard({
                 restaurant={restaurant}
                 otherBills={bills.filter((bill) => bill.id !== selected.id && !bill.heldAt)}
                 rewards={rewards}
+                loyalty={loyalty}
                 menu={menu}
               />
               <BillPanel
@@ -1087,12 +1193,15 @@ function BillingDetailPanel({
   restaurant,
   otherBills,
   rewards,
+  loyalty,
   menu,
 }: {
   bill: CashierBill
   restaurant: ReceiptRestaurant
   otherBills: CashierBill[]
   rewards: LoyaltyRewardOption[]
+  /** The programme's settings, so points can be spent on this bill (§10). */
+  loyalty?: { enabled: boolean; pointValue: number }
   menu: PublicMenu
 }) {
   /*
@@ -1287,7 +1396,12 @@ function BillingDetailPanel({
         Only when a guest is on it — an anonymous walk-in has no account, and
         the cashier adds a phone at the door to give them one.
       */}
-      {bill.loyalty && rewards.length > 0 ? (
+      {/*
+        A guest is enough. It used to need `rewards.length > 0`, so a
+        restaurant that had never written a reward had a loyalty programme
+        nobody could spend from at the counter (pro.A.md §10).
+      */}
+      {bill.loyalty ? (
         <div className="px-4 pt-4">
           <TillLoyalty
             orderId={bill.id}
@@ -1301,6 +1415,10 @@ function BillingDetailPanel({
             }))}
             currency={restaurant.currency}
             locale={restaurant.locale}
+            pointValue={loyalty?.enabled ? loyalty.pointValue : 0}
+            // What is left for points to take off, the same room the service
+            // re-computes under the lock before it spends anything.
+            room={Math.max(0, bill.subtotal - bill.loyaltyDiscount)}
           />
         </div>
       ) : null}
@@ -1365,6 +1483,18 @@ function BillingDetailPanel({
               <SummaryRow
                 label="Discount"
                 value={`− ${formatMoney(bill.discountTotal, restaurant.currency, restaurant.locale)}`}
+              />
+            ) : null}
+            {/*
+              Its own row (pro.A.md §10). This used to be added into the
+              Discount line above, so a guest spending their own points read it
+              as the restaurant discounting the bill — and the restaurant's own
+              reports could not tell the two apart on screen either.
+            */}
+            {bill.loyaltyDiscount > 0 ? (
+              <SummaryRow
+                label="Points used"
+                value={`− ${formatMoney(bill.loyaltyDiscount, restaurant.currency, restaurant.locale)}`}
               />
             ) : null}
             {bill.serviceCharge > 0 ? (
@@ -2109,6 +2239,7 @@ function EditOrderDialog({
       {
         key: `${item.id}-${Date.now()}-${current.length}`,
         foodId: item.id,
+        categoryId: item.categoryId ?? null,
         name: item.name,
         quantity,
         unitPrice: item.price + chosen.reduce((sum, option) => sum + option.priceDelta, 0),

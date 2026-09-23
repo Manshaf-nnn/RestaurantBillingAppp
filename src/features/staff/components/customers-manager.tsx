@@ -482,7 +482,6 @@ function CampaignDialog({
   const router = useRouter()
   const params = useSearchParams()
   const [form, setForm] = React.useState({
-    code: '',
     description: '',
     type: 'PERCENT' as 'PERCENT' | 'FIXED',
     value: '',
@@ -496,7 +495,7 @@ function CampaignDialog({
 
   React.useEffect(() => {
     if (!open) return
-    setForm((current) => ({ ...current, code: '', value: '' }))
+    setForm((current) => ({ ...current, value: '' }))
   }, [open])
 
   const save = async () => {
@@ -515,7 +514,9 @@ function CampaignDialog({
 
     const result = await callAction(() =>
       createCustomerCampaignAction({
-        code: form.code,
+        // No code. The server names it — see `freeCampaignCode`. A targeted
+        // offer is never typed by a guest: the till shows it to the cashier
+        // when the phone is recognised.
         description: form.description,
         type: form.type,
         // Percent is basis points, so 10% is 1000 — the same unit the engine
@@ -539,7 +540,7 @@ function CampaignDialog({
     router.refresh()
   }
 
-  const valid = form.code.trim().length >= 3 && Number(form.value) > 0
+  const valid = Number(form.value) > 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -552,13 +553,6 @@ function CampaignDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Code" required>
-            <Input
-              value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-              placeholder="REGULARS10"
-            />
-          </Field>
           <Field label="Type">
             <select
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"

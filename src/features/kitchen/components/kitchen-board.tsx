@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useSocketEvent } from '@/hooks/use-socket'
-import { progressItemsAction, updateOrderStatus } from '@/features/orders/actions'
+import { progressItemsAction, updateItemStatus, updateOrderStatus } from '@/features/orders/actions'
 import { isGuestChannel } from '@/features/orders/channels'
 import { callWaiterAction } from '@/features/floor/actions'
 import { setOrderPriorityAction } from '../actions'
@@ -333,6 +333,56 @@ export function KitchenBoard({
     )
   }
 
+  /*
+   * The middle rung: this dish is on the heat, none of it finished yet.
+   *
+   * ── Why this is not a counter ───────────────────────────────────────────
+   *
+   * `preparedQty` counts plates FINISHED, so it cannot say "started". A cook
+   * putting three burgers on the grill has finished none of them, and ticking
+   * one to say so would tell the guest a burger was ready. So Preparing stays
+   * a plain status flip beside the counters — exactly what the section board
+   * has always sent — and the two never disagree: a line only offers this
+   * while nothing of it is made, and `rowStatusFromCounters` puts a line at
+   * PREPARING by itself the moment the first plate is ticked.
+   *
+   * The server takes it only from QUEUED, so a second tap moves nothing: the
+   * button is hidden by then, and a racing tap from another screen is refused
+   * where it matters rather than only in the browser.
+   */
+  const prepare = async (ticket: KitchenTicket, itemId: string) => {
+    setPendingId(ticket.id)
+    const result = await callAction(() =>
+      updateItemStatus({ orderId: ticket.id, itemId, status: 'PREPARING' }),
+    )
+    setPendingId(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setTickets((current) =>
+      current.map((entry) =>
+        entry.id !== ticket.id
+          ? entry
+          : {
+              ...entry,
+              /*
+               * The order follows its lines (`deriveOrderStatus` owns that, one
+               * direction only). Both statuses sit in the same column, so this
+               * is a label catching up, not a card moving; the socket carries
+               * the authoritative value a moment later either way.
+               */
+              status: entry.status === 'ACCEPTED' ? 'PREPARING' : entry.status,
+              items: entry.items.map((item) =>
+                item.id === itemId && item.status === 'QUEUED'
+                  ? { ...item, status: 'PREPARING' as OrderItemStatus }
+                  : item,
+              ),
+            },
+      ),
+    )
+  }
+
   const progress = async (ticket: KitchenTicket, updates: ProgressUpdate[]) => {
     if (updates.length === 0) return
     setPendingId(ticket.id)
@@ -543,6 +593,7 @@ export function KitchenBoard({
                       flashing={flashing.has(ticket.id)}
                       pending={pendingId === ticket.id}
                       onAdvance={advance}
+                      onPrepare={prepare}
                       onProgress={progress}
                       onCallWaiter={callWaiter}
                       onPrioritise={prioritise}
@@ -567,6 +618,7 @@ function TicketCard({
   flashing,
   pending,
   onAdvance,
+  onPrepare,
   onProgress,
   onCallWaiter,
   onPrioritise,
@@ -579,6 +631,8 @@ function TicketCard({
   flashing: boolean
   pending: boolean
   onAdvance: (ticket: KitchenTicket, status: OrderStatus) => void
+  /** One line goes on the heat — the rung between accepted and prepared. */
+  onPrepare: (ticket: KitchenTicket, itemId: string) => void
   onProgress: (ticket: KitchenTicket, updates: ProgressUpdate[]) => void
   onCallWaiter: (ticket: KitchenTicket) => void
   onPrioritise: (ticket: KitchenTicket, priority: 'NORMAL' | 'HIGH' | 'URGENT') => void
@@ -737,6 +791,27 @@ function TicketCard({
                   <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-success">
                     <Check className="size-3" /> Ready
                   </span>
+                ) : canTick && item.status === 'QUEUED' ? (
+                  /*
+                   * The middle rung, per line: this dish has gone on the heat.
+                   * It sits where "+1" sits for a line already under way — a
+                   * queued line has nothing prepared, so the only honest next
+                   * step is starting it, and ticking a plate from here would
+                   * skip straight past the state the guest is waiting to see.
+                   * The button leaves as the line does, so it cannot be
+                   * pressed twice.
+                   */
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => onPrepare(ticket, item.id)}
+                    className="ml-auto shrink-0 rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-bold text-warning hover:bg-warning/20 disabled:opacity-50"
+                    aria-label={`Start preparing ${item.name}`}
+                    title="On the heat — the guest sees this straight away"
+                  >
+                    <Flame className="mr-0.5 inline size-3" />
+                    Preparing
+                  </button>
                 ) : canTick && item.quantity > 1 ? (
                   <button
                     type="button"
@@ -748,6 +823,11 @@ function TicketCard({
                   >
                     {item.preparedQty} of {item.quantity} · +1
                   </button>
+                ) : item.status === 'PREPARING' ? (
+                  // Started, nothing finished: the same word the guest is reading.
+                  <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-bold text-warning">
+                    <Flame className="size-3" /> Preparing
+                  </span>
                 ) : null}
               </p>
               {item.optionsLabel ? (

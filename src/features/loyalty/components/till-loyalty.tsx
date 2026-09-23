@@ -7,9 +7,10 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { formatMoney } from '@/lib/money'
 import { callAction } from '@/lib/use-action'
-import { redeemLoyaltyReward } from '../actions'
+import { redeemLoyaltyPoints, redeemLoyaltyReward } from '../actions'
 import type { RewardOffer } from '../service'
 
 /**
@@ -30,6 +31,9 @@ export function TillLoyalty({
   rewards,
   currency,
   locale,
+  pointValue = 0,
+  /** What is left on the bill for points to take off, in minor units. */
+  room = 0,
 }: {
   orderId: string
   customerName: string | null
@@ -37,9 +41,16 @@ export function TillLoyalty({
   rewards: RewardOffer[]
   currency: string
   locale: string
+  /**
+   * What one point is worth (pro.A.md §10). Zero, or absent, hides the
+   * spend-points box — a restaurant that has not set a rate cannot honour one.
+   */
+  pointValue?: number
+  room?: number
 }) {
   const router = useRouter()
   const [busy, setBusy] = React.useState<string | null>(null)
+  const [wanted, setWanted] = React.useState('')
   const money = (value: number) => formatMoney(value, currency, locale)
 
   const redeem = async (rewardId: string) => {
@@ -50,6 +61,33 @@ export function TillLoyalty({
       toast.error(result.error)
       return
     }
+    toast.success(`${money(result.data.discount)} off · ${result.data.balance} points left`)
+    router.refresh()
+  }
+
+  /*
+   * Points, not only rewards (pro.A.md §10).
+   *
+   * A reward is a named offer and the right thing to show a guest. It is the
+   * wrong thing to show a cashier whose customer has 1,340 points and says
+   * "take some off" — and a restaurant with no rewards written had a loyalty
+   * programme nobody could spend from at the counter at all.
+   */
+  const affordableByBill = pointValue > 0 ? Math.floor(Math.max(0, room) / pointValue) : 0
+  const maxPoints = Math.min(points, affordableByBill)
+  const asked = Math.max(0, Math.floor(Number(wanted) || 0))
+
+  const spendPoints = async () => {
+    const take = Math.min(asked, maxPoints)
+    if (take <= 0) return
+    setBusy('points')
+    const result = await callAction(() => redeemLoyaltyPoints({ orderId, points: take }))
+    setBusy(null)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setWanted('')
     toast.success(`${money(result.data.discount)} off · ${result.data.balance} points left`)
     router.refresh()
   }
@@ -66,6 +104,48 @@ export function TillLoyalty({
           <span className="ml-1 text-[11px] font-medium text-muted-foreground">pts</span>
         </span>
       </div>
+
+      {pointValue > 0 && points > 0 ? (
+        <div className="mb-2 space-y-1 border-b border-border pb-2">
+          {maxPoints <= 0 ? (
+            <p className="text-xs text-muted-foreground">
+              This bill is already covered — no more points can come off it.
+            </p>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={maxPoints}
+                  className="h-8"
+                  placeholder="Points"
+                  value={wanted}
+                  onChange={(event) => setWanted(event.target.value)}
+                  aria-label="Points to use"
+                />
+                <Button size="sm" variant="outline" onClick={() => setWanted(String(maxPoints))}>
+                  Max
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={asked <= 0 || busy !== null}
+                  loading={busy === 'points'}
+                  onClick={spendPoints}
+                >
+                  Use
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {asked > 0
+                  ? `Takes ${money(Math.min(asked, maxPoints) * pointValue)} off this bill.`
+                  : `Up to ${maxPoints.toLocaleString()} points here · ${money(maxPoints * pointValue)}`}
+              </p>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {rewards.length === 0 ? (
         <p className="text-xs text-muted-foreground">No rewards are on offer just now.</p>

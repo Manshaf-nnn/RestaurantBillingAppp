@@ -95,12 +95,28 @@ export const customerSegmentSchema = z.object({
  * usage cap, branch) applies unchanged.
  */
 export const createCampaignSchema = z.object({
+  /**
+   * Optional, and normally absent.
+   *
+   * A code was required here because a coupon is looked up by one — it is the
+   * primary key of the redemption path. But nobody ever says this code out
+   * loud: the offer is aimed at a named group, and the till now shows it to
+   * the cashier the moment the guest's phone is recognised. Asking an owner to
+   * invent "REGULARS10" was asking them to name something they would never use
+   * again, and to keep it unique by hand.
+   *
+   * So the column stays — the redemption path, the audit trail and the
+   * existing coupon history all depend on it — and it is generated when this
+   * is blank. Still accepted, because a restaurant that DOES want a sayable
+   * code for a poster should be able to have one.
+   */
   code: z
     .string()
     .trim()
-    .min(3, 'Give the offer a code guests can say out loud')
     .max(24)
-    .regex(/^[A-Za-z0-9_-]+$/, 'Letters, numbers, dashes'),
+    .regex(/^[A-Za-z0-9_-]+$/, 'Letters, numbers, dashes')
+    .optional()
+    .or(z.literal('')),
   description: z.string().trim().max(160).optional().or(z.literal('')),
   type: z.enum(['PERCENT', 'FIXED']),
   /** Percent in basis points, or a fixed amount in minor units. */
@@ -112,4 +128,29 @@ export const createCampaignSchema = z.object({
   usageLimit: z.coerce.number().int().min(0).nullable().optional(),
   perCustomerLimit: z.coerce.number().int().min(0).nullable().optional(),
   segment: customerSegmentSchema,
+})
+
+/**
+ * The basket a guest is standing in front of, for the offers question
+ * (pro.A.md §4).
+ *
+ * The cart is posted rather than read from anywhere, because at the Orders tab
+ * there is no order yet — the basket only exists in the browser. Nothing here
+ * is trusted for money: it decides which offers to SHOW, and placement
+ * re-evaluates every one of them against the real lines before a rupee moves.
+ */
+export const offersForCustomerSchema = z.object({
+  customerId: z.string().cuid(),
+  branchId: z.string().trim().max(40).optional().or(z.literal('')),
+  lines: z
+    .array(
+      z.object({
+        foodId: z.string().max(40).nullable().optional(),
+        categoryId: z.string().max(40).nullable().optional(),
+        quantity: z.coerce.number().int().min(0).max(1000),
+        lineTotal: z.coerce.number().int().min(0),
+      }),
+    )
+    .max(120)
+    .default([]),
 })

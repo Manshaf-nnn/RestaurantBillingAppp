@@ -13,6 +13,7 @@ import { prisma } from '@/server/db/prisma'
 import {
   assertNoEscalation,
   assertPresetScopeAllowed,
+  mintRoleLink,
   requireRole,
   resolveRoleBranch,
   templateFor,
@@ -111,6 +112,22 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
         entityId: role.id,
         after: { name: role.name, preset: role.preset, permissions: role.permissions },
       })
+
+      /*
+       * A role comes WITH its sign-in link (sidebar.md — role links).
+       *
+       * Everything needed to make one already existed and reaching it meant
+       * leaving this screen for another, so the link every role obviously
+       * wants was the one nobody made. Minting it here is what makes the role
+       * usable the moment it is saved.
+       *
+       * Deliberately not fatal. The role is the thing being created and it is
+       * already written; a link that could not be minted — a branch rule the
+       * preset refuses, say — leaves a "Create sign-in link" button on the
+       * card rather than losing the owner's work to an error about something
+       * they did not ask for.
+       */
+      await mintRoleLink(admin, role.id).catch(() => undefined)
 
       refresh()
       return { id: role.id }

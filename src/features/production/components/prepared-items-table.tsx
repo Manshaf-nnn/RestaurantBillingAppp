@@ -169,9 +169,9 @@ export function PreparedItemsTable({
                   <TableCell className="text-right tabular-nums">{row.runs}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {open.length > 0 && canManage ? (
+                      {open.length === 1 && canManage ? (
                         <Button size="sm" asChild>
-                          <Link href={`/dashboard/production/items/${row.id}`}>How much did you make?</Link>
+                          <Link href={`/dashboard/production/${open[0].id}`}>{open[0].issued ? 'Complete production' : 'Issue ingredients'}</Link>
                         </Button>
                       ) : (
                         <Button variant="ghost" size="sm" asChild>
@@ -180,7 +180,7 @@ export function PreparedItemsTable({
                       )}
                       {canManage ? (
                         <Button variant="outline" size="sm" asChild>
-                          <Link href={`/dashboard/production/items/${row.id}#make-more`}>Make more</Link>
+                          <Link href={`/dashboard/production?make=${row.id}`}>Make more</Link>
                         </Button>
                       ) : null}
                     </div>

@@ -320,20 +320,22 @@ async function main() {
 
     const mayo = `Mayo UI ${stamp}`
 
-    console.log('\n── 7. Make an Item: one flow — create, then mark done from the confirmation ──')
+    console.log('\n── 7. Make an Item: recipe → stock → order → issue (FIFO) → complete → in stock ──')
     {
+      // DELIBERATE behaviour change 2026-09 (pro.b.md): the one-step Create /
+      // Make Done flow became the six screens. Nothing moves until the
+      // ingredients are issued, on the order's own page.
       await ownerPage.goto(`${BASE}/dashboard/production`, { waitUntil: 'networkidle' })
       check('the form names the location it is acting on', await seen(ownerPage, /Making at/))
       check('no "Make it now"', (await ownerPage.getByRole('button', { name: 'Make it now' }).count()) === 0)
       check('no location select on the form', (await ownerPage.getByText('Made at').count()) === 0)
+      check('the three steps are named', await seen(ownerPage, 'Recipe Setup') && await seen(ownerPage, 'Check Available Stock') && await seen(ownerPage, 'Create Production Order'))
 
-      // DELIBERATE wording change 2026-09 (aO.md §5): the field asks what you
-      // are making and offers the whole of stock, not only what production
-      // has made before.
+      // 1. Recipe Setup
       await ownerPage.getByRole('combobox').filter({ hasText: 'Choose any item from stock' }).click()
       await ownerPage.getByRole('option', { name: /New item/ }).click()
-      await ownerPage.getByPlaceholder('Mayonnaise, curry paste, dough…').fill(mayo)
-      await ownerPage.getByLabel('Output — how much you are making').fill('900')
+      await ownerPage.getByPlaceholder('Chicken Shawarma Filling, mayonnaise, dough…').fill(mayo)
+      await ownerPage.getByLabel('Expected yield').fill('900')
       // The label wraps the select, so its text is "Unit" plus every option's; scope by the label instead.
       await ownerPage.locator('label', { hasText: /^Unit/ }).locator('select').selectOption('GRAM')
 
@@ -345,43 +347,80 @@ async function main() {
         .filter({ has: ownerPage.getByRole('combobox').filter({ hasText: chicken.name }) })
         .last()
       await ingredientRow.getByPlaceholder('0').first().fill('2')
+      check('the line is costed FIFO as it is typed', await seen(ownerPage, 'Current cost (FIFO)') && await seen(ownerPage, 'Total Recipe Cost'))
 
-      const createButton = ownerPage.getByRole('button', { name: 'Create prepared item' })
-      check('Create is enabled once the plan is complete', await createButton.isEnabled())
-      await createButton.click()
-      // DELIBERATE behaviour change 2026-09 (aO.md §5): Create lands on the
-      // prepared item's own page, where the yield is asked for once.
-      await ownerPage.waitForURL(/\/dashboard\/production\/items\//, { timeout: 15_000 }).catch(() => undefined)
-      check('Create lands on the prepared item\'s page', /\/dashboard\/production\/items\//.test(ownerPage.url()), ownerPage.url())
-      check('which asks how much was made', await seen(ownerPage, 'How much did you make?'))
-      check('and shows what goes into it, costed', await seen(ownerPage, 'Production Cost') && await seen(ownerPage, chicken.name))
+      const saveButton = ownerPage.getByRole('button', { name: 'Save recipe' })
+      check('Save recipe is enabled once the recipe is complete', await saveButton.isEnabled())
+      await saveButton.click()
 
+      // 2. Check Available Stock
+      await ownerPage.getByText('Stock Balance').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('step 2 shows the stock balance of each ingredient here', await seen(ownerPage, 'Stock Balance') && await seen(ownerPage, 'Available Qty') && await seen(ownerPage, chicken.name))
       const item = await eventually(
         () => prisma.inventoryItem.findFirst({ where: { restaurantId: restaurant.id, name: mayo } }),
         (i) => i !== null,
       )
-      check('the prepared item exists from Create', item?.isPrepared === true)
+      check('the prepared item exists from Save recipe', item?.isPrepared === true)
+      check('with its recipe', (await prisma.recipe.count({ where: { producesItemId: item?.id ?? '', isActive: true } })) === 1)
       const chickenBefore = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
       check('and nothing has left stock', chickenBefore?.available === 10, String(chickenBefore?.available))
+      await ownerPage.getByRole('button', { name: 'Create Production Order', exact: true }).click()
 
-      await ownerPage.getByLabel('How much did you make?').fill('850')
-      check('a shortfall is named and asks why', await seen(ownerPage, /Short by 50/) && (await ownerPage.getByLabel('Why?').count()) === 1)
-      await ownerPage.getByLabel('Why?').selectOption('PRODUCTION_LOSS')
-      await ownerPage.getByLabel('In your words').fill('reduced on the hob')
-      await ownerPage.getByRole('button', { name: 'Make Done' }).click()
-
+      // 3. Create Production Order
+      await ownerPage.getByText('New Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('step 3 is the order form with the recipe named', await seen(ownerPage, 'New Production Order') && await seen(ownerPage, 'Planned Quantity') && await seen(ownerPage, 'Production Type'))
+      check('planned quantity is pre-filled from the yield', (await ownerPage.getByPlaceholder('10').inputValue()) === '900')
+      await ownerPage.getByRole('button', { name: 'Create Order', exact: true }).click()
+      await ownerPage.waitForURL(/\/dashboard\/production\/[^/?]+$/, { timeout: 15_000 }).catch(() => undefined)
+      check('Create Order lands on the order\'s own page', /\/dashboard\/production\/(?!items)[^/?]+$/.test(ownerPage.url()), ownerPage.url())
       const order = await eventually(
         () => prisma.productionOrder.findFirst({ where: { restaurantId: restaurant.id, outputItemId: item?.id ?? '' }, orderBy: { createdAt: 'desc' } }),
-        (o) => o?.status === 'COMPLETED',
+        (o) => o !== null,
       )
-      check('the batch is completed, with the reason from the enum', order?.status === 'COMPLETED' && order.varianceReason === 'PRODUCTION_LOSS' && order.actualQty === 850)
+      check('the order is in progress and nothing is issued', order?.status === 'IN_PROGRESS' && order.startedAt === null)
+      const chickenAfterCreate = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
+      check('and still nothing has left stock', chickenAfterCreate?.available === 10, String(chickenAfterCreate?.available))
+
+      // 4. Issue ingredients
+      check('the Ingredients tab offers Issue All (FIFO)', await seen(ownerPage, 'Issue All (FIFO)') && await seen(ownerPage, 'Issue Qty'))
+      await ownerPage.getByRole('button', { name: 'Issue All (FIFO)' }).click()
+      const issued = await eventually(
+        () => prisma.productionOrder.findUniqueOrThrow({ where: { id: order!.id } }),
+        (o) => o.startedAt !== null,
+      )
+      check('issuing stamps the order and keeps it in progress', issued.startedAt !== null && issued.status === 'IN_PROGRESS')
+      const chickenAfterIssue = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
+      check('the chicken left on Issue, not on Create', chickenAfterIssue?.available === 8, String(chickenAfterIssue?.available))
+      const lots = await prisma.productionConsumptionLot.count({ where: { consumption: { orderId: order!.id } } })
+      check('and the draw is traced lot by lot', lots >= 1, String(lots))
+
+      // 5. Complete Production
+      await ownerPage.getByRole('tab', { name: 'Production' }).click()
+      await ownerPage.getByLabel('Actual Produced Quantity').fill('850')
+      check('a shortfall is named and asks why', await seen(ownerPage, /Short by 50/) && (await ownerPage.getByLabel('Why?').count()) === 1)
+      const prefilled = await eventually(() => ownerPage.getByLabel('Wastage Quantity').inputValue(), (v) => v === '50', 5_000)
+      check('and the wastage pre-fills with it', prefilled === '50', prefilled)
+      check('the live figures are shown', await seen(ownerPage, 'Total Ingredient Cost (FIFO)') && await seen(ownerPage, /Actual Cost per/))
+      await ownerPage.getByLabel('Why?').selectOption('PRODUCTION_LOSS')
+      await ownerPage.getByLabel('Remarks').fill('reduced on the hob')
+      await ownerPage.getByRole('button', { name: 'Complete Production', exact: true }).click()
+
+      const done = await eventually(
+        () => prisma.productionOrder.findUniqueOrThrow({ where: { id: order!.id } }),
+        (o) => o.status === 'COMPLETED',
+      )
+      check('the batch is completed, with the reason from the enum and the wastage', done.status === 'COMPLETED' && done.varianceReason === 'PRODUCTION_LOSS' && done.actualQty === 850 && done.wastageQty === 50)
       const chickenAfter = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
-      check('and the chicken left on Make Done, not on Create', chickenAfter?.available === 8, String(chickenAfter?.available))
+      check('completion consumed nothing twice', chickenAfter?.available === 8, String(chickenAfter?.available))
       const mayoStock = await prisma.inventoryStock.findFirst({ where: { itemId: item?.id ?? '', branchId: kandy.id } })
       check('the mayonnaise is on the shelf at the actual yield', mayoStock?.available === 850, String(mayoStock?.available))
+
+      // 6. Finished Item in Stock
+      await ownerPage.getByText('Finished Item in Stock').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('the page shows the finished item in stock', await seen(ownerPage, 'Finished Item in Stock') && await seen(ownerPage, mayo))
     }
 
-    console.log('\n── 8. Prepared Items: an in-progress row → the item page → Make Done, then Make More ──')
+    console.log('\n── 8. Prepared Items: an in-progress row → its order → issue, complete; then Make More ──')
     {
       const mayoItem = await prisma.inventoryItem.findFirstOrThrow({ where: { restaurantId: restaurant.id, name: mayo } })
       const second = await startBatch({
@@ -389,41 +428,64 @@ async function main() {
         plan: { name: mayo, itemId: mayoItem.id, quantity: 500, unit: 'GRAM', ingredients: [{ itemId: chicken.id, quantity: 1, unit: 'KG' }] },
       })
       await ownerPage.goto(`${BASE}/dashboard/production`, { waitUntil: 'networkidle' })
-      check('the count in progress is said above the tabs', await seen(ownerPage, /1 batch in progress/))
-      await ownerPage.getByRole('tab', { name: /Prepared Items/ }).click()
+      check('the order in progress is listed under the steps', await seen(ownerPage, /1 production order in progress/))
+      await ownerPage.getByRole('tab', { name: /Prepared/ }).click()
       const row = ownerPage.locator('tr[data-state="in-progress"]')
       check('the item is a row in the in-progress state', (await row.count()) === 1 && (await row.first().innerText().catch(() => '')).includes(mayo))
-      // DELIBERATE behaviour change 2026-09 (aO.md §5): the row opens the
-      // item's own page instead of a dialog, and everything happens there.
-      await row.first().getByRole('link', { name: /How much did you make/ }).click()
-      await ownerPage.waitForURL(/\/dashboard\/production\/items\//, { timeout: 15_000 }).catch(() => undefined)
+      // DELIBERATE behaviour change 2026-09 (pro.b.md §4): the row opens the
+      // order's own page, where the ingredients are issued and the batch completed.
+      await row.first().getByRole('link', { name: 'Issue ingredients' }).click()
+      await ownerPage.waitForURL(new RegExp(`/dashboard/production/${second.id}`), { timeout: 15_000 }).catch(() => undefined)
       const text = await ownerPage.locator('main').innerText().catch(() => '')
-      check('the page shows the batch waiting', /in progress/i.test(text) && text.includes(second.number))
-      check('and how the item is made, costed', /Production Cost/.test(text) && text.includes(chicken.name))
-      await ownerPage.getByLabel('How much did you make?').fill('500')
+      check('the page is the order, with its number', text.includes(second.number) && /Issue All \(FIFO\)/.test(text))
+      await ownerPage.getByRole('button', { name: 'Issue All (FIFO)' }).click()
+      await eventually(
+        () => prisma.productionOrder.findUniqueOrThrow({ where: { id: second.id } }),
+        (o) => o.startedAt !== null,
+      )
+      await ownerPage.getByRole('tab', { name: 'Production' }).click()
+      await ownerPage.getByLabel('Actual Produced Quantity').fill('500')
       check('no reason asked when the figures match', (await ownerPage.getByLabel('Why?').count()) === 0)
-      await ownerPage.getByRole('button', { name: 'Make Done' }).click()
+      await ownerPage.getByRole('button', { name: 'Complete Production', exact: true }).click()
       const done = await eventually(
         () => prisma.productionOrder.findUniqueOrThrow({ where: { id: second.id } }),
         (o) => o.status === 'COMPLETED',
       )
-      check('marked done from the item page', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
+      check('completed from the order page', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
 
-      // Make More: the same page, one question, one step (aO.md §5).
+      // Make More: the item page opens step 3 with the recipe; a new order, never a new item (pro.b.md §12).
       const runsBefore = await prisma.productionOrder.count({
         where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'COMPLETED' },
       })
-      await ownerPage.reload({ waitUntil: 'networkidle' })
+      await ownerPage.goto(`${BASE}/dashboard/production/items/${mayoItem.id}`, { waitUntil: 'networkidle' })
       check('the page offers Add Production / Make More', await seen(ownerPage, /Add Production/))
-      await ownerPage.getByLabel('How much are you making?').fill('200')
-      await ownerPage.getByRole('button', { name: 'Complete production' }).click()
+      await ownerPage.getByRole('link', { name: 'New production order' }).click()
+      await ownerPage.waitForURL(/\/dashboard\/production\?make=/, { timeout: 15_000 }).catch(() => undefined)
+      await ownerPage.getByText('New Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('Make more lands on step 3 with the recipe', await seen(ownerPage, 'New Production Order') && (await ownerPage.locator('input[readonly]').first().inputValue()) === mayo)
+      await ownerPage.getByPlaceholder('10').fill('200')
+      await ownerPage.getByRole('button', { name: 'Create Order', exact: true }).click()
+      await ownerPage.waitForURL(/\/dashboard\/production\/(?!items)[^/?]+$/, { timeout: 15_000 }).catch(() => undefined)
+      const third = await eventually(
+        () => prisma.productionOrder.findFirst({ where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'IN_PROGRESS' } }),
+        (o) => o !== null,
+      )
+      check('a third order exists, in progress, for the same item', third?.plannedQty === 200)
+      await ownerPage.getByRole('button', { name: 'Issue All (FIFO)' }).click()
+      await eventually(
+        () => prisma.productionOrder.findUniqueOrThrow({ where: { id: third!.id } }),
+        (o) => o.startedAt !== null,
+      )
+      await ownerPage.getByRole('tab', { name: 'Production' }).click()
+      await ownerPage.getByLabel('Actual Produced Quantity').fill('200')
+      await ownerPage.getByRole('button', { name: 'Complete Production', exact: true }).click()
       const made = await eventually(
         () => prisma.productionOrder.count({
           where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'COMPLETED' },
         }),
         (count) => count > runsBefore,
       )
-      check('Make More completes a run in one step', made === runsBefore + 1, String(made))
+      check('Make More completes another run', made === runsBefore + 1, String(made))
       const items = await prisma.inventoryItem.count({ where: { restaurantId: restaurant.id, name: mayo } })
       check('and creates no second prepared item', items === 1, String(items))
     }

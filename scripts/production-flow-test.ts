@@ -371,32 +371,42 @@ async function main() {
     check('runs today counts only what finished', workspace.stats.runsToday >= 2)
   }
 
-  console.log('\n── 6. The screens: one question, on the item\'s own page ──')
+  console.log('\n── 6. The screens: six steps, the order carried from the third ──')
   {
+    // DELIBERATE behaviour change 2026-09 (pro.b.md): the item page no longer
+    // completes anything itself. Make Done and Make More became a production
+    // order with its own page — issue (FIFO), complete, finished stock.
     const form = readFileSync('src/features/production/components/make-item-form.tsx', 'utf8')
-    check('Create leads to the item page', form.includes('router.push(`/dashboard/production/items/'))
+    check('Create Order leads to the order page', form.includes('router.push(`/dashboard/production/${data.id}`)'))
     check('and asks nothing twice', !form.includes('Made it already?') && !form.includes('What did you make?'))
-    check('the make form no longer marks anything done', !form.includes('MarkDoneForm'))
-    check('still one verb, still no location select', form.includes('Create prepared item') && form.includes('Making at'))
+    check('the make form completes nothing itself', !form.includes('CompleteProductionForm') && !form.includes('MarkDoneForm'))
+    check('still no location select', form.includes('Making at'))
 
     check('the item page exists as a route', existsSync('src/app/dashboard/production/items/[itemId]/page.tsx'))
     check('and the old dialog is gone', !existsSync('src/features/production/components/prepared-item-detail.tsx'))
+    check('and the one-step Make More form is gone', !existsSync('src/features/production/components/make-more-form.tsx'))
 
     const page = readFileSync('src/features/production/components/prepared-item-page.tsx', 'utf8')
     check('the page shows the ingredients and Production Cost', page.includes('Production Cost') && page.includes('Ingredients'))
-    check('and Add Production / Make More', page.includes('Add Production') && page.includes('<MakeMoreForm'))
+    check('and Add Production / Make More opens a new order for the same item', page.includes('Add Production') && page.includes('/dashboard/production?make=${item.id}'))
     check('and this item\'s history', page.includes('<ProductionHistory'))
 
     const done = readFileSync('src/features/production/components/mark-done-form.tsx', 'utf8')
-    check('Make Done asks "How much did you make?" with a unit', done.includes('How much did you make?') && done.includes('actualUnit'))
-    check('and is labelled Make Done', done.includes('Make Done'))
+    check('Complete Production asks for the actual quantity with a unit', done.includes('Actual Produced Quantity') && done.includes('actualUnit'))
+    check('and is labelled Complete Production', done.includes('Complete Production'))
     check('the variance reason rule survives', done.includes("(!needsReason || (reason !== '' && note.trim().length > 0))"))
+    check('and shows the spec\'s three figures', done.includes('Total Ingredient Cost (FIFO)') && done.includes('Actual Output Quantity') && done.includes('Actual Cost per'))
 
-    const more = readFileSync('src/features/production/components/make-more-form.tsx', 'utf8')
-    check('Make More asks how much and completes in one step', more.includes('How much are you making?') && more.includes('Complete production') && more.includes('makeMoreAction'))
+    const order = readFileSync('src/features/production/components/production-order-panel.tsx', 'utf8')
+    check('the order page has Ingredients, Production and Notes', order.includes('"ingredients"') && order.includes('"production"') && order.includes('"notes"'))
+    check('with Issue All (FIFO)', order.includes('Issue All (FIFO)') && order.includes('issueIngredientsAction'))
+    check('an editable Issue Qty per line', order.includes('Issue Qty') && order.includes('Required Qty'))
+    check('lots shown after issue', order.includes('lot.batchNo'))
+    check('and Finished Item in Stock after completion', order.includes('Finished Item in Stock'))
 
     const history = readFileSync('src/features/production/components/production-history.tsx', 'utf8')
-    check('history shows status, ingredients and a labelled Reference', history.includes('>Status<') && history.includes('Ingredients consumed') && history.includes('>Reference<'))
+    check('history shows status, planned, actual, wastage, ingredients and a labelled Reference',
+      history.includes('>Status<') && history.includes('>Planned<') && history.includes('>Actual<') && history.includes('>Wastage<') && history.includes('Ingredients consumed') && history.includes('>Reference<'))
 
     const table = readFileSync('src/features/production/components/prepared-items-table.tsx', 'utf8')
     check('the rows link to the item page', table.includes('/dashboard/production/items/${row.id}'))
@@ -406,8 +416,6 @@ async function main() {
     check('the item picker lists every stock item', !/items\s*\n?\s*\.filter\(\(item\) => item\.isPrepared\)\s*\n?\s*\.map/.test(form))
     check('with the ones made before first', form.includes('items.filter((item) => item.isPrepared)') && form.includes('items.filter((item) => !item.isPrepared)'))
     check('and a search box over them', form.includes('searchPlaceholder'))
-    // aO.md §5 — the field asks what is being made and says where the list
-    // comes from, so nobody reads it as "things production has made before".
     check('the field is Make an item, over stock', form.includes('>Make an item</span>') && form.includes('Choose any item from stock') && form.includes('Search all stock items'))
   }
 }

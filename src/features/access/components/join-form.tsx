@@ -1,13 +1,13 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowRight, Monitor } from 'lucide-react'
+import { ArrowRight, Monitor, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-import { joinAsDevice, joinWithCode } from '../join-actions'
+import { joinAsDevice, joinWithCode, joinWithRole } from '../join-actions'
 
 /**
  * The two ways in.
@@ -23,7 +23,7 @@ export function JoinForm({
   email: initialEmail,
 }: {
   token: string
-  mode: 'PERSONAL' | 'SHARED_DEVICE'
+  mode: 'PERSONAL' | 'SHARED_DEVICE' | 'ROLE'
   email: string | null
 }) {
   const [email, setEmail] = React.useState(initialEmail ?? '')
@@ -40,7 +40,11 @@ export function JoinForm({
       const result =
         mode === 'PERSONAL'
           ? await joinWithCode({ token, email, code })
-          : await joinAsDevice({ token })
+          : mode === 'ROLE'
+            ? // Same two fields, a different question: this one asks whether
+              // they hold the role rather than whether they are one person.
+              await joinWithRole({ token, email, code })
+            : await joinAsDevice({ token })
       // Only reached when the action refused; a success has already navigated.
       if (!result.ok) setError(result.error)
     } catch (thrown) {
@@ -81,6 +85,18 @@ export function JoinForm({
 
   return (
     <form className="space-y-4" onSubmit={submit}>
+      {mode === 'ROLE' ? (
+        <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          <p className="flex items-center gap-2 font-medium text-foreground">
+            <Users className="size-4" /> Sign in with your own details
+          </p>
+          <p className="mt-1.5">
+            This link is shared by everybody on this role. Use your own email and code — what you
+            do is recorded under your name, not the link's.
+          </p>
+        </div>
+      ) : null}
+
       <div className="space-y-1.5">
         <Label htmlFor="join-email">Email</Label>
         <Input

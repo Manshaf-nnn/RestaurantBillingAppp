@@ -30,7 +30,7 @@ import {
   rowStatusFromCounters,
   summariseProgress,
 } from '../src/features/orders/progress'
-import { cancelOrder, placeOrder, progressItems, updateOrderStatus } from '../src/features/orders/service'
+import { cancelOrder, placeOrder, progressItems, startItem, updateOrderStatus } from '../src/features/orders/service'
 import { mergeBills, splitBill, voidOrderItem } from '../src/features/cashier/service'
 import { getLiveBoard } from '../src/features/live/queries'
 import { getCashierQueue, getKitchenQueue, getOrderForStaff } from '../src/features/orders/queries'
@@ -348,6 +348,85 @@ async function main() {
     check('and the invoice is minted without them', bill.includes("include: { items: { where: { status: { not: 'CANCELLED' } } }, table: true }"))
   }
 
+  console.log('\n── 9. The Preparing rung: accepted → preparing → ready, per line ──')
+  {
+    /*
+     * The middle rung the KDS now has a button for. It is the one status with
+     * no counter behind it — a cook with three burgers on the grill has
+     * finished none — so it is tested for exactly that: the status moves, the
+     * counters do not, and the guest is told.
+     */
+    const c = await order([{ foodId: burger.id, quantity: 3 }, { foodId: rice.id, quantity: 1 }, { foodId: pasta.id, quantity: 2 }])
+    await step(c.id, 'ACCEPTED')
+    const burgers = await line(c.id, 'Burger')
+    const riceLine = await line(c.id, 'Rice')
+    check('both lines start queued', burgers.status === 'QUEUED' && riceLine.status === 'QUEUED')
+
+    const started = await startItem({ restaurantId: restaurant.id, orderId: c.id, itemId: burgers.id, ...actor })
+    const afterStart = await line(c.id, 'Burger')
+    check('Preparing moves the line', started.changed && started.status === 'PREPARING' && afterStart.status === 'PREPARING')
+    check('and finishes nothing — the counters stay put', afterStart.preparedQty === 0 && afterStart.servedQty === 0)
+    check('stamped when the kitchen started it, not when a plate was made', afterStart.preparingAt !== null && afterStart.readyAt === null)
+    check('the status a screen derives agrees with the row', rowStatusFromCounters(afterStart) === 'PREPARING')
+
+    const orderNow = await prisma.order.findUniqueOrThrow({ where: { id: c.id } })
+    check('the order follows its lines: Preparing', orderNow.status === 'PREPARING')
+
+    // The whole point of per-item: the rest of the ticket is untouched.
+    const riceAfter = await line(c.id, 'Rice')
+    check('the other line on the same ticket is untouched', riceAfter.status === 'QUEUED' && riceAfter.preparingAt === null)
+
+    // Duplicate actions: a double tap, two cooks, a retried request.
+    const again = await startItem({ restaurantId: restaurant.id, orderId: c.id, itemId: burgers.id, ...actor })
+    const afterAgain = await line(c.id, 'Burger')
+    check('pressing Preparing twice changes nothing', !again.changed && afterAgain.preparingAt?.getTime() === afterStart.preparingAt?.getTime())
+
+    // Forward only: nothing drags a line back to the grill.
+    await progress(c.id, [{ itemId: burgers.id, preparedQty: 3 }])
+    const ready = await line(c.id, 'Burger')
+    check('Ready then takes the line the rest of the way', ready.status === 'READY' && ready.preparedQty === 3 && ready.readyAt !== null)
+    const backwards = await startItem({ restaurantId: restaurant.id, orderId: c.id, itemId: burgers.id, ...actor })
+    const stillReady = await line(c.id, 'Burger')
+    check('and Preparing cannot drag a made line back', !backwards.changed && backwards.status === 'READY' && stillReady.status === 'READY')
+
+    /*
+     * A line already part-made is past "started" — the counter owns it. Two
+     * plates ordered, one made: the status reads PREPARING without anybody
+     * pressing anything, which is why the button is offered on QUEUED alone.
+     */
+    const pastaLine2 = await line(c.id, 'Pasta')
+    await progress(c.id, [{ itemId: pastaLine2.id, preparedQty: 1 }])
+    const pastaPart = await line(c.id, 'Pasta')
+    check('a line goes Preparing by itself when the first of several is made', pastaPart.status === 'PREPARING' && pastaPart.preparedQty === 1)
+    const noop = await startItem({ restaurantId: restaurant.id, orderId: c.id, itemId: pastaLine2.id, ...actor })
+    const pastaStill = await line(c.id, 'Pasta')
+    check('and Preparing on it moves nothing', !noop.changed && pastaStill.preparedQty === 1)
+    check('the queued line beside it is still queued', (await line(c.id, 'Rice')).status === 'QUEUED')
+
+    // The guard rails the rest of progress already has.
+    const spare2 = await prisma.restaurantTable.create({
+      data: { restaurantId: restaurant.id, branchId: branch.id, number: `9${stamp.slice(-2)}`, capacity: 2 },
+    })
+    const waiting = await placeOrder({
+      restaurantId: restaurant.id, branchId: branch.id, tableId: spare2.id, type: 'DINE_IN', channel: 'QR',
+      items: [{ foodId: rice.id, quantity: 1, optionIds: [] }],
+      customerName: 'Scanner', customerPhone: '0770000002',
+    })
+    const waitingLine = await line(waiting.id, 'Rice')
+    await refuses('a ticket nobody has taken on refuses',
+      () => startItem({ restaurantId: restaurant.id, orderId: waiting.id, itemId: waitingLine.id, ...actor }), /ORDER_NOT_ACCEPTED/)
+    await cancelOrder({ restaurantId: restaurant.id, orderId: waiting.id, reason: 'Test' })
+
+    const d = await order([{ foodId: pasta.id, quantity: 1 }])
+    await step(d.id, 'ACCEPTED')
+    const pastaLine = await line(d.id, 'Pasta')
+    await prisma.orderItem.update({ where: { id: pastaLine.id }, data: { status: 'CANCELLED' } })
+    await refuses('a cancelled line refuses',
+      () => startItem({ restaurantId: restaurant.id, orderId: d.id, itemId: pastaLine.id, ...actor }), /ITEM_CANCELLED/)
+    await refuses("another order's line is not found",
+      () => startItem({ restaurantId: restaurant.id, orderId: d.id, itemId: burgers.id, ...actor }), /not found/i)
+  }
+
   console.log('\n── 7. The action, the event, the boards ──')
   {
     const actions = readFileSync('src/features/orders/actions.ts', 'utf8')
@@ -365,12 +444,26 @@ async function main() {
 
     const kds = readFileSync('src/features/kitchen/components/kitchen-board.tsx', 'utf8')
     check('the KDS has a box per line and Select all', kds.includes('aria-label={`${item.name} prepared`}') && kds.includes('aria-label="Select all"'))
+    // The middle rung, per line: a queued line offers Preparing where a line
+    // already under way offers "+1", so nothing can skip the state the guest
+    // is waiting to see.
+    check('the KDS has a Preparing button per line', kds.includes('aria-label={`Start preparing ${item.name}`}'))
+    check('offered only while the line is queued', kds.includes("canTick && item.status === 'QUEUED' ?"))
+    check('and it sends the status through the same action the sections use', kds.includes("updateItemStatus({ orderId: ticket.id, itemId, status: 'PREPARING' })"))
+    const station = readFileSync('src/features/kitchen/components/station-board.tsx', 'utf8')
+    check('the section board still starts a dish the same way', station.includes("move(item, 'PREPARING')"))
     // DELIBERATE behaviour change 2026-09 (aO.md §1): the KDS has no "New
     // orders" column any more — every ticket on it is accepted, so every
     // ticket has its boxes.
     check('the KDS has no column for orders nobody has taken on', !kds.includes("statuses: ['PENDING']") && !kds.includes('acceptOrderAction'))
     const tracker = readFileSync('src/features/orders/components/order-tracker.tsx', 'utf8')
     check('the guest tracker listens to the line event', tracker.includes('useSocketEvent(EVENTS.ORDER_ITEM_STATUS'))
+    check('and shows each line its own status, Preparing among them',
+      tracker.includes('<ItemStatusPill status={live.status} />') && /PREPARING: \{ label: 'Preparing'/.test(tracker))
+    check('and says so when a dish goes on the heat',
+      tracker.includes("next.status === 'PREPARING' && before.status === 'QUEUED'"))
+    const legacyPrep = actions.slice(actions.indexOf('export async function updateItemStatus'), actions.indexOf('export async function progressItemsAction'))
+    check('the Preparing rung is a face over the service too', legacyPrep.includes('await startItem('))
     const waiter = readFileSync('src/features/waiter/components/waiter-board.tsx', 'utf8')
     check('the waiter serves what is prepared, by quantity', waiter.includes('servedQty: item.preparedQty'))
   }
