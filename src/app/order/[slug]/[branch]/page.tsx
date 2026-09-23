@@ -4,6 +4,7 @@ import type { Metadata } from 'next'
 import { TableEntry } from '@/features/orders/components/table-entry'
 import { isOpenNow, parseOpeningHours, todayLabel } from '@/lib/opening-hours'
 import { orderableBranches, resolvePublicBranch } from '@/features/branches/public-branch'
+import { getGuestAppearance } from '@/features/guest/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -57,11 +58,16 @@ export default async function BranchEntryPage({
    * A guest who has scanned the wrong card should be able to see it at a
    * glance, and so should an owner testing their own QR codes.
    */
-  const orderable = await orderableBranches(restaurant.id)
+  const [orderable, appearance] = await Promise.all([
+    orderableBranches(restaurant.id),
+    // One setting, every code (ar.md §13): the same object the QR menus read.
+    getGuestAppearance(restaurant.id),
+  ])
   const showBranch = orderable.length > 1
 
   return (
     <TableEntry
+      appearance={appearance}
       restaurantName={restaurant.name}
       tagline={restaurant.tagline}
       logoUrl={restaurant.logoUrl}

@@ -195,6 +195,28 @@ export async function resolveTable(
  * while `placeOrderSchema` next door caps the cart at 60 lines. Prices were
  * never at risk (they are re-read from the row), but the fan-out was.
  */
+/**
+ * The printed QR code a basket was built under → the experience it names.
+ *
+ * Scoped to the tenant the caller already resolved, so a code belonging to
+ * another restaurant resolves to null rather than attributing an order across
+ * a tenant boundary (ar.md §25). An unknown or retired code is simply no
+ * attribution — never an error, because a guest whose code was deactivated
+ * mid-meal should still be able to finish ordering.
+ */
+async function resolveQrExperienceId(
+  restaurantId: string,
+  code: string | null | undefined,
+): Promise<string | null> {
+  const publicId = code?.trim().toLowerCase()
+  if (!publicId) return null
+  const row = await prisma.qrExperience.findFirst({
+    where: { publicId, restaurantId, isActive: true },
+    select: { id: true },
+  })
+  return row?.id ?? null
+}
+
 export async function quoteCart(
   input: unknown,
   slug?: string,
@@ -228,6 +250,9 @@ export async function quoteCart(
       // The same branch the menu was priced at, so the summary agrees with what
       // the guest was looking at a moment ago.
       branchId: branch?.id ?? null,
+      // …and the same QR menu, so an offer scoped to it prices the same way
+      // here as it will when the order is actually placed.
+      qrExperienceId: await resolveQrExperienceId(restaurant.id, data.qrCode),
     })
 
     return {
@@ -288,11 +313,28 @@ export async function placeGuestOrder(
       const asserted = data.branchCode?.trim() || null
       const branch = asserted ? await resolvePublicBranch(restaurant.id, asserted) : null
 
+      /*
+       * No table means no seat, so it is not a DINE_IN (ar.md §3).
+       *
+       * A delivery leaflet or a takeaway counter has no table to name. The
+       * order is a TAKEAWAY, and the branch has to come from the code the
+       * guest scanned — the table is normally what settles which kitchen
+       * cooks, and with no table there is nothing else to ask.
+       */
+      const tableId = data.tableId?.trim() || null
+      if (!tableId && !branch) {
+        throw new AppError(
+          'We could not tell which of our locations this order is for — scan the code again',
+          400,
+          'BRANCH_REQUIRED',
+        )
+      }
+
       const order = await placeOrderService({
         restaurantId: restaurant.id,
         branchId: branch?.id ?? null,
-        tableId: data.tableId,
-        type: 'DINE_IN',
+        tableId,
+        type: tableId ? 'DINE_IN' : 'TAKEAWAY',
         channel: 'QR',
         // A blank phone means no customer record at all — the name is
         // snapshotted on the order and nothing pools into a shared identity.
@@ -309,6 +351,7 @@ export async function placeGuestOrder(
         })),
         couponCode: data.couponCode || null,
         guestSessionId,
+        qrExperienceId: await resolveQrExperienceId(restaurant.id, data.qrCode),
         idempotencyKey: data.idempotencyKey || null,
       })
 

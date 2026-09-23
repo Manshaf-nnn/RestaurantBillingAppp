@@ -136,6 +136,11 @@ export const AUDIT_ACTIONS = {
   INVOICE_ISSUED: 'invoice.issued',
   STOCK_ADJUSTED: 'inventory.adjusted',
   SETTINGS_UPDATED: 'settings.updated',
+  /// ar.md §18 — what a QR menu shows and asks is a change to the guest
+  /// experience, so who changed it and to what is worth keeping.
+  QR_EXPERIENCE_SAVED: 'qr.experience_saved',
+  QR_EXPERIENCE_ACTIVE: 'qr.experience_active',
+  QR_EXPERIENCE_REGENERATED: 'qr.experience_regenerated',
   STAFF_INVITED: 'staff.invited',
   /*
    * Changing what a role may do is a permission change, and permission changes

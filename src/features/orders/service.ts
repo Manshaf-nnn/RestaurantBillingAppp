@@ -162,6 +162,8 @@ export async function buildDraft(params: {
    * up at the restaurant's base price.
    */
   branchId?: string | null
+  /** The QR menu this basket was built under, for QR-scoped offers (ar.md §11). */
+  qrExperienceId?: string | null
   db?: TxClient
 }): Promise<OrderDraft> {
   const db = params.db ?? prisma
@@ -319,6 +321,7 @@ export async function buildDraft(params: {
         customerId: params.customerId ?? null,
         now,
         timeZone: restaurant.timezone,
+        qrExperienceId: params.qrExperienceId ?? null,
       })
       if (!verdict.ok) {
         couponError = verdict.reason ?? 'This coupon cannot be applied'
@@ -409,6 +412,14 @@ export interface PlaceOrderParams {
    * client to generate one.
    */
   idempotencyKey?: string | null
+  /**
+   * The QR menu this order came through (ar.md §15, §24).
+   *
+   * Attribution only: the order is an ordinary TableFlow order and travels the
+   * same cashier → kitchen → billing → reporting path as any other. It also
+   * decides whether an offer scoped to that menu applies.
+   */
+  qrExperienceId?: string | null
   createdById?: string | null
   servedById?: string | null
 }
@@ -542,6 +553,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
     redeemPoints: params.redeemPoints,
     customerId: existingCustomer?.id ?? null,
     branchId,
+    qrExperienceId: params.qrExperienceId ?? null,
   })
 
   if (params.couponCode && draft.couponError) {
@@ -676,6 +688,8 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               idempotencyKey: params.idempotencyKey || null,
               type,
               channel: params.channel ?? 'STAFF',
+              // Which printed code produced this, when one did (ar.md §24).
+              qrExperienceId: params.qrExperienceId ?? null,
               branchId,
               // Typed in by staff = accepted (aO.md §1). A guest order waits at the till.
               status: acceptedOnPlacement(params.channel) ? 'ACCEPTED' : 'PENDING',

@@ -76,6 +76,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/reports/daily-close':
     'The day is signed for the BUSINESS: branch closes are a later refinement, and the snapshot deliberately spans every site',
   'dashboard/settings': 'Restaurant-level settings',
+  'dashboard/settings/guest':
+    'The business\'s face, not a site\'s — one welcome screen for every code, like the loyalty scheme',
   'dashboard/settings/profile': 'The signed-in user’s own account',
   'dashboard/help': 'Static guidance',
   'dashboard/locations': 'The list of locations — narrowed by visibleBranchIds, not by a selection',
@@ -156,6 +158,15 @@ function main() {
   const all = [
     ...pages(join(ROOT, 'dashboard'), 'dashboard'),
     ...pages(join(ROOT, 'order'), 'order'),
+    /*
+     * And the QR menus (ar.md), which are a second guest tree.
+     *
+     * `/m/<code>` resolves its branch from the experience row — but resolving
+     * it from a row is not the same as checking it is still a branch that can
+     * be ordered at, and a tree left outside this walk is one nobody would
+     * notice losing that check.
+     */
+    ...pages(join(ROOT, 'm'), 'm'),
     /*
      * And the station screens, which were outside this check entirely.
      *

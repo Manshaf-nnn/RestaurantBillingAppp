@@ -134,6 +134,15 @@ export const couponSchema = z
      * this is the other half.
      */
     branchId: z.string().trim().max(40).optional().or(z.literal('')),
+    /**
+     * Only from one QR menu (ar.md §11, §12).
+     *
+     * "Student Lunch, on the Student QR." Empty means everywhere, which is
+     * every coupon that existed before this. When set, `evaluate()` refuses
+     * the code unless the basket was built through that menu — including at
+     * the till, which is the point of it.
+     */
+    qrExperienceId: z.string().trim().max(40).optional().or(z.literal('')),
     isActive: z.coerce.boolean().default(true),
   })
   .refine((data) => data.type !== 'PERCENT' || data.value <= 10000, {

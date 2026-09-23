@@ -5,6 +5,7 @@ import type { Prisma } from '@prisma/client'
 
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { readPaymentConfig } from '@/features/payments/service'
+import { readAppearance } from '@/features/guest/appearance'
 import { runAction, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -16,6 +17,7 @@ import { minorUnitFactor } from '@/lib/money'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import {
   cashControlsSchema,
+  guestAppearanceSchema,
   liveBoardPolicySchema,
   paymentDestinationsSchema,
   paymentSettingsSchema,
@@ -450,5 +452,57 @@ export async function updateLiveBoardPolicy(input: unknown): Promise<ActionResul
       return { id: user.restaurantId }
     },
     'Live floor settings saved.',
+  )
+}
+
+/**
+ * Save how guests are met (ar.md §13, §19).
+ *
+ * Merged over what is stored rather than written wholesale, the same way the
+ * live-board policy is: a form that posts only the fields it knows about must
+ * not erase the ones a later version added.
+ */
+export async function updateGuestAppearance(input: unknown): Promise<ActionResult<{ ok: true }>> {
+  return runAction(
+    guestAppearanceSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      // Read the column itself: `requireRestaurant` returns the public summary,
+      // which deliberately does not carry every settings blob.
+      const stored = await prisma.restaurant.findUniqueOrThrow({
+        where: { id: user.restaurantId },
+        select: { guestExperience: true },
+      })
+
+      const existing = readAppearance(stored.guestExperience)
+      const next = { ...existing, ...data }
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: { guestExperience: next as unknown as Prisma.InputJsonValue },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SETTINGS_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        after: { guestExperience: next },
+      })
+
+      /*
+       * Both guest trees, because both read this one setting: the ordinary
+       * table QR at `/order` and every QR menu at `/m`.
+       */
+      revalidatePath('/order', 'layout')
+      revalidatePath('/m', 'layout')
+      revalidatePath('/dashboard/settings/guest')
+      return { ok: true as const }
+    },
+    'Guest experience saved.',
+    'settings.guestAppearance',
   )
 }

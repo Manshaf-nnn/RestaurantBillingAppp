@@ -745,6 +745,21 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
       if (branchId) await assertBranchAccess(user, branchId)
 
       /*
+       * A QR menu this restaurant actually owns. Checked rather than trusted:
+       * this id arrives from a form, and scoping an offer to another
+       * restaurant's code would be a cross-tenant reference (ar.md §25).
+       */
+      const qrExperienceId = data.qrExperienceId || null
+      if (qrExperienceId) {
+        const experience = await prisma.qrExperience.findFirst({
+          where: { id: qrExperienceId, restaurantId: user.restaurantId },
+          select: { id: true, branchId: true },
+        })
+        if (!experience) throw new NotFoundError('QR menu')
+        await assertRecordBranch(user, experience, 'QR menu')
+      }
+
+      /*
        * The record being edited must be this restaurant's, and at a branch
        * this person reaches. `deleteCoupon` below always scoped its delete;
        * the update by primary key alone could set another restaurant's live
@@ -762,6 +777,7 @@ export async function saveCoupon(input: unknown): Promise<ActionResult<{ id: str
       const payload = {
         code: data.code,
         branchId,
+        qrExperienceId,
         description: data.description || null,
         type: data.type,
         value: data.value,

@@ -45,6 +45,13 @@ export interface DiscountContext {
   now?: Date
   /** The restaurant's IANA zone — the hours below are ITS hours. */
   timeZone?: string
+  /**
+   * The QR menu this basket was built under, if any (ar.md §11, §12).
+   *
+   * Null for the till, the website and the ordinary `/order` flow — which is
+   * exactly the distinction a QR-scoped offer needs to make.
+   */
+  qrExperienceId?: string | null
 }
 
 export interface DiscountResult {
@@ -154,6 +161,25 @@ export async function evaluate(
     if (!inside) return reject('That offer is not for this customer')
   }
 
+  /*
+   * ── An offer that belongs to one QR menu (ar.md §11, §12) ─────────────
+   *
+   * "Student Lunch, on the Student QR." The null direction is the one that
+   * matters: a QR-scoped offer is refused when the basket names no
+   * experience, so a code printed for one laminated card cannot be typed in
+   * at the counter or claimed from the ordinary ordering flow.
+   *
+   * One check. Everything else about the offer — its value, its window, its
+   * items, its segment, its limits — is decided by the same engine as every
+   * other coupon.
+   */
+  if (coupon.qrExperienceId) {
+    if (!context.qrExperienceId) return reject('That offer is only available from its QR menu')
+    if (context.qrExperienceId !== coupon.qrExperienceId) {
+      return reject('That offer is not available on this menu')
+    }
+  }
+
   if (coupon.perCustomerLimit !== null && context.customerId) {
     const used = await prisma.couponRedemption.count({
       where: { couponId: coupon.id, customerId: context.customerId },
@@ -258,6 +284,8 @@ export async function offersForCustomer(params: {
   lines: BasketLine[]
   now?: Date
   timeZone?: string
+  /** The QR menu this basket was built under, so its own offers show up. */
+  qrExperienceId?: string | null
 }): Promise<OfferForCustomer[]> {
   const now = params.now ?? new Date()
 
@@ -274,6 +302,13 @@ export async function offersForCustomer(params: {
          * irrelevant rows on every keystroke; `evaluate` still checks it.
          */
         { OR: [{ branchId: null }, ...(params.branchId ? [{ branchId: params.branchId }] : [])] },
+        // Same shape as the branch narrowing above: everywhere, or here.
+        {
+          OR: [
+            { qrExperienceId: null },
+            ...(params.qrExperienceId ? [{ qrExperienceId: params.qrExperienceId }] : []),
+          ],
+        },
       ],
     },
     orderBy: { createdAt: 'desc' },
@@ -288,6 +323,7 @@ export async function offersForCustomer(params: {
     customerId: params.customerId,
     now,
     timeZone: params.timeZone,
+    qrExperienceId: params.qrExperienceId ?? null,
   }
 
   const offers = await Promise.all(

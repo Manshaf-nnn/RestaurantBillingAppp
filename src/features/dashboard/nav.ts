@@ -11,8 +11,10 @@ import {
   ListOrdered,
   Package,
   QrCode,
+  ScanLine,
   ScrollText,
   Settings,
+  Smartphone,
   ShieldCheck,
   Smile,
   Sparkles,
@@ -426,6 +428,12 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/dashboard/reports/cash-drawer', label: 'Cash drawer report', icon: Wallet, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/reports/petty-cash', label: 'Petty cash report', icon: Coins, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.QR_VIEW },
+    /*
+     * ar.md §1 — what guests meet when they scan, as opposed to the printed
+     * codes above. Its own row because an owner looking for "what does the
+     * menu ask my customers" is not looking for a print sheet.
+     */
+    { href: '/dashboard/qr/experiences', label: 'QR menus', icon: ScanLine, permission: PERMISSIONS.QR_VIEW },
       {
         href: '/dashboard/audit-logs',
         label: 'Audit log',
@@ -433,6 +441,12 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.AUDIT_VIEW,
       },
       { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: PERMISSIONS.SETTINGS_VIEW },
+      /*
+       * ar.md §13 — what a guest sees when they scan, for every code at once.
+       * Its own row because an owner looking for "what do my customers see"
+       * is not looking inside tax rates and printer settings.
+       */
+      { href: '/dashboard/settings/guest', label: 'Guest experience', icon: Smartphone, permission: PERMISSIONS.SETTINGS_MANAGE },
       { href: '/dashboard/links', label: 'Share links', icon: UsersRound, permission: PERMISSIONS.STAFF_MANAGE },
     ],
   },

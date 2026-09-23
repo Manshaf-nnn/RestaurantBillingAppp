@@ -149,6 +149,16 @@ export const PERMISSIONS = {
   RECIPE_VIEW: 'recipe.view',
   LOYALTY_VIEW: 'loyalty.view',
   QR_VIEW: 'qr.view',
+  /*
+   * Changing what a QR menu shows and asks (ar.md §1).
+   *
+   * Split from QR_VIEW rather than derived from it: reading the print sheet is
+   * something a manager does, while rewriting the guest experience — which
+   * menu is shown, what a customer is made to hand over before they can eat —
+   * is not the same power. Deliberately absent from SPLIT_FROM for that
+   * reason; OWNER, ADMIN and MANAGER pick it up through ALL.
+   */
+  QR_MANAGE: 'qr.manage',
   FEEDBACK_VIEW: 'feedback.view',
   CUSTOMER_ANALYTICS: 'customer.analytics',
   REPORT_SALES: 'report.sales',

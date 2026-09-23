@@ -39,7 +39,6 @@ import { cn } from '@/lib/utils'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { createServiceRequest } from '../actions'
 import { useCart } from '../cart-store'
-import { guestPath } from '@/features/orders/guest-path'
 import { ItemSheet } from './item-sheet'
 import { callAction } from '@/lib/use-action'
 
@@ -60,7 +59,14 @@ export function MenuBrowser({
   locale,
   loyalty,
   slug,
-  branchCode,
+  basePath,
+  ordering = true,
+  requiresTable = true,
+  showSearch = true,
+  showPrices = true,
+  showImages = true,
+  showDescriptions = true,
+  showFeatured = true,
   branchName = null,
   taxLabel,
   addingTo = null,
@@ -80,7 +86,36 @@ export function MenuBrowser({
    * cookie silently substituted the default branch.
    */
   slug: string
-  branchCode: string
+  /**
+   * Where this menu's own links go — `/order/<slug>/<branch>` for the ordinary
+   * QR flow, `/m/<code>` for a QR experience (ar.md §10).
+   *
+   * It replaced a `branchCode` prop that existed only to be fed to
+   * `guestPath`. The branch still comes from the cart's own table, which is
+   * what every server call already reads.
+   */
+  basePath: string
+  /**
+   * False for a menu somebody is only reading (ar.md §3B).
+   *
+   * It hides every path into the basket — the cart bar, the Add button, the
+   * redirect to pick a table. Without it a guest could fill the shared
+   * `ros.cart.<restaurantId>` basket from a menu-only code and carry it into
+   * the ordinary ordering flow, which is precisely the "must NOT automatically
+   * create an order" the spec is asking for.
+   */
+  ordering?: boolean
+  /**
+   * False for a code with no table (ar.md §3). The menu then never redirects
+   * to the entry screen to have one picked — there is no question there.
+   */
+  requiresTable?: boolean
+  showSearch?: boolean
+  showPrices?: boolean
+  /** ar.md §13 — the owner's own menu layout, from Settings → Guest experience. */
+  showImages?: boolean
+  showDescriptions?: boolean
+  showFeatured?: boolean
   /** Shown when the restaurant has more than one place to order from. */
   branchName?: string | null
   /** The guest's own open order these picks join (aO.md §3), from `?add=`. */
@@ -114,7 +149,7 @@ export function MenuBrowser({
 
   // Without a table the guest has skipped the entry screen — send them back.
   React.useEffect(() => {
-    if (hydrated && !state.table) router.replace(guestPath(slug, branchCode))
+    if (ordering && requiresTable && hydrated && !state.table) router.replace(basePath)
   }, [hydrated, state.table, router])
 
   const filtered = React.useMemo(() => {
@@ -146,10 +181,10 @@ export function MenuBrowser({
 
   const recommended = React.useMemo(
     () =>
-      menu.items
-        .filter((item) => (item.isRecommended || item.isPopular) && item.isAvailable)
-        .slice(0, 10),
-    [menu.items],
+      showFeatured
+        ? menu.items.filter((item) => (item.isRecommended || item.isPopular) && item.isAvailable).slice(0, 10)
+        : [],
+    [menu.items, showFeatured],
   )
 
   const showRecommended = !search && category === 'ALL' && diet === 'ALL' && recommended.length > 0
@@ -179,7 +214,7 @@ export function MenuBrowser({
       >
         <div className="flex items-center gap-2.5 px-4 py-3">
           <Link
-            href={guestPath(slug, branchCode)}
+            href={basePath}
             aria-label="Back"
             className="guest-control flex size-9 shrink-0 items-center justify-center rounded-xl border transition-opacity active:opacity-70"
           >
@@ -216,12 +251,14 @@ export function MenuBrowser({
           <ThemeToggle className="guest-ink shrink-0 hover:bg-black/5 dark:hover:bg-white/10" />
           <ServiceRequestDialog
             tableId={state.table?.tableId ?? null}
+            slug={slug}
             // The branch the guest scanned, checked server-side against the
             // table — a call bell must ring in the room the guest is sitting in.
             branchCode={state.table?.branchCode ?? null}
           />
         </div>
 
+        {showSearch ? (
         <div className="px-4 pb-3">
           <Input
             value={search}
@@ -238,6 +275,7 @@ export function MenuBrowser({
             className="guest-control h-11 rounded-xl border focus-visible:ring-[rgb(var(--brand-r),var(--brand-g),var(--brand-b))]"
           />
         </div>
+        ) : null}
 
         <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3">
           <Chip active={diet === 'VEG'} onClick={() => setDiet(diet === 'VEG' ? 'ALL' : 'VEG')}>
@@ -454,7 +492,7 @@ export function MenuBrowser({
                           expect the sheet to ask them anything — the size
                           picker was there and invisible.
                         */}
-                        {(() => {
+                        {!showPrices ? null : (() => {
                           const range = priceRange(item.price, item.groups)
                           return (
                             <div className="mt-1 flex items-center gap-2">
@@ -479,7 +517,7 @@ export function MenuBrowser({
                           )
                         })()}
 
-                        {item.description ? (
+                        {showDescriptions && item.description ? (
                           <p className="guest-ink-muted mt-1.5 line-clamp-2 text-xs leading-relaxed">
                             {item.description}
                           </p>
@@ -503,7 +541,13 @@ export function MenuBrowser({
                         </div>
                       </div>
 
-                      <div className="guest-surface relative size-24 shrink-0 overflow-hidden rounded-xl border">
+                      {/*
+                        * Photos off gives a clean text menu that loads faster
+                        * on a phone in a basement (ar.md §13). The whole tile
+                        * goes, not just the image — an empty frame beside every
+                        * dish is worse than no frame.
+                        */}
+                      <div className={showImages ? 'guest-surface relative size-24 shrink-0 overflow-hidden rounded-xl border' : 'hidden'}>
                         {item.imageUrl ? (
                           <Image
                             src={item.imageUrl}
@@ -541,10 +585,10 @@ export function MenuBrowser({
         )}
       </main>
 
-      {itemCount > 0 ? (
+      {ordering && itemCount > 0 ? (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-lg p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <Link
-            href={guestPath(slug, branchCode, 'cart')}
+            href={`${basePath}/cart`}
             style={{
               backgroundColor: 'rgb(var(--brand-r),var(--brand-g),var(--brand-b))',
               boxShadow: '0 12px 34px rgba(var(--brand-r),var(--brand-g),var(--brand-b),0.45)',
@@ -579,6 +623,8 @@ export function MenuBrowser({
         item={active}
         currency={currency}
         locale={locale}
+        readOnly={!ordering}
+        showPrices={showPrices}
         onOpenChange={(open) => !open && setActive(null)}
       />
     </div>
@@ -626,9 +672,19 @@ function Chip({
 
 function ServiceRequestDialog({
   tableId,
+  slug,
   branchCode,
 }: {
   tableId: string | null
+  /**
+   * The restaurant, named rather than left to a cookie.
+   *
+   * `resolvePublicTenant` reads the path slug first and the `ros_r` cookie
+   * third, and that cookie is only ever written under `/order`. A call bell
+   * rung from a QR menu at `/m/<code>` would otherwise fall through to the
+   * "exactly one active restaurant" fallback and fail on a shared host.
+   */
+  slug: string
   branchCode: string | null
 }) {
   const [open, setOpen] = React.useState(false)
@@ -639,7 +695,7 @@ function ServiceRequestDialog({
   const request = (type: (typeof SERVICE_ACTIONS)[number]['type']) => {
     startTransition(async () => {
       const result = await callAction(() =>
-        createServiceRequest({ tableId, type }, undefined, branchCode),
+        createServiceRequest({ tableId, type }, slug, branchCode),
       )
       if (result.ok) {
         toast.success('Our staff have been notified')

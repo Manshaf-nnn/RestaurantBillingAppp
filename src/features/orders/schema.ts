@@ -39,10 +39,29 @@ export const quoteCartSchema = z.object({
     .max(60),
   couponCode: z.string().trim().max(40).optional().or(z.literal('')),
   phone: z.string().trim().max(30).optional().or(z.literal('')),
+  /*
+   * The QR menu this basket was built under (ar.md §15, §24).
+   *
+   * The PRINTED public code, never a row id: §25 says not to put internal
+   * identifiers on a public path, and this one is typed into a client payload
+   * that anybody can read. The server resolves it to an experience, scoped to
+   * the tenant it just resolved, so a code from another restaurant resolves to
+   * nothing rather than attributing an order across a tenant boundary.
+   */
+  qrCode: z.string().trim().max(32).optional().or(z.literal('')),
 })
 
 export const placeOrderSchema = z.object({
-  tableId: z.string().cuid('Select a table'),
+  /*
+   * Optional, because not every code has a table behind it (ar.md §3).
+   *
+   * A card on table 6 sends one. A delivery leaflet or a takeaway counter has
+   * no table to send, and the order that comes out is a TAKEAWAY rather than a
+   * DINE_IN with nowhere to sit. When it is absent the BRANCH must be named
+   * instead — the table is what usually decides which kitchen cooks, and
+   * something has to.
+   */
+  tableId: z.string().cuid('Select a table').optional().or(z.literal('')),
   /*
    * The branch code from the QR (`?b=`), carried through the cart so the order
    * does not depend on a cookie surviving three page loads on somebody's phone.
@@ -87,6 +106,16 @@ export const placeOrderSchema = z.object({
    * deduct another full set of ingredients.
    */
   idempotencyKey: z.string().trim().min(8).max(64).optional().or(z.literal('')),
+  /*
+   * The QR menu this basket was built under (ar.md §15, §24).
+   *
+   * The PRINTED public code, never a row id: §25 says not to put internal
+   * identifiers on a public path, and this one is typed into a client payload
+   * that anybody can read. The server resolves it to an experience, scoped to
+   * the tenant it just resolved, so a code from another restaurant resolves to
+   * nothing rather than attributing an order across a tenant boundary.
+   */
+  qrCode: z.string().trim().max(32).optional().or(z.literal('')),
 })
 export type PlaceOrderInput = z.infer<typeof placeOrderSchema>
 

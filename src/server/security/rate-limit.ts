@@ -58,6 +58,19 @@ export const RATE_LIMITS = {
    * for a full dining room editing their carts, closed to a script.
    */
   quoteCartBurst: { limit: 600, windowSeconds: 300 },
+  /*
+   * A guest answering a QR menu's entry questions (ar.md §25).
+   *
+   * Sized like the loyalty lookup it sits beside, and for the same reason: the
+   * form takes a phone number and no proof, so the thing stopping somebody
+   * walking the number space to find out who eats here is how often they may
+   * ask. A real guest submits it once, or twice if they mistype.
+   */
+  qrEnter: { limit: 10, windowSeconds: 600 },
+  /** per venue IP — a dining room's worth of guests arriving at once */
+  qrEnterBurst: { limit: 200, windowSeconds: 600 },
+  /** Opening a QR menu. Counted once a session, so this is only a floor. */
+  qrOpenBurst: { limit: 600, windowSeconds: 300 },
   // Also per IP, and also shared by the whole venue: guests browsing the menu
   // and staff devices polling their stations all arrive from one address.
   publicRead: { limit: 600, windowSeconds: 60 },

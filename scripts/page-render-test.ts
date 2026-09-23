@@ -70,6 +70,7 @@ const PAGES = [
   '/dashboard/reviews',
   '/dashboard/reservations',
   '/dashboard/qr',
+  '/dashboard/qr/experiences',
   '/dashboard/handover',
   '/dashboard/shifts',
   '/dashboard/shifts?tab=templates',

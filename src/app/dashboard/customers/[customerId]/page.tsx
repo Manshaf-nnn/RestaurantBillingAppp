@@ -59,7 +59,9 @@ export default async function CustomerPage({
         them: a grid of empty labels tells a reader nothing and makes the ones
         that do matter harder to find.
       */}
-      {[c.address, c.birthday, c.anniversary, c.firstOrderAt, c.notes].some(Boolean) ? (
+      {[c.address, c.birthday, c.anniversary, c.firstOrderAt, c.notes].some(Boolean) ||
+      c.customFields.length > 0 ||
+      c.sourceQrName ? (
         <dl className="mb-5 grid gap-x-6 gap-y-2 rounded-xl border bg-card p-4 text-sm shadow-soft sm:grid-cols-2 lg:grid-cols-4">
           {c.address ? (
             <div><dt className="text-xs text-muted-foreground">Address</dt><dd>{c.address}</dd></div>
@@ -80,6 +82,23 @@ export default async function CustomerPage({
             <div>
               <dt className="text-xs text-muted-foreground">First visit</dt>
               <dd><LocalDateTime value={c.firstOrderAt} options={{ dateStyle: 'medium' }} /></dd>
+            </div>
+          ) : null}
+          {/*
+            What a QR menu asked them, in the owner's own words (ar.md §23).
+            Beside the rest of who they are, not in a section of its own — a
+            campus ID is simply another thing known about this person.
+          */}
+          {c.customFields.map((field) => (
+            <div key={field.label}>
+              <dt className="text-xs text-muted-foreground">{field.label}</dt>
+              <dd>{field.value}</dd>
+            </div>
+          ))}
+          {c.sourceQrName ? (
+            <div>
+              <dt className="text-xs text-muted-foreground">Came from</dt>
+              <dd>{c.sourceQrName}</dd>
             </div>
           ) : null}
         </dl>

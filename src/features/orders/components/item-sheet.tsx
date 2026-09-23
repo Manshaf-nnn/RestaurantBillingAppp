@@ -21,6 +21,17 @@ interface ItemSheetProps {
   item: PublicMenuItem | null
   currency: string
   locale: string
+  /**
+   * A menu somebody is only reading (ar.md §3B).
+   *
+   * The sheet still shows the dish, its description and its choices — that is
+   * what a menu is for — but nothing here can put it in a basket. Without this
+   * a menu-only code would quietly fill the same `ros.cart.<restaurantId>`
+   * basket the ordering flow uses.
+   */
+  readOnly?: boolean
+  /** §13 — an owner may run a menu with no prices on it. */
+  showPrices?: boolean
   onOpenChange: (open: boolean) => void
 }
 
@@ -28,7 +39,14 @@ interface ItemSheetProps {
  * Item detail sheet: variants, add-ons, quantity and a note for the kitchen.
  * Required option groups gate the add-to-cart button, matching server rules.
  */
-export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetProps) {
+export function ItemSheet({
+  item,
+  currency,
+  locale,
+  readOnly = false,
+  showPrices = true,
+  onOpenChange,
+}: ItemSheetProps) {
   const { addItem } = useCart()
   const [quantity, setQuantity] = React.useState(1)
   const [notes, setNotes] = React.useState('')
@@ -253,6 +271,8 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
             )
           })}
 
+          {/* Nothing to tell a kitchen about a dish nobody is ordering. */}
+          {readOnly ? null : (
           <section className="mt-6">
             <Separator className="mb-4" />
             <label htmlFor="item-notes" className="text-sm font-semibold">
@@ -270,8 +290,16 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
             />
             <p className="mt-1 text-right text-xs text-muted-foreground">{notes.length}/200</p>
           </section>
+          )}
         </div>
 
+        {/*
+          * A read-only sheet has no footer at all (ar.md §3B): no quantity, no
+          * Add. Disabling the button instead would show a guest a way to order
+          * that does not work, on a code whose whole point is that it does not
+          * take orders.
+          */}
+        {readOnly ? null : (
         <div className="sticky bottom-0 z-10 border-t bg-background/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1 rounded-xl border p-1">
@@ -305,10 +333,15 @@ export function ItemSheet({ item, currency, locale, onOpenChange }: ItemSheetPro
               onClick={submit}
               disabled={Boolean(missingGroup) || !item.isAvailable}
             >
-              {missingGroup ? `Choose ${missingGroup.name}` : `Add · ${formatMoney(total, currency, locale)}`}
+              {missingGroup
+                ? `Choose ${missingGroup.name}`
+                : showPrices
+                  ? `Add · ${formatMoney(total, currency, locale)}`
+                  : 'Add to order'}
             </Button>
           </div>
         </div>
+        )}
       </SheetContent>
     </Dialog>
   )

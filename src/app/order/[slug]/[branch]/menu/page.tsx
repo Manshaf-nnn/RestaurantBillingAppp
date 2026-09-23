@@ -6,6 +6,8 @@ import { getOrderForGuest } from '@/features/orders/queries'
 import { orderableBranches, resolvePublicBranch } from '@/features/branches/public-branch'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
+import { getGuestAppearance } from '@/features/guest/queries'
+import { guestPath } from '@/features/orders/guest-path'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { localeForCurrency } from '@/lib/money'
 
@@ -57,9 +59,11 @@ export default async function BranchMenuPage({
       ? { orderId: addTo.id, orderNumber: addTo.orderNumber }
       : null
 
-  const [menu, orderable] = await Promise.all([
+  const [menu, orderable, appearance] = await Promise.all([
     getPublicMenu(restaurant.id, restaurant.timezone, branch.id),
     orderableBranches(restaurant.id),
+    // The same setting the QR menus read (ar.md §13).
+    getGuestAppearance(restaurant.id),
   ])
 
   return (
@@ -72,7 +76,12 @@ export default async function BranchMenuPage({
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         taxLabel={restaurant.taxLabel}
         slug={slug}
-        branchCode={branch.code}
+        basePath={guestPath(slug, branch.code)}
+        showSearch={appearance.menuShowSearch}
+        showPrices={appearance.menuShowPrices}
+        showImages={appearance.menuShowImages}
+        showDescriptions={appearance.menuShowDescriptions}
+        showFeatured={appearance.menuShowFeatured}
         addingTo={addingTo}
         // Named on the menu too — it never was, so a guest browsing the wrong
         // branch's prices had nothing on screen to tell them.

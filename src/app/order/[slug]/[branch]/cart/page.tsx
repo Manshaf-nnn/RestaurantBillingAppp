@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 
 import { CartCheckout } from '@/features/orders/components/cart-checkout'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
+import { guestPath } from '@/features/orders/guest-path'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { localeForCurrency } from '@/lib/money'
@@ -43,7 +44,7 @@ export default async function BranchCartPage({
         loyaltyEnabled={restaurant.loyaltyEnabled}
         loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
         slug={slug}
-        branchCode={branch.code}
+        basePath={guestPath(slug, branch.code)}
       />
     </BrandTheme>
   )

@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import CoverPage from '@/components/CoverPage'
+import type { GuestAppearance } from '@/features/guest/appearance'
 
 interface TableEntryProps {
   restaurantName: string
@@ -19,6 +20,8 @@ interface TableEntryProps {
   branchCode?: string | null
   /** Shown when the code was a branch's, so the guest can confirm the place. */
   branchName?: string | null
+  /** What the owner has decided this screen shows and says (ar.md §13). */
+  appearance?: GuestAppearance
 }
 
 /**

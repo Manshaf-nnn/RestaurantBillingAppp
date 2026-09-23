@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import Image from 'next/image'
-import { Copy, Download, ExternalLink, Printer, QrCode } from 'lucide-react'
+import Link from 'next/link'
+import { Copy, Download, ExternalLink, Printer, QrCode, ScanLine } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -169,9 +170,20 @@ export function QrPoster({
             ? 'One code per location, and one per table. A table code opens that location’s menu with the table already set.'
             : 'One code for the whole restaurant — guests enter their table number after scanning'
         }
+        /*
+         * These print sheets are the DEFAULT experience and are untouched by
+         * the QR-menu feature (ar.md §2). The link across is for the owner who
+         * wants a code that shows something different — it is not a
+         * replacement for anything on this page.
+         */
         actions={
           orderUrl && qrDataUrl ? (
             <>
+              <Button variant="ghost" asChild>
+                <Link href="/dashboard/qr/experiences">
+                  <ScanLine /> QR menus
+                </Link>
+              </Button>
               <Button variant="outline" onClick={download}>
                 <Download /> PNG
               </Button>

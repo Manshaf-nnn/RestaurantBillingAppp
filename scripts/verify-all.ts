@@ -114,6 +114,12 @@ const SERVICE = [
   // records which; completion costs the actual output from what was issued
   // and stocks it at this branch only; the second tap of anything is refused.
   'production-fifo-test',
+  // ar.md — QR menus as a configuration layer: a code created with a name and
+  // a branch behaves exactly as the old QR did; a menu-only code seats nothing
+  // and orders nothing; category-specific questions are asked and irrelevant
+  // ones are not; an existing customer keeps their name through the gate AND
+  // through placeOrder; a QR-scoped offer is refused at the till.
+  'qr-experience-test',
   'catalog-test',
   'purchasing-test',
   'supplier-ledger-test',

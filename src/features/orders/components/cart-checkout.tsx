@@ -29,7 +29,6 @@ import { addGuestOrderItems, placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
 import { pointsEarned, type OrderTotals } from '../pricing'
 import { callAction } from '@/lib/use-action'
-import { guestPath } from '@/features/orders/guest-path'
 
 interface Props {
   currency: string
@@ -47,7 +46,24 @@ interface Props {
    * final tap.
    */
   slug: string
-  branchCode: string
+  /** Where this cart's own links go — `/order/<slug>/<branch>` or `/m/<code>`. */
+  basePath: string
+  /**
+   * The printed QR code this basket was built under (ar.md §11, §15, §24).
+   *
+   * Carried so the order records where it came from, and so a coupon scoped to
+   * one QR menu can be told apart from the same code typed at the till.
+   */
+  qrCode?: string | null
+  /**
+   * False for a code with no table behind it — a delivery leaflet, a takeaway
+   * counter (ar.md §3). The guest was never asked to seat themselves, so this
+   * screen must not send them back to a question that is not there. The order
+   * becomes a TAKEAWAY and the branch comes from the code.
+   */
+  requiresTable?: boolean
+  /** The branch that code belongs to, since no table can settle it. */
+  branchCode?: string | null
 }
 
 export function CartCheckout({
@@ -58,7 +74,10 @@ export function CartCheckout({
   loyaltyEnabled,
   loyaltyEarnRateX100,
   slug,
-  branchCode,
+  basePath,
+  qrCode = null,
+  requiresTable = true,
+  branchCode = null,
 }: Props) {
   const router = useRouter()
   const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines, stopAdding } =
@@ -96,7 +115,7 @@ export function CartCheckout({
   const [quoting, startQuote] = React.useTransition()
 
   React.useEffect(() => {
-    if (hydrated && !state.table) router.replace(guestPath(slug, branchCode))
+    if (requiresTable && hydrated && !state.table) router.replace(basePath)
   }, [hydrated, state.table, router])
 
   // Re-quote whenever the basket or coupon changes — totals always come from
@@ -118,8 +137,9 @@ export function CartCheckout({
               })),
               couponCode: code || undefined,
               phone: state.customer.phone || undefined,
+              qrCode: qrCode || undefined,
             },
-            undefined,
+            slug,
             /*
              * The branch the guest scanned. It was already being passed to
              * `placeGuestOrder` twelve lines below and dropped here, so the
@@ -159,8 +179,10 @@ export function CartCheckout({
     // Captured rather than read inside the closure below: narrowing does not
     // survive into a callback, since `state` could change before it runs.
     const table = state.table
-    if (!table) {
-      router.replace(guestPath(slug, branchCode))
+    // A code with no table was never going to have one; only send the guest
+    // back when the question actually exists on the screen behind them.
+    if (!table && requiresTable) {
+      router.replace(basePath)
       return
     }
 
@@ -175,7 +197,7 @@ export function CartCheckout({
             optionIds: line.options.map((option) => option.optionId),
             notes: line.notes || '',
           })),
-        }),
+        }, slug),
       )
       setPlacing(false)
       if (!addition.ok) {
@@ -190,13 +212,16 @@ export function CartCheckout({
     }
     const result = await callAction(() => placeGuestOrder({
       idempotencyKey: idempotencyKey.current,
-      tableId: table.tableId,
+      tableId: table?.tableId ?? '',
       // The branch the guest actually scanned, so the order cannot be filed
       // against the default one by a lost cookie.
-      branchCode: table.branchCode ?? '',
+      // The table settles the branch when there is one; the code does otherwise.
+      branchCode: table?.branchCode ?? branchCode ?? '',
       customerName: state.customer.name,
       customerPhone: state.customer.phone,
       customerEmail: state.customer.email || '',
+      // Which printed code this basket was built under (ar.md §15, §24).
+      qrCode: qrCode || '',
       notes: orderNotes,
       couponCode: state.couponCode || '',
       redeemPoints: 0,
@@ -206,7 +231,7 @@ export function CartCheckout({
         optionIds: line.options.map((option) => option.optionId),
         notes: line.notes || '',
       })),
-    }))
+    }, slug))
     setPlacing(false)
 
     if (!result.ok) {
@@ -242,7 +267,7 @@ export function CartCheckout({
   if (itemCount === 0) {
     return (
       <div className="flex min-h-dvh flex-col">
-        <Header title="Your order" />
+        <Header title="Your order" menuHref={`${basePath}/menu`} />
         <div className="flex flex-1 items-center p-6">
           <EmptyState
             className="w-full border-none"
@@ -251,7 +276,7 @@ export function CartCheckout({
             description="Add something from the menu and it will show up here."
             action={
               <Button asChild size="lg">
-                <Link href={guestPath(slug, branchCode, 'menu')}>
+                <Link href={`${basePath}/menu`}>
                   <UtensilsCrossed /> Browse the menu
                 </Link>
               </Button>
@@ -272,6 +297,7 @@ export function CartCheckout({
   return (
     <div className="flex min-h-dvh flex-col pb-40">
       <Header
+        menuHref={`${basePath}/menu`}
         title={adding ? 'Add to your order' : 'Your order'}
         subtitle={
           adding
@@ -356,7 +382,7 @@ export function CartCheckout({
           ))}
 
           <Link
-            href={guestPath(slug, branchCode, 'menu')}
+            href={`${basePath}/menu`}
             className="flex items-center justify-center gap-2 p-3 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
           >
             <Plus className="size-4" /> Add more items
@@ -525,11 +551,17 @@ export function CartCheckout({
   )
 }
 
-function Header({ title, subtitle }: { title: string; subtitle?: string }) {
+/**
+ * `menuHref` used to be the literal `/order/menu`, which is the legacy
+ * redirect page: going back from the cart dropped the branch and bounced the
+ * guest through the "which location are you at?" chooser. It takes the caller's
+ * own base path now, so back goes back.
+ */
+function Header({ title, subtitle, menuHref }: { title: string; subtitle?: string; menuHref: string }) {
   return (
     <header className="sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
       <Button variant="ghost" size="icon-sm" asChild aria-label="Back to menu">
-        <Link href="/order/menu">
+        <Link href={menuHref}>
           <ArrowLeft />
         </Link>
       </Button>

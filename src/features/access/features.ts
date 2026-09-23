@@ -843,9 +843,18 @@ export const FEATURES: Feature[] = [
     key: 'qr',
     label: 'QR codes',
     group: 'Back office',
-    description: 'The codes guests scan at the table.',
-    actions: [{ key: 'view', permission: PERMISSIONS.QR_VIEW }],
-    routes: ['/dashboard/qr'],
+    description: 'The codes guests scan at the table, and what they see when they do.',
+    actions: [
+      { key: 'view', permission: PERMISSIONS.QR_VIEW },
+      { key: 'edit', label: 'Manage', permission: PERMISSIONS.QR_MANAGE },
+    ],
+    /*
+     * `/dashboard/qr` already prefix-matches the experience screens below it,
+     * so naming them here is belt and braces rather than strictly required —
+     * but `featureForRoute` takes the longest match, and writing them down is
+     * what stops a future feature quietly claiming one of them.
+     */
+    routes: ['/dashboard/qr', '/dashboard/qr/experiences'],
   },
   {
     key: 'audit',

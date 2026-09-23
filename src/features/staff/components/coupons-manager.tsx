@@ -50,6 +50,8 @@ export interface CouponRow {
   /** Null means every location. */
   branchId: string | null
   branchName: string | null
+  /** Null means every menu, including the till (ar.md §11). */
+  qrExperienceId: string | null
 }
 
 export function CouponsManager({
@@ -57,12 +59,14 @@ export function CouponsManager({
   currency,
   locale,
   locations,
+  qrExperiences,
 }: {
   coupons: CouponRow[]
   currency: string
   locale: string
   /** Locations this person may pin a code to. */
   locations: Array<{ id: string; name: string }>
+  qrExperiences: Array<{ id: string; name: string }>
 }) {
   const [coupons, setCoupons] = React.useState(initial)
   const [editing, setEditing] = React.useState<CouponRow | null>(null)
@@ -197,6 +201,7 @@ export function CouponsManager({
         coupon={editing}
         currency={currency}
         locations={locations}
+        qrExperiences={qrExperiences}
       />
 
       <ConfirmDialog
@@ -217,6 +222,7 @@ function CouponDialog({
   coupon,
   currency,
   locations,
+  qrExperiences,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -224,6 +230,7 @@ function CouponDialog({
   currency: string
   /** Locations this person may pin a code to. Fewer than two hides the field. */
   locations: Array<{ id: string; name: string }>
+  qrExperiences: Array<{ id: string; name: string }>
 }) {
   const [form, setForm] = React.useState({
     code: '',
@@ -237,6 +244,7 @@ function CouponDialog({
     startsAt: '',
     endsAt: '',
     branchId: '',
+    qrExperienceId: '',
     isActive: true,
   })
   const [saving, setSaving] = React.useState(false)
@@ -268,6 +276,7 @@ function CouponDialog({
       startsAt: coupon?.startsAt ? coupon.startsAt.slice(0, 10) : '',
       endsAt: coupon?.endsAt ? coupon.endsAt.slice(0, 10) : '',
       branchId: coupon?.branchId ?? '',
+      qrExperienceId: coupon?.qrExperienceId ?? '',
       isActive: coupon?.isActive ?? true,
     })
   }, [open, coupon, currency])
@@ -291,6 +300,7 @@ function CouponDialog({
       startsAt: form.startsAt || '',
       endsAt: form.endsAt || '',
       branchId: form.branchId || '',
+      qrExperienceId: form.qrExperienceId || '',
       isActive: form.isActive,
     }))
     setSaving(false)
@@ -392,6 +402,28 @@ function CouponDialog({
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
+
+          {/*
+            ar.md §11/§12 — an offer that belongs to one QR menu. Refused
+            anywhere else, the counter included, which is what makes "Student
+            QR only" mean something.
+          */}
+          {qrExperiences.length > 0 ? (
+            <Field label="Only on this QR menu" hint="Blank = anywhere, including the till">
+              <select
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                value={form.qrExperienceId}
+                onChange={(e) => setForm({ ...form, qrExperienceId: e.target.value })}
+              >
+                <option value="">Anywhere</option>
+                {qrExperiences.map((experience) => (
+                  <option key={experience.id} value={experience.id}>
+                    {experience.name}
                   </option>
                 ))}
               </select>

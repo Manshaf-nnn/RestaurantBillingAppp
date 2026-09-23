@@ -251,3 +251,43 @@ export const liveBoardPolicySchema = z
     }
   })
 export type LiveBoardPolicyInput = z.infer<typeof liveBoardPolicySchema>
+
+/**
+ * How guests are met, on every code (ar.md §13, §19).
+ *
+ * One setting for the ordinary table QR and every QR menu alike: a guest
+ * scanning the table card and a guest scanning the takeaway poster should meet
+ * the same restaurant. Text fields are capped rather than required — a blank
+ * falls back to the built-in wording in `readAppearance`, so an owner cannot
+ * leave a guest reading an empty heading.
+ */
+export const guestAppearanceSchema = z.object({
+  showLogo: z.coerce.boolean(),
+  showTagline: z.coerce.boolean(),
+  showHours: z.coerce.boolean(),
+  showPoweredBy: z.coerce.boolean(),
+  showTiles: z.coerce.boolean(),
+  showFooter: z.coerce.boolean(),
+
+  headingText: z.string().trim().max(80).optional().or(z.literal('')),
+  helperText: z.string().trim().max(160).optional().or(z.literal('')),
+  buttonText: z.string().trim().max(40).optional().or(z.literal('')),
+  footerNote: z.string().trim().max(120).optional().or(z.literal('')),
+  noTableHeadingText: z.string().trim().max(80).optional().or(z.literal('')),
+  noTableHelperText: z.string().trim().max(160).optional().or(z.literal('')),
+
+  menuShowSearch: z.coerce.boolean(),
+  menuShowPrices: z.coerce.boolean(),
+  menuShowImages: z.coerce.boolean(),
+  menuShowDescriptions: z.coerce.boolean(),
+  menuShowFeatured: z.coerce.boolean(),
+  menuLayout: z.enum(['LIST', 'GRID']),
+
+  accentMode: z.enum(['AUTO', 'CUSTOM']),
+  accentColour: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #f97316')
+    .optional()
+    .or(z.literal('')),
+})

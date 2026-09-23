@@ -68,6 +68,15 @@ export interface CustomerProfile {
   firstOrderAt: string | null
   /** Anything still owed across their open bills. */
   outstanding: number
+  /**
+   * What a QR menu asked them, and which one (ar.md §23).
+   *
+   * These are the owner's own questions — "Campus ID", "Company name" — so
+   * they are shown as they were asked rather than mapped onto anything.
+   */
+  customFields: Array<{ label: string; value: string }>
+  /** The QR menu that first brought them in, if one did. */
+  sourceQrName: string | null
 }
 
 export async function getCustomerProfile(params: {
@@ -78,7 +87,10 @@ export async function getCustomerProfile(params: {
 }): Promise<CustomerProfile> {
   const customer = await prisma.customer.findFirstOrThrow({
     where: { id: params.customerId, restaurantId: params.restaurantId },
-    include: { category: { select: { name: true } } },
+    include: {
+      category: { select: { name: true } },
+      sourceQrExperience: { select: { name: true } },
+    },
   })
 
   /*
@@ -238,6 +250,25 @@ export async function getCustomerProfile(params: {
     marketingConsent: customer.marketingConsent,
     notes: customer.notes,
     categoryName: customer.category?.name ?? null,
+    /*
+     * Read defensively — a Json column written from a public endpoint. The
+     * service caps and shapes it on the way in; anything that does not look
+     * like an answer is simply not shown.
+     */
+    customFields:
+      customer.profile && typeof customer.profile === 'object' && !Array.isArray(customer.profile)
+        ? Object.values(customer.profile as Record<string, unknown>)
+            .filter(
+              (entry): entry is { label: string; value: string } =>
+                Boolean(entry) &&
+                typeof entry === 'object' &&
+                !Array.isArray(entry) &&
+                typeof (entry as Record<string, unknown>).label === 'string' &&
+                typeof (entry as Record<string, unknown>).value === 'string',
+            )
+            .map((entry) => ({ label: entry.label, value: entry.value }))
+        : [],
+    sourceQrName: customer.sourceQrExperience?.name ?? null,
     address: customer.address,
     birthday: customer.birthday?.toISOString() ?? null,
     anniversary: customer.anniversary?.toISOString() ?? null,

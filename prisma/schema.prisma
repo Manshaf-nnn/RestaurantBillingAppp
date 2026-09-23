@@ -755,6 +755,19 @@ model Restaurant {
   /// [ApprovalPolicy] — thresholds above which an action needs a second
   /// pair of eyes. Null means the built-in defaults apply.
   approvalPolicy     Json?
+  /// ── How guests are met, on every code (ar.md §13, §19) ────────────────
+  ///
+  /// [GuestAppearance] — what the welcome screen shows and says, and how the
+  /// menu is laid out. Restaurant-level on purpose: a guest scanning the table
+  /// card and a guest scanning the takeaway poster should meet the same
+  /// restaurant, so this is ONE setting that both the ordinary `/order` flow
+  /// and every QR menu read. A QR menu's own switches narrow it for that code;
+  /// they never fork it.
+  ///
+  /// Null means the built-in defaults, which are exactly what the guest
+  /// screens looked like before this existed.
+  guestExperience    Json?
+
   /// [LiveBoardPolicy] — the live floor board's waiting-time bands, customer
   /// tiers, return-gap days and alert timings. Null means the built-in
   /// defaults apply, which is why the board works before anyone configures it.
@@ -764,6 +777,7 @@ model Restaurant {
   /// is too long to wait for food".
   liveBoardPolicy    Json?
   customerCategories CustomerCategory[]
+  qrExperiences      QrExperience[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -911,14 +925,14 @@ model User {
   restaurantId String?
   restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  email        String
-  passwordHash String
-  name         String
-  phone        String?
-  avatarUrl    String?
-  role         UserRole @default(WAITER)
+  email             String
+  passwordHash      String
+  name              String
+  phone             String?
+  avatarUrl         String?
+  role              UserRole @default(WAITER)
   /// extra permission keys granted on top of whatever the role gives
-  permissions  String[] @default([])
+  permissions       String[] @default([])
   /// Permission keys taken away from THIS person, whatever granted them
   /// (staff.A.md §3). Subtracted last in `permissionsFor`, so it beats the
   /// role defaults, a saved role and `permissions` above alike. Owners and the
@@ -1044,12 +1058,10 @@ model User {
 
 /**
  * An extra site somebody may work (staff.A.md §4).
- *
  * `User.branchId` stays the HOME site — where a shift opens, where the drawer
  * defaults, the one `requiresOwnBranch` insists on. This table is reach on top
  * of that, so "John covers Ampara and Kandy but not Colombo" is one row per
  * site rather than a second account per site.
- *
  * A join table rather than a `String[]` column: the foreign key is what makes
  * a closed branch drop out of everyone's reach automatically, and an array of
  * ids would go on naming it until somebody remembered to sweep.
@@ -1638,6 +1650,32 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// ── What a QR menu asked them (ar.md §9, §23) ─────────────────────────
+  ///
+  /// `{ "campus-id": { "label": "Campus ID", "value": "ABC123", "at": "…" } }`
+  /// — the answers to the owner's own custom fields, kept beside the customer
+  /// rather than in a table of their own.
+  ///
+  /// Json because §23 needs these SHOWN on the profile and nothing anywhere
+  /// filters, aggregates or joins on them. The bet, written down so the next
+  /// person can price it: "every customer whose Campus ID starts with X" would
+  /// need a GIN index or a real table. Until something asks for that, a column
+  /// beats a model, a relation and an N+1 on the customer list.
+  ///
+  /// Written from an UNAUTHENTICATED endpoint, so `enterExperience` merges
+  /// rather than replaces — a second visit filling one field must not erase
+  /// the first — and caps the size. See `capProfile` in features/qr/service.ts.
+  profile Json?
+
+  /// The QR experience that CREATED this record, if one did (ar.md §22, §23).
+  ///
+  /// Set once, on insert, and never rewritten: it answers "where did this
+  /// customer come from", which a later scan of a different code does not
+  /// change. That makes "new customers from the Student QR" a count rather
+  /// than a guess.
+  sourceQrExperienceId String?
+  sourceQrExperience   QrExperience? @relation(fields: [sourceQrExperienceId], references: [id], onDelete: SetNull)
+
   orders         Order[]
   reservations   Reservation[]
   reviews        Review[]
@@ -1653,6 +1691,7 @@ model Customer {
   @@index([restaurantId, totalSpent])
   @@index([restaurantId, totalOrders])
   @@index([restaurantId, categoryId])
+  @@index([restaurantId, sourceQrExperienceId])
   @@map("customers")
 }
 
@@ -1678,10 +1717,42 @@ model CustomerCategory {
   updatedAt DateTime @updatedAt
 
   customers Customer[]
+  /// Extra questions a QR menu asks once this category is chosen (ar.md §7).
+  qrFields  QrExperienceField[]
 
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive, sortOrder])
   @@map("customer_categories")
+}
+
+/// Ordering, or a menu somebody reads (ar.md §3).
+enum QrExperienceType {
+  ORDERING
+  MENU_ONLY
+}
+
+/// The branch's whole menu, or a chosen part of it (ar.md §10).
+enum QrMenuMode {
+  ALL
+  CUSTOM
+}
+
+/// How a guest's answer is typed in. Kept small on purpose — §9 asks for
+/// simple fields, not a form builder.
+enum QrFieldType {
+  TEXT
+  PHONE
+  EMAIL
+  DATE
+  NUMBER
+}
+
+/// Whether a field is asked for at all, and whether it may be left blank
+/// (ar.md §5: "Do not make everything mandatory").
+enum QrFieldRule {
+  HIDDEN
+  OPTIONAL
+  REQUIRED
 }
 
 // ────────────────────────────────────────────────────────────── orders ─────
@@ -1830,6 +1901,15 @@ model Order {
   /// twice. Partial so the column can stay null for orders keyed in by staff.
   idempotencyKey String?
 
+  /// The QR experience this order came through (ar.md §15, §24).
+  ///
+  /// Attribution only — the order itself is an ordinary TableFlow order and
+  /// goes through the same cashier, kitchen, billing and reporting path as any
+  /// other. `SetNull` because retiring a code must never orphan the orders it
+  /// produced; §18 says deactivate, never delete.
+  qrExperienceId String?
+  qrExperience   QrExperience? @relation(fields: [qrExperienceId], references: [id], onDelete: SetNull)
+
   @@unique([restaurantId, orderNumber])
   @@unique([restaurantId, idempotencyKey])
   @@index([restaurantId, status, placedAt])
@@ -1847,6 +1927,7 @@ model Order {
   @@index([guestSessionId])
   @@index([restaurantId, heldAt])
   @@index([restaurantId, branchId, placedAt])
+  @@index([restaurantId, qrExperienceId])
   @@map("orders")
 }
 
@@ -2470,6 +2551,18 @@ model Coupon {
   /// group the discount reaches. Null means everybody — which is every coupon
   /// that existed before this.
   segment          Json?
+  /// ── Only from this QR menu (ar.md §11, §12) ────────────────────────────
+  ///
+  /// "Student Lunch, on the Student QR." Null means everywhere, which is every
+  /// coupon that existed before this. Set means the offer is refused unless
+  /// the basket was built through that experience — INCLUDING at the till,
+  /// which is the point: a code meant for one laminated card should not be
+  /// typeable at the counter.
+  ///
+  /// One nullable column and one check in `evaluate()`; the discount engine is
+  /// not duplicated.
+  qrExperienceId   String?
+  qrExperience     QrExperience?  @relation(fields: [qrExperienceId], references: [id], onDelete: SetNull)
   isActive         Boolean        @default(true)
 
   createdAt DateTime @default(now())
@@ -3399,6 +3492,7 @@ model Branch {
   productionOrders ProductionOrder[]
   approvalRequests ApprovalRequest[]
   coupons          Coupon[]
+  qrExperiences    QrExperience[]
   instructions     BranchInstruction[]
   goodsReceipts    GoodsReceipt[]
   menu             FoodBranch[]
@@ -4217,7 +4311,7 @@ model StockBatch {
   updatedAt  DateTime @updatedAt
 
   movements         StockMovement[]
-  wastage           WastageRecord[]     @relation("WastageBatch")
+  wastage           WastageRecord[]            @relation("WastageBatch")
   transferLines     StockTransferLine[]
   productionOutputs ProductionOutput[]
   /// Production runs that drew from this lot (pro.b.md §9).
@@ -5022,4 +5116,163 @@ model BankStatementLine {
   @@index([restaurantId, lineHash])
   @@index([statementId])
   @@map("bank_statement_lines")
+}
+
+// ─────────────────────────────────────────────────────── qr experiences ─────
+
+/// What a guest meets when they scan a code (ar.md).
+///
+/// ── A configuration layer, not a second anything ───────────────────────────
+///
+/// Every row here decides what the EXISTING systems show: which menu items
+/// (`getPublicMenu`, filtered), what the guest is asked (`findOrCreateCustomer`),
+/// which offers apply (`evaluate`, via `Coupon.qrExperienceId`), whether points
+/// are shown (the existing loyalty screens), and whether an order can be placed
+/// (`placeOrder`, `channel: 'QR'`). Nothing here re-implements any of that, and
+/// the default `/order/<slug>/<branch>` flow is untouched by all of it.
+///
+/// A restaurant that never opens this screen keeps exactly the behaviour it had.
+model QrExperience {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Required. A code belongs to one place: its menu, its prices, its tables.
+  /// §28 asks that a code from Branch A never expose Branch B, and the cheapest
+  /// way to guarantee that is to make it impossible to have a branchless one.
+  branchId     String
+  branch       Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  /// ── What goes in the URL (ar.md §17, §25) ──────────────────────────────
+  ///
+  /// A short opaque code, NOT the `id`: these get printed, laminated and
+  /// photographed, and §25 says not to put internal database identifiers on
+  /// them. Crockford base32 without I, L, O or U, so a code read aloud or
+  /// re-typed from a photo cannot be misheard.
+  publicId String @unique
+
+  name        String
+  description String?
+
+  /// Ordering or menu-only. This single field is the ordering switch — there
+  /// is deliberately no second `allowOrdering` flag, because a menu-only code
+  /// that takes orders simply IS an ordering code (§3B), and two columns
+  /// saying one thing is how they come to disagree.
+  type QrExperienceType @default(ORDERING)
+
+  /// ── Is there a table to ask about? ─────────────────────────────────────
+  ///
+  /// True for a card on a table. FALSE for the codes that have no table at
+  /// all: a delivery leaflet, a takeaway counter, a poster in a window. Those
+  /// guests cannot answer "what is your table number?", and asking is a wall
+  /// in front of the menu that nobody can climb.
+  ///
+  /// It also decides what KIND of order comes out. An order with no table
+  /// cannot be DINE_IN — there is nowhere to carry it — so a code with this
+  /// off produces a TAKEAWAY order, and the branch comes from the code rather
+  /// than from the table.
+  askTable Boolean @default(true)
+  /// Retired, never deleted (§18) — orders and customers point back here.
+  isActive Boolean @default(true)
+
+  /// ── The menu (ar.md §10) ───────────────────────────────────────────────
+  ///
+  /// `ALL` is the default and means the branch's ordinary menu. `CUSTOM`
+  /// narrows it to the chosen categories and items — a filter over
+  /// `getPublicMenu`, never a second copy of the catalogue. Shaped as Json
+  /// id-lists to match `Coupon.itemIds` / `Coupon.categoryIds`.
+  menuMode        QrMenuMode @default(ALL)
+  /// [String[]] — menu category ids. Null or empty with CUSTOM shows nothing.
+  menuCategoryIds Json?
+  /// [String[]] — individual food ids, added on top of whole categories.
+  menuFoodIds     Json?
+
+  /// ── Who is scanning (ar.md §5, §6) ─────────────────────────────────────
+  ///
+  /// Off by default, which is §21: a code created with nothing but a name and
+  /// a branch behaves exactly like the existing QR flow.
+  identifyCustomer    Boolean @default(false)
+  /// Ask them to pick one of the owner's existing CRM categories.
+  askCustomerCategory Boolean @default(false)
+  /// [String[]] — which `CustomerCategory` rows to offer. Null means all the
+  /// active ones. The categories themselves live in the CRM; this only says
+  /// which of them this code puts on screen.
+  customerCategoryIds Json?
+
+  /// ── What they can do (ar.md §13) ───────────────────────────────────────
+  ///
+  /// Only toggles the backend actually honours. There is no `showTracking`:
+  /// a placed order has to land somewhere, so it could never be turned off,
+  /// and §13 says not to offer settings that do not exist.
+  showSearch  Boolean @default(true)
+  showPrices  Boolean @default(true)
+  showOffers  Boolean @default(true)
+  showLoyalty Boolean @default(true)
+
+  /// ── Usage (ar.md §18, §22) ─────────────────────────────────────────────
+  ///
+  /// "Opens", not "scans": nothing can tell a camera from a shared link, and
+  /// there is no telemetry table in this system to build a real funnel on.
+  /// Counted once per browser session from the client, so a prefetch or a
+  /// link-unfurling bot does not inflate it. Orders and sales come from real
+  /// joins on `Order.qrExperienceId`, not from here.
+  openCount    Int       @default(0)
+  lastOpenedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fields    QrExperienceField[]
+  orders    Order[]
+  customers Customer[]
+  coupons   Coupon[]
+
+  @@index([restaurantId, branchId, isActive])
+  @@map("qr_experiences")
+}
+
+/// One thing a guest is asked for (ar.md §5, §7, §9).
+///
+/// ── Why one table answers three sections ───────────────────────────────────
+///
+/// `categoryId` is the whole idea. Null means the field is asked of everybody
+/// — that is §5's visible/required/optional list. Set means it is asked only
+/// after the guest picks THAT customer category — that is §7's "Student needs
+/// a Campus ID, Corporate needs a Company Name", and it is also why an
+/// irrelevant field is never shown (§7 again). A `key` outside the built-in
+/// set is a custom field (§9).
+///
+/// So there is no form builder, no field-type zoo and no rules engine: the
+/// owner adds a row, names it, and says whether it is required.
+model QrExperienceField {
+  id           String       @id @default(cuid())
+  experienceId String
+  experience   QrExperience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  /// `name`, `phone`, `email`, `birthday` and `anniversary` are built in and
+  /// map to real `Customer` columns through `findOrCreateCustomer`. Anything
+  /// else is the owner's own and its answer lands in `Customer.profile`.
+  key   String
+  /// What the guest reads. Renameable without changing where the answer goes.
+  label String
+  type  QrFieldType @default(TEXT)
+  rule  QrFieldRule @default(OPTIONAL)
+
+  /// Null = asked of everyone. Set = only when that customer category is chosen.
+  categoryId String?
+  category   CustomerCategory? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  sortOrder Int     @default(0)
+  /// True for the five that write a real column, so the service knows not to
+  /// file the answer in `profile`.
+  isBuiltIn Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// The same field may be asked of everyone AND, differently, of one
+  /// category — "phone optional generally, required for VIP".
+  @@unique([experienceId, key, categoryId])
+  @@index([experienceId, sortOrder])
+  @@index([categoryId])
+  @@map("qr_experience_fields")
 }
