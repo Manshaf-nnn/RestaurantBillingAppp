@@ -87,7 +87,26 @@ function run(args) {
  * guarded UPDATE) — nothing partial exists. Amended with a deterministic
  * SKU pre-clean, so the re-apply succeeds on the same data.
  */
-const RESOLVABLE_FAILURES = ['20260915100000_inventory_truth']
+const RESOLVABLE_FAILURES = [
+  '20260915100000_inventory_truth',
+  /*
+   * 20260922100000_crm_and_item_discounts: failed 2026-09-23 on the first
+   * production deploy, rewriting the legacy shared walk-in customer
+   * (`phone: ''`). `customers_phone_not_blank` was added NOT VALID in
+   * 20260920093000 precisely because that row already broke it — and a NOT
+   * VALID check still applies to UPDATEs, so backfilling `phoneKey` over it was
+   * refused and took the whole migration with it.
+   *
+   * Both bars are met. Every statement is transactional in Postgres — CREATE
+   * TABLE, CREATE INDEX, ALTER TABLE ADD COLUMN / ADD CONSTRAINT, UPDATE — so
+   * Prisma's per-migration transaction rolled the failure back to nothing and
+   * no partial schema exists. And the file has been amended: all three
+   * customer UPDATEs now carry the constraint's own predicate as a guard, so
+   * the legacy row is skipped rather than rewritten, which was reproduced
+   * against a copy of production's exact state before this line was added.
+   */
+  '20260922100000_crm_and_item_discounts',
+]
 
 /** Migration folder names, in the order Prisma applies them. */
 function migrationNames() {
