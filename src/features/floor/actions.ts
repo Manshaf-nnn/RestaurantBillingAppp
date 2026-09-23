@@ -252,7 +252,7 @@ export async function updateTableStatus(input: unknown): Promise<ActionResult<{ 
      * matches nothing and reports as not-found, which is the same answer an
      * invented id gets.
      */
-    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const reach = visibleBranchIds(user)
     const result = await prisma.restaurantTable.updateMany({
       where: {
         id: data.id,
@@ -277,7 +277,7 @@ export async function updateTableStatus(input: unknown): Promise<ActionResult<{ 
 export async function setServiceTableStatus(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(serviceTableStatusSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.WAITER_VIEW)
-    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const reach = visibleBranchIds(user)
     const result = await prisma.restaurantTable.updateMany({
       where: {
         id: data.id,
@@ -321,7 +321,7 @@ export async function deleteTable(id: string): Promise<ActionResult<{ id: string
       throw new ConflictError('This table has seating history — mark it inactive instead of deleting it')
     }
 
-    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const reach = visibleBranchIds(user)
     const result = await prisma.restaurantTable.deleteMany({
       where: {
         id,

@@ -42,14 +42,6 @@ import {
   serveOrder,
   updateOrderStatus,
 } from '@/features/orders/actions'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { setServiceTableStatus } from '@/features/floor/actions'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
 import type { SettableTableState, TableState } from '@/features/floor/table-state'
@@ -196,14 +188,12 @@ export function WaiterBoard({
    * screen with the table number and who called, hears the bell, and either
    * says "on my way" or puts it aside for a colleague.
    */
-  const [incomingCall, setIncomingCall] = React.useState<WaiterRequest | null>(null)
   React.useEffect(() => {
     if (isRealtimeEnabled()) return
     const fresh = initialRequests.filter((r) => !seenRequestIds.current.has(r.id))
     seenRequestIds.current = new Set(initialRequests.map((r) => r.id))
     if (fresh.length > 0) {
       play('alert')
-      setIncomingCall(fresh[fresh.length - 1])
     }
   }, [initialRequests, play])
   React.useEffect(() => {
@@ -265,7 +255,6 @@ export function WaiterBoard({
       current.some((entry) => entry.id === payload.id) ? current : [...current, request],
     )
     play('alert')
-    setIncomingCall(request)
     toast.warning(`Table ${payload.tableNumber} · ${REQUEST_META[payload.type].label}`, {
       description: payload.requestedByName !== `Table ${payload.tableNumber}` ? `Called by ${payload.requestedByName}` : undefined,
     })
@@ -280,12 +269,10 @@ export function WaiterBoard({
       ),
     )
     // A colleague is going: no need for this station to keep asking.
-    setIncomingCall((current) => (current?.id === payload.id ? null : current))
   })
 
   useSocketEvent(EVENTS.SERVICE_REQUEST_RESOLVED, (payload: { id: string }) => {
     setRequests((current) => current.filter((request) => request.id !== payload.id))
-    setIncomingCall((current) => (current?.id === payload.id ? null : current))
   })
 
   /*
@@ -365,7 +352,6 @@ export function WaiterBoard({
       return
     }
     setRequests((current) => current.filter((entry) => entry.id !== request.id))
-    setIncomingCall((current) => (current?.id === request.id ? null : current))
   }
 
   // "On my way" (abc.md §7): stamps who is going, and tells the other stations.
@@ -384,7 +370,6 @@ export function WaiterBoard({
         entry.id === request.id ? { ...entry, status: 'ACKNOWLEDGED', acknowledgedAt: at } : entry,
       ),
     )
-    setIncomingCall((current) => (current?.id === request.id ? null : current))
   }
 
   const occupied = tables.filter((table) => table.status === 'OCCUPIED').length
@@ -394,6 +379,8 @@ export function WaiterBoard({
       title="Waiter station"
       subtitle={restaurantName}
       branch={branchName}
+      branchIds={branchIds}
+      canAnswerCalls={true}
       user={user}
       actions={exit}
       soundEnabled={soundEnabled}
@@ -409,36 +396,13 @@ export function WaiterBoard({
         ]}
       />
 
-      {/* ── a table is calling (abc.md §7) ──────────────────────── */}
-      <Dialog open={incomingCall !== null} onOpenChange={(open) => { if (!open) setIncomingCall(null) }}>
-        <DialogContent size="sm" data-testid="waiter-call-popup">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-2xl">
-              <Bell className="size-6 text-warning" />
-              Table {incomingCall?.tableNumber}
-            </DialogTitle>
-            <DialogDescription className="text-base">
-              {incomingCall ? REQUEST_META[incomingCall.type].label : ''}
-              {incomingCall?.requestedByName && incomingCall.requestedByName !== `Table ${incomingCall.tableNumber}`
-                ? ` · called by ${incomingCall.requestedByName}`
-                : ''}
-              {incomingCall?.note ? ` · ${incomingCall.note}` : ''}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIncomingCall(null)}>
-              Someone else will
-            </Button>
-            <Button
-              variant="warning"
-              loading={busyId === incomingCall?.id}
-              onClick={() => incomingCall && acknowledge(incomingCall)}
-            >
-              <Check /> On my way
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/*
+        The "a table is calling" popup moved to `StaffAlerts` in the shell
+        (pro.A.md §17), so a cashier or a manager sees it too rather than only
+        whoever happens to be standing at /waiter. The sound, the list below and
+        the acknowledge buttons on each card stay here — this screen is still
+        where a waiter works the queue.
+      */}
 
       <Tabs defaultValue="serve" className="p-4">
         <TabsList className="w-full sm:w-auto">

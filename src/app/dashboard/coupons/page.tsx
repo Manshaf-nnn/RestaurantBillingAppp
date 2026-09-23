@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: 'Coupons' }
 
 export default async function CouponsPage() {
   const user = await requirePagePermission(PERMISSIONS.COUPON_MANAGE, '/dashboard/coupons')
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
 
   const [restaurant, coupons, locations] = await Promise.all([
     requireRestaurant(user.restaurantId),
@@ -48,6 +48,7 @@ export default async function CouponsPage() {
         minOrderAmount: coupon.minOrderAmount,
         maxDiscount: coupon.maxDiscount,
         usageLimit: coupon.usageLimit,
+        perCustomerLimit: coupon.perCustomerLimit,
         usedCount: coupon.usedCount,
         isActive: coupon.isActive,
         startsAt: coupon.startsAt?.toISOString() ?? null,

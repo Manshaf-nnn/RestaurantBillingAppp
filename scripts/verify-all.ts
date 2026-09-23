@@ -70,6 +70,10 @@ const SERVICE = [
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
   'stock-location-test',
   'branch-scope-test',
+  // staff.A.md §3/§4/§6/§10 — per-staff allow and deny, several branches per
+  // person, the POS rename across all six persisted columns, and the
+  // POS_OPEN_DRAWER split.
+  'staff-access-test',
   // stockMa.md — the stock keeper: what they may and may not do, that they see
   // one location and nothing without one, and that a correction they raise
   // moves no stock until somebody else signs it.
@@ -298,6 +302,13 @@ const RUNTIME = [
   // bugfix.md — the staff-codes page per branch, the pulse stream confined,
   // uploads checked by signature, cross-tenant writes through real actions.
   'security-runtime-test',
+  // pro.A.md §19 — editing a stock item actually writes to the database,
+  // the cost rule refuses instead of silently dropping, and the edit is audited.
+  'inventory-edit-test',
+  // staff.A.md §3/§6 — the real actions over real HTTP: opening a till refused
+  // without the permission, a denial landing on the same cookie with no
+  // re-login, and escalation refused on the grant half only.
+  'pos-drawer-test',
   // websiteconnect.md — the website API over real HTTP: key refused and accepted,
   // menu priced per branch, an order that lands ONLINE, a browser call refused.
   'website-api-test',
@@ -333,6 +344,15 @@ interface Outcome {
   passed: number
   failed: number
   skipped: boolean
+  /**
+   * The lines that actually failed.
+   *
+   * Without these a red row said "1 FAILED" and nothing else, so the only way
+   * to learn WHICH check broke was to re-run the suite by hand — and a suite
+   * that only fails as part of the whole run (accumulated data, ordering) is
+   * exactly the one that will then pass on its own.
+   */
+  detail: string[]
 }
 
 function run(name: string, kind: string): Outcome {
@@ -350,15 +370,24 @@ function run(name: string, kind: string): Outcome {
     crashed = true
   }
 
-  if (/skipping\./i.test(out)) return { name, kind, passed: 0, failed: 0, skipped: true }
+  if (/skipping\./i.test(out)) return { name, kind, passed: 0, failed: 0, skipped: true, detail: [] }
+
+  const lines = out.split('\n')
+  const detail = lines
+    .map((line, index) => (line.includes('✗') ? lines.slice(index, index + 3).join('\n') : null))
+    .filter((line): line is string => line !== null)
+    .slice(0, 5)
 
   const tally = out.match(/(\d+) passed, (\d+) failed/)
   if (tally) {
-    return { name, kind, passed: Number(tally[1]), failed: Number(tally[2]), skipped: false }
+    return { name, kind, passed: Number(tally[1]), failed: Number(tally[2]), skipped: false, detail }
   }
   // A guard script reports by exit code and a single line.
-  if (!crashed && /✓/.test(out)) return { name, kind, passed: 1, failed: 0, skipped: false }
-  return { name, kind, passed: 0, failed: 1, skipped: false }
+  if (!crashed && /✓/.test(out)) return { name, kind, passed: 1, failed: 0, skipped: false, detail }
+  return {
+    name, kind, passed: 0, failed: 1, skipped: false,
+    detail: detail.length ? detail : [out.trim().split('\n').slice(-12).join('\n')],
+  }
 }
 
 async function main() {
@@ -375,6 +404,10 @@ async function main() {
             : `${outcome.passed} passed`
       const mark = outcome.skipped ? '·' : outcome.failed > 0 ? '✗' : '✓'
       console.log(`  ${mark} ${name.padEnd(26)} ${label}`)
+      // Say WHICH check broke, here, while the run is in front of somebody.
+      for (const line of outcome.failed > 0 ? outcome.detail : []) {
+        console.log(line.split('\n').map((part) => `      ${part.trim()}`).join('\n'))
+      }
     }
   }
 

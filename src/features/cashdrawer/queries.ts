@@ -110,6 +110,12 @@ export interface DrawerPageData {
   handoverCandidates: Array<{ id: string; name: string }>
   canManage: boolean
   canApprovePetty: boolean
+  /**
+   * May open a till (staff.A.md §6). The console shows the Open Drawer form
+   * only when this is true; without it somebody with no open session sees why
+   * rather than a form that will be refused.
+   */
+  canOpen: boolean
   currency: string
   /**
    * The gap, in minor units, at which a difference is worth explaining and
@@ -192,6 +198,14 @@ export async function getDrawerPageData(params: {
   canSeeAll: boolean
   canApprovePetty?: boolean
   canReview?: boolean
+  /**
+   * May start a session and count an opening float (staff.A.md §6).
+   *
+   * Absent means no, because the console renders the Open Drawer form from
+   * this and a flag that defaults to true would hand the form to every caller
+   * that had not been updated. The action refuses regardless.
+   */
+  canOpen?: boolean
   /** Only tills at this location. Null means every location. */
   branchId?: string | null
   /** What this person may see at all. Null is unrestricted, `[]` is nothing. */
@@ -375,6 +389,7 @@ export async function getDrawerPageData(params: {
     ),
     canManage: params.canSeeAll,
     canApprovePetty: params.canApprovePetty ?? false,
+    canOpen: params.canOpen ?? false,
     currency: params.currency,
     recent: sessions.map(toSessionRow),
     review: review.map(toSessionRow),

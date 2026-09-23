@@ -26,8 +26,11 @@ import type { ShiftTemplateView } from '../types'
  * everything already rostered stands.
  */
 
+// CASHIER is absent on purpose (staff.A.md §10) — it is the retired name for
+// POS, and this list is what the rota offers, so leaving it out is what stops
+// a new template being written against a name nothing assigns any more.
 const ROSTERABLE = [
-  'MANAGER', 'CASHIER', 'WAITER', 'KITCHEN', 'INVENTORY_MANAGER', 'STOCK_KEEPER',
+  'MANAGER', 'POS', 'WAITER', 'KITCHEN', 'INVENTORY_MANAGER', 'STOCK_KEEPER',
   'WAREHOUSE_STAFF', 'PURCHASING_MANAGER', 'ACCOUNTANT', 'ADMIN', 'OWNER',
 ] as const
 type RosterRole = (typeof ROSTERABLE)[number]
@@ -138,7 +141,7 @@ function TemplateDialog({
     setName(editing?.name ?? '')
     setStartTime(editing?.startTime ?? '08:00')
     setEndTime(editing?.endTime ?? '16:00')
-    setRoles((editing?.roles as RosterRole[] | undefined) ?? ['CASHIER', 'WAITER', 'KITCHEN'])
+    setRoles((editing?.roles as RosterRole[] | undefined) ?? ['POS', 'WAITER', 'KITCHEN'])
     setBranchId(editing?.branchId ?? '')
   }, [template, editing])
 

@@ -85,7 +85,14 @@ export interface PrintableBill {
     optionsLabel?: string
     quantity: number
     unitPrice?: number
+    /** Gross, at menu price. */
     lineTotal: number
+    /**
+     * What was taken off this line (pro.A.md §10). Printed under the row so
+     * the paper shows price, discount and net — a total a guest cannot check
+     * against the dishes is a total they have to take on trust.
+     */
+    discountAmount?: number
   }>
   subtotal: number
   discountTotal: number
@@ -215,6 +222,13 @@ export function buildReceipt(
           quantity: fields.quantity ? item.quantity : null,
           unitPrice: fields.unitPrice && item.unitPrice !== undefined ? money(item.unitPrice) : null,
           lineTotal: money(item.lineTotal),
+          /*
+           * What came off this dish, and what it therefore cost
+           * (pro.A.md §10). Both null when the line carries no discount, so
+           * every existing receipt prints exactly as it did.
+           */
+          discountAmount: item.discountAmount ? money(item.discountAmount) : null,
+          netTotal: item.discountAmount ? money(item.lineTotal - item.discountAmount) : null,
         }))
       : [],
     totals: receiptTotals(bill, restaurant, fields),

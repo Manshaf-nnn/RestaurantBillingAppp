@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
+import { AccessTabs } from '@/features/access/components/access-tabs'
 import { RoleBuilder } from '@/features/access/components/role-builder'
 import { ROLE_PRESETS } from '@/features/access/schema'
 import { listRoles } from '@/features/access/service'
@@ -63,9 +64,10 @@ export default async function RolesPage({
   return (
     <>
       <PageHeader
-        title="Roles"
+        title="Role &amp; access"
         description="Give a job title only the features it needs. Changes reach everyone in the role straight away."
       />
+      <AccessTabs active="roles" />
       <RoleBuilder
         roles={roles}
         presets={presets}

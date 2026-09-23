@@ -191,8 +191,10 @@ async function main() {
     check('both audited', accept.includes('AUDIT_ACTIONS.ORDER_ACCEPTED_AT_TILL') && reject.includes('AUDIT_ACTIONS.ORDER_CANCELLED'))
 
     const rbac = readFileSync('src/lib/rbac.ts', 'utf8')
-    const cashierBlock = rbac.slice(rbac.indexOf('const CASHIER'), rbac.indexOf('const WAITER'))
-    check('cashiers hold it; anyone who collects payment gets it by the split', cashierBlock.includes('PERMISSIONS.ORDER_ACCEPT') && rbac.includes('[PERMISSIONS.ORDER_ACCEPT, PERMISSIONS.PAYMENT_COLLECT]'))
+    // The array is `const POS` since staff.A.md §10 renamed the role; the
+    // block still ends where WAITER's begins.
+    const cashierBlock = rbac.slice(rbac.indexOf('const POS'), rbac.indexOf('const WAITER'))
+    check('POS holds it; anyone who collects payment gets it by the split', cashierBlock.includes('PERMISSIONS.ORDER_ACCEPT') && rbac.includes('[PERMISSIONS.ORDER_ACCEPT, PERMISSIONS.PAYMENT_COLLECT]'))
     const features = readFileSync('src/features/access/features.ts', 'utf8')
     check('and the payments feature sells it', /key: 'payments'[\s\S]*?PERMISSIONS\.ORDER_ACCEPT/.test(features))
 

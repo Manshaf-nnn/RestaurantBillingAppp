@@ -68,7 +68,7 @@ export async function globalSearch(params: {
 
   const { user } = params
   const restaurantId = user.restaurantId
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const allowed = visibleBranchIds(user)
 
   /*
    * `[]` means "sees nothing", not "no filter" — the distinction that has been

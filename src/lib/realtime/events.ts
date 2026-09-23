@@ -176,6 +176,15 @@ export interface NotificationPayload {
   type: NotificationType
   title: string
   body: string | null
+  /**
+   * Which location it concerns; `null` is a genuine business-wide notice.
+   *
+   * Role rooms carry no branch segment, so every site receives every
+   * MANAGEMENT push. The listener filters on this, exactly as the order
+   * boards do — otherwise a live toast crosses a branch the stored list would
+   * never have shown.
+   */
+  branchId: string | null
   data?: Record<string, unknown> | null
   createdAt: string
 }

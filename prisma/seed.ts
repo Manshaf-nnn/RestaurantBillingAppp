@@ -134,7 +134,7 @@ async function main() {
     { email: OWNER_EMAIL, name: 'Alex Fernandes', role: 'OWNER' },
     { email: 'manager@restaurantos.dev', name: 'Priya Nair', role: 'MANAGER' },
     { email: 'kitchen@restaurantos.dev', name: 'Raj Kumar', role: 'KITCHEN' },
-    { email: 'cashier@restaurantos.dev', name: 'Sara Thomas', role: 'CASHIER' },
+    { email: 'cashier@restaurantos.dev', name: 'Sara Thomas', role: 'POS' },
     { email: 'waiter@restaurantos.dev', name: 'Dev Patel', role: 'WAITER' },
   ]
   const users: Record<string, string> = {}
@@ -537,7 +537,7 @@ async function main() {
             method: pick(methods),
             status: 'PAID',
             amount: grandTotal,
-            receivedById: users.CASHIER,
+            receivedById: users.POS,
             paidAt: new Date(placedAt.getTime() + 45 * 60000),
           },
         })

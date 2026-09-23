@@ -59,6 +59,17 @@ export async function notify(input: NotifyInput) {
     type: record.type,
     title: record.title,
     body: record.body,
+    /*
+     * The branch travels with the push (pro.A.md §15).
+     *
+     * Rooms are keyed `r:<restaurantId>:<role>` with no branch segment, so a
+     * MANAGEMENT notification reaches every site at once. The stored list IS
+     * branch-filtered, so a Kandy manager's bell showed a live toast about
+     * Colombo and then lost it on the next render. Carrying the branch lets the
+     * listener ignore what is not its own on arrival — the same fix the order
+     * payloads already carry. `null` means genuinely business-wide.
+     */
+    branchId: record.branchId,
     data: input.data ?? null,
     createdAt: record.createdAt.toISOString(),
   }

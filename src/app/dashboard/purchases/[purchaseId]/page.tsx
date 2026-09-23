@@ -39,7 +39,7 @@ export default async function PurchaseOrderPage({
    * branch manager cannot receive goods into another site by choosing it from
    * a menu.
    */
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const allowed = visibleBranchIds(user)
   const locations = (await listSwitchableLocations(user.restaurantId, allowed)).map((l) => ({
     id: l.id,
     name: l.name,

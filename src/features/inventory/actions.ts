@@ -25,7 +25,41 @@ import {
 
 // ── items ────────────────────────────────────────────────────────────────────
 
-export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ id: string }>> {
+export interface SavedInventoryItem {
+  id: string
+  name: string
+  sku: string | null
+  category: string | null
+  unit: string
+  reorderLevel: number
+  minStock: number
+  maxStock: number | null
+  costPerUnit: number
+  supplierId: string | null
+  storageArea: string | null
+  purchaseUnit: string | null
+  unitsPerPurchaseUnit: number | null
+  trackExpiry: boolean
+}
+
+function toSavedItem(row: {
+  id: string; name: string; sku: string | null; category: string | null; unit: string
+  reorderLevel: number; minStock: number; maxStock: number | null; costPerUnit: number
+  supplierId: string | null; storageArea: string | null; purchaseUnit: string | null
+  unitsPerPurchaseUnit: number | null; trackExpiry: boolean
+}): SavedInventoryItem {
+  return {
+    id: row.id, name: row.name, sku: row.sku, category: row.category, unit: row.unit,
+    reorderLevel: row.reorderLevel, minStock: row.minStock, maxStock: row.maxStock,
+    costPerUnit: row.costPerUnit, supplierId: row.supplierId, storageArea: row.storageArea,
+    purchaseUnit: row.purchaseUnit, unitsPerPurchaseUnit: row.unitsPerPurchaseUnit,
+    trackExpiry: row.trackExpiry,
+  }
+}
+
+export async function saveInventoryItem(
+  input: unknown,
+): Promise<ActionResult<{ id: string; saved?: SavedInventoryItem }>> {
   return runAction(
     inventoryItemSchema,
     input,
@@ -94,6 +128,25 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
         }
       }
 
+      /*
+       * ── Say no, rather than saying yes and doing nothing (pro.A.md §19) ──
+       *
+       * The cost per unit is a weighted average the ledger owns: receipts move
+       * it, nothing else. That rule is right and stays. What was wrong is that
+       * somebody could type a new cost, press Save, be told "Item saved", and
+       * find the old number still there after a refresh — because the field was
+       * quietly dropped from the payload. A rule nobody is told about is
+       * indistinguishable from a bug. Now it refuses, and the form shows the
+       * figure as read-only with the reason.
+       */
+      if (data.id && existing && data.costPerUnit !== existing.costPerUnit) {
+        throw new AppError(
+          'The cost per unit is the weighted average of what you have actually paid — receive stock at the new price and it moves on its own.',
+          409,
+          'COST_LOCKED',
+        )
+      }
+
       const payload = {
         name: data.name,
         sku: data.sku || null,
@@ -128,12 +181,52 @@ export async function saveInventoryItem(input: unknown): Promise<ActionResult<{ 
            * Prisma will not take a non-unique `where` on `update`, so the
            * tenant-scoped form is the many-variant plus a count check.
            */
+          const before = await prisma.inventoryItem.findFirst({
+            where: { id: data.id, restaurantId: user.restaurantId },
+          })
+          if (!before) throw new NotFoundError('Inventory item')
+
           const result = await prisma.inventoryItem.updateMany({
             where: { id: data.id, restaurantId: user.restaurantId },
             data: payload,
           })
           if (result.count === 0) throw new NotFoundError('Inventory item')
-          return { id: data.id }
+
+          /*
+           * Read it back. The caller renders what the DATABASE holds, not what
+           * the form sent — so a column this action declines to write can never
+           * again look saved on screen.
+           */
+          const after = await prisma.inventoryItem.findFirstOrThrow({
+            where: { id: data.id, restaurantId: user.restaurantId },
+          })
+
+          const snapshot = (row: typeof after) => ({
+            name: row.name, sku: row.sku, category: row.category, unit: row.unit,
+            reorderLevel: row.reorderLevel, maxStock: row.maxStock,
+            supplierId: row.supplierId, storageArea: row.storageArea,
+            purchaseUnit: row.purchaseUnit, unitsPerPurchaseUnit: row.unitsPerPurchaseUnit,
+            trackExpiry: row.trackExpiry,
+          })
+          await audit({
+            restaurantId: user.restaurantId,
+            branchId: data.branchId || null,
+            userId: user.id,
+            actorName: user.name,
+            action: AUDIT_ACTIONS.INVENTORY_ITEM_EDITED,
+            entity: 'InventoryItem',
+            entityId: after.id,
+            before: snapshot(before),
+            after: snapshot(after),
+          })
+
+          /*
+           * The edit branch used to return here, one line above the revalidate
+           * the create branch runs — so the list stayed on the old row until
+           * something else happened to refresh the route.
+           */
+          revalidatePath('/dashboard/inventory')
+          return { id: after.id, saved: toSavedItem(after) }
         }
 
         /*

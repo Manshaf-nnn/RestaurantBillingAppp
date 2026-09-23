@@ -1,18 +1,26 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Minus, Plus, Printer, ShoppingCart, Trash2, X } from 'lucide-react'
+import { Check, Minus, Plus, Printer, ShoppingCart, Trash2, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatMoney } from '@/lib/money'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { newRequestKey } from '@/lib/request-key'
 import { createStaffOrder, type StaffOrderBill } from '@/features/orders/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { callAction } from '@/lib/use-action'
+import { findCustomerAction } from '@/features/customers/actions'
+import { CustomerFormDialog } from '@/features/customers/components/customer-form-dialog'
 import { printReceipt } from '@/features/printing/print'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
 import { buildReceipt, type ReceiptRestaurant } from '@/features/printing/receipt'
@@ -59,6 +67,9 @@ interface Line {
   quantity: number
   options: Array<{ id: string; name: string; groupName: string; priceDelta: number }>
   notes: string
+  /** Money off this line, minor units, for the whole line (pro.A.md §10). */
+  discount: number
+  discountReason: string
 }
 
 /**
@@ -79,6 +90,7 @@ export function PosTerminal({
   tables = [],
   servers = [],
   currentUserId,
+  customerCategories = [],
 }: {
   menu: PublicMenu
   currency: string
@@ -89,6 +101,8 @@ export function PosTerminal({
   branchId?: string | null
   /** Free tables, so a counter order can be seated. */
   tables?: Array<{ id: string; number: string; area: string | null; status: string }>
+  /** The owner's customer categories, for the Add customer form (§1). */
+  customerCategories?: Array<{ id: string; name: string }>
   /** Who can be credited with serving it. */
   servers?: Array<{ id: string; name: string; role: string }>
   currentUserId?: string
@@ -99,6 +113,43 @@ export function PosTerminal({
   const [phone, setPhone] = React.useState('')
   const [notes, setNotes] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [discounting, setDiscounting] = React.useState<Line | null>(null)
+  const [picked, setPicked] = React.useState<{ id: string; name: string; loyaltyPoints: number } | null>(null)
+  const [addOpen, setAddOpen] = React.useState(false)
+
+  /*
+   * ── A number we already know fills itself in (pro.A.md §5) ──────────────
+   *
+   * The dropdown suggested matches, but only if the cashier noticed it and
+   * tapped one. A phone number is an exact key, so once enough of it is typed
+   * there is nothing to choose: the guest's name and points simply appear, and
+   * the cashier does not type a name that turns out to belong to somebody the
+   * system already had.
+   *
+   * Debounced, and the name is only auto-filled while the cashier has not
+   * typed one of their own — overwriting what somebody is in the middle of
+   * typing is worse than not helping.
+   */
+  React.useEffect(() => {
+    const value = phone.trim()
+    if (value.length < 7) {
+      setPicked(null)
+      return
+    }
+    let live = true
+    const timer = setTimeout(() => {
+      void callAction(() => findCustomerAction({ phone: value })).then((result) => {
+        if (!live || !result.ok) return
+        const found = result.data.customer
+        setPicked(found)
+        if (found) setName((current) => (current.trim() ? current : found.name))
+      })
+    }, 350)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [phone])
   const [cartOpen, setCartOpen] = React.useState(false)
   const [tableId, setTableId] = React.useState('')
   /*
@@ -182,7 +233,7 @@ export function PosTerminal({
 
     setLines((current) => {
       const found = current.find((l) => l.key === key)
-      if (!found) return [...current, { key, item, quantity, options: chosen, notes }]
+      if (!found) return [...current, { key, item, quantity, options: chosen, notes, discount: 0, discountReason: '' }]
       return current.map((l) =>
         l.key === key ? { ...l, quantity: Math.min(50, l.quantity + quantity) } : l,
       )
@@ -201,7 +252,12 @@ export function PosTerminal({
   const unitOf = (line: Line) =>
     line.item.price + line.options.reduce((total, option) => total + option.priceDelta, 0)
 
-  const subtotal = lines.reduce((total, l) => total + unitOf(l) * l.quantity, 0)
+  const gross = lines.reduce((total, l) => total + unitOf(l) * l.quantity, 0)
+  const lineDiscounts = lines.reduce(
+    (total, l) => total + Math.min(l.discount, unitOf(l) * l.quantity),
+    0,
+  )
+  const subtotal = gross - lineDiscounts
   const count = lines.reduce((total, l) => total + l.quantity, 0)
 
   /** Clear the till for the next guest. */
@@ -277,7 +333,14 @@ export function PosTerminal({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_22rem] lg:items-start">
+    /*
+     * The order column is the one that has to be read while somebody is
+     * waiting (pro.A.md §13): customer, points, every line with its own
+     * discount, and the whole money ladder. 22rem could not hold that without
+     * wrapping, so it grows and the menu — which is tiles, and reflows
+     * happily — gives up the width.
+     */
+    <div className="grid gap-4 lg:grid-cols-[1fr_26rem] lg:items-start xl:grid-cols-[1fr_30rem]">
       {/* ── menu side ────────────────────────────────────────────────────── */}
       <div className="space-y-4">
         <OrderTypeChips value={type} onChange={setType} />
@@ -338,6 +401,25 @@ export function PosTerminal({
                         {line.notes ? (
                           <p className="truncate text-xs text-muted-foreground">{line.notes}</p>
                         ) : null}
+                        {/*
+                          A discount on THIS dish (pro.A.md §10). "The burger
+                          was cold, take 100 off it" is a fact about the
+                          burger; recording it against the whole bill loses
+                          which dish it belonged to.
+                        */}
+                        {line.discount > 0 ? (
+                          <p className="text-xs text-success">
+                            − {money(line.discount)}
+                            {line.discountReason ? ` · ${line.discountReason}` : ''}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                          onClick={() => setDiscounting(line)}
+                        >
+                          {line.discount > 0 ? 'Change discount' : 'Discount this item'}
+                        </button>
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
@@ -363,7 +445,16 @@ export function PosTerminal({
                       </div>
 
                       <span className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums">
-                        {money(unitOf(line) * line.quantity)}
+                        {line.discount > 0 ? (
+                          <>
+                            <span className="block text-xs font-normal text-muted-foreground line-through">
+                              {money(unitOf(line) * line.quantity)}
+                            </span>
+                            {money(Math.max(0, unitOf(line) * line.quantity - line.discount))}
+                          </>
+                        ) : (
+                          money(unitOf(line) * line.quantity)
+                        )}
                       </span>
                     </li>
                   ))}
@@ -463,12 +554,49 @@ export function PosTerminal({
                       id="pos-phone"
                       phone={phone}
                       name={name}
-                      onPhoneChange={setPhone}
+                      onPhoneChange={(next) => {
+                        setPhone(next)
+                        setPicked(null)
+                      }}
                       onPick={(customer) => {
                         setPhone(customer.phone)
                         setName(customer.name)
+                        setPicked(customer)
                       }}
                     />
+                    {/*
+                      Phone first, and then say who it is (pro.A.md §5).
+                      Typing a number that nobody has used to create a customer
+                      silently, with whatever name was in the box; now the till
+                      says who it belongs to, or offers to add them — through
+                      the same shared form the CRM uses.
+                    */}
+                    {picked ? (
+                      <p className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <Badge variant="success" size="sm">{picked.name}</Badge>
+                        {picked.loyaltyPoints > 0 ? (
+                          <span className="text-muted-foreground">
+                            {picked.loyaltyPoints.toLocaleString()} points
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {/*
+                      Always here, not only once a number is typed
+                      (pro.A.md §5, §6). A cashier looking for "where do I add
+                      this guest" should find it whatever is in the boxes, and
+                      it opens the SAME form the customer screen uses — name,
+                      category, date of birth, anniversary and the rest.
+                    */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => setAddOpen(true)}
+                    >
+                      <UserPlus /> Add customer
+                    </Button>
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="pos-notes" className="text-xs">
@@ -522,7 +650,132 @@ export function PosTerminal({
           </span>
         </button>
       )}
+
+      {/*
+        Money off one dish, before the order is sent (pro.A.md §10). The same
+        idea as the dialog on the Cashier tab, for a bill that does not exist
+        yet — so the kitchen ticket and the first printed bill already carry
+        the right figure.
+      */}
+      {/*
+        The same customer form the CRM uses (pro.A.md §6), seeded with
+        whatever is already in the boxes so nothing is typed twice.
+      */}
+      <CustomerFormDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        seed={{ phone, name }}
+        categories={customerCategories}
+        onSaved={(customer) => {
+          setPicked(customer)
+          setName(customer.name)
+          setPhone(customer.phone)
+        }}
+      />
+
+      <LineDiscountDialog
+        line={discounting}
+        currency={restaurant.currency}
+        money={money}
+        unitOf={unitOf}
+        onClose={() => setDiscounting(null)}
+        onApply={(key, discount, reason) => {
+          setLines((current) =>
+            current.map((l) => (l.key === key ? { ...l, discount, discountReason: reason } : l)),
+          )
+          setDiscounting(null)
+        }}
+      />
     </div>
+  )
+}
+
+/**
+ * Money off one line of a cart that has not been sent yet (pro.A.md §10).
+ *
+ * The amount is for the whole line, not per unit — "two burgers, 100 off" is
+ * 100 — because that is how it is said out loud and how it reads on the bill.
+ * Nothing is totalled here: the server re-prices the order from the menu and
+ * clamps each discount to its own line.
+ */
+function LineDiscountDialog({
+  line,
+  currency,
+  money,
+  unitOf,
+  onClose,
+  onApply,
+}: {
+  line: Line | null
+  currency: string
+  money: (minor: number) => string
+  unitOf: (line: Line) => number
+  onClose: () => void
+  onApply: (key: string, discount: number, reason: string) => void
+}) {
+  const [amount, setAmount] = React.useState('')
+  const [reason, setReason] = React.useState('')
+  const factor = minorUnitFactor(currency)
+
+  React.useEffect(() => {
+    if (!line) return
+    setAmount(line.discount > 0 ? String(line.discount / factor) : '')
+    setReason(line.discountReason)
+  }, [line, factor])
+
+  const gross = line ? unitOf(line) * line.quantity : 0
+  const minor = amount.trim() && Number.isFinite(Number(amount)) ? Math.round(Number(amount) * factor) : 0
+  const tooMuch = minor > gross
+
+  return (
+    <Dialog open={line !== null} onOpenChange={(next) => (next ? null : onClose())}>
+      <DialogContent className="sm:max-w-md">
+        {line ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Discount {line.quantity} × {line.item.name}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Line price</span>
+                <span className="tabular-nums">{money(gross)}</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pos-line-discount">Take off ({currency})</Label>
+                <Input
+                  id="pos-line-discount"
+                  autoFocus
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {tooMuch
+                    ? 'That is more than the line is worth.'
+                    : `The line becomes ${money(Math.max(0, gross - minor))}. Leave it empty to remove the discount.`}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pos-line-reason">Why (optional)</Label>
+                <Input
+                  id="pos-line-reason"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value.slice(0, 160))}
+                  placeholder="e.g. served cold"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t pt-3">
+              <Button variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button disabled={tooMuch} onClick={() => onApply(line.key, minor, reason)}>
+                {minor === 0 ? 'Remove discount' : 'Apply discount'}
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 

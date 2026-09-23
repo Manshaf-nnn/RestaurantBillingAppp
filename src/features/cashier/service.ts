@@ -39,7 +39,15 @@ interface ActorParams {
 export async function recalculateOrderTotals(tx: TxClient, orderId: string): Promise<Order> {
   const order = await tx.order.findUniqueOrThrow({
     where: { id: orderId },
-    include: { items: { where: { status: { not: 'CANCELLED' } }, select: { lineTotal: true } } },
+    include: {
+      items: {
+        where: { status: { not: 'CANCELLED' } },
+        // The line's own discount travels with it (pro.A.md §10) — a voided
+        // line takes its discount away with it, which is why this reads the
+        // live rows rather than the order's stored `itemDiscount`.
+        select: { lineTotal: true, discountAmount: true },
+      },
+    },
   })
 
   const restaurant = await tx.restaurant.findUniqueOrThrow({
@@ -48,7 +56,7 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
   })
 
   const totals = computeTotals({
-    lines: order.items,
+    lines: order.items.map((item) => ({ lineTotal: item.lineTotal, discount: item.discountAmount })),
     taxRateBps: order.taxRateBps,
     serviceChargeBps: order.serviceChargeBps,
     // The bill's own rule, snapshotted at placement like the rates above.
@@ -113,6 +121,7 @@ export async function recalculateOrderTotals(tx: TxClient, orderId: string): Pro
       discountTotal: totals.discountTotal,
       couponDiscount: totals.couponDiscount,
       manualDiscount: totals.manualDiscount,
+      itemDiscount: totals.itemDiscount,
       loyaltyDiscount: totals.loyaltyDiscount,
       serviceCharge: totals.serviceCharge,
       taxTotal: totals.taxTotal,
@@ -148,6 +157,15 @@ async function loadOpenBill(restaurantId: string, orderId: string) {
 /**
  * Park a bill. It leaves the active queue but keeps its items, its table and
  * its order number, so resuming is a single tap with nothing re-entered.
+ *
+ * ── Somebody's name is on it (pro.A.md §12) ────────────────────────────────
+ *
+ * A held bill is an unpaid bill with nobody standing next to it. Held
+ * anonymously it becomes money owed by nobody: the next shift finds "Walk-in,
+ * 4,500, two hours ago" and has no way to collect it or to know whether the
+ * food was even eaten. So a hold needs a customer on the order — which the
+ * till gets by asking for a phone, the same shared flow every other screen
+ * uses.
  */
 export async function holdBill(
   params: ActorParams & { orderId: string; reason?: string | null },
@@ -158,6 +176,14 @@ export async function holdBill(
     throw new AppError('This bill is already paid', 409, 'ORDER_PAID')
   }
   if (order.heldAt) return order
+
+  if (!order.customerId) {
+    throw new AppError(
+      'A held bill needs to belong to somebody — add the customer’s phone number first.',
+      400,
+      'HOLD_NEEDS_CUSTOMER',
+    )
+  }
 
   return prisma.order.update({
     where: { id: order.id },
@@ -878,4 +904,154 @@ export async function rejectGuestOrder(
     actorId: params.actorId ?? null,
     actorName: params.actorName ?? null,
   })
+}
+
+/**
+ * Take money off one line of a bill (pro.A.md §10).
+ *
+ * ── Why the line and not the bill ───────────────────────────────────────────
+ *
+ * "The burger was cold, take 100 off it" is a fact about the burger. Recording
+ * it as a bill-level discount loses which dish it belonged to, so nobody can
+ * ask later why that table paid less, and the item report still shows the
+ * burger earning full price. Per-line is also how a guest reads a bill: price,
+ * discount, net, on the row.
+ *
+ * ── What it deliberately does not do ────────────────────────────────────────
+ *
+ * It does not add the money up. The amount is written to the line and
+ * `recalculateOrderTotals` re-derives everything through `computeTotals`,
+ * which is still the only function in the system that totals a bill.
+ */
+export async function setItemDiscount(
+  params: ActorParams & {
+    orderId: string
+    itemId: string
+    /** Minor units, for the whole line. Zero clears it. */
+    amount: number
+    reason?: string | null
+  },
+): Promise<{ order: Order; itemName: string; before: number; after: number }> {
+  const amount = Math.max(0, Math.round(params.amount))
+  const reason = params.reason?.trim() || null
+
+  const order = await loadOpenBill(params.restaurantId, params.orderId)
+
+  // Signed books do not quietly change (§59).
+  await assertPeriodOpen(prisma, params.restaurantId, order.placedAt)
+
+  /*
+   * The same rule the void path applies, for the same reason: a bill that has
+   * taken money cannot quietly become cheaper, because the difference would
+   * appear in no report and produce no refund.
+   */
+  if (order.paidTotal > 0) {
+    throw new AppError(
+      'This bill has money on it — refund the payment before discounting a line',
+      409,
+      'ORDER_PAID',
+    )
+  }
+
+  const item = order.items.find((entry) => entry.id === params.itemId)
+  if (!item) throw new NotFoundError('Item')
+  if (item.status === 'CANCELLED') {
+    throw new AppError('That item is voided — there is nothing to discount', 409, 'ITEM_ALREADY_VOID')
+  }
+  if (amount > item.lineTotal) {
+    throw new AppError(
+      `That is more than the line is worth (${item.quantity} × ${item.name}).`,
+      400,
+      'ITEM_DISCOUNT_TOO_LARGE',
+    )
+  }
+
+  const before = item.discountAmount
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.orderItem.update({
+      where: { id: item.id },
+      data: { discountAmount: amount, discountReason: reason },
+    })
+
+    await tx.orderEvent.create({
+      data: {
+        orderId: order.id,
+        status: order.status,
+        note:
+          amount === 0
+            ? `Discount removed from ${item.quantity} × ${item.name}`
+            : `Discount on ${item.quantity} × ${item.name}${reason ? ` — ${reason}` : ''}`,
+        actorId: params.actorId ?? null,
+        actorName: params.actorName ?? null,
+      },
+    })
+
+    return recalculateOrderTotals(tx, order.id)
+  })
+
+  return { order: updated, itemName: item.name, before, after: amount }
+}
+
+/**
+ * Put a customer on a bill that is already open (pro.A.md §5, §7).
+ *
+ * ── Why this did not exist ──────────────────────────────────────────────────
+ *
+ * `Order.customerId` was written once, at placement, from the phone the
+ * cashier happened to have typed before sending to the kitchen. Nothing could
+ * change it afterwards. So a guest who produced a loyalty number when the bill
+ * arrived could not be given their points, and the till's own loyalty panel —
+ * which only renders when the order has a customer — was unreachable for every
+ * order rung up without a phone. The comment beside it described a capability
+ * the code did not have.
+ *
+ * Attaching does not re-price anything. Points are earned at settlement and
+ * redeemed deliberately; this only answers "whose bill is this".
+ */
+export async function attachCustomer(
+  params: ActorParams & { orderId: string; customerId: string },
+): Promise<{ order: Order; customerName: string }> {
+  const order = await loadOpenBill(params.restaurantId, params.orderId)
+
+  /*
+   * Money already taken means the receipt has been given and the loyalty for
+   * it settled against whoever the bill belonged to at the time. Moving it now
+   * would credit one person for another's spend.
+   */
+  if (order.paidTotal > 0) {
+    throw new AppError(
+      'This bill has money on it — the customer cannot be changed now',
+      409,
+      'ORDER_PAID',
+    )
+  }
+
+  const customer = await prisma.customer.findFirst({
+    where: { id: params.customerId, restaurantId: params.restaurantId },
+    select: { id: true, name: true, phone: true, isBlocked: true },
+  })
+  if (!customer) throw new NotFoundError('Customer')
+  if (customer.isBlocked) {
+    throw new AppError('That customer is blocked', 403, 'CUSTOMER_BLOCKED')
+  }
+
+  const updated = await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      customerId: customer.id,
+      customerName: customer.name,
+      customerPhone: customer.phone,
+      events: {
+        create: {
+          status: order.status,
+          note: `Bill assigned to ${customer.name}`,
+          actorId: params.actorId ?? null,
+          actorName: params.actorName ?? null,
+        },
+      },
+    },
+  })
+
+  return { order: updated, customerName: customer.name }
 }

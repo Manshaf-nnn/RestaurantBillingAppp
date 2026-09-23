@@ -83,7 +83,13 @@ export async function openDrawerAction(
     openDrawerSchema,
     input,
     async (data) => {
-      const user = await requirePermission(PERMISSIONS.CASH_DRAWER_OPERATE)
+      /*
+       * Opening a till is its own permission now (staff.A.md §6), split from
+       * CASH_DRAWER_OPERATE so nobody loses it on deploy day. This is the
+       * check that matters: the Open Drawer form is hidden from anybody
+       * without it, and hiding a form is not access control.
+       */
+      const user = await requirePermission(PERMISSIONS.POS_OPEN_DRAWER)
       /*
        * The posted branch has to be one this person may reach. `openDrawer`
        * resolves it through `resolveBranchId`, which only checks that the

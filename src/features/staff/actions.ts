@@ -16,6 +16,7 @@ import {
   requiresOwnBranch,
   seesAllLocations,
   visibleBranchIds,
+  canActOnRole,
 } from '@/lib/rbac'
 import { tenantOrigin } from '@/lib/tenant-url'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
@@ -33,11 +34,11 @@ import { requireRestaurant } from '@/server/db/tenant'
 import {
   adjustLoyaltySchema,
   couponSchema,
-  customerSchema,
   inviteStaffSchema,
   setStaffPasswordSchema,
   replyReviewSchema,
   updateStaffSchema,
+  staffPermissionsSchema,
 } from './schema'
 
 // ── staff ────────────────────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ async function homeBranchFor(
   /** The role being given to the account, not the admin's own. */
   role: UserRole,
 ): Promise<string | null> {
-  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+  const reach = visibleBranchIds(admin)
 
   if (!branchId) {
     /*
@@ -101,6 +102,43 @@ async function homeBranchFor(
 }
 
 /**
+ * The extra locations this person may also work (staff.A.md §4).
+ *
+ * Bounded by the acting admin's own reach, for exactly the reason
+ * `homeBranchFor` is: granting a site is granting sight of its takings, its
+ * staff and its audit log, and an admin cannot give away what they do not
+ * hold. A site manager listing another branch here is refused by name rather
+ * than having it silently dropped, because a silent drop reads as success and
+ * the person shows up on Monday unable to see the shop they were told to
+ * cover.
+ *
+ * The home branch is filtered out: it is already reach, and storing it twice
+ * would show as a duplicate on the effective-access screen.
+ */
+async function extraBranchesFor(
+  admin: TenantUser,
+  requested: string[] | undefined,
+  homeBranchId: string | null,
+): Promise<string[]> {
+  const wanted = [...new Set((requested ?? []).filter((id) => id && id !== homeBranchId))]
+  if (wanted.length === 0) return []
+
+  for (const branchId of wanted) await assertBranchAccess(admin, branchId)
+
+  /*
+   * Re-read under the acting admin's own restaurant, so a guessed id from
+   * another tenant resolves to nothing rather than tying somebody across the
+   * boundary — the same rule `homeBranchFor` applies to the home branch.
+   */
+  const rows = await prisma.branch.findMany({
+    where: { id: { in: wanted }, restaurantId: admin.restaurantId, deletedAt: null },
+    select: { id: true },
+  })
+  if (rows.length !== wanted.length) throw new NotFoundError('Location')
+  return rows.map((row) => row.id)
+}
+
+/**
  * Nobody may create an account that sees more than they do.
  *
  * The rank rule (`assignableRoles`) stops a manager minting another manager,
@@ -110,7 +148,7 @@ async function homeBranchFor(
  * while being confined to one themselves.
  */
 function assertScopeAllowed(admin: TenantUser, role: UserRole) {
-  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+  const reach = visibleBranchIds(admin)
   if (reach === null) return
 
   // Would this role see every location regardless of the branch we pin them to?
@@ -175,6 +213,10 @@ export async function inviteStaff(
         staffRole?.branchId ?? data.branchId,
         role,
       )
+      // Resolved before the write for the same reason the home branch is: a
+      // location the admin may not reach must refuse the whole invitation, not
+      // create the account and then fail (staff.A.md §4).
+      const extraBranchIds = await extraBranchesFor(admin, data.branchIds, branchId)
 
       /*
        * The sign-in code is the password. A waiter is handed a card with their
@@ -199,6 +241,7 @@ export async function inviteStaff(
           signInCode: temporaryPassword,
           passwordHash,
           emailVerifiedAt: new Date(),
+          branchAccess: { create: extraBranchIds.map((id) => ({ branchId: id })) },
         },
       })
 
@@ -222,7 +265,7 @@ export async function inviteStaff(
         action: AUDIT_ACTIONS.STAFF_INVITED,
         entity: 'User',
         entityId: user.id,
-        after: { email: data.email, role: data.role, branchId },
+        after: { email: data.email, role: data.role, branchId, extraBranchIds },
       })
 
       revalidatePath('/dashboard/staff')
@@ -260,6 +303,13 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
       assertScopeAllowed(admin, data.role)
 
       const branchId = await homeBranchFor(admin, data.branchId, data.role)
+      const extraBranchIds = await extraBranchesFor(admin, data.branchIds, branchId)
+      const beforeExtras = (
+        await prisma.userBranch.findMany({
+          where: { userId: data.id },
+          select: { branchId: true },
+        })
+      ).map((row) => row.branchId)
 
       /*
        * Two facts have to stay in step: `User.branchId` decides what someone
@@ -289,6 +339,31 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
             isActive: data.isActive,
           },
         })
+
+        /*
+         * Replace, not merge (staff.A.md §4).
+         *
+         * The form posts the complete set of extra locations, so a branch the
+         * owner unticked has to go. Merging would make the checkboxes one-way
+         * — every save could only ever widen somebody's reach, and taking a
+         * site back would need a database edit.
+         *
+         * Only when the form said something: `branchIds` is optional, and an
+         * absent field means "this caller did not ask about extra locations",
+         * which must not read as "remove them all".
+         */
+        if (data.branchIds !== undefined) {
+          await tx.userBranch.deleteMany({
+            where: { userId: data.id, branchId: { notIn: extraBranchIds.length ? extraBranchIds : ['-'] } },
+          })
+          for (const id of extraBranchIds) {
+            await tx.userBranch.upsert({
+              where: { userId_branchId: { userId: data.id, branchId: id } },
+              create: { userId: data.id, branchId: id },
+              update: {},
+            })
+          }
+        }
 
         if (runs && !stillRunsIt) {
           await tx.branch.update({ where: { id: runs.id }, data: { managerId: null } })
@@ -322,14 +397,129 @@ export async function updateStaff(input: unknown): Promise<ActionResult<{ id: st
         action: AUDIT_ACTIONS.UPDATE,
         entity: 'User',
         entityId: data.id,
-        before: { role: target.role, isActive: target.isActive, branchId: target.branchId },
-        after: { role: data.role, isActive: data.isActive, branchId },
+        before: {
+          role: target.role,
+          isActive: target.isActive,
+          branchId: target.branchId,
+          extraBranchIds: beforeExtras,
+        },
+        after: {
+          role: data.role,
+          isActive: data.isActive,
+          branchId,
+          extraBranchIds: data.branchIds === undefined ? beforeExtras : extraBranchIds,
+        },
       })
 
       revalidatePath('/dashboard/staff')
       return { id: data.id }
     },
     'Staff member updated.',
+  )
+}
+
+/**
+ * What this one person may and may not do, on top of their role (staff.A.md §3).
+ *
+ * ── Why both halves are here ────────────────────────────────────────────────
+ *
+ * `allow` has been readable by `permissionsFor` since the column existed and
+ * no screen ever wrote it. `deny` is new. Together they are what makes
+ * "everyone on Senior POS, except Nila, who must not give discounts"
+ * expressible without cloning the role — and a cloned role drifts from its
+ * original the first time somebody edits one and not the other.
+ *
+ * ── The guards are the ones that already exist ──────────────────────────────
+ *
+ * Same four as every other write on this screen, reused rather than restated:
+ * the record's own branch, the owner being untouchable, no editing yourself,
+ * and rank. Plus `assertNoEscalation` on the ALLOW half, because granting a
+ * permission you do not hold is the whole point of the rule.
+ *
+ * DENY is deliberately NOT escalation-checked. Taking something away can only
+ * narrow, so a manager may deny a permission they do not hold themselves —
+ * refusing that would mean a site manager could not stop their own staff doing
+ * something only an owner can normally do.
+ */
+export async function setStaffPermissions(
+  input: unknown,
+): Promise<ActionResult<{ id: string; allow: string[]; deny: string[] }>> {
+  return runAction(
+    staffPermissionsSchema,
+    input,
+    async (data) => {
+      const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
+
+      const target = await prisma.user.findFirst({
+        where: { id: data.userId, restaurantId: admin.restaurantId, deletedAt: null },
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          branchId: true,
+          permissions: true,
+          deniedPermissions: true,
+        },
+      })
+      if (!target) throw new NotFoundError('Staff member')
+
+      await assertRecordBranch(admin, target, 'staff member')
+      if (target.role === 'OWNER') {
+        throw new ForbiddenError('The owner account cannot be restricted')
+      }
+      if (target.id === admin.id) {
+        throw new AppError('You cannot change your own access', 400, 'SELF_EDIT')
+      }
+      if (!canActOnRole(admin.role, target.role)) {
+        throw new ForbiddenError(`You cannot change what ${target.name} may do`)
+      }
+
+      /*
+       * Only keys this build knows about. A typo or a stale key from an old
+       * tab would otherwise sit in the column for ever, showing on the
+       * effective-access screen as a permission that grants nothing and
+       * cannot be explained.
+       */
+      const known = new Set<string>(Object.values(PERMISSIONS))
+      const unknown = [...data.allow, ...data.deny].filter((key) => !known.has(key))
+      if (unknown.length > 0) {
+        throw new AppError(`Unknown permission: ${unknown[0]}`, 400, 'UNKNOWN_PERMISSION')
+      }
+
+      // Granting is bounded by what the grantor holds; taking away is not.
+      assertNoEscalation(admin, data.allow)
+
+      const allow = [...new Set(data.allow)].sort()
+      const deny = [...new Set(data.deny)].sort()
+
+      await prisma.user.update({
+        where: { id: target.id },
+        data: { permissions: allow, deniedPermissions: deny },
+      })
+
+      await audit({
+        restaurantId: admin.restaurantId,
+        branchId: target.branchId,
+        userId: admin.id,
+        actorName: admin.name,
+        action: AUDIT_ACTIONS.STAFF_PERMISSIONS_SET,
+        entity: 'User',
+        entityId: target.id,
+        before: { allow: target.permissions, deny: target.deniedPermissions },
+        after: { allow, deny },
+      })
+
+      /*
+       * No session revocation, deliberately. Permissions are re-read from the
+       * database on every request (`USER_SELECT`), so this lands on the
+       * person's very next click — and cutting their session would sign them
+       * out mid-order to deliver a change they would have got anyway.
+       */
+      revalidatePath('/dashboard/staff')
+      revalidatePath(`/dashboard/staff/${target.id}/access`)
+      return { id: target.id, allow, deny }
+    },
+    'Access updated.',
   )
 }
 
@@ -354,7 +544,7 @@ async function credentialTarget(admin: TenantUser, userId: string) {
   if (target.id === adminId) {
     throw new AppError('Use your own profile to change your password', 400, 'SELF_EDIT')
   }
-  if (!assignableRoles(adminRole as never).includes(target.role as never)) {
+  if (!canActOnRole(adminRole as never, target.role as never)) {
     throw new ForbiddenError(`You cannot change the sign-in details of ${target.name}`)
   }
   return target
@@ -477,65 +667,14 @@ export async function removeStaff(id: string): Promise<ActionResult<{ id: string
 
 // ── customers ────────────────────────────────────────────────────────────────
 
-export async function saveCustomer(input: unknown): Promise<ActionResult<{ id: string }>> {
-  return runAction(
-    customerSchema,
-    input,
-    async (data) => {
-      const user = await requirePermission(PERMISSIONS.CUSTOMER_MANAGE)
-
-      /*
-       * Fenced on the tenant BEFORE the write. The update by primary key alone
-       * would rename, re-phone or block any restaurant's customer from here —
-       * `adjustLoyalty` two functions down always did this correctly.
-       */
-      const existing = data.id
-        ? await prisma.customer.findFirst({
-            where: { id: data.id, restaurantId: user.restaurantId },
-            select: { id: true, name: true, phone: true, email: true, isBlocked: true },
-          })
-        : null
-      if (data.id && !existing) throw new NotFoundError('Customer')
-
-      const payload = {
-        name: data.name,
-        phone: data.phone,
-        email: data.email || null,
-        notes: data.notes || null,
-        isBlocked: data.isBlocked,
-      }
-
-      try {
-        const record = existing
-          ? await prisma.customer.update({
-              where: { id: existing.id },
-              data: payload,
-            })
-          : await prisma.customer.create({ data: { ...payload, restaurantId: user.restaurantId } })
-
-        // Blocking a regular, or moving their phone (the loyalty key), is a
-        // change somebody may ask about; this path wrote no audit row at all.
-        await audit({
-          restaurantId: user.restaurantId,
-          userId: user.id,
-          actorName: user.name,
-          action: existing ? AUDIT_ACTIONS.UPDATE : AUDIT_ACTIONS.CREATE,
-          entity: 'Customer',
-          entityId: record.id,
-          before: existing ? { name: existing.name, phone: existing.phone, email: existing.email, isBlocked: existing.isBlocked } : undefined,
-          after: { name: payload.name, phone: payload.phone, email: payload.email, isBlocked: payload.isBlocked },
-        })
-
-        revalidatePath('/dashboard/customers')
-        return { id: record.id }
-      } catch (error) {
-        if (isUniqueViolation(error)) throw new ConflictError('A customer with that phone already exists')
-        throw error
-      }
-    },
-    'Customer saved.',
-  )
-}
+/*
+ * `saveCustomer` moved to `src/features/customers/actions.ts` as
+ * `saveCustomerAction` (pro.A.md §6): one customer form, shared by the CRM and
+ * the till, so a number typed at the counter and one typed in the back office
+ * reach the same record. Creating with a number that already exists now
+ * returns that person rather than refusing, and the phone is matched on its
+ * normalised key so spacing cannot make a second copy of a regular.
+ */
 
 /**
  * A hand correction to a guest's points.

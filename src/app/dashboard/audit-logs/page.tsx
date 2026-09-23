@@ -24,7 +24,7 @@ export default async function AuditLogsPage({
   const user = await requirePagePermission(PERMISSIONS.AUDIT_VIEW, '/dashboard/audit-logs')
   const params = await searchParams
   const search = (typeof params.search === 'string' ? params.search : '').trim()
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
 
   const [restaurant, logs] = await Promise.all([
     requireRestaurant(user.restaurantId),

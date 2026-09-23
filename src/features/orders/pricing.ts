@@ -169,7 +169,14 @@ export function evaluateCoupon(
 // ── order totals ─────────────────────────────────────────────────────────────
 
 export interface TotalsInput {
-  lines: Array<{ lineTotal: number }>
+  /**
+   * The lines, gross. `discount` is what a cashier took off THIS line
+   * (pro.A.md §10) — already multiplied out for the quantity. It is summed
+   * here rather than pre-subtracted by the caller, so `subtotal` keeps meaning
+   * "what the food costs at menu price" and a bill can show price, discount
+   * and net on the same row.
+   */
+  lines: Array<{ lineTotal: number; discount?: number }>
   taxRateBps: number
   serviceChargeBps: number
   taxInclusive: boolean
@@ -186,6 +193,8 @@ export interface OrderTotals {
   discountTotal: number
   couponDiscount: number
   manualDiscount: number
+  /** The sum of the lines' own discounts; part of `discountTotal`. */
+  itemDiscount: number
   loyaltyDiscount: number
   taxableBase: number
   serviceCharge: number
@@ -206,15 +215,33 @@ export function computeTotals(input: TotalsInput): OrderTotals {
   const subtotal = input.lines.reduce((total, line) => total + line.lineTotal, 0)
 
   /*
-   * The two discounts stay two numbers all the way through. When they exceed
-   * the bill, the coupon is honoured first and the manual discount takes the
-   * clamp — a manager comping "the rest" after a coupon is the common case,
-   * and this makes the recorded split match what each instrument actually
-   * took off.
+   * Line discounts come off first, because they are the most specific claim on
+   * the money: "this burger was 100 off" is a fact about that burger, and a
+   * coupon or a manager's comp applies to whatever is left after it. Each line
+   * is clamped to its own gross so one bad figure cannot make a line negative,
+   * and the sum is clamped to the subtotal.
    */
-  const couponDiscount = Math.min(Math.max(0, input.couponDiscount ?? 0), subtotal)
-  const manualDiscount = Math.min(Math.max(0, input.manualDiscount ?? 0), subtotal - couponDiscount)
-  const discountTotal = couponDiscount + manualDiscount
+  const itemDiscount = Math.min(
+    input.lines.reduce(
+      (total, line) => total + Math.min(Math.max(0, line.discount ?? 0), Math.max(0, line.lineTotal)),
+      0,
+    ),
+    subtotal,
+  )
+
+  /*
+   * The discounts stay separate numbers all the way through. When they exceed
+   * the bill, the more specific instrument is honoured first and the looser
+   * one takes the clamp — a manager comping "the rest" after a coupon is the
+   * common case, and this makes the recorded split match what each instrument
+   * actually took off.
+   */
+  const couponDiscount = Math.min(Math.max(0, input.couponDiscount ?? 0), subtotal - itemDiscount)
+  const manualDiscount = Math.min(
+    Math.max(0, input.manualDiscount ?? 0),
+    subtotal - itemDiscount - couponDiscount,
+  )
+  const discountTotal = itemDiscount + couponDiscount + manualDiscount
 
   const loyaltyDiscount = Math.min(
     Math.max(0, input.loyaltyDiscount ?? 0),
@@ -254,6 +281,7 @@ export function computeTotals(input: TotalsInput): OrderTotals {
     discountTotal,
     couponDiscount,
     manualDiscount,
+    itemDiscount,
     loyaltyDiscount,
     taxableBase,
     serviceCharge,

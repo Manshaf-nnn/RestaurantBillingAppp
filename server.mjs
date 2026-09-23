@@ -29,21 +29,79 @@ if (!process.env.NEXT_PUBLIC_APP_URL) {
 }
 
 const dev = process.env.NODE_ENV !== 'production'
-const hostname = process.env.HOSTNAME || '0.0.0.0'
 const port = Number(process.env.PORT || 3000)
+
+/*
+ * ── Two different jobs, two different values (pro.A.md §18) ────────────────
+ *
+ * `bindHost` is the interface to listen on. In a container that is 0.0.0.0,
+ * because the port has to be reachable from outside the container.
+ *
+ * `publicHost` is the name visitors type. Next stores whatever it is given
+ * here as `fetchHostname` and builds EVERY `request.url` from it — so passing
+ * the bind address made `NextResponse.redirect(new URL('/login', request.url))`
+ * send real people to `https://0.0.0.0:3000/login`, losing their host-only
+ * session cookies on the way. One variable was doing both jobs.
+ *
+ * Next cannot simply be given nothing: without it middleware throws
+ * "To use middleware you must provide a `hostname` and `port`".
+ */
+const bindHost = process.env.HOSTNAME || '0.0.0.0'
+
+function publicHostFrom(url) {
+  if (!url) return null
+  const raw = url.trim().replace(/\/$/, '')
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+  try {
+    return new URL(candidate).hostname || null
+  } catch {
+    return null
+  }
+}
+
+const publicHost =
+  publicHostFrom(process.env.NEXT_PUBLIC_APP_URL) ||
+  publicHostFrom(process.env.RENDER_EXTERNAL_URL) ||
+  (bindHost === '0.0.0.0' ? 'localhost' : bindHost)
 
 const ACCESS_COOKIE = 'ros_at'
 const GUEST_COOKIE = 'ros_gs'
 const ISSUER = 'restaurantos'
 const AUDIENCE = 'restaurantos.app'
 
+/*
+ * Which rooms each role listens in (pro.A.md §15, §17).
+ *
+ * Six roles were missing, so an accountant, a stock keeper or a purchasing
+ * manager joined no role room at all and never received a MANAGEMENT
+ * notification — while the server-rendered bell on /dashboard showed them the
+ * very same rows. Live and stored disagreed for half the staff list.
+ *
+ * Keep this in step with ROLE_PERMISSIONS in src/lib/rbac.ts. It cannot import
+ * it: this file is plain ESM run by node before Next exists.
+ */
 const ROLE_ROOMS = {
   SUPER_ADMIN: ['management', 'kitchen', 'waiter', 'cashier'],
   OWNER: ['management', 'kitchen', 'waiter', 'cashier'],
+  ADMIN: ['management', 'kitchen', 'waiter', 'cashier'],
   MANAGER: ['management', 'kitchen', 'waiter', 'cashier'],
   KITCHEN: ['kitchen'],
   WAITER: ['waiter'],
+  /*
+   * The role is POS; the room is still called `cashier` (staff.A.md §10).
+   * Rooms are named after `NotificationAudience`, a Prisma enum written into
+   * every notification row ever sent, so renaming the room would mean
+   * migrating that history — and a client on the old name would go deaf in
+   * the window between the two deploys.
+   */
+  POS: ['cashier'],
+  /** Retired name, kept so a session signed before the deploy still hears. */
   CASHIER: ['cashier'],
+  INVENTORY_MANAGER: ['management'],
+  PURCHASING_MANAGER: ['management'],
+  WAREHOUSE_STAFF: ['management'],
+  STOCK_KEEPER: ['management'],
+  ACCOUNTANT: ['management'],
 }
 
 function parseCookies(header = '') {
@@ -146,7 +204,7 @@ async function mayWatchOrder(socket, orderId) {
   return staff.branchId === order.branchId
 }
 
-const app = next({ dev, hostname, port })
+const app = next({ dev, hostname: publicHost, port })
 const handle = app.getRequestHandler()
 
 await app.prepare()
@@ -214,8 +272,8 @@ io.on('connection', (socket) => {
 // Expose to the Next.js runtime — see src/server/realtime/emitter.ts
 globalThis.__ros_io = io
 
-httpServer.listen(port, hostname, () => {
-  const shown = hostname === '0.0.0.0' ? 'localhost' : hostname
+httpServer.listen(port, bindHost, () => {
+  const shown = publicHost
   console.log(`\n  TableFlow ${dev ? '(development)' : '(production)'}`)
   console.log(`  ▸ App        http://${shown}:${port}`)
   console.log(`  ▸ Realtime   ws://${shown}:${port}/socket.io`)

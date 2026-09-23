@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 
 import { listBranches } from '@/features/branches/service'
 import { listRoles } from '@/features/access/service'
+import { AccessTabs } from '@/features/access/components/access-tabs'
 import { StaffManager } from '@/features/staff/components/staff-manager'
 import { assignableRoles, can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -23,7 +24,7 @@ export default async function StaffPage() {
    * unrestricted — an owner or a group manager — and `[]` means confined with
    * no branch, which correctly shows nothing rather than everything.
    */
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
 
   const [staff, locations, customRoles] = await Promise.all([
     prisma.user.findMany({
@@ -45,6 +46,9 @@ export default async function StaffPage() {
         lastLoginAt: true,
         branchId: true,
         branch: { select: { name: true } },
+        // staff.A.md §4 — so the edit form opens on the extra sites this
+        // person already has rather than clearing them on the next save.
+        branchAccess: { select: { branchId: true } },
         staffRoleId: true,
         staffRole: { select: { name: true } },
       },
@@ -75,6 +79,8 @@ export default async function StaffPage() {
   return (
     <>
       <AutoRefresh scope="catalog" intervalMs={10000} />
+      {/* Roles are the templates; this is the people on them (staff.A.md §8). */}
+      {can(user, PERMISSIONS.STAFF_MANAGE) ? <AccessTabs active="staff" /> : null}
     <StaffManager
       canManage={can(user, PERMISSIONS.STAFF_MANAGE)}
       currentUserId={user.id}
@@ -110,6 +116,7 @@ export default async function StaffPage() {
         isActive: member.isActive,
         lastLoginAt: member.lastLoginAt?.toISOString() ?? null,
         branchId: member.branchId,
+        branchIds: member.branchAccess.map((row) => row.branchId),
         branchName: member.branch?.name ?? null,
         staffRoleId: member.staffRoleId,
         staffRoleName: member.staffRole?.name ?? null,

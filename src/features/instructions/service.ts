@@ -183,7 +183,7 @@ async function resolveAssignee(params: {
 
 export async function createInstruction(params: {
   restaurantId: string
-  user: { id: string; name: string; role: UserRole; branchId?: string | null }
+  user: { id: string; name: string; role: UserRole; branchId?: string | null; branchIds?: string[] | null }
   branchId: string | null
   /** Null keeps the original meaning: the task is for the location. */
   assigneeId?: string | null
@@ -271,7 +271,7 @@ export async function createInstruction(params: {
 
 export async function completeInstruction(params: {
   restaurantId: string
-  user: { id: string; name: string; role: UserRole; branchId?: string | null }
+  user: { id: string; name: string; role: UserRole; branchId?: string | null; branchIds?: string[] | null }
   instructionId: string
   note: string | null
 }) {
@@ -298,7 +298,7 @@ export async function completeInstruction(params: {
 /** Withdrawing an instruction. Only the people who may write one may cancel one. */
 export async function cancelInstruction(params: {
   restaurantId: string
-  user: { id: string; name: string; role: UserRole; branchId?: string | null }
+  user: { id: string; name: string; role: UserRole; branchId?: string | null; branchIds?: string[] | null }
   instructionId: string
 }) {
   if (visibleBranchIds(params.user) !== null) {

@@ -73,6 +73,8 @@ export default async function CashDrawerPage({
     // ever sees their own, so one till's shortfall is not floor gossip.
     canSeeAll: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
     canApprovePetty: can(user, PERMISSIONS.PETTY_CASH_APPROVE),
+    // Opening a till is its own permission now (staff.A.md §6).
+    canOpen: can(user, PERMISSIONS.POS_OPEN_DRAWER),
   })
 
   /*

@@ -49,7 +49,30 @@ export function DrawerConsole({ data }: { data: DrawerPageData }) {
       {data.pendingHandovers.length > 0 && <IncomingHandovers data={data} money={money} />}
       {data.openNow.some((row) => !row.mine) && <OpenNow data={data} money={money} />}
       {data.review.length > 0 && <ReviewQueue data={data} money={money} />}
-      {data.open ? <OpenDrawerPanel data={data} money={money} /> : <OpenForm data={data} />}
+      {/*
+        Opening a till is its own permission (staff.A.md §6). This used to
+        render the form whenever no session was open, for anybody who could
+        reach the screen — so somebody deliberately allowed the drawer view and
+        not the drawer got a full opening-float form and a refusal after
+        filling it in. The server refuses either way; this is so the screen
+        stops asking.
+      */}
+      {data.open ? (
+        <OpenDrawerPanel data={data} money={money} />
+      ) : data.canOpen ? (
+        <OpenForm data={data} />
+      ) : (
+        <SectionCard
+          title="No drawer open"
+          description="Opening a till is not part of your access. Ask a manager to open one, or to take the handover of a till that is already running."
+        >
+          <EmptyState
+            icon={<Lock />}
+            title="You cannot open a till"
+            description="You can still take payments against a till somebody else has opened."
+          />
+        </SectionCard>
+      )}
       <History data={data} money={money} />
     </div>
   )

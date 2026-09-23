@@ -1,6 +1,8 @@
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { requestUrl } from '@/lib/request-url'
+
 import { refreshCookieName, type SessionScope } from '@/server/auth/jwt'
 import { rotateSession } from '@/server/auth/session'
 
@@ -61,8 +63,8 @@ function finish(
 ) {
   if (nextPath) {
     const target = ok
-      ? new URL(nextPath, request.url)
-      : new URL(`${loginPath}?next=${encodeURIComponent(nextPath)}`, request.url)
+      ? requestUrl(request, nextPath)
+      : requestUrl(request, `${loginPath}?next=${encodeURIComponent(nextPath)}`)
     return NextResponse.redirect(target)
   }
 

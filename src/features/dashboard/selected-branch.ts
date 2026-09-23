@@ -37,7 +37,7 @@ export async function selectedBranch(
   user: Pick<TenantUser, 'role' | 'branchId'>,
   searchParams?: Record<string, string | string[] | undefined>,
 ): Promise<BranchSelection> {
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const allowed = visibleBranchIds(user)
 
   /*
    * An empty allow-list means "sees nothing", and it must not be mistaken for
@@ -113,7 +113,7 @@ export async function listStationBranches(
   user: Pick<TenantUser, 'role' | 'branchId' | 'restaurantId'>,
 ): Promise<Array<{ id: string; name: string }>> {
   const { prisma } = await import('@/server/db/prisma')
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
 
   return prisma.branch.findMany({
     where: {

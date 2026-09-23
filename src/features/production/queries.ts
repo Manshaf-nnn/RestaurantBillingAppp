@@ -386,7 +386,7 @@ export async function listProductionBranches(user: {
   branchId: string | null
   restaurantId: string
 }): Promise<Array<{ id: string; name: string }>> {
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
   return prisma.branch.findMany({
     where: {
       restaurantId: user.restaurantId,

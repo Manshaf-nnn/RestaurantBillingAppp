@@ -66,7 +66,7 @@ export async function resolveShiftNote(id: string): Promise<ActionResult<{ id: s
      * reports as not-found — the same answer a made-up id gets, which is what
      * someone probing ids should see.
      */
-    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const reach = visibleBranchIds(user)
     const result = await prisma.shiftNote.updateMany({
       where: {
         id,

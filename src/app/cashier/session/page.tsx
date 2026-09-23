@@ -23,16 +23,21 @@ export const metadata: Metadata = { title: 'Start your shift' }
  * back button from parking somebody on an interstitial they have already
  * passed.
  *
- * Reachable by anyone who can operate a drawer, including a manager who wants
- * to open one deliberately — the gate is about who is *forced* here, not who is
+ * Reachable by anyone who can OPEN a drawer, including a manager who wants to
+ * open one deliberately — the gate is about who is *forced* here, not who is
  * allowed.
+ *
+ * Guarded on POS_OPEN_DRAWER rather than CASH_DRAWER_OPERATE (staff.A.md §6),
+ * because this screen IS the opening float: everything on it starts a session.
+ * Somebody who may work a till but not open one has no business here, and
+ * before the split they could type the URL and get the form.
  */
 export default async function CashierSessionPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.CASH_DRAWER_OPERATE, '/cashier/session')
+  const user = await requirePagePermission(PERMISSIONS.POS_OPEN_DRAWER, '/cashier/session')
 
   const params = await searchParams
   const raw = typeof params.next === 'string' ? params.next : '/cashier'

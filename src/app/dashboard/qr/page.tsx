@@ -35,7 +35,7 @@ export default async function QrPage() {
   const user = await requirePagePermission(PERMISSIONS.QR_VIEW, '/dashboard/qr')
   const restaurant = await requireRestaurant(user.restaurantId)
 
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const allowed = visibleBranchIds(user)
   const branches = (await orderableBranches(user.restaurantId)).filter(
     (branch) => allowed === null || allowed.includes(branch.id),
   )

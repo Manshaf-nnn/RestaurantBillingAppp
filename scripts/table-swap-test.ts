@@ -172,8 +172,10 @@ async function main() {
     check('both tables announced', (action.match(/realtime\.tableUpdated\(/g) ?? []).length === 2)
     check('and every moved order', action.includes('realtime.orderUpdated(user.restaurantId, payload)'))
     const rbac = readFileSync('src/lib/rbac.ts', 'utf8')
-    const cashierBlock = rbac.slice(rbac.indexOf('const CASHIER'), rbac.indexOf('const WAITER'))
-    check('cashiers hold it by default, and so does anyone who manages tables',
+    // The array is `const POS` since staff.A.md §10 renamed the role; the
+    // block still ends where WAITER's begins.
+    const cashierBlock = rbac.slice(rbac.indexOf('const POS'), rbac.indexOf('const WAITER'))
+    check('POS holds it by default, and so does anyone who manages tables',
       cashierBlock.includes('PERMISSIONS.TABLE_SWAP') && rbac.includes('[PERMISSIONS.TABLE_SWAP, PERMISSIONS.TABLE_MANAGE]'))
   }
 }

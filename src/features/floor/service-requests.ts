@@ -6,6 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { notifyAudiences } from '@/server/notifications'
 import { realtime } from '@/server/realtime/emitter'
+import { emitOutbox } from '@/server/realtime/outbox'
 
 /**
  * A guest — or a colleague on their behalf — calling the floor (abc.md §7).
@@ -68,16 +69,36 @@ export async function openServiceRequest(params: {
   let request: ServiceRequest
   let created = false
   try {
-    request = await prisma.serviceRequest.create({
-      data: {
+    /*
+     * The row and its outbox entry commit together (pro.A.md §16).
+     *
+     * A waiter call was the one important event with no durable record of
+     * having happened: the socket emit below is fire-and-forget, so a station
+     * whose tablet was reconnecting at that moment simply never learned about
+     * it, and there was nothing to replay. Now the event is in the same
+     * transaction as the request, so a screen coming back can catch up.
+     */
+    request = await prisma.$transaction(async (tx) => {
+      const row = await tx.serviceRequest.create({
+        data: {
+          restaurantId: params.restaurantId,
+          branchId: table.branchId,
+          tableId: table.id,
+          type: params.type,
+          note,
+          requestedByName,
+          createdById: params.createdById ?? null,
+        },
+      })
+      await emitOutbox(tx, {
         restaurantId: params.restaurantId,
         branchId: table.branchId,
-        tableId: table.id,
-        type: params.type,
-        note,
-        requestedByName,
-        createdById: params.createdById ?? null,
-      },
+        type: 'service-request.created',
+        entity: 'ServiceRequest',
+        entityId: row.id,
+        payload: { tableId: table.id, tableNumber: table.number, type: row.type },
+      })
+      return row
     })
     created = true
   } catch (error) {

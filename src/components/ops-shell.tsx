@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/primitives'
+import { StaffAlerts } from '@/components/staff-alerts'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { logout } from '@/features/auth/actions'
 import { useSocket } from '@/hooks/use-socket'
@@ -30,6 +31,8 @@ export function OpsShell({
   title,
   subtitle,
   branch,
+  branchIds = null,
+  canAnswerCalls = false,
   user,
   soundEnabled,
   onToggleSound,
@@ -49,6 +52,13 @@ export function OpsShell({
    * the wrong drawer. The dashboard at least carries the branch switcher.
    */
   branch?: string | null
+  /**
+   * The locations this viewer may see, so the global listener can ignore
+   * another site's events. `null` means every location.
+   */
+  branchIds?: string[] | null
+  /** Whether this person may answer a table's call from the popup. */
+  canAnswerCalls?: boolean
   user: { name: string; role: string }
   soundEnabled?: boolean
   onToggleSound?: () => void
@@ -72,6 +82,12 @@ export function OpsShell({
 
   return (
     <div className="flex min-h-dvh flex-col">
+      {/*
+        One listener for every operational screen (pro.A.md §17). A waiter call
+        used to raise a popup only on /waiter; now the cashier at the till and
+        the kitchen rail hear it too, wherever they are standing.
+      */}
+      <StaffAlerts branchIds={branchIds} branchName={branch} canAnswerCalls={canAnswerCalls} />
       <header className="glass-chrome sticky top-0 z-40 border-b">
         <div className="flex h-14 items-center gap-3 px-4">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">

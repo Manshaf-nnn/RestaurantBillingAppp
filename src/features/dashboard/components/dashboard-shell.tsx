@@ -51,6 +51,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { EVENTS, type NotificationPayload } from '@/lib/realtime/events'
 import { cn, initials } from '@/lib/utils'
 import { permissionsFor, ROLE_LABELS } from '@/lib/rbac'
+import { StaffAlerts } from '@/components/staff-alerts'
 import { useSocket, useSocketEvent } from '@/hooks/use-socket'
 import { isRealtimeEnabled } from '@/lib/realtime/client'
 import { useNotificationSound } from '@/hooks/use-notification-sound'
@@ -112,6 +113,7 @@ export interface ShellNotification {
 export function DashboardShell({
   user,
   locations,
+  branchIds = null,
   seesEverything = false,
   restaurantName,
   orderUrl,
@@ -125,6 +127,11 @@ export function DashboardShell({
   user: ShellUser
   /** Locations this user may see; the switcher hides itself with nothing to pick. */
   locations?: SwitchableLocation[]
+  /**
+   * The same reach as ids, for filtering live events. `null` means every
+   * location — the value `visibleBranchIds` already returns.
+   */
+  branchIds?: string[] | null
   /**
    * Whether this person's reach is unrestricted. Drives the "Main admin" row —
    * see `BranchSwitcher`.
@@ -300,13 +307,27 @@ export function DashboardShell({
   }, [])
 
   useSocketEvent(EVENTS.NOTIFICATION, (payload: NotificationPayload) => {
+    /*
+     * Only what belongs here (pro.A.md §15).
+     *
+     * Role rooms carry no branch segment, so a MANAGEMENT push reaches every
+     * site at once — and the bell list this prepends to IS branch-filtered on
+     * the server. Without this check a Kandy manager saw a Colombo toast and a
+     * bell row that vanished on the next render. `null` is a genuine
+     * business-wide notice and belongs to everybody.
+     */
+    if (branchIds !== null && payload.branchId && !branchIds.includes(payload.branchId)) return
     setNotifications((current) => [
       // A socket payload carries no destination; the next full load fills it.
       { id: payload.id, title: payload.title, body: payload.body, createdAt: payload.createdAt, readAt: null, href: null },
       ...current.slice(0, 29),
     ])
     play('alert')
-    toast(payload.title, { description: payload.body ?? undefined })
+    // A table calling raises the shared popup below; a toast as well would be
+    // the same news twice.
+    if (payload.type !== 'SERVICE_REQUEST') {
+      toast(payload.title, { description: payload.body ?? undefined })
+    }
   })
 
   React.useEffect(() => setMobileOpen(false), [pathname])
@@ -369,6 +390,12 @@ export function DashboardShell({
 
   return (
     <div className="flex min-h-dvh">
+      {/*
+        The same table-calling popup the till and the kitchen get
+        (pro.A.md §17). A manager reading the dashboard is often the person who
+        answers, and until now only /waiter ever showed it.
+      */}
+      <StaffAlerts branchIds={branchIds} canAnswerCalls />
       {/* ── desktop sidebar ─────────────────────────────────────── */}
       <aside
         className={cn(

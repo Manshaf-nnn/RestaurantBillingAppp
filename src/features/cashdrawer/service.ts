@@ -810,7 +810,7 @@ export async function forceCloseDrawer(params: {
   })
   if (!session) throw new NotFoundError('Drawer session')
 
-  if (!canAccessBranch({ role: params.actor.role, branchId: params.actor.branchId }, session.branchId)) {
+  if (!canAccessBranch(params.actor, session.branchId)) {
     throw new ForbiddenError('That drawer belongs to another location')
   }
   if (session.status !== 'OPEN') {
@@ -936,7 +936,7 @@ export async function reviewDrawer(params: {
   })
   if (!session) throw new NotFoundError('Drawer session')
 
-  if (!canAccessBranch({ role: params.actor.role, branchId: params.actor.branchId }, session.branchId)) {
+  if (!canAccessBranch(params.actor, session.branchId)) {
     throw new ForbiddenError('That drawer belongs to another location')
   }
   if (session.status !== 'PENDING_REVIEW') {
@@ -1121,6 +1121,8 @@ export interface DrawerActor {
   id: string
   role: UserRole
   branchId?: string | null
+  /** staff.A.md §4 — extra sites, so a person covering two shops is not narrowed to one. */
+  branchIds?: string[] | null
   canManageOthers: boolean
   /**
    * May sign off a large cash difference. Deliberately separate from
@@ -1154,7 +1156,7 @@ export async function requireOpenSession(
   })
   if (!session) throw new NotFoundError('Drawer session')
 
-  if (!canAccessBranch({ role: actor.role, branchId: actor.branchId }, session.branchId)) {
+  if (!canAccessBranch(actor, session.branchId)) {
     throw new ForbiddenError('That drawer belongs to another location')
   }
   if (!actor.canManageOthers && session.openedById !== actor.id) {

@@ -6,7 +6,9 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertRecordBranch, requirePermission } from '@/server/auth/guard'
+import { AppError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { needsApproval, requestApproval } from '@/features/approvals/service'
 import { realtime } from '@/server/realtime/emitter'
 import { toOrderPayload } from '@/features/orders/service'
 import {
@@ -18,7 +20,9 @@ import {
   splitBillSchema,
   voidItemSchema,
   addItemsSchema,
+  setItemDiscountSchema,
 } from './schema'
+import { attachCustomerSchema } from '@/features/customers/schema'
 import { addStaffOrderItems } from '@/features/orders/guest-additions'
 import {
   acceptGuestOrder,
@@ -26,6 +30,8 @@ import {
   mergeBills,
   rejectGuestOrder,
   resumeBill,
+  attachCustomer,
+  setItemDiscount,
   splitBill,
   voidOrderItem,
 } from './service'
@@ -309,6 +315,149 @@ export async function voidItemAction(
       return { orderId: order.id, grandTotal: order.grandTotal }
     },
     'Item voided.',
+  )
+}
+
+/**
+ * Put a customer on a bill that is already open (pro.A.md §5, §7, §12).
+ *
+ * Gated on `PAYMENT_COLLECT` — the permission the till already needs — because
+ * this is a cashier saying whose bill it is, not an edit to the customer's own
+ * record.
+ */
+export async function attachCustomerToBillAction(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; customerName: string }>> {
+  return runAction(
+    attachCustomerSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.PAYMENT_COLLECT)
+      await assertBillBranch(user, user.restaurantId, data.orderId)
+
+      const { order, customerName } = await attachCustomer({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        customerId: data.customerId,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.UPDATE,
+        entity: 'Order',
+        entityId: order.id,
+        after: { customerId: data.customerId, customerName },
+      })
+
+      revalidateCounter()
+      await broadcast(order.id, user.restaurantId)
+      return { orderId: order.id, customerName }
+    },
+    'Bill assigned to the customer.',
+  )
+}
+
+/**
+ * Take money off one line (pro.A.md §10).
+ *
+ * Same permission as a bill-level discount, and the same approval threshold:
+ * a cashier who may not comp 500 off a bill may not comp it off a dish either.
+ * The kind is `PRICE_OVERRIDE`, which has existed in the approval enum with no
+ * raiser since it was added — this is what it was for.
+ */
+export async function setItemDiscountAction(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; grandTotal: number; itemDiscount: number }>> {
+  return runAction(
+    setItemDiscountSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.DISCOUNT_APPLY)
+      await assertBillBranch(user, user.restaurantId, data.orderId)
+
+      /*
+       * Over the house limit, a signature is needed — and the signature is
+       * consumed, once, by a compare-and-swap. An approval for 500 covers a
+       * 300 discount and never the reverse, and never twice.
+       */
+      if (data.amount > 0 && (await needsApproval({ restaurantId: user.restaurantId, kind: 'PRICE_OVERRIDE', amount: data.amount }))) {
+        const approval = await prisma.approvalRequest.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            kind: 'PRICE_OVERRIDE',
+            entity: 'OrderItem',
+            entityId: data.itemId,
+            status: 'APPROVED',
+            consumedAt: null,
+            amount: { gte: data.amount },
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+        const claimed = approval
+          ? await prisma.approvalRequest.updateMany({
+              where: { id: approval.id, status: 'APPROVED', consumedAt: null },
+              data: { consumedAt: new Date() },
+            })
+          : { count: 0 }
+
+        if (claimed.count === 0) {
+          await requestApproval({
+            restaurantId: user.restaurantId,
+            branchId: null,
+            kind: 'PRICE_OVERRIDE',
+            entity: 'OrderItem',
+            entityId: data.itemId,
+            amount: data.amount,
+            reason: data.reason || 'Discount on one item',
+            payload: { orderId: data.orderId, itemId: data.itemId, amount: data.amount },
+            userId: user.id,
+          })
+          throw new AppError(
+            'That discount needs a manager to sign it off. It has been sent for approval.',
+            403,
+            'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
+      const { order, itemName, before, after } = await setItemDiscount({
+        restaurantId: user.restaurantId,
+        orderId: data.orderId,
+        itemId: data.itemId,
+        amount: data.amount,
+        reason: data.reason || null,
+        actorId: user.id,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: order.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.ORDER_ITEM_DISCOUNT,
+        entity: 'OrderItem',
+        entityId: data.itemId,
+        before: { discountAmount: before },
+        after: {
+          discountAmount: after,
+          reason: data.reason || null,
+          item: itemName,
+          orderId: order.id,
+          grandTotal: order.grandTotal,
+        },
+      })
+
+      revalidateCounter()
+      await broadcast(order.id, user.restaurantId)
+      return { orderId: order.id, grandTotal: order.grandTotal, itemDiscount: order.itemDiscount }
+    },
+    'Discount applied to the item.',
   )
 }
 

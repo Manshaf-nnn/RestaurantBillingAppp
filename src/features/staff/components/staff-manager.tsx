@@ -1,9 +1,11 @@
 'use client'
 
+import Link from 'next/link'
+
 import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import type { UserRole } from '@prisma/client'
-import { Copy, KeyRound, MoreVertical, Pencil, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { Copy, KeyRound, MoreVertical, Pencil, Search, ShieldCheck, SlidersHorizontal, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -63,6 +65,8 @@ export interface StaffMember {
   /** The restaurant's own role, when they are in one. */
   staffRoleId: string | null
   staffRoleName: string | null
+  /** Extra sites beyond `branchId`, so the form opens on what is stored (staff.A.md §4). */
+  branchIds: string[]
 }
 
 /** A custom role that can be given to somebody on this screen. */
@@ -280,6 +284,16 @@ export function StaffManager({
                             <DropdownMenuItem onClick={() => setPasswordFor(member)}>
                               <KeyRound /> Set password
                             </DropdownMenuItem>
+                            {/*
+                              What they can actually do, once the role, the
+                              custom role and any override for this one person
+                              are put together (staff.A.md §3, §8).
+                            */}
+                            <DropdownMenuItem asChild>
+                              <Link href={`/dashboard/staff/${member.id}/access`}>
+                                <SlidersHorizontal /> View effective access
+                              </Link>
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem destructive onClick={() => setDeleteId(member.id)}>
                               <Trash2 /> Remove
@@ -410,6 +424,66 @@ function WorksAtField({
   )
 }
 
+/**
+ * The other sites this person may also work (staff.A.md §4).
+ *
+ * Separate from "Works at", because the two answer different questions and
+ * conflating them is why somebody could only ever have one location. The home
+ * branch is where their shift opens, their drawer defaults and their rota sits;
+ * these are extra reach on top of it.
+ *
+ * Hidden when the home location is "All locations" — adding a site to somebody
+ * who already sees every site would be a checkbox that changes nothing — and
+ * hidden when there is only one location to give.
+ */
+function AlsoWorksAtField({
+  homeBranchId,
+  value,
+  onChange,
+  locations,
+}: {
+  homeBranchId: string
+  value: string[]
+  onChange: (value: string[]) => void
+  locations: StaffLocation[]
+}) {
+  const others = locations.filter((location) => location.id !== homeBranchId)
+  if (homeBranchId === ALL_LOCATIONS || others.length === 0) return null
+
+  const toggle = (id: string) => {
+    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id])
+  }
+
+  return (
+    <Field
+      label="Also works at"
+      hint="Extra locations this person may see and work at, on top of the one above. Leave them all unticked for somebody who works at one place."
+    >
+      <div className="flex flex-wrap gap-2">
+        {others.map((location) => {
+          const on = value.includes(location.id)
+          return (
+            <button
+              key={location.id}
+              type="button"
+              aria-pressed={on}
+              onClick={() => toggle(location.id)}
+              className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                on
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'bg-background hover:bg-muted'
+              }`}
+            >
+              {location.name}
+              {location.isActive ? '' : ' (switched off)'}
+            </button>
+          )
+        })}
+      </div>
+    </Field>
+  )
+}
+
 function InviteDialog({
   open,
   onOpenChange,
@@ -453,6 +527,8 @@ function InviteDialog({
         canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
         locations,
       ),
+      /** Extra sites, on top of the home one above (staff.A.md §4). */
+      branchIds: [] as string[],
     }
   })
   const [saving, setSaving] = React.useState(false)
@@ -465,6 +541,7 @@ function InviteDialog({
       setForm({
         name: '', email: '', phone: '', role,
         branchId: branchForRole(role, ALL_LOCATIONS, locations),
+        branchIds: [],
       })
       setStaffRoleId('')
       setError(null)
@@ -617,6 +694,12 @@ function InviteDialog({
               role={form.role}
               canAssignAllLocations={canAssignAllLocations}
             />
+            <AlsoWorksAtField
+              homeBranchId={form.branchId}
+              value={form.branchIds}
+              onChange={(branchIds) => setForm({ ...form, branchIds })}
+              locations={locations}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
                 Cancel
@@ -649,6 +732,7 @@ function EditDialog({
 }) {
   const [form, setForm] = React.useState({
     name: '', phone: '', role: 'WAITER' as UserRole, isActive: true, branchId: ALL_LOCATIONS,
+    branchIds: [] as string[],
   })
   /*
    * Kept apart from `form` because it is saved by a different action.
@@ -672,6 +756,7 @@ function EditDialog({
         // prevents; open on a real location rather than on an option that is
         // no longer offered for their role.
         branchId: branchForRole(member.role, member.branchId ?? ALL_LOCATIONS, locations),
+        branchIds: member.branchIds,
       })
       setStaffRoleId(member.staffRoleId ?? '')
       setError(null)
@@ -757,6 +842,12 @@ function EditDialog({
           locations={locations}
           role={form.role}
           canAssignAllLocations={canAssignAllLocations}
+        />
+        <AlsoWorksAtField
+          homeBranchId={form.branchId}
+          value={form.branchIds}
+          onChange={(branchIds) => setForm({ ...form, branchIds })}
+          locations={locations}
         />
         {customRoles && customRoles.length > 0 ? (
           <Field label="Custom access">

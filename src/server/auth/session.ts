@@ -117,9 +117,23 @@ export interface AuthUser {
   restaurantId: string | null
   /// Home branch, when the restaurant runs more than one location.
   branchId: string | null
+  /**
+   * Extra sites this person may also work (staff.A.md §4).
+   *
+   * Beyond `branchId`, not instead of it: the home branch is still where their
+   * shift opens and their drawer defaults. `visibleBranchIds` unions the two.
+   */
+  branchIds: string[]
   avatarUrl: string | null
   /** Extra keys granted to this person alone. */
   permissions: string[]
+  /**
+   * Keys taken away from this person, whatever granted them (staff.A.md §3).
+   *
+   * Read fresh per request for the same reason `rolePermissions` is: a
+   * revocation that waits for a token to expire is not a revocation.
+   */
+  deniedPermissions: string[]
   /**
    * The complete list from the restaurant's own role, when they hold one.
    *
@@ -181,6 +195,19 @@ export const USER_SELECT = {
   branchId: true,
   avatarUrl: true,
   permissions: true,
+  /*
+   * staff.A.md §3 — read here, not carried in the JWT, for the same reason
+   * `permissions` is: an owner who takes a permission away means now, and a
+   * claim in a signed token would go on granting it until the token expired.
+   */
+  deniedPermissions: true,
+  /*
+   * staff.A.md §4 — the extra sites this person may work, on the query that was
+   * already loading the session. `visibleBranchIds` unions them with the home
+   * branch, so the cost of somebody covering three shops is three small rows
+   * rather than a second query on every request.
+   */
+  branchAccess: { select: { branchId: true } },
   // sidebar.md §9 — on the query that was already loading the session, for the
   // same reason `enabledFeatures` is below: the sidebar draws on every single
   // page and must not pay a round trip for the shortcuts at the top of it.
@@ -208,8 +235,10 @@ function toAuthUser(user: SessionUser, sessionId: string): AuthUser {
     role: user.role,
     restaurantId: user.restaurantId,
     branchId: user.branchId ?? null,
+    branchIds: user.branchAccess.map((row) => row.branchId),
     avatarUrl: user.avatarUrl,
     permissions: user.permissions,
+    deniedPermissions: user.deniedPermissions,
     rolePermissions: activeRolePermissions(user.staffRole),
     /*
      * Expanded once, here, rather than wherever a permission is checked.

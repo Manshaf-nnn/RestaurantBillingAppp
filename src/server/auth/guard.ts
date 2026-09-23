@@ -71,7 +71,7 @@ export async function assertBranchAccess(
   branchId: string | null | undefined,
 ): Promise<void> {
   if (!branchId) return
-  if (!canAccessBranch({ role: user.role, branchId: user.branchId }, branchId)) {
+  if (!canAccessBranch(user, branchId)) {
     throw new ForbiddenError('You do not have access to that location')
   }
 }
@@ -210,7 +210,7 @@ export async function assertRecordBranch(
 ): Promise<void> {
   if (!record) throw new NotFoundError(what)
   if (!record.branchId) return
-  if (!canAccessBranch({ role: user.role, branchId: user.branchId }, record.branchId)) {
+  if (!canAccessBranch(user, record.branchId)) {
     throw new ForbiddenError(`That ${what} belongs to another location`)
   }
 }

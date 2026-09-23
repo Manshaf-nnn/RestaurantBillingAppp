@@ -72,6 +72,8 @@ export interface PettyActor {
   id: string
   role: UserRole
   branchId?: string | null
+  /** staff.A.md §4 — extra sites, so a person covering two shops is not narrowed to one. */
+  branchIds?: string[] | null
   canApprove: boolean
 }
 
@@ -493,7 +495,7 @@ async function requireRequest(
   })
   if (!request) throw new NotFoundError('Petty cash request')
 
-  if (!canAccessBranch({ role: actor.role, branchId: actor.branchId }, request.branchId)) {
+  if (!canAccessBranch(actor, request.branchId)) {
     throw new ForbiddenError('That request belongs to another location')
   }
   return request

@@ -445,6 +445,8 @@ export function KitchenBoard({
       title="Kitchen display"
       subtitle={restaurantName}
       branch={branchName}
+      branchIds={branchIds}
+      canAnswerCalls={false}
       user={user}
       actions={exit}
       soundEnabled={soundEnabled}

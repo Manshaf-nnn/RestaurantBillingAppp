@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { requestUrl } from '@/lib/request-url'
+
 import {
   ACCESS_COOKIE,
   ADMIN_ACCESS_COOKIE,
@@ -51,11 +53,16 @@ const PROTECTED_PREFIXES = [
 const ROLE_ALLOWED: Record<string, string[]> = {
   '/kitchen': ['OWNER', 'MANAGER', 'ADMIN', 'KITCHEN'],
   '/waiter': ['OWNER', 'MANAGER', 'ADMIN', 'WAITER'],
-  '/cashier': ['OWNER', 'MANAGER', 'ADMIN', 'CASHIER'],
+  // POS and CASHIER both appear wherever a role is listed here (staff.A.md
+  // §10). The migration moved every row to POS; CASHIER stays so that a
+  // session signed before the deploy — its role is a claim inside a JWT that
+  // has not expired yet — is not bounced to /forbidden mid-shift.
+  '/cashier': ['OWNER', 'MANAGER', 'ADMIN', 'POS', 'CASHIER'],
   '/dashboard': [
     'OWNER',
     'MANAGER',
     'ADMIN',
+    'POS',
     'CASHIER',
     'KITCHEN',
     'WAITER',
@@ -289,7 +296,7 @@ export async function middleware(request: NextRequest) {
 
   // ── 2. admin login page ───────────────────────────────────────────────────
   if (isAdminLogin) {
-    if (adminClaims) return NextResponse.redirect(new URL('/admin', request.url))
+    if (adminClaims) return NextResponse.redirect(requestUrl(request, '/admin'))
     return NextResponse.next()
   }
 
@@ -298,24 +305,24 @@ export async function middleware(request: NextRequest) {
     if (!adminClaims) {
       if (isPrefetch && request.cookies.has(ADMIN_REFRESH_COOKIE)) return NextResponse.next()
       if (request.cookies.has(ADMIN_REFRESH_COOKIE)) {
-        const refreshUrl = new URL('/api/auth/refresh', request.url)
+        const refreshUrl = requestUrl(request, '/api/auth/refresh')
         refreshUrl.searchParams.set('scope', 'admin')
         refreshUrl.searchParams.set('next', `${pathname}${search}`)
         return NextResponse.redirect(refreshUrl)
       }
-      const loginUrl = new URL('/admin/login', request.url)
+      const loginUrl = requestUrl(request, '/admin/login')
       loginUrl.searchParams.set('next', `${pathname}${search}`)
       return NextResponse.redirect(loginUrl)
     }
     if (adminClaims.role !== 'SUPER_ADMIN') {
-      return NextResponse.redirect(new URL('/admin/login', request.url))
+      return NextResponse.redirect(requestUrl(request, '/admin/login'))
     }
     return NextResponse.next()
   }
 
   // ── 4. staff auth screens: signed-in staff skip them ──────────────────────
   if (AUTH_PAGES.includes(pathname)) {
-    if (staffClaims) return NextResponse.redirect(new URL('/dashboard', request.url))
+    if (staffClaims) return NextResponse.redirect(requestUrl(request, '/dashboard'))
     return NextResponse.next()
   }
 
@@ -326,17 +333,17 @@ export async function middleware(request: NextRequest) {
   if (!staffClaims) {
     if (isPrefetch && request.cookies.has(REFRESH_COOKIE)) return NextResponse.next()
     if (request.cookies.has(REFRESH_COOKIE)) {
-      const refreshUrl = new URL('/api/auth/refresh', request.url)
+      const refreshUrl = requestUrl(request, '/api/auth/refresh')
       refreshUrl.searchParams.set('next', `${pathname}${search}`)
       return NextResponse.redirect(refreshUrl)
     }
-    const loginUrl = new URL('/login', request.url)
+    const loginUrl = requestUrl(request, '/login')
     loginUrl.searchParams.set('next', `${pathname}${search}`)
     return NextResponse.redirect(loginUrl)
   }
 
   if (!roleAllowed(pathname, String(staffClaims.role))) {
-    return NextResponse.redirect(new URL('/forbidden', request.url))
+    return NextResponse.redirect(requestUrl(request, '/forbidden'))
   }
 
   return NextResponse.next()

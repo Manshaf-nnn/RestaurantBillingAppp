@@ -107,7 +107,7 @@ export async function rememberBranch(branchId: string | null) {
       return { branchId: null }
     }
 
-    const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const allowed = visibleBranchIds(user)
     if (allowed !== null && !allowed.includes(branchId)) {
       throw new ForbiddenError('You do not have access to that location')
     }
@@ -164,7 +164,7 @@ export async function switchBranch(input: { branchId: string | null; path?: stri
   if (input.branchId) {
     // Never trust the posted id: the same check `rememberBranch` makes, so a
     // hand-edited request cannot widen what somebody sees.
-    const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const allowed = visibleBranchIds(user)
     if (allowed !== null && !allowed.includes(input.branchId)) {
       throw new ForbiddenError('You do not have access to that location')
     }

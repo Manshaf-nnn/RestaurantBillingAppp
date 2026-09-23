@@ -5,12 +5,24 @@ import { useRouter } from 'next/navigation'
 
 import { isRealtimeEnabled, REALTIME_POLL_MS } from '@/lib/realtime/client'
 import { usePulse } from '@/hooks/use-pulse'
+import { useSocket } from '@/hooks/use-socket'
 
 /**
- * Keeps a page fresh when there is no realtime server (e.g. on Netlify).
+ * Keeps a page fresh when live events are not arriving.
  *
- * When realtime push is available this renders nothing and does nothing —
- * live events handle updates.
+ * ── Why "not arriving" and not "not available" (pro.A.md §16) ───────────────
+ *
+ * This used to stand down whenever realtime was *compiled in*, which in the
+ * production image is always — `isRealtimeEnabled()` reads a build-time flag
+ * that nothing sets. So on the twenty-odd screens whose only freshness
+ * mechanism is this component, it rendered null and polled nothing, for ever.
+ * A kitchen station screen sat unchanged until somebody reloaded it by hand.
+ *
+ * The honest condition is whether the socket is connected *right now*. While
+ * it is, this does nothing and live events do the work. The moment it drops —
+ * flaky tablet wifi, a server restart, a proxy timeout — polling resumes and
+ * the screen keeps up until the socket is back. That is what a fallback is
+ * for, and it costs nothing in the normal case.
  *
  * Otherwise it watches `/api/pulse`, a single cheap query that reports whether
  * anything changed, and only re-renders the route when it actually did.
@@ -44,7 +56,9 @@ export function AutoRefresh({
   onChange?: () => void
 }) {
   const router = useRouter()
-  const live = isRealtimeEnabled()
+  const { connected } = useSocket()
+  // Compiled in AND actually connected. Either half failing means poll.
+  const live = isRealtimeEnabled() && connected
 
   const refresh = React.useCallback(() => {
     onChange?.()

@@ -3,6 +3,7 @@
 import * as React from 'react'
 import type { StockUnit } from '@prisma/client'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { AlertTriangle, Eye, MoreVertical, Package, Pencil, Plus, Search, Settings2, Trash2, TrendingDown, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -497,6 +498,7 @@ function ItemDialog({
   locations: Array<{ id: string; name: string }>
   selectedBranchId: string | null
 }) {
+  const router = useRouter()
   const [form, setForm] = React.useState({
     name: '',
     sku: '',
@@ -595,6 +597,9 @@ function ItemDialog({
     }
     toast.success('Item saved')
     onOpenChange(false)
+    // The row on screen is server-rendered; without this it keeps the old
+    // values until something else happens to refresh the route.
+    router.refresh()
   }
 
   return (
@@ -746,7 +751,20 @@ function ItemDialog({
             />
           </Field>
           <Field label={`Cost per unit (${currency})`}>
-            <Input type="number" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: e.target.value })} />
+            {/*
+              Read-only once the item exists (pro.A.md §19). The cost is the
+              weighted average of what has actually been paid; receipts move it
+              and nothing else may. It used to be an open input whose value was
+              silently discarded on save, which read as "the app lost my edit".
+            */}
+            {item?.id ? (
+              <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                {form.costPerUnit || '0'} — the average of what you have paid. Receive stock at a
+                new price and this moves on its own.
+              </p>
+            ) : (
+              <Input type="number" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: e.target.value })} />
+            )}
           </Field>
           <div className="sm:col-span-2">
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-sm">

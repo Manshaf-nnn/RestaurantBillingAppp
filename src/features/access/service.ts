@@ -78,7 +78,7 @@ export async function resolveRoleBranch(
   branchId: string | null | undefined,
   preset: UserRole,
 ): Promise<string | null> {
-  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+  const reach = visibleBranchIds(admin)
 
   if (!branchId) {
     if (requiresOwnBranch(preset)) {
@@ -113,7 +113,7 @@ export async function resolveRoleBranch(
  * created by a person confined to a single site.
  */
 export function assertPresetScopeAllowed(admin: TenantUser, preset: UserRole): void {
-  const reach = visibleBranchIds({ role: admin.role, branchId: admin.branchId })
+  const reach = visibleBranchIds(admin)
   if (reach === null) return
   // MANAGER is confined the moment it is given a branch, and `resolveRoleBranch`
   // guarantees a confined admin gives one, so it is safe here.

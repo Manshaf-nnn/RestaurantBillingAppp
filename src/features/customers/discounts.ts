@@ -1,11 +1,12 @@
 import 'server-only'
 
-import type { Coupon, CustomerGroup } from '@prisma/client'
+import type { Coupon } from '@prisma/client'
 
 import { AppError } from '@/lib/errors'
 import { applyBps } from '@/lib/money'
 import { localMinutes } from '@/features/orders/pricing'
 import { prisma } from '@/server/db/prisma'
+import { customerInSegment, readSegment } from './segments'
 
 /**
  * Discount eligibility and value.
@@ -122,6 +123,28 @@ export async function evaluate(
     if (customer?.group !== coupon.customerGroup) {
       return reject(`That offer is for ${String(coupon.customerGroup).toLowerCase()} customers`)
     }
+  }
+
+  /*
+   * ── A campaign is aimed at a group (pro.A.md §4) ──────────────────────
+   *
+   * The segment saved on the coupon is the SAME filter the insights screen
+   * counted with, evaluated here against the customer this order belongs to.
+   * One definition, so the group on screen and the group that gets the
+   * discount cannot drift apart.
+   *
+   * No customer means no match: a campaign for regulars cannot be claimed by
+   * an anonymous walk-in who happens to know the code.
+   */
+  const segment = readSegment(coupon.segment)
+  if (segment) {
+    if (!context.customerId) return reject('That offer is for a specific group of customers')
+    const inside = await customerInSegment({
+      restaurantId: context.restaurantId,
+      customerId: context.customerId,
+      segment,
+    })
+    if (!inside) return reject('That offer is not for this customer')
   }
 
   if (coupon.perCustomerLimit !== null && context.customerId) {

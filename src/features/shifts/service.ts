@@ -40,6 +40,8 @@ export interface ShiftActor {
   id: string
   role: UserRole
   branchId: string | null
+  /** staff.A.md §4 — extra sites, so somebody covering two shops may roster both. */
+  branchIds?: string[] | null
 }
 
 /* ── time ───────────────────────────────────────────────────────────────── */
@@ -268,7 +270,7 @@ async function requireStaffFor(restaurantId: string, userId: string, branchId: s
     select: { id: true, name: true, role: true, branchId: true },
   })
   if (!staff) throw new NotFoundError('Staff member')
-  if (!canAccessBranch({ role: staff.role, branchId: staff.branchId }, branchId)) {
+  if (!canAccessBranch(staff, branchId)) {
     throw new AppError(`${staff.name} does not work at this location`, 403, 'SHIFT_CROSSES_BRANCH')
   }
   if (!roles.includes(staff.role)) {

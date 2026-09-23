@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
+import type { UserRole } from '@prisma/client'
 
 import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ensureStaffCodes } from '@/features/staff/codes'
 import { appUrl } from '@/lib/env'
-import { assignableRoles, landingFor, PERMISSIONS, ROLE_LABELS, visibleBranchIds } from '@/lib/rbac'
+import { landingFor, PERMISSIONS, ROLE_LABELS, visibleBranchIds, canActOnRole } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { CopyLink } from '@/features/staff/components/copy-link'
@@ -36,8 +37,10 @@ export default async function StaffCodesPage() {
   // Anyone hired before codes existed gets one on first view.
   await ensureStaffCodes(user.restaurantId)
 
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
-  const canReveal = new Set<string>(assignableRoles(user.role))
+  const reach = visibleBranchIds(user)
+  // A row that still says CASHIER is a person at a till, not a role to
+  // withhold — see `canActOnRole` (staff.A.md §10).
+  const canReveal = (role: UserRole) => canActOnRole(user.role, role)
 
   const staff = await prisma.user.findMany({
     where: {
@@ -107,7 +110,7 @@ export default async function StaffCodesPage() {
                       <span className="block text-xs text-muted-foreground">{s.email}</span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <StaffCodeCell userId={s.id} code={canReveal.has(s.role) ? s.signInCode : null} />
+                      <StaffCodeCell userId={s.id} code={canReveal(s.role) ? s.signInCode : null} />
                     </td>
                     <td className="py-2.5 pr-3 text-muted-foreground">
                       {s.staffRole?.isActive ? (

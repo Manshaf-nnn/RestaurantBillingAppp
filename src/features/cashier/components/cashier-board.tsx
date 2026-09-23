@@ -19,12 +19,16 @@ import {
   QrCode,
   Receipt,
   Search,
+  User,
+  UserPlus,
   Split,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CustomerPhoneField } from '@/features/customers/components/customer-phone-field'
+import { CustomerFormDialog } from '@/features/customers/components/customer-form-dialog'
 
+import { LocalTime } from '@/components/local-time'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,14 +40,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/feedback'
-import { Field } from '@/components/ui/label'
+import { Field, Label } from '@/components/ui/label'
 import { Input, Textarea } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { OrderStatusBadge, PaymentStatusBadge } from '@/components/ui/status'
 import { OpsShell, OpsStats } from '@/components/ops-shell'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { EVENTS, type OrderSummaryPayload, type PaymentPayload } from '@/lib/realtime/events'
-import { formatMoney, parseMoney, toMajor } from '@/lib/money'
+import { formatMoney, minorUnitFactor, parseMoney, toMajor } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { newRequestKey } from '@/lib/request-key'
 import { cn } from '@/lib/utils'
@@ -54,7 +58,8 @@ import { applyManualDiscount, createStaffOrder } from '@/features/orders/actions
 import { presentBill, collectPayment, createStaffPaymentQr } from '@/features/payments/actions'
 import { recordPrint } from '@/features/printing/actions'
 import { TillLoyalty } from '@/features/loyalty/components/till-loyalty'
-import { addItemsToBillAction, voidItemAction } from '../actions'
+import { addItemsToBillAction, attachCustomerToBillAction, setItemDiscountAction, voidItemAction } from '../actions'
+import { findCustomerAction, saveCustomerAction } from '@/features/customers/actions'
 import { useRouter } from 'next/navigation'
 
 /** A reward as the till lists it, before this bill's balance is applied. */
@@ -123,7 +128,30 @@ export interface CashierBill {
   grandTotal: number
   tipAmount: number
   paidTotal: number
-  items: Array<{ id: string; name: string; optionsLabel: string; quantity: number; lineTotal: number }>
+  items: Array<{
+    id: string
+    name: string
+    optionsLabel: string
+    quantity: number
+    /** Gross, at menu price. */
+    lineTotal: number
+    /** What was taken off this line (pro.A.md §10). */
+    discountAmount: number
+    discountReason: string | null
+  }>
+  /**
+   * What has been tendered so far (pro.A.md §11).
+   *
+   * Split payment means splitting the MONEY: one order, several payments. The
+   * engine has always allowed it, but the till showed only a single "paid"
+   * figure, so a cashier taking 4,000 cash then 3,000 card had no way to see
+   * what had already gone through — or to check it against the drawer.
+   */
+  payments: Array<{ id: string; method: string; amount: number; paidAt: string | null }>
+  /** Who the bill belongs to, when anybody (pro.A.md §5). */
+  customerId: string | null
+  /** Their category, for the till's customer block. */
+  customerCategory: string | null
   /** The loyalty account on this bill, when it has one (loyalty spec). */
   loyalty?: { customerId: string; customerName: string | null; points: number } | null
 }
@@ -132,6 +160,11 @@ type BillFilter = 'ACTIVE' | 'DINE_IN' | 'TAKEAWAY' | 'HELD'
 
 /** The same methods, order and icons as the orders screen's Take-payment dialog. */
 const METHODS = TENDER_METHODS
+
+/** Method code → the words a cashier reads, for the tender list. */
+const METHOD_LABEL: Record<string, string> = Object.fromEntries(
+  TENDER_METHODS.map((method) => [method.key, method.label]),
+)
 
 export function CashierBoard({
   initialBills,
@@ -143,6 +176,7 @@ export function CashierBoard({
   menu,
   startInTakeaway = false,
   branchIds,
+  customerCategories = [],
   branchName,
   tables = [],
   canAccept = false,
@@ -168,6 +202,8 @@ export function CashierBoard({
   exit?: React.ReactNode
   /** Locations this screen is showing. Null means all of them. */
   branchIds: string[] | null
+  /** The owner's customer categories, for the Add customer form (§1). */
+  customerCategories?: Array<{ id: string; name: string }>
   /** Which location this till is standing in (correctionA.md §6). */
   branchName?: string | null
   menu: PublicMenu
@@ -225,6 +261,37 @@ export function CashierBoard({
   const orderKey = React.useRef(newOrderKey())
   const [customerName, setCustomerName] = React.useState('')
   const [customerPhone, setCustomerPhone] = React.useState('')
+  const [knownCustomer, setKnownCustomer] = React.useState<{ id: string; name: string; loyaltyPoints: number } | null>(null)
+  const [addCustomerOpen, setAddCustomerOpen] = React.useState(false)
+
+  /*
+   * ── A number we already know answers for itself (pro.A.md §5) ───────────
+   *
+   * The dropdown only helped if the cashier noticed it and tapped a row. A
+   * phone number is an exact key, so once enough of it is typed the guest's
+   * name simply appears under the field, and the name box fills itself when
+   * nothing has been typed there.
+   */
+  React.useEffect(() => {
+    const value = customerPhone.trim()
+    if (value.length < 7) {
+      setKnownCustomer(null)
+      return
+    }
+    let live = true
+    const timer = setTimeout(() => {
+      void callAction(() => findCustomerAction({ phone: value })).then((result) => {
+        if (!live || !result.ok) return
+        const found = result.data.customer
+        setKnownCustomer(found)
+        if (found) setCustomerName((current) => (current.trim() ? current : found.name))
+      })
+    }, 350)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [customerPhone])
   const [notes, setNotes] = React.useState('')
   /*
    * A list, not a `Record<foodId, qty>`.
@@ -476,6 +543,11 @@ export function CashierBoard({
         tableNumber: bill.tableNumber,
         customerName: bill.customerName,
         customerPhone: customerPhone.trim(),
+        // Nothing has been tendered against a bill this new.
+        payments: [],
+        // The server resolves the phone to a record; the next render fills these.
+        customerId: null,
+        customerCategory: null,
         placedAt: bill.placedAt,
         heldAt: null,
         holdReason: null,
@@ -492,6 +564,9 @@ export function CashierBoard({
           optionsLabel: entry.optionsLabel ?? '',
           quantity: entry.quantity,
           lineTotal: entry.lineTotal,
+          // A brand-new line has nothing off it yet.
+          discountAmount: 0,
+          discountReason: null,
         })),
       },
       ...current,
@@ -532,7 +607,7 @@ export function CashierBoard({
   const outstanding = bills.reduce((sum, bill) => sum + outstandingOn(bill), 0)
 
   return (
-    <Frame embedded={embedded} title="Cashier" subtitle={restaurant.name} branch={branchName} user={user} actions={exit}>
+    <Frame embedded={embedded} title="Cashier" subtitle={restaurant.name} branch={branchName} branchIds={branchIds} canAnswerCalls user={user} actions={exit}>
       <AutoRefresh intervalMs={3000} />
       <OpsStats
         items={[
@@ -594,7 +669,7 @@ export function CashierBoard({
             <DialogDescription>Tap a dish to add it, then send it straight to the kitchen.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+          <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
             <div className="space-y-3">
               <OrderTypeChips value={orderType} onChange={setOrderType} />
 
@@ -725,6 +800,22 @@ export function CashierBoard({
               </div>
 
               {takeawayError ? <p className="text-sm font-medium text-destructive">{takeawayError}</p> : null}
+
+              {/*
+                The SAME customer form the CRM uses (pro.A.md §6), seeded with
+                whatever is already typed so nothing is entered twice.
+              */}
+              <CustomerFormDialog
+                open={addCustomerOpen}
+                onOpenChange={setAddCustomerOpen}
+                seed={{ phone: customerPhone, name: customerName }}
+                categories={customerCategories}
+                onSaved={(customer) => {
+                  setKnownCustomer(customer)
+                  setCustomerName(customer.name)
+                  setCustomerPhone(customer.phone)
+                }}
+              />
 
               {choosing ? (
                 <OptionDialog
@@ -1013,6 +1104,7 @@ function BillingDetailPanel({
    */
   const editable = bill.paidTotal === 0 && !bill.heldAt
   const [editOpen, setEditOpen] = React.useState(false)
+  const [discounting, setDiscounting] = React.useState<CashierBill['items'][number] | null>(null)
   const [splitOpen, setSplitOpen] = React.useState(false)
   const [mergeOpen, setMergeOpen] = React.useState(false)
   const [swapOpen, setSwapOpen] = React.useState(false)
@@ -1155,6 +1247,12 @@ function BillingDetailPanel({
         bill={bill}
         restaurant={restaurant}
       />
+      <ItemDiscountDialog
+        item={discounting}
+        orderId={bill.id}
+        restaurant={restaurant}
+        onClose={() => setDiscounting(null)}
+      />
       <EditOrderDialog
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -1174,6 +1272,15 @@ function BillingDetailPanel({
         onOpenChange={setSwapOpen}
         table={bill.tableId ? { id: bill.tableId, number: bill.tableNumber ?? '' } : null}
       />
+
+      {/*
+        Who the bill belongs to (pro.A.md §5, §13).
+        Name, phone, category and points on the bill itself, and a way to put
+        somebody on it afterwards — which until now was impossible, so a guest
+        who produced their number when the bill arrived could not be given
+        their points.
+      */}
+      <BillCustomer bill={bill} editable={editable} />
 
       {/*
         Points and rewards for whoever this bill belongs to (loyalty spec).
@@ -1211,9 +1318,40 @@ function BillingDetailPanel({
                   {item.optionsLabel ? (
                     <span className="block text-xs text-muted-foreground">{item.optionsLabel}</span>
                   ) : null}
+                  {/*
+                    Price, discount and net on the row (pro.A.md §10). A guest
+                    reading a bill wants to see what the dish cost and what came
+                    off it, not a single number they cannot check.
+                  */}
+                  {item.discountAmount > 0 ? (
+                    <span className="block text-xs text-success">
+                      − {formatMoney(item.discountAmount, restaurant.currency, restaurant.locale)}
+                      {item.discountReason ? ` · ${item.discountReason}` : ''}
+                    </span>
+                  ) : null}
+                  {editable ? (
+                    <button
+                      type="button"
+                      className="mt-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      onClick={() => setDiscounting(item)}
+                    >
+                      {item.discountAmount > 0 ? 'Change discount' : 'Discount this item'}
+                    </button>
+                  ) : null}
                 </span>
-                <span className="shrink-0 tabular-nums">
-                  {formatMoney(item.lineTotal, restaurant.currency, restaurant.locale)}
+                <span className="shrink-0 text-right tabular-nums">
+                  {item.discountAmount > 0 ? (
+                    <>
+                      <span className="block text-xs text-muted-foreground line-through">
+                        {formatMoney(item.lineTotal, restaurant.currency, restaurant.locale)}
+                      </span>
+                      <span className="font-medium">
+                        {formatMoney(item.lineTotal - item.discountAmount, restaurant.currency, restaurant.locale)}
+                      </span>
+                    </>
+                  ) : (
+                    formatMoney(item.lineTotal, restaurant.currency, restaurant.locale)
+                  )}
                 </span>
               </li>
             ))}
@@ -1256,6 +1394,31 @@ function BillingDetailPanel({
             <span className="text-muted-foreground">Status</span>
             <OrderStatusBadge status={bill.status} showIcon={false} />
           </div>
+          {/*
+            Every tender taken on this bill (pro.A.md §11). One order, several
+            payments — the cashier can see what has gone through and what is
+            left without leaving the till.
+          */}
+          {bill.payments.length > 0 ? (
+            <div className="space-y-1 border-t pt-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Payments ({bill.payments.length})
+              </span>
+              <ul className="space-y-0.5">
+                {bill.payments.map((payment) => (
+                  <li key={payment.id} className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">
+                      {METHOD_LABEL[payment.method] ?? payment.method}
+                      {payment.paidAt ? <> · <LocalTime value={payment.paidAt} /></> : null}
+                    </span>
+                    <span className="tabular-nums">
+                      {formatMoney(payment.amount, restaurant.currency, restaurant.locale)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Payment</span>
             <PaymentStatusBadge status={bill.paymentStatus} />
@@ -2142,6 +2305,275 @@ function EditOrderDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+
+/**
+ * Money off one dish (pro.A.md §10).
+ *
+ * The amount is for the whole line, not per unit — "two burgers, 100 off" is
+ * 100 — because that is how somebody says it out loud and how it reads on the
+ * bill. Zero clears it, which is how a cashier takes one back off. The server
+ * re-derives every total; nothing here does arithmetic beyond showing what the
+ * line will come to.
+ */
+function ItemDiscountDialog({
+  item,
+  orderId,
+  restaurant,
+  onClose,
+}: {
+  item: CashierBill['items'][number] | null
+  orderId: string
+  restaurant: ReceiptRestaurant
+  onClose: () => void
+}) {
+  const router = useRouter()
+  const [amount, setAmount] = React.useState('')
+  const [reason, setReason] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const factor = minorUnitFactor(restaurant.currency)
+  const money = (minor: number) => formatMoney(minor, restaurant.currency, restaurant.locale)
+
+  React.useEffect(() => {
+    if (!item) return
+    setAmount(item.discountAmount > 0 ? String(item.discountAmount / factor) : '')
+    setReason(item.discountReason ?? '')
+  }, [item, factor])
+
+  const minor =
+    amount.trim() && Number.isFinite(Number(amount)) ? Math.round(Number(amount) * factor) : 0
+  const tooMuch = item !== null && minor > item.lineTotal
+
+  const submit = async () => {
+    if (!item || tooMuch) return
+    setBusy(true)
+    const result = await callAction(() =>
+      setItemDiscountAction({ orderId, itemId: item.id, amount: minor, reason }),
+    )
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(minor === 0 ? 'Discount removed.' : `${money(minor)} off ${item.name}.`)
+    onClose()
+    router.refresh()
+  }
+
+  return (
+    <Dialog open={item !== null} onOpenChange={(next) => (next ? null : onClose())}>
+      <DialogContent className="sm:max-w-md">
+        {item ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Discount {item.quantity} × {item.name}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Line price</span>
+                <span className="tabular-nums">{money(item.lineTotal)}</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="item-discount">Take off ({restaurant.currency})</Label>
+                <Input
+                  id="item-discount"
+                  autoFocus
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {tooMuch
+                    ? 'That is more than the line is worth.'
+                    : `The line becomes ${money(Math.max(0, item.lineTotal - minor))}. Leave it empty to remove the discount.`}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="item-discount-reason">Why (optional)</Label>
+                <Input
+                  id="item-discount-reason"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value.slice(0, 160))}
+                  placeholder="e.g. served cold"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t pt-3">
+              <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+              <Button disabled={busy || tooMuch} loading={busy} onClick={submit}>
+                {minor === 0 ? 'Remove discount' : 'Apply discount'}
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+
+/**
+ * The customer on a bill, and the way to put one there (pro.A.md §5, §12).
+ *
+ * The phone is asked for FIRST and everything else follows from it: an
+ * existing guest is recognised and attached with one tap, and a new one is
+ * created through the same shared form the CRM uses, with the number already
+ * filled in. A cashier never types a name that turns out to belong to somebody
+ * the system already knew.
+ */
+function BillCustomer({ bill, editable }: { bill: CashierBill; editable: boolean }) {
+  const router = useRouter()
+  const [open, setOpen] = React.useState(false)
+  const [phone, setPhone] = React.useState('')
+  const [name, setName] = React.useState('')
+  const [found, setFound] = React.useState<{ id: string; name: string; loyaltyPoints: number } | null>(null)
+  const [looked, setLooked] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) return
+    setPhone(bill.customerPhone || '')
+    setName('')
+    setFound(null)
+    setLooked(false)
+  }, [open, bill.customerPhone])
+
+  const look = async (value: string) => {
+    setBusy(true)
+    const result = await callAction(() => findCustomerAction({ phone: value }))
+    setBusy(false)
+    setLooked(true)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setFound(result.data.customer)
+  }
+
+  const attach = async (customerId: string) => {
+    setBusy(true)
+    const result = await callAction(() => attachCustomerToBillAction({ orderId: bill.id, customerId }))
+    setBusy(false)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(`Bill is ${result.data.customerName}'s.`)
+    setOpen(false)
+    router.refresh()
+  }
+
+  const createThenAttach = async () => {
+    setBusy(true)
+    const made = await callAction(() => saveCustomerAction({ phone, name }))
+    if (!made.ok) {
+      setBusy(false)
+      toast.error(made.error)
+      return
+    }
+    setBusy(false)
+    await attach(made.data.id)
+  }
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2.5 text-sm">
+        <User className="size-4 shrink-0 text-muted-foreground" />
+        {bill.customerId ? (
+          <>
+            <span className="font-medium">{bill.customerName}</span>
+            {bill.customerPhone ? (
+              <span className="text-muted-foreground">{bill.customerPhone}</span>
+            ) : null}
+            {bill.customerCategory ? (
+              <Badge variant="secondary" size="sm">{bill.customerCategory}</Badge>
+            ) : null}
+            {bill.loyalty ? (
+              <Badge variant="success" size="sm">{bill.loyalty.points.toLocaleString()} pts</Badge>
+            ) : null}
+          </>
+        ) : (
+          <span className="text-muted-foreground">
+            No customer on this bill — needed to hold it, and to earn points.
+          </span>
+        )}
+        {editable ? (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setOpen(true)}>
+            {bill.customerId ? 'Change' : 'Add customer'}
+          </Button>
+        ) : null}
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Who is this bill for?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="bill-customer-phone">Phone number</Label>
+              <Input
+                id="bill-customer-phone"
+                autoFocus
+                inputMode="tel"
+                placeholder="07X XXX XXXX"
+                value={phone}
+                onChange={(event) => {
+                  setPhone(event.target.value)
+                  setLooked(false)
+                  setFound(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && phone.trim().length >= 3) void look(phone.trim())
+                }}
+              />
+            </div>
+
+            {!looked ? (
+              <Button
+                className="w-full"
+                disabled={busy || phone.trim().length < 3}
+                loading={busy}
+                onClick={() => look(phone.trim())}
+              >
+                <Search /> Look them up
+              </Button>
+            ) : found ? (
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                <p className="text-sm">
+                  <strong>{found.name}</strong> already has this number
+                  {found.loyaltyPoints > 0 ? ` · ${found.loyaltyPoints.toLocaleString()} points` : ''}.
+                </p>
+                <Button className="w-full" disabled={busy} loading={busy} onClick={() => attach(found.id)}>
+                  Use this customer
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                <p className="text-sm text-muted-foreground">
+                  Nobody has that number yet. A name is optional — the number is what matters.
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="bill-customer-name">Name (optional)</Label>
+                  <Input
+                    id="bill-customer-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value.slice(0, 80))}
+                    placeholder="e.g. Priya"
+                  />
+                </div>
+                <Button className="w-full" disabled={busy} loading={busy} onClick={createThenAttach}>
+                  <Plus /> Add and use
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

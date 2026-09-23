@@ -399,6 +399,9 @@ export async function updateGuestOrderItems(
       const totals = computeTotals({
         lines: keep.map(({ current, quantity }) => ({
           lineTotal: (current.unitPrice + current.optionsTotal) * quantity,
+          // A line that shrank cannot carry more discount than it is worth;
+          // `computeTotals` clamps each line to its own gross.
+          discount: current.discountAmount,
         })),
         taxRateBps: order.taxRateBps || order.restaurant.taxRateBps,
         serviceChargeBps: order.serviceChargeBps || order.restaurant.serviceChargeBps,
@@ -502,6 +505,7 @@ export async function updateGuestOrderItems(
             discountTotal: totals.discountTotal,
             couponDiscount: totals.couponDiscount,
             manualDiscount: totals.manualDiscount,
+            itemDiscount: totals.itemDiscount,
             loyaltyDiscount: order.loyaltyDiscount,
             taxTotal: totals.taxTotal,
             serviceCharge: totals.serviceCharge,
@@ -962,6 +966,37 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
        * be typed straight into a new order at all: it goes through
        * `applyManualDiscount`, where a manager signs it off.
        */
+      /*
+       * The same rule for a discount on one line (pro.A.md §10). A line
+       * discount is a discount: it needs the discount permission, and the
+       * total of them is measured against the same approval threshold, so
+       * "100 off each of eight dishes" cannot walk past a limit that "800 off
+       * the bill" would stop at.
+       */
+      const lineDiscountTotal = data.items.reduce((sum, item) => sum + (item.discount ?? 0), 0)
+      if (lineDiscountTotal > 0) {
+        if (!can(user, PERMISSIONS.DISCOUNT_APPLY)) {
+          throw new AppError(
+            'You do not have permission to apply discounts',
+            403,
+            'DISCOUNT_FORBIDDEN',
+          )
+        }
+        if (
+          await needsApproval({
+            restaurantId: user.restaurantId,
+            kind: 'PRICE_OVERRIDE',
+            amount: lineDiscountTotal,
+          })
+        ) {
+          throw new AppError(
+            'Discounts this size need a manager\u2019s sign-off. Place the order first, then discount the lines so it can be approved.',
+            403,
+            'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
       if (data.manualDiscount > 0) {
         if (!can(user, PERMISSIONS.DISCOUNT_APPLY)) {
           throw new AppError(
@@ -1030,6 +1065,8 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
           quantity: item.quantity,
           optionIds: item.optionIds,
           notes: item.notes || undefined,
+          // Money off this dish, gated above (pro.A.md §10).
+          discount: item.discount,
         })),
         couponCode: data.couponCode || null,
         manualDiscount: data.manualDiscount,
@@ -1175,7 +1212,9 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
       const totals = computeTotals({
         lines: order.items
           .filter((item) => item.status !== 'CANCELLED')
-          .map((item) => ({ lineTotal: item.lineTotal })),
+          // The lines' own discounts stay on the bill (pro.A.md §10); a manual
+          // discount is applied on top of them, not instead of them.
+          .map((item) => ({ lineTotal: item.lineTotal, discount: item.discountAmount })),
         taxRateBps: order.taxRateBps,
         serviceChargeBps: order.serviceChargeBps,
         taxInclusive: order.taxInclusive,
@@ -1193,6 +1232,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
           discountTotal: totals.discountTotal,
           couponDiscount: totals.couponDiscount,
           manualDiscount: totals.manualDiscount,
+          itemDiscount: totals.itemDiscount,
           taxTotal: totals.taxTotal,
           serviceCharge: totals.serviceCharge,
           roundingAdj: totals.roundingAdj,

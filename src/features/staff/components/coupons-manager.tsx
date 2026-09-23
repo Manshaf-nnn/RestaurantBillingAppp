@@ -41,6 +41,8 @@ export interface CouponRow {
   minOrderAmount: number
   maxDiscount: number | null
   usageLimit: number | null
+  /** Uses per guest. Enforced by `evaluate`; now also editable. */
+  perCustomerLimit: number | null
   usedCount: number
   isActive: boolean
   startsAt: string | null
@@ -232,6 +234,7 @@ function CouponDialog({
     maxDiscount: '',
     usageLimit: '',
     perCustomerLimit: '',
+    startsAt: '',
     endsAt: '',
     branchId: '',
     isActive: true,
@@ -255,7 +258,14 @@ function CouponDialog({
       minOrderAmount: coupon?.minOrderAmount ? String(toMajor(coupon.minOrderAmount, currency)) : '',
       maxDiscount: coupon?.maxDiscount ? String(toMajor(coupon.maxDiscount, currency)) : '',
       usageLimit: coupon?.usageLimit ? String(coupon.usageLimit) : '',
-      perCustomerLimit: '',
+      /*
+       * Was hard-coded to '' whatever the coupon held, so opening any coupon
+       * and pressing Save silently wiped its per-customer limit — a
+       * one-per-guest offer quietly became unlimited (pro.A.md §4).
+       */
+      perCustomerLimit: coupon?.perCustomerLimit ? String(coupon.perCustomerLimit) : '',
+      /* Never in the payload at all, so an edit wiped the start date too. */
+      startsAt: coupon?.startsAt ? coupon.startsAt.slice(0, 10) : '',
       endsAt: coupon?.endsAt ? coupon.endsAt.slice(0, 10) : '',
       branchId: coupon?.branchId ?? '',
       isActive: coupon?.isActive ?? true,
@@ -278,6 +288,7 @@ function CouponDialog({
       maxDiscount: form.maxDiscount ? parseMoney(form.maxDiscount, currency) : null,
       usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
       perCustomerLimit: form.perCustomerLimit ? Number(form.perCustomerLimit) : null,
+      startsAt: form.startsAt || '',
       endsAt: form.endsAt || '',
       branchId: form.branchId || '',
       isActive: form.isActive,
@@ -346,6 +357,21 @@ function CouponDialog({
               value={form.usageLimit}
               onChange={(e) => setForm({ ...form, usageLimit: e.target.value })}
             />
+          </Field>
+          {/*
+            Per-guest limit and start date (pro.A.md §4). `evaluate` has
+            enforced both since the beginning; the form simply never asked, and
+            worse, wiped whatever was there on every edit.
+          */}
+          <Field label="Per customer" hint="Uses per guest; blank = unlimited">
+            <Input
+              type="number"
+              value={form.perCustomerLimit}
+              onChange={(e) => setForm({ ...form, perCustomerLimit: e.target.value })}
+            />
+          </Field>
+          <Field label="Starts on" hint="Optional — blank means now">
+            <Input type="date" value={form.startsAt} onChange={(e) => setForm({ ...form, startsAt: e.target.value })} />
           </Field>
           <Field label="Expires on" hint="Optional">
             <Input type="date" value={form.endsAt} onChange={(e) => setForm({ ...form, endsAt: e.target.value })} />

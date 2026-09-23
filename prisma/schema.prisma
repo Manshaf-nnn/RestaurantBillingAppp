@@ -36,6 +36,12 @@ enum UserRole {
   OWNER
   MANAGER
   KITCHEN
+  /// Works the one POS workspace: orders, the till, the drawer, handover.
+  POS
+  /// Retired name for POS (staff.A.md §10). Every row was migrated; the value
+  /// stays only because dropping an enum value means recreating the type and
+  /// rewriting the five columns that use it. Never offered for assignment —
+  /// see FLOOR_ROLES in lib/rbac.ts.
   CASHIER
   WAITER
   /// Full access to one restaurant, short of platform administration.
@@ -749,6 +755,7 @@ model Restaurant {
   /// worth a second pair of eyes", which is a different question from "how long
   /// is too long to wait for food".
   liveBoardPolicy    Json?
+  customerCategories CustomerCategory[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -904,6 +911,12 @@ model User {
   role         UserRole @default(WAITER)
   /// extra permission keys granted on top of whatever the role gives
   permissions  String[] @default([])
+  /// Permission keys taken away from THIS person, whatever granted them
+  /// (staff.A.md §3). Subtracted last in `permissionsFor`, so it beats the
+  /// role defaults, a saved role and `permissions` above alike. Owners and the
+  /// platform operator are exempt, so nobody can be locked out of their own
+  /// restaurant.
+  deniedPermissions String[] @default([])
 
   /// Sidebar shortcuts, in the order this person arranged them (sidebar.md §1/§2).
   /// Plain hrefs from NAV_SECTIONS, re-filtered through `permissionsFor` on every
@@ -1008,6 +1021,9 @@ model User {
   approvalsRequested     ApprovalRequest[]     @relation("ApprovalRequestedBy")
   approvalsDecided       ApprovalRequest[]     @relation("ApprovalDecidedBy")
   kitchenStations        KitchenStationStaff[]
+  /// Extra sites this person may work, beyond their home `branchId`
+  /// (staff.A.md §4).
+  branchAccess           UserBranch[]
 
   @@unique([email])
   @@unique([restaurantId, staffCode])
@@ -1016,6 +1032,32 @@ model User {
   @@index([restaurantId, isActive])
   @@index([restaurantId, branchId])
   @@map("users")
+}
+
+/**
+ * An extra site somebody may work (staff.A.md §4).
+ *
+ * `User.branchId` stays the HOME site — where a shift opens, where the drawer
+ * defaults, the one `requiresOwnBranch` insists on. This table is reach on top
+ * of that, so "John covers Ampara and Kandy but not Colombo" is one row per
+ * site rather than a second account per site.
+ *
+ * A join table rather than a `String[]` column: the foreign key is what makes
+ * a closed branch drop out of everyone's reach automatically, and an array of
+ * ids would go on naming it until somebody remembered to sweep.
+ */
+model UserBranch {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, branchId])
+  @@index([branchId])
+  @@map("user_branches")
 }
 
 model Session {
@@ -1073,9 +1115,18 @@ model VerificationToken {
 ///
 /// That list is the whole point. `permissionsFor` used to be role defaults ∪
 /// per-user grants, which can only ever ADD — there was no way to take the
-/// payments screen off a cashier, because the union put it back. Storing the
-/// complete set means OFF is expressible, and means nothing has to compute the
-/// precedence between a grant list and a deny list on 152 separate call sites.
+/// payments screen off a POS user, because the union put it back. Storing the
+/// complete set means OFF is expressible for the ROLE.
+///
+/// This comment used to add that storing the set also avoided computing
+/// precedence "between a grant list and a deny list on 152 separate call
+/// sites". `User.deniedPermissions` now exists and that clause no longer holds
+/// (staff.A.md §3): precedence is decided once, at the end of `permissionsFor`,
+/// which is the only resolver — `can`, `canAny`, `canAll` and `visibleSections`
+/// are one-liners over it, so no call site sees the question. The two columns
+/// answer different questions and both are needed: this one says what the ROLE
+/// is, `deniedPermissions` says what ONE PERSON on it may not do.
+
 model StaffRole {
   id           String     @id @default(cuid())
   restaurantId String
@@ -1531,10 +1582,25 @@ model Customer {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
-  name  String
-  phone String
-  email String?
-  notes String?
+  name         String
+  phone        String
+  /// ── The phone as a comparison key (pro.A.md §1, §20) ──────────────────
+  ///
+  /// `0771234567`, `077 123 4567` and `+94771234567` are one person and were
+  /// three customers, because the unique key was the typed string. This holds
+  /// the digits only, so the same number entered any way lands on one record
+  /// whichever screen it came from. Nullable for the blank-phone walk-in.
+  phoneKey     String?
+  email        String?
+  notes        String?
+  address      String?
+  /// Their anniversary, for the "we remembered" campaigns §1 asks for.
+  anniversary  DateTime?
+  /// When they first ordered. `lastOrderAt` alone cannot tell a regular of ten
+  /// years from somebody who came twice last week.
+  firstOrderAt DateTime?
+  categoryId   String?
+  category     CustomerCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   loyaltyPoints      Int           @default(0)
   /// lifetime spend, minor units
@@ -1559,8 +1625,43 @@ model Customer {
   loyaltyEntries LoyaltyEntry[]
 
   @@unique([restaurantId, phone])
+  /// One person, one record, whatever they typed.
+  @@unique([restaurantId, phoneKey])
   @@index([restaurantId, lastOrderAt])
+  /// Segment filtering (§3) sorts and ranges on these; without them every
+  /// insight query is a sequential scan of the whole customer table.
+  @@index([restaurantId, totalSpent])
+  @@index([restaurantId, totalOrders])
+  @@index([restaurantId, categoryId])
   @@map("customers")
+}
+
+/// A customer category the owner defines — Student, VIP, Corporate, anything
+/// (pro.A.md §1).
+///
+/// Deliberately a table and not an enum: the existing `CustomerGroup` is five
+/// fixed values that no screen can set, which is exactly what the spec says not
+/// to do. Retired with `isActive` rather than deleted, because a category is
+/// part of what a customer's history says about them.
+model CustomerCategory {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name      String
+  /// A dot beside the name in lists. Free-form so a theme change cannot orphan it.
+  colour    String?
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customers Customer[]
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, isActive, sortOrder])
+  @@map("customer_categories")
 }
 
 // ────────────────────────────────────────────────────────────── orders ─────
@@ -1614,6 +1715,10 @@ model Order {
   /// The two columns underneath are the truth; this is their sum, always.
   discountTotal   Int @default(0)
   couponDiscount  Int @default(0)
+  /// The sum of every line's own discount (pro.A.md §10). Counted inside
+  /// `discountTotal` beside the coupon and the manual one, so every report
+  /// that already reads `discountTotal` stays correct with no change.
+  itemDiscount    Int @default(0)
   manualDiscount  Int @default(0)
   loyaltyDiscount Int @default(0)
   taxTotal        Int @default(0)
@@ -1743,6 +1848,14 @@ model OrderItem {
   /// [SelectedOption[]] — [{ groupId, groupName, optionId, name, priceDelta, kind }]
   options         Json?
   optionsTotal    Int             @default(0)
+  /// ── What the cashier took off THIS line (pro.A.md §10) ────────────────
+  ///
+  /// Minor units, already multiplied out for the quantity, and never more than
+  /// the gross line. `lineTotal` stays gross so a bill can show price,
+  /// discount and net separately; every total downstream subtracts this
+  /// through `computeTotals`, which remains the only thing that adds money up.
+  discountAmount  Int             @default(0)
+  discountReason  String?
   lineTotal       Int
   costPrice       Int             @default(0)
   notes           String?
@@ -2329,6 +2442,14 @@ model Coupon {
   daysOfWeek       Json?
   /// Restrict to a customer segment.
   customerGroup    CustomerGroup?
+  /// ── Who it is for, as a saved filter (pro.A.md §4) ─────────────────────
+  ///
+  /// A campaign is a coupon with a segment attached: "customers with 5+
+  /// visits who have not been in for 30 days". Stored as the same filter
+  /// object the insights screen builds, so the group counted on screen is the
+  /// group the discount reaches. Null means everybody — which is every coupon
+  /// that existed before this.
+  segment          Json?
   isActive         Boolean        @default(true)
 
   createdAt DateTime @default(now())
@@ -3235,7 +3356,11 @@ model Branch {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  /// People whose HOME site this is.
   users            User[]
+  /// People who may also work here without it being their home site
+  /// (staff.A.md §4).
+  staffAccess      UserBranch[]
   tables           RestaurantTable[]
   orders           Order[]
   inventoryItems   InventoryItem[]

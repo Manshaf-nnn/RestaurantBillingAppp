@@ -178,8 +178,24 @@ async function main() {
     check('acknowledge and resolve are floor work, audited', ack.includes('PERMISSIONS.WAITER_VIEW') && orders.includes('AUDIT_ACTIONS.SERVICE_REQUEST_ACKNOWLEDGED') && orders.includes('AUDIT_ACTIONS.SERVICE_REQUEST_RESOLVED'))
 
     const board = readFileSync('src/features/waiter/components/waiter-board.tsx', 'utf8')
-    check('the waiter station opens a popup on a call', board.includes('incomingCall') && board.includes("play('alert')"))
-    check('with Acknowledge on it', board.includes('acknowledgeServiceRequestAction'))
+    check('the waiter station still chimes on a call', board.includes("play('alert')"))
+    check('and can acknowledge from the queue', board.includes('acknowledgeServiceRequestAction'))
+    /*
+     * pro.A.md §17 — the popup moved OUT of the waiter screen and into the
+     * shell both staff families mount, so a cashier at the till and a manager
+     * on the dashboard see a table calling too. It used to exist on exactly
+     * one page, which is why nobody else ever answered.
+     */
+    const alerts = readFileSync('src/components/staff-alerts.tsx', 'utf8')
+    check('one popup, for every staff screen', alerts.includes('EVENTS.SERVICE_REQUEST_CREATED') && alerts.includes('data-testid="staff-call-popup"'))
+    check('with Acknowledge and Resolve on it', alerts.includes('acknowledgeServiceRequestAction') && alerts.includes('resolveServiceRequest'))
+    check('and it ignores another branch\'s call', alerts.includes('isOurs(payload.branchId)'))
+    for (const [shell, label] of [
+      ['src/components/ops-shell.tsx', 'the kitchen, waiter and till shell'],
+      ['src/features/dashboard/components/dashboard-shell.tsx', 'the dashboard shell'],
+    ] as const) {
+      check(`${label} mounts it`, readFileSync(shell, 'utf8').includes('<StaffAlerts'))
+    }
     for (const [file, label] of [
       ['src/features/cashier/components/cashier-board.tsx', 'the till'],
       ['src/features/kitchen/components/kitchen-board.tsx', 'the KDS'],

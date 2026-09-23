@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { ConflictError, ForbiddenError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, assignableRoles, canActOnRole } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission, assertRecordBranch, assertBranchAccess } from '@/server/auth/guard'
@@ -352,7 +352,7 @@ export async function assignRole(input: unknown): Promise<ActionResult<{ userId:
 
       // The same rank rule as editing them any other way: an owner's account
       // is not somebody a manager may re-scope.
-      if (target.role === 'OWNER' || !assignableRoles(admin.role).includes(target.role)) {
+      if (target.role === 'OWNER' || !canActOnRole(admin.role, target.role)) {
         throw new ForbiddenError('You cannot change that person’s access')
       }
 

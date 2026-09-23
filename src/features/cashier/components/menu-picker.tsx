@@ -100,7 +100,7 @@ export function MenuPicker({
           className={
             compact
               ? 'grid max-h-[26rem] grid-cols-2 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-3'
-              : 'grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4'
+              : 'grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
           }
         >
           {visible.map((item) => (

@@ -3,7 +3,7 @@ import 'server-only'
 import type { CashHandover, Prisma, UserRole } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
-import { canAccessBranch } from '@/lib/rbac'
+import { canAccessBranch, reachOf } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import {
   computeDrawerTotals,
@@ -58,7 +58,15 @@ export type HandoverActor = DrawerActor
  * posted id — the pair that drifted apart would be a dropdown that filters and
  * a server that does not.
  */
-export const HANDOVER_ROLES = new Set<UserRole>(['CASHIER', 'MANAGER', 'ADMIN', 'OWNER'])
+export const HANDOVER_ROLES = new Set<UserRole>([
+  'POS',
+  // The retired name (staff.A.md §10). A till open across the deploy must
+  // still be handed on, and the person holding it may not have signed in since.
+  'CASHIER',
+  'MANAGER',
+  'ADMIN',
+  'OWNER',
+])
 
 /**
  * Count the drawer, close it, and offer it to the next cashier.
@@ -149,7 +157,7 @@ export async function requestHandover(params: {
    * nowhere near it — and every branch check downstream reads the new session,
    * which would then agree that they belong there.
    */
-  if (!canAccessBranch({ role: incoming.role, branchId: incoming.branchId }, session.branchId)) {
+  if (!canAccessBranch(reachOf(incoming), session.branchId)) {
     throw new AppError(
       'That person does not work at this location',
       403,
@@ -559,28 +567,26 @@ export async function listHandoverCandidates(params: {
       id: { not: params.excludeUserId },
       role: { in: [...HANDOVER_ROLES] },
     },
-    select: { id: true, name: true, role: true, branchId: true },
+    select: { id: true, name: true, role: true, branchId: true, branchAccess: { select: { branchId: true } } },
     orderBy: { name: 'asc' },
   })
 
   // Filtered here rather than in the query because "no branch" means every
   // branch, which a `branchId` predicate cannot express.
-  return rows.filter((user) =>
-    canAccessBranch({ role: user.role, branchId: user.branchId }, params.branchId),
-  )
+  return rows.filter((user) => canAccessBranch(reachOf(user), params.branchId))
 }
 
 async function requireHandover(
   restaurantId: string,
   handoverId: string,
-  actor: { role: UserRole; branchId?: string | null },
+  actor: { role: UserRole; branchId?: string | null; branchIds?: string[] | null },
 ): Promise<CashHandover> {
   const handover = await prisma.cashHandover.findFirst({
     where: { id: handoverId, restaurantId },
   })
   if (!handover) throw new NotFoundError('Handover')
 
-  if (!canAccessBranch({ role: actor.role, branchId: actor.branchId }, handover.branchId)) {
+  if (!canAccessBranch(actor, handover.branchId)) {
     throw new ForbiddenError('That handover belongs to another location')
   }
   return handover

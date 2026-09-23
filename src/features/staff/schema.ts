@@ -38,12 +38,27 @@ const STAFF_ROLES = (Object.keys(ROLE_LABELS) as Array<keyof typeof ROLE_LABELS>
  */
 const branchIdField = z.string().trim().max(40).optional().nullable()
 
+/**
+ * Extra locations this person may also work (staff.A.md §4).
+ *
+ * Beyond `branchId`, never instead of it: the home branch is still where their
+ * shift opens and their drawer defaults, and `requiresOwnBranch` still insists
+ * a floor role has one. This is the answer to "John covers Ampara and Kandy
+ * but not Colombo", which one column could not express.
+ *
+ * Capped at 50 because a restaurant with more sites than that wants a
+ * cross-location role, not fifty rows — and an unbounded array from a form is
+ * an unbounded write.
+ */
+const extraBranchesField = z.array(z.string().trim().min(1).max(40)).max(50).optional()
+
 export const inviteStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(80),
   email: emailSchema,
   phone: phoneSchema.optional().or(z.literal('')),
   role: z.enum(STAFF_ROLES),
   branchId: branchIdField,
+  branchIds: extraBranchesField,
   /**
    * A custom role, chosen at the same time as the person.
    *
@@ -65,6 +80,7 @@ export const updateStaffSchema = z.object({
   role: z.enum(STAFF_ROLES),
   isActive: z.coerce.boolean(),
   branchId: branchIdField,
+  branchIds: extraBranchesField,
 })
 export type UpdateStaffInput = z.infer<typeof updateStaffSchema>
 
@@ -142,3 +158,25 @@ export const setStaffPasswordSchema = z.object({
   userId: z.string().min(1),
   password: passwordSchema,
 })
+
+/**
+ * What one person may and may not do, on top of their role (staff.A.md §3).
+ *
+ * Two lists rather than a single tri-state map, because that is the shape the
+ * screen reads back: "inherited + overrides = effective". `allow` adds to
+ * whatever the role gives, `deny` takes away whatever granted it, and a key in
+ * both is refused rather than silently resolved — an owner who has ticked
+ * both has not decided yet, and picking one for them is how a revocation
+ * quietly becomes a grant.
+ */
+export const staffPermissionsSchema = z
+  .object({
+    userId: z.string().cuid(),
+    allow: z.array(z.string().trim().min(1).max(60)).max(400).default([]),
+    deny: z.array(z.string().trim().min(1).max(60)).max(400).default([]),
+  })
+  .refine((value) => !value.allow.some((key) => value.deny.includes(key)), {
+    message: 'A permission cannot be both allowed and denied',
+    path: ['deny'],
+  })
+export type StaffPermissionsInput = z.infer<typeof staffPermissionsSchema>

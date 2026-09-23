@@ -43,7 +43,7 @@ export default async function ItemHistoryPage({
   const { item, rows, ledgerTotal, stockByLocation, purchases } = await getItemHistory({
     restaurantId: user.restaurantId,
     itemId,
-    branchIds: visibleBranchIds({ role: user.role, branchId: user.branchId }),
+    branchIds: visibleBranchIds(user),
   })
 
   const money = (minor: number) => formatMoney(minor, restaurant.currency)

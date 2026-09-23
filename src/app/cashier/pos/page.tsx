@@ -20,6 +20,7 @@ import {
 } from '@/features/dashboard/selected-branch'
 import { ShiftPanel } from '@/features/shifts/components/shift-panel'
 import { loadShiftPanel } from '@/features/shifts/panel-data'
+import { listCustomerCategories } from '@/features/customers/service'
 import { getPublicMenu } from '@/features/menu/queries'
 import { getCashierQueue, readOptions } from '@/features/orders/queries'
 import { readPaperWidths } from '@/features/printing/paper'
@@ -159,7 +160,7 @@ export default async function PosPage({
 
   // ── Orders ────────────────────────────────────────────────────────────────
   if (tab === 'orders') {
-    const [menu, tables, servers] = await Promise.all([
+    const [menu, tables, servers, customerCategories] = await Promise.all([
       getPublicMenu(user.restaurantId, restaurant.timezone, branchId),
       prisma.restaurantTable.findMany({
         where: { restaurantId: user.restaurantId, isActive: true, ...(branchId ? { branchId } : {}) },
@@ -170,11 +171,17 @@ export default async function PosPage({
       prisma.user.findMany({
         where: {
           restaurantId: user.restaurantId, isActive: true, deletedAt: null,
-          role: { in: ['WAITER', 'CASHIER', 'MANAGER', 'OWNER', 'ADMIN'] },
+          // Both spellings — the migration moved every row to POS, and a
+          // restaurant that has not deployed it yet still has CASHIER rows
+          // whose owner is standing at the till (staff.A.md §10).
+          role: { in: ['WAITER', 'POS', 'CASHIER', 'MANAGER', 'OWNER', 'ADMIN'] },
         },
         select: { id: true, name: true, role: true },
         orderBy: { name: 'asc' },
       }),
+      // The owner's customer categories, so Add customer at the till offers the
+      // same choices as the customer screen (pro.A.md §1, §6).
+      listCustomerCategories({ restaurantId: user.restaurantId }),
     ])
 
     // Lets the sidebar link straight into takeaway or delivery; an old
@@ -207,6 +214,10 @@ export default async function PosPage({
           tables={tables.map((t) => ({ ...t, status: t.status as string }))}
           servers={servers.map((s) => ({ ...s, role: s.role as string }))}
           currentUserId={user.id}
+          customerCategories={customerCategories.map((category) => ({
+            id: category.id,
+            name: category.name,
+          }))}
         />
       </div>
     )
@@ -218,7 +229,7 @@ export default async function PosPage({
     startOfDay.setHours(0, 0, 0, 0)
     const branchIds = branchId ? [branchId] : selection.branchIds
 
-    const [menu, bills, tables, rewards, today] = await Promise.all([
+    const [menu, bills, tables, rewards, today, cashierCategories] = await Promise.all([
       // The till sells its own branch's menu at its own branch's prices.
       getPublicMenu(user.restaurantId, restaurant.timezone, branchId),
       getCashierQueue(user.restaurantId, branchIds),
@@ -251,6 +262,9 @@ export default async function PosPage({
         _sum: { amount: true },
         _count: true,
       }),
+      // The owner's customer categories, so Add customer at the till offers
+      // the same choices as the customer screen (pro.A.md §1, §6).
+      listCustomerCategories({ restaurantId: user.restaurantId }),
     ])
 
     /*
@@ -263,7 +277,9 @@ export default async function PosPage({
       (customerIds.length
         ? await prisma.customer.findMany({
             where: { id: { in: customerIds }, restaurantId: user.restaurantId },
-            select: { id: true, name: true, loyaltyPoints: true },
+            // The category comes along so the till's customer block can show
+            // it (pro.A.md §5) without a second round trip.
+            select: { id: true, name: true, loyaltyPoints: true, category: { select: { name: true } } },
           })
         : []
       ).map((customer) => [customer.id, customer]),
@@ -276,6 +292,7 @@ export default async function PosPage({
         <CashierBoard
           embedded
           branchIds={branchIds}
+          customerCategories={cashierCategories.map((category) => ({ id: category.id, name: category.name }))}
           branchName={branchName}
           menu={menu}
           startInTakeaway={params.mode === 'takeaway'}
@@ -315,7 +332,20 @@ export default async function PosPage({
                 .join(', '),
               quantity: item.quantity,
               lineTotal: item.lineTotal,
+              discountAmount: item.discountAmount,
+              discountReason: item.discountReason,
             })),
+            // Every tender taken on this bill (pro.A.md §11).
+            payments: order.payments
+              .filter((payment) => payment.status === 'PAID' || payment.status === 'REFUNDED')
+              .map((payment) => ({
+                id: payment.id,
+                method: payment.method,
+                amount: payment.amount,
+                paidAt: payment.paidAt ? payment.paidAt.toISOString() : null,
+              })),
+            customerId: order.customerId,
+            customerCategory: points.get(order.customerId ?? '')?.category?.name ?? null,
             // Who the bill belongs to, so the till can show their points.
             loyalty: order.customerId
               ? {
@@ -397,6 +427,8 @@ export default async function PosPage({
     canReview: can(user, PERMISSIONS.CASH_VARIANCE_REVIEW),
     canSeeAll: can(user, PERMISSIONS.CASH_DRAWER_MANAGE),
     canApprovePetty: can(user, PERMISSIONS.PETTY_CASH_APPROVE),
+    // Opening a till is its own permission now (staff.A.md §6).
+    canOpen: can(user, PERMISSIONS.POS_OPEN_DRAWER),
   })
 
   return (

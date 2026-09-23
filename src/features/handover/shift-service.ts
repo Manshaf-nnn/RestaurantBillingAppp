@@ -3,7 +3,7 @@ import 'server-only'
 import type { Prisma, ShiftHandover, ShiftHandoverStatus, UserRole } from '@prisma/client'
 
 import { AppError, ForbiddenError, NotFoundError } from '@/lib/errors'
-import { ROLE_LABELS, canAccessBranch } from '@/lib/rbac'
+import { ROLE_LABELS, canAccessBranch, reachOf } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { notify } from '@/server/notifications'
 import { computeDrawerTotals } from '@/features/cashdrawer/service'
@@ -65,11 +65,15 @@ const MANAGERS: UserRole[] = ['MANAGER', 'ADMIN', 'OWNER']
 /**
  * Who may take over from whom. A shift is handed to somebody who can do the
  * job, or to a manager who can cover it; a waiter's shift does not go to the
- * kitchen. Cashiers are further narrowed by `HANDOVER_ROLES` when a till is
+ * kitchen. POS shifts are further narrowed by `HANDOVER_ROLES` when a till is
  * involved.
  */
 export const RECEIVER_ROLES: Record<UserRole, UserRole[]> = {
-  CASHIER: ['CASHIER', ...MANAGERS],
+  // Both directions name both spellings on purpose (staff.A.md §10): a shift
+  // opened before the rename carries `roleAtStart: 'CASHIER'`, and it still
+  // has to be handed to the POS person who is actually standing there.
+  POS: ['POS', 'CASHIER', ...MANAGERS],
+  CASHIER: ['POS', 'CASHIER', ...MANAGERS],
   WAITER: ['WAITER', ...MANAGERS],
   KITCHEN: ['KITCHEN', ...MANAGERS],
   MANAGER: MANAGERS,
@@ -90,6 +94,8 @@ export interface HandoverPerson {
   name: string
   role: UserRole
   branchId: string | null
+  /** staff.A.md §4 — extra sites, so a person covering two shops is not narrowed to one. */
+  branchIds?: string[] | null
 }
 
 const OPEN_ORDER_STATUSES = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED'] as const
@@ -119,10 +125,16 @@ export async function listEligibleReceivers(params: {
       id: { not: params.from.id },
       role: { in: roles },
     },
-    select: { id: true, name: true, role: true, branchId: true, branch: { select: { name: true } } },
+    select: {
+      id: true, name: true, role: true, branchId: true,
+      // staff.A.md §4 — somebody covering this site as an extra branch is
+      // eligible to take the shift here, and was invisible without this.
+      branchAccess: { select: { branchId: true } },
+      branch: { select: { name: true } },
+    },
     orderBy: { name: 'asc' },
   })
-  const here = people.filter((p) => canAccessBranch({ role: p.role, branchId: p.branchId }, params.branchId))
+  const here = people.filter((p) => canAccessBranch(reachOf(p), params.branchId))
 
   const busy = new Set(
     (
@@ -315,7 +327,7 @@ export async function startShiftHandover(params: {
 
   const receiver = await prisma.user.findFirst({
     where: { id: params.toUserId, restaurantId: params.restaurantId, isActive: true, deletedAt: null },
-    select: { id: true, name: true, role: true, branchId: true },
+    select: { id: true, name: true, role: true, branchId: true, branchAccess: { select: { branchId: true } } },
   })
   if (!receiver) throw new NotFoundError('Colleague')
 
@@ -327,7 +339,7 @@ export async function startShiftHandover(params: {
       'HANDOVER_ROLE_MISMATCH',
     )
   }
-  if (!canAccessBranch({ role: receiver.role, branchId: receiver.branchId }, params.branchId)) {
+  if (!canAccessBranch(reachOf(receiver), params.branchId)) {
     throw new AppError('That person does not work at this location', 403, 'HANDOVER_CROSSES_BRANCH')
   }
 
@@ -724,11 +736,11 @@ export async function listShiftHandovers(params: {
 async function requireShiftHandover(
   restaurantId: string,
   handoverId: string,
-  actor: { role: UserRole; branchId?: string | null },
+  actor: { role: UserRole; branchId?: string | null; branchIds?: string[] | null },
 ): Promise<ShiftHandover> {
   const row = await prisma.shiftHandover.findFirst({ where: { id: handoverId, restaurantId } })
   if (!row) throw new NotFoundError('Handover')
-  if (!canAccessBranch({ role: actor.role, branchId: actor.branchId }, row.branchId)) {
+  if (!canAccessBranch(actor, row.branchId)) {
     throw new ForbiddenError('That handover belongs to another location')
   }
   return row

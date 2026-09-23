@@ -123,6 +123,8 @@ export const AUDIT_ACTIONS = {
   PERIOD_CLOSED: 'accounting.periodClosed',
   PERIOD_REOPENED: 'accounting.periodReopened',
   ORDER_DISCOUNT: 'order.discount_applied',
+  /** pro.A.md §10 — money taken off one line of a bill. */
+  ORDER_ITEM_DISCOUNT: 'order.item_discount_applied',
   ORDER_HELD: 'order.held',
   ORDER_RESUMED: 'order.resumed',
   ORDER_SPLIT: 'order.split',
@@ -145,6 +147,14 @@ export const AUDIT_ACTIONS = {
   ROLE_UPDATED: 'role.updated',
   ROLE_DELETED: 'role.deleted',
   ROLE_ASSIGNED: 'role.assigned',
+  /**
+   * One person's own allow/deny list changed (staff.A.md §3).
+   *
+   * Separate from ROLE_UPDATED and needed for the same reason: an override is
+   * invisible in the role row, so "why could only Nila do that" has no other
+   * answer once the override is edited again.
+   */
+  STAFF_PERMISSIONS_SET: 'staff.permissions_set',
   REPORT_EXPORTED: 'report.exported',
 
   ORDER_ITEM_VOIDED: 'order.item_voided',
@@ -205,6 +215,8 @@ export const AUDIT_ACTIONS = {
   STOCK_COST_EDITED: 'inventory.cost_edited',
   /** A prepared item came into being because someone made it (redesignkitchenjob.md). */
   INVENTORY_PREPARED_ITEM_CREATED: 'inventory.prepared_item_created',
+  /** pro.A.md §19 — an item's own record was edited (not its balance). */
+  INVENTORY_ITEM_EDITED: 'inventory.item_edited',
 
   PO_CREATED: 'purchase.created',
   PO_APPROVED: 'purchase.approved',

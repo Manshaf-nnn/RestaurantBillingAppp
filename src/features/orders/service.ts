@@ -105,6 +105,14 @@ export interface DraftItemInput {
   quantity: number
   optionIds: string[]
   notes?: string
+  /**
+   * Money off THIS line, in minor units, for the whole line (pro.A.md §10).
+   *
+   * Set by a cashier at the till before the order is sent. Clamped to the
+   * line's own gross by `computeTotals`, and gated by `DISCOUNT_APPLY` in the
+   * action — a draft cannot discount itself.
+   */
+  discount?: number
 }
 
 export interface PricedDraftItem {
@@ -116,6 +124,8 @@ export interface PricedDraftItem {
   options: SelectedOption[]
   optionsTotal: number
   lineTotal: number
+  /** Money off this line before any bill-level discount (pro.A.md §10). */
+  discountAmount: number
   costPrice: number
   notes: string | null
   isVeg: boolean
@@ -250,6 +260,11 @@ export async function buildDraft(params: {
       options: selected,
       optionsTotal: extras,
       lineTotal: (price + extras) * quantity,
+      // Never more than the line is worth, and never negative.
+      discountAmount: Math.min(
+        Math.max(0, Math.round(line.discount ?? 0)),
+        (price + extras) * quantity,
+      ),
       /*
        * Zero, not the menu's cost field. `snapshotLineCosts` is the sole writer
        * of this column, and it only ever fills a zero — so copying the menu's
@@ -335,7 +350,7 @@ export async function buildDraft(params: {
   }
 
   const totals = computeTotals({
-    lines: priced,
+    lines: priced.map((line) => ({ lineTotal: line.lineTotal, discount: line.discountAmount })),
     taxRateBps: restaurant.taxRateBps,
     serviceChargeBps: restaurant.serviceChargeBps,
     taxInclusive: restaurant.taxInclusive,
@@ -685,6 +700,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               discountTotal: draft.totals.discountTotal,
               couponDiscount: draft.totals.couponDiscount,
               manualDiscount: draft.totals.manualDiscount,
+              itemDiscount: draft.totals.itemDiscount,
               loyaltyDiscount: draft.totals.loyaltyDiscount,
               taxTotal: draft.totals.taxTotal,
               serviceCharge: draft.totals.serviceCharge,
@@ -704,6 +720,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
                   options: item.options as unknown as Prisma.InputJsonValue,
                   optionsTotal: item.optionsTotal,
                   lineTotal: item.lineTotal,
+                  discountAmount: item.discountAmount,
                   costPrice: item.costPrice,
                   notes: item.notes,
                   isVeg: item.isVeg,

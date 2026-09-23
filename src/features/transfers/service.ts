@@ -736,7 +736,7 @@ function assertTransition(from: TransferStatus, to: TransferStatus) {
 export type TransferSide = 'SOURCE' | 'DESTINATION' | 'EITHER'
 
 export function assertTransferSide(
-  user: { role: UserRole; branchId?: string | null },
+  user: { role: UserRole; branchId?: string | null; branchIds?: string[] | null },
   transfer: { fromBranchId: string; toBranchId: string },
   side: TransferSide,
 ): void {

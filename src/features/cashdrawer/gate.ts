@@ -24,9 +24,9 @@ import { getApprovalPolicy } from '@/features/approvals/service'
  * manager". Owners, managers and admins hold MANAGE, so the gate can never lock
  * them out of their own dashboard — which is the failure mode that makes this
  * kind of interstitial dangerous. A custom role granted OPERATE alone is
- * gated, which is the right answer: it was granted a cashier's job.
+ * gated, which is the right answer: it was granted a till operator's job.
  *
- * Gating on `role === 'CASHIER'` would have been simpler and wrong, because
+ * Gating on `role === 'POS'` would have been simpler and wrong, because
  * this app's roles are templates and a restaurant can build a till-operating
  * role under any name.
  *
@@ -46,6 +46,8 @@ export interface GateSubject {
   restaurantId: string
   role: string
   permissions?: string[]
+  /** staff.A.md §3 — named here so a denial reaches `permissionsFor` below. */
+  deniedPermissions?: string[] | null
   rolePermissions?: string[] | null
 }
 
@@ -53,6 +55,7 @@ export interface GateSubject {
 export function isTillOperator(user: {
   role: GateSubject['role']
   permissions?: string[]
+  deniedPermissions?: string[] | null
   rolePermissions?: string[] | null
 }): boolean {
   return (
@@ -88,11 +91,23 @@ export async function requireCashierSession(
     restaurantId: string
     role: GateSubject['role']
     permissions?: string[]
+    deniedPermissions?: string[] | null
     rolePermissions?: string[] | null
   },
   next: string,
 ): Promise<void> {
   if (!isTillOperator(user)) return
+
+  /*
+   * Never send somebody to a door they cannot open (staff.A.md §6).
+   *
+   * Now that opening a till is its own permission, an owner can grant the
+   * payments screen and withhold POS_OPEN_DRAWER. Without this line that
+   * person would be redirected to the session screen, find no form on it, and
+   * be unable to reach any other page — a lockout built out of two settings
+   * that are each individually reasonable.
+   */
+  if (!can(user as never, PERMISSIONS.POS_OPEN_DRAWER)) return
 
   const policy = await getApprovalPolicy(user.restaurantId)
   if (!policy.requireCashierSession) return

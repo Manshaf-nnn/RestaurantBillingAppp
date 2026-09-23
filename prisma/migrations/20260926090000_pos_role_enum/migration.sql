@@ -1,0 +1,13 @@
+-- staff.A.md §10 — Cashier becomes POS: the enum value, and nothing else.
+--
+-- ── Why this is a migration on its own ──────────────────────────────────────
+--
+-- PostgreSQL will add an enum value inside a transaction, but it refuses to
+-- let the same transaction USE it: "unsafe use of new value of enum type".
+-- Prisma runs each migration file as one transaction, so the UPDATE statements
+-- that move every row to 'POS' cannot live here — they are the next migration,
+-- which starts after this one has committed.
+--
+-- Idempotent, because a migration that has been half-applied by hand during an
+-- incident should not block the deploy that finishes it.
+ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'POS';

@@ -23,6 +23,14 @@ function audiencesFor(role: string): Array<'KITCHEN' | 'WAITER' | 'CASHIER' | 'M
       return ['KITCHEN']
     case 'WAITER':
       return ['WAITER']
+    /*
+     * The ROLE is POS; the AUDIENCE is still called CASHIER (staff.A.md §10).
+     * `NotificationAudience` is its own Prisma enum, written into every
+     * notification row ever sent, and renaming it would mean migrating that
+     * history to change a word nobody sees. The till is what the audience
+     * means either way.
+     */
+    case 'POS':
     case 'CASHIER':
       return ['CASHIER']
     default:
@@ -84,7 +92,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // it too. The switcher only offers what this user is allowed to see, so a
   // branch manager cannot reach another site's figures by picking it from a
   // menu.
-  const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+  const reach = visibleBranchIds(user)
 
   const [restaurant, notifications, openTasks, allLocations] = await Promise.all([
     requireRestaurant(user.restaurantId),
@@ -151,6 +159,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <DashboardShell
       locations={locations}
+      branchIds={reach}
       /*
        * `reach === null` is the definition of "sees every location", and it is
        * what decides whether the switcher offers a "Main admin" row at all.

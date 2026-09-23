@@ -100,6 +100,23 @@ export type PlaceOrderInput = z.infer<typeof placeOrderSchema>
  * name when none is given.
  */
 export const staffOrderSchema = placeOrderSchema.extend({
+  /*
+   * A cashier's cart may carry a discount on each line (pro.A.md §10).
+   *
+   * Deliberately on the STAFF schema and not on `cartItemSchema`: a guest's
+   * own cart posts through the same shape, and a discount a guest can name is
+   * a discount a guest can give themselves. `DISCOUNT_APPLY` gates it in the
+   * action, and the total is re-derived on the server either way.
+   */
+  items: z
+    .array(
+      cartItemSchema.extend({
+        discount: z.coerce.number().int().min(0).max(100_000_00).default(0),
+        discountReason: z.string().trim().max(160).optional().or(z.literal('')),
+      }),
+    )
+    .min(1, 'Your cart is empty')
+    .max(60, 'Too many items in one order'),
   type: z.enum(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'COUNTER']).default('DINE_IN'),
   tableId: z.string().cuid().optional().or(z.literal('')),
   customerName: z.string().trim().max(60).optional().or(z.literal('')),

@@ -248,7 +248,7 @@ async function main() {
       data: {
         restaurantId: owner.restaurantId,
         name: `Exporter ${stamp}`,
-        preset: 'CASHIER',
+        preset: 'POS',
         permissions: ['report.export'],
       },
     })
@@ -258,7 +258,7 @@ async function main() {
         email: `exporter-${stamp}@test.local`,
         name: 'Exporter',
         passwordHash: 'x',
-        role: 'CASHIER',
+        role: 'POS',
         staffRoleId: role.id,
       },
     })

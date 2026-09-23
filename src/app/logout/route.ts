@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { requestUrl } from '@/lib/request-url'
+
 import { destroySession } from '@/server/auth/session'
 
 export const dynamic = 'force-dynamic'
@@ -37,10 +39,10 @@ export async function GET(request: NextRequest) {
   if (crossSite || notANavigation) {
     // Nothing destroyed. Send them to the login page, which shows them as
     // still signed in if they are.
-    return NextResponse.redirect(new URL('/login', request.url))
+    return NextResponse.redirect(requestUrl(request, '/login'))
   }
 
   await destroySession('staff')
   await destroySession('admin')
-  return NextResponse.redirect(new URL('/login', request.url))
+  return NextResponse.redirect(requestUrl(request, '/login'))
 }

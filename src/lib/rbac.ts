@@ -69,6 +69,20 @@ export const PERMISSIONS = {
   DISCOUNT_APPLY: 'discount.apply',
   COUPON_MANAGE: 'coupon.manage',
 
+  /**
+   * Open a till and count its opening float (staff.A.md §6).
+   *
+   * Carved out of CASH_DRAWER_OPERATE, which had grown to mean six different
+   * powers: seeing the Drawer tab, raising petty cash, recording a cash
+   * movement, closing and counting down, handing a till on, AND starting one.
+   * An owner who wants a POS user to take payments without ever opening a
+   * drawer had no way to say so — the one switch gave all six.
+   *
+   * Split (see SPLIT_FROM) so every existing account keeps exactly what it
+   * holds today; from now on it can be switched off on its own.
+   */
+  POS_OPEN_DRAWER: 'pos.openDrawer',
+
   // people
   CUSTOMER_VIEW: 'customer.view',
   CUSTOMER_MANAGE: 'customer.manage',
@@ -275,7 +289,15 @@ const KITCHEN: Permission[] = [
   PERMISSIONS.INVENTORY_EXPIRY_VIEW,
 ]
 
-const CASHIER: Permission[] = [
+/**
+ * The till and the order screen, which are one workspace (staff.A.md §6).
+ *
+ * Called POS rather than CASHIER because the product has only ever had one
+ * screen here — `/cashier` has been a redirect stub for some time and the
+ * sidebar has said POS since. Two names for one thing is how a permission
+ * gets granted twice and revoked once.
+ */
+const POS: Permission[] = [
   PERMISSIONS.DASHBOARD_VIEW,
   PERMISSIONS.ORDER_VIEW,
   PERMISSIONS.ORDER_CREATE,
@@ -502,6 +524,9 @@ const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   // approving it stays with whoever already reconciles the floor.
   [PERMISSIONS.PETTY_CASH_VIEW, PERMISSIONS.CASH_DRAWER_OPERATE],
   [PERMISSIONS.PETTY_CASH_REQUEST, PERMISSIONS.CASH_DRAWER_OPERATE],
+  // staff.A.md §6 — whoever works a till today already opens one, so nobody
+  // loses the power on the day it becomes its own switch.
+  [PERMISSIONS.POS_OPEN_DRAWER, PERMISSIONS.CASH_DRAWER_OPERATE],
   [PERMISSIONS.PETTY_CASH_APPROVE, PERMISSIONS.CASH_DRAWER_MANAGE],
   // Accepting an order and seeing the station list are both things anyone who
   // could already work the kitchen rail could already do. Reassigning items and
@@ -538,7 +563,16 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   OWNER: ALL,
   MANAGER: withSplits(MANAGER),
   KITCHEN: withSplits(KITCHEN),
-  CASHIER: withSplits(CASHIER),
+  POS: withSplits(POS),
+  /*
+   * Retired (staff.A.md §10). The migration moves every row to POS, so nothing
+   * should resolve through here — but a Postgres enum value cannot be dropped
+   * without recreating the type and rewriting five columns that reference it,
+   * which is not a risk worth taking on a live database for a value with no
+   * rows. It resolves to the same list so a row that somehow survived behaves
+   * identically rather than losing its screens.
+   */
+  CASHIER: withSplits(POS),
   WAITER: withSplits(WAITER),
 }
 
@@ -553,7 +587,9 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   OWNER: 'Owner',
   MANAGER: 'Manager',
   KITCHEN: 'Kitchen',
-  CASHIER: 'Cashier',
+  POS: 'POS',
+  /** Retired — kept so a historical row still renders a name (staff.A.md §10). */
+  CASHIER: 'POS (old name)',
   WAITER: 'Waiter',
 }
 
@@ -573,6 +609,7 @@ export const ROLE_HOME: Record<UserRole, string> = {
   MANAGER: '/dashboard',
   KITCHEN: '/kitchen',
   // The till is a tab inside the POS (abc.md §8).
+  POS: '/cashier/pos?tab=cashier',
   CASHIER: '/cashier/pos?tab=cashier',
   WAITER: '/waiter',
 }
@@ -606,6 +643,14 @@ export interface PermissionSubject {
    */
   rolePermissions?: string[] | null
   /**
+   * Keys taken away from this one person, whatever granted them (staff.A.md §3).
+   *
+   * Subtracted last in `permissionsFor`, so it beats the role defaults, a saved
+   * role and the per-user grant alike. Owners and the platform operator are
+   * exempt — see the short-circuit there.
+   */
+  deniedPermissions?: string[] | null
+  /**
    * Every permission the platform operator has sold this restaurant.
    *
    * Undefined or empty means unrestricted. Anything here is intersected with
@@ -631,15 +676,30 @@ export interface PermissionSubject {
  * always put it back. Every ON/OFF switch in the role builder needs the OFF
  * half to mean something.
  *
- * The alternative — keeping the union and adding a deny list — was rejected.
- * It makes every one of the 152 permission checks in this codebase depend on
- * getting a precedence rule right, and a deny list that is consulted in one
- * place and forgotten in another fails open. Storing the answer instead of
- * computing it means there is nothing to get wrong: what the row says is what
- * the person has.
- *
- * Per-user `permissions` still adds on top, so "this one cashier may also
+ * Per-user `permissions` still adds on top, so "this one POS user may also
  * approve wastage" needs no bespoke role.
+ *
+ * ── Why there is now a deny list, having said there would not be ────────────
+ *
+ * DELIBERATE behaviour change 2026-09 (staff.A.md §3). This comment used to
+ * say a deny list was rejected because it "makes every one of the 152
+ * permission checks depend on getting a precedence rule right, and a deny list
+ * consulted in one place and forgotten in another fails open".
+ *
+ * That argument assumed deny would be consulted at the call sites. It is not.
+ * `can`, `canAny`, `canAll` and `visibleSections` are one-liners over THIS
+ * function, so there is exactly one place a subtraction can live and no caller
+ * that can bypass it. Nor can it fail open: a subtraction that never runs
+ * grants nothing new, it only leaves the union as it already was.
+ *
+ * The need is real. A saved role answers "what does a POS user get"; it cannot
+ * answer "everyone on this role except Nila, who must not give discounts"
+ * without cloning the role, and a cloned role drifts from its original the
+ * first time somebody edits one and not the other.
+ *
+ * Deny beats everything: role default, saved role, and the per-user grant
+ * above it. "Take this away from this person" has to mean it regardless of how
+ * they came to hold it, or it is not a revocation, it is a suggestion.
  *
  * ── The owner is not lockable ───────────────────────────────────────────────
  *
@@ -688,6 +748,16 @@ export function permissionsFor(subject: PermissionSubject): Set<string> {
    */
   const base = subject.rolePermissions ?? ROLE_PERMISSIONS[subject.role]
   const granted = new Set<string>([...base, ...(subject.permissions ?? [])])
+
+  /*
+   * Deny last, so it beats every source above it (staff.A.md §3).
+   *
+   * Above the owner short-circuit this would be a way to lock an owner out of
+   * their own restaurant; below it, an owner's denials are simply never
+   * consulted, which is the same protection the saved-role path already has.
+   */
+  for (const permission of subject.deniedPermissions ?? []) granted.delete(permission)
+
   if (!available) return granted
   return new Set([...granted].filter((permission) => available.has(permission)))
 }
@@ -736,8 +806,14 @@ export function canManageLocation(subject: PermissionSubject): boolean {
   return can(subject, PERMISSIONS.BRANCH_MANAGE)
 }
 
-/** Roles that work the floor — every restaurant has them. */
-const FLOOR_ROLES: UserRole[] = ['KITCHEN', 'CASHIER', 'WAITER']
+/**
+ * Roles that work the floor — every restaurant has them.
+ *
+ * CASHIER is absent on purpose (staff.A.md §10): it is the retired name for
+ * POS, and this list is what `assignableRoles` offers, so leaving it out is
+ * what stops the old name being handed to anybody new.
+ */
+const FLOOR_ROLES: UserRole[] = ['KITCHEN', 'POS', 'WAITER']
 
 /**
  * The back-office roles. Fully defined above and, until now, impossible to
@@ -779,6 +855,28 @@ export function assignableRoles(role: UserRole): UserRole[] {
   }
 }
 
+
+/**
+ * May this admin act on somebody who already holds that role?
+ *
+ * ── Why this is not just `assignableRoles(...).includes(...)` ───────────────
+ *
+ * Those are two different questions and retiring a role separated them.
+ * `assignableRoles` answers "what may I CREATE", and CASHIER is deliberately
+ * absent from it so nobody is given the old name again (staff.A.md §10). But
+ * seven call sites were asking a stored role the same way — "may I reset this
+ * person's password", "may I read their sign-in code", "may I change what they
+ * can do" — and for those, a row that still says CASHIER is a person standing
+ * at a till, not a role to be withheld. Reusing the create ladder there meant
+ * an owner could not touch their own leftover accounts, with no error that
+ * explained why.
+ *
+ * So the retired name resolves to the one that replaced it, and only here.
+ */
+export function canActOnRole(adminRole: UserRole, targetRole: UserRole): boolean {
+  const effective = targetRole === 'CASHIER' ? 'POS' : targetRole
+  return assignableRoles(adminRole).includes(effective)
+}
 
 /**
  * Which locations a user may see.
@@ -839,30 +937,66 @@ export function requiresOwnBranch(role: UserRole): boolean {
   return !CROSS_LOCATION_ROLES.includes(role) && !SITE_SCOPED_WHEN_ASSIGNED.includes(role)
 }
 
-export function visibleBranchIds(subject: {
+/**
+ * Somebody's reach across the business.
+ *
+ * `branchId` is their HOME site — where their shift opens, where their drawer
+ * defaults, the one `requiresOwnBranch` insists on. `branchIds` (staff.A.md
+ * §4) are extra sites they may also work, which is the ordinary case for a
+ * supervisor covering two of three shops. They are separate fields because
+ * "where do you work" and "what may you see" are different questions, and
+ * answering both with one column is why a person could only ever have one.
+ */
+export interface BranchSubject {
   role: UserRole
   branchId?: string | null
-}): string[] | null {
+  /** Extra sites beyond the home one. Order is not significant. */
+  branchIds?: string[] | null
+}
+
+/**
+ * Turn a database row into a subject these functions understand.
+ *
+ * A user row loaded with `branchAccess: { select: { branchId: true } }` has its
+ * extra sites as rows, not as a list of ids. Every place that checks somebody
+ * ELSE's reach — who may receive a handover, who may take this till — would
+ * otherwise have to flatten it by hand, and the one that forgot would quietly
+ * narrow that person back to a single branch with no error anywhere.
+ */
+export function reachOf<T extends BranchSubject>(
+  subject: T & { branchAccess?: Array<{ branchId: string }> | null },
+): BranchSubject {
+  return {
+    role: subject.role,
+    branchId: subject.branchId ?? null,
+    branchIds: subject.branchAccess
+      ? subject.branchAccess.map((row) => row.branchId)
+      : (subject.branchIds ?? []),
+  }
+}
+
+export function visibleBranchIds(subject: BranchSubject): string[] | null {
   if (seesAllLocations(subject.role, subject.branchId)) return null
-  // Someone tied to a location with none assigned yet sees nothing rather than
-  // everything — failing closed is the only safe default here.
-  return subject.branchId ? [subject.branchId] : []
+  /*
+   * Someone tied to a location with none assigned yet sees nothing rather than
+   * everything — failing closed is the only safe default here. An extra site
+   * on its own still counts, so a person given Kandy and Ampara but no home
+   * branch is not blinded.
+   */
+  const ids = new Set<string>()
+  if (subject.branchId) ids.add(subject.branchId)
+  for (const id of subject.branchIds ?? []) if (id) ids.add(id)
+  return [...ids]
 }
 
 /** Spread into a Prisma `where` to confine a query to what the user may see. */
-export function branchScope(subject: {
-  role: UserRole
-  branchId?: string | null
-}): { branchId?: { in: string[] } } {
+export function branchScope(subject: BranchSubject): { branchId?: { in: string[] } } {
   const ids = visibleBranchIds(subject)
   return ids === null ? {} : { branchId: { in: ids } }
 }
 
 /** True when this user may act on that specific location. */
-export function canAccessBranch(
-  subject: { role: UserRole; branchId?: string | null },
-  branchId: string,
-): boolean {
+export function canAccessBranch(subject: BranchSubject, branchId: string): boolean {
   const ids = visibleBranchIds(subject)
   return ids === null || ids.includes(branchId)
 }

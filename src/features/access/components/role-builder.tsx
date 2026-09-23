@@ -163,6 +163,17 @@ export function RoleBuilder({
                       {role.memberCount} {role.memberCount === 1 ? 'person' : 'people'}
                     </span>
                     <span>{countFeatures(role.permissions)} features on</span>
+                    {/*
+                      Both numbers, because they answer different questions
+                      (staff.A.md §8). "Features on" is what the person will
+                      see in the sidebar; "permissions" is what the role
+                      actually grants, and the two differ whenever a feature is
+                      on with only some of its actions.
+                    */}
+                    <span>
+                      {role.permissions.length}{' '}
+                      {role.permissions.length === 1 ? 'permission' : 'permissions'}
+                    </span>
                   </p>
                 </div>
               </div>

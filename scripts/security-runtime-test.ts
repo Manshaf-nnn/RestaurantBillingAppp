@@ -216,7 +216,12 @@ async function main() {
       data: { restaurantId: B.restaurant.id, branchId: B.main.id, customerName: 'Their guest', customerPhone: '0710000000', partySize: 2, reservedAt: new Date(Date.now() + 86_400_000) },
     })
 
-    const customer = await callAction('/dashboard/customers', id('saveCustomer'),
+    /*
+     * pro.A.md §6 — the CRM and the till now share one customer action,
+     * `saveCustomerAction`. Same property under test: an id belonging to
+     * another restaurant is refused and the record is untouched.
+     */
+    const customer = await callAction('/dashboard/customers', id('saveCustomerAction'),
       [{ id: customerB.id, name: 'Hijacked', phone: customerB.phone, email: '', notes: '', isBlocked: true }], asOwnerA)
     const keptCustomer = await prisma.customer.findUniqueOrThrow({ where: { id: customerB.id } })
     check('S2 — a customer of another restaurant: refused and untouched', !customer.ok && keptCustomer.name === 'Theirs' && !keptCustomer.isBlocked, customer.body.slice(0, 120))

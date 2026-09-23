@@ -169,13 +169,25 @@ export const FEATURES: Feature[] = [
     actions: [
       { key: 'operate', label: 'Operate own drawer', permission: PERMISSIONS.CASH_DRAWER_OPERATE },
       {
+        key: 'create',
+        label: 'Open a till and count the float',
+        permission: PERMISSIONS.POS_OPEN_DRAWER,
+        hint: 'Start a session and set its opening float. Switch this off and the person can still take payments against a till somebody else opened.',
+      },
+      {
         key: 'approve',
         label: "See everyone's",
         permission: PERMISSIONS.CASH_DRAWER_MANAGE,
         hint: "Every drawer's variance, signing off a large one, and managing tills.",
       },
     ],
-    routes: ['/dashboard/cash-drawer'],
+    /*
+     * `/cashier/session` is named here on purpose (staff.A.md §6). Routes
+     * resolve by longest matching prefix, and with `/cashier` belonging to
+     * payments the opening-float screen was answering to the payments feature
+     * — so switching Cash drawer off for a tenant left its front door open.
+     */
+    routes: ['/dashboard/cash-drawer', '/cashier/session'],
   },
   {
     key: 'pettyCash',

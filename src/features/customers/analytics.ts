@@ -19,6 +19,11 @@ export interface CustomerProfile {
   group: string
   marketingConsent: boolean
   notes: string | null
+  /** The owner's own category, when they are in one (pro.A.md §1). */
+  categoryName: string | null
+  address: string | null
+  birthday: string | null
+  anniversary: string | null
   totalSpent: number
   totalOrders: number
   loyaltyPoints: number
@@ -37,7 +42,32 @@ export interface CustomerProfile {
     total: number
     status: string
     itemCount: number
+    /** The whole bill (pro.A.md §2), so the history reads without opening each order. */
+    type: string
+    channel: string
+    paymentStatus: string
+    branchName: string | null
+    cashierName: string | null
+    subtotal: number
+    discountTotal: number
+    itemDiscount: number
+    loyaltyDiscount: number
+    serviceCharge: number
+    taxTotal: number
+    tipAmount: number
+    paidTotal: number
+    items: Array<{ name: string; quantity: number; lineTotal: number; discountAmount: number }>
+    payments: Array<{ id: string; method: string; amount: number; paidAt: string | null }>
+    refunds: Array<{ id: string; amount: number; createdAt: string; reason: string | null }>
+    loyaltyEarned: number
+    loyaltyRedeemed: number
   }>
+  /** How many of their orders were cancelled, and how many refunded (§2). */
+  cancelledOrders: number
+  refundedOrders: number
+  firstOrderAt: string | null
+  /** Anything still owed across their open bills. */
+  outstanding: number
 }
 
 export async function getCustomerProfile(params: {
@@ -48,6 +78,7 @@ export async function getCustomerProfile(params: {
 }): Promise<CustomerProfile> {
   const customer = await prisma.customer.findFirstOrThrow({
     where: { id: params.customerId, restaurantId: params.restaurantId },
+    include: { category: { select: { name: true } } },
   })
 
   /*
@@ -71,12 +102,82 @@ export async function getCustomerProfile(params: {
     take: 100,
     select: {
       id: true, orderNumber: true, placedAt: true, grandTotal: true, status: true,
+      /*
+       * The whole bill, not just its total (pro.A.md §2). Somebody asking
+       * "what did they have and what did they pay" should not have to open
+       * each order in turn to find out.
+       */
+      type: true, channel: true, paymentStatus: true,
+      subtotal: true, discountTotal: true, itemDiscount: true, loyaltyDiscount: true,
+      serviceCharge: true, taxTotal: true, tipAmount: true, paidTotal: true,
+      branch: { select: { name: true } },
+      createdBy: { select: { name: true } },
       items: {
         where: { status: { not: 'CANCELLED' } },
-        select: { name: true, quantity: true, lineTotal: true },
+        select: { name: true, quantity: true, lineTotal: true, discountAmount: true },
       },
+      payments: {
+        where: { status: { in: ['PAID', 'REFUNDED'] } },
+        select: { id: true, method: true, amount: true, paidAt: true },
+      },
+      refunds: { select: { id: true, amount: true, createdAt: true, reason: true } },
     },
   })
+
+  /*
+   * Points earned and spent on each of those bills.
+   *
+   * `LoyaltyEntry` carries `orderId` but Order has no back-relation to it, so
+   * this is one extra query for the whole page rather than an include — and
+   * emphatically not one query per order.
+   */
+  const loyaltyByOrder = new Map<string, { earned: number; redeemed: number }>()
+  if (orders.length > 0) {
+    const entries = await prisma.loyaltyEntry.findMany({
+      where: { restaurantId: params.restaurantId, orderId: { in: orders.map((order) => order.id) } },
+      select: { orderId: true, points: true, kind: true },
+    })
+    for (const entry of entries) {
+      if (!entry.orderId) continue
+      const bucket = loyaltyByOrder.get(entry.orderId) ?? { earned: 0, redeemed: 0 }
+      if (entry.kind === 'EARNED') bucket.earned += entry.points
+      if (entry.kind === 'REDEEMED') bucket.redeemed += Math.abs(entry.points)
+      loyaltyByOrder.set(entry.orderId, bucket)
+    }
+  }
+
+  /*
+   * The counts §2 asks for, which the order list above cannot answer: it
+   * excludes cancelled orders by design, and is capped at 100 rows.
+   */
+  const reach = params.branchIds ? { branchId: { in: params.branchIds } } : {}
+  const [cancelledOrders, refundedOrders, outstandingAgg] = await Promise.all([
+    prisma.order.count({
+      where: { customerId: customer.id, restaurantId: params.restaurantId, status: 'CANCELLED', ...reach },
+    }),
+    prisma.order.count({
+      where: {
+        customerId: customer.id,
+        restaurantId: params.restaurantId,
+        refunds: { some: {} },
+        ...reach,
+      },
+    }),
+    prisma.order.findMany({
+      where: {
+        customerId: customer.id,
+        restaurantId: params.restaurantId,
+        status: { not: 'CANCELLED' },
+        paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
+        ...reach,
+      },
+      select: { grandTotal: true, tipAmount: true, paidTotal: true },
+    }),
+  ])
+  const outstanding = outstandingAgg.reduce(
+    (sum, order) => sum + Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
+    0,
+  )
 
   const favourites = new Map<string, { quantity: number; spend: number }>()
   for (const o of orders) {
@@ -136,6 +237,10 @@ export async function getCustomerProfile(params: {
     group: customer.group as string,
     marketingConsent: customer.marketingConsent,
     notes: customer.notes,
+    categoryName: customer.category?.name ?? null,
+    address: customer.address,
+    birthday: customer.birthday?.toISOString() ?? null,
+    anniversary: customer.anniversary?.toISOString() ?? null,
     totalSpent,
     totalOrders,
     /*
@@ -163,7 +268,44 @@ export async function getCustomerProfile(params: {
       total: o.grandTotal,
       status: o.status,
       itemCount: o.items.length,
+      type: o.type as string,
+      channel: o.channel as string,
+      paymentStatus: o.paymentStatus as string,
+      branchName: o.branch?.name ?? null,
+      cashierName: o.createdBy?.name ?? null,
+      subtotal: o.subtotal,
+      discountTotal: o.discountTotal,
+      itemDiscount: o.itemDiscount,
+      loyaltyDiscount: o.loyaltyDiscount,
+      serviceCharge: o.serviceCharge,
+      taxTotal: o.taxTotal,
+      tipAmount: o.tipAmount,
+      paidTotal: o.paidTotal,
+      items: o.items.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        lineTotal: item.lineTotal,
+        discountAmount: item.discountAmount,
+      })),
+      payments: o.payments.map((payment) => ({
+        id: payment.id,
+        method: payment.method as string,
+        amount: payment.amount,
+        paidAt: payment.paidAt?.toISOString() ?? null,
+      })),
+      refunds: o.refunds.map((refund) => ({
+        id: refund.id,
+        amount: refund.amount,
+        createdAt: refund.createdAt.toISOString(),
+        reason: refund.reason,
+      })),
+      loyaltyEarned: loyaltyByOrder.get(o.id)?.earned ?? 0,
+      loyaltyRedeemed: loyaltyByOrder.get(o.id)?.redeemed ?? 0,
     })),
+    cancelledOrders,
+    refundedOrders,
+    firstOrderAt: customer.firstOrderAt?.toISOString() ?? null,
+    outstanding,
   }
 }
 
@@ -190,6 +332,17 @@ export interface CustomerAnalytics {
  * then stopped is a problem worth a phone call, while someone who came once
  * and left never was a regular to begin with. The two are counted separately
  * rather than lumped together as "inactive".
+ */
+/**
+ * Superseded by `getCustomerInsights` (`./insights.ts`) for anything a person
+ * reads (pro.A.md §3).
+ *
+ * This version adds up `Customer.totalSpent` in JavaScript over every row. That
+ * counter includes tax and service charge and ignores partial refunds, so its
+ * "spend" cannot be reconciled against the sales report — which is why the
+ * screen no longer uses it. It survives only as a cheap smoke probe for the
+ * health endpoint and two suites, where the point is that the query runs at
+ * all rather than what it returns.
  */
 export async function getCustomerAnalytics(params: {
   restaurantId: string

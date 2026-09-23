@@ -8,6 +8,8 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useSocketEvent } from '@/hooks/use-socket'
+import { EVENTS } from '@/lib/realtime/events'
 import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { updateItemStatus } from '@/features/orders/actions'
@@ -58,6 +60,28 @@ export function StationBoard({
 }) {
   const router = useRouter()
   const [pendingId, setPendingId] = React.useState<string | null>(null)
+
+  /*
+   * ── This rail listens (pro.A.md §14) ──────────────────────────────────────
+   *
+   * It had no socket subscription at all. Its only freshness mechanism was
+   * `<AutoRefresh>`, which stood down whenever realtime was compiled in — so a
+   * section screen never changed until somebody reloaded it, which on a
+   * wall-mounted tablet with no keyboard is close to never.
+   *
+   * The rail is server-rendered and already branch- and station-scoped, so the
+   * honest handler is to re-read the route rather than splice payloads into
+   * local state: a dish may have been routed to this section or away from it,
+   * and only the server knows which.
+   */
+  const reload = React.useCallback(() => {
+    React.startTransition(() => router.refresh())
+  }, [router])
+
+  useSocketEvent(EVENTS.ORDER_CREATED, reload)
+  useSocketEvent(EVENTS.ORDER_ITEM_STATUS, reload)
+  useSocketEvent(EVENTS.ORDER_UPDATED, reload)
+  useSocketEvent(EVENTS.ORDER_CANCELLED, reload)
 
   /*
    * One clock for the whole board, ticking locally.

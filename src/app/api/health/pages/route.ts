@@ -71,7 +71,7 @@ export async function GET() {
               : null,
     }
 
-    const branchIds = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const branchIds = visibleBranchIds(user)
     const range = resolveRange({ preset: 'THIS_MONTH' })
     const currency = row?.currency ?? 'LKR'
 
@@ -176,7 +176,7 @@ export async function GET() {
         (await import('@/features/reports/profit')).getBranchComparison({ restaurantId: rid, range, branchIds })],
       ['cash drawer', async () =>
         (await import('@/features/cashdrawer/queries')).getDrawerPageData({
-          restaurantId: rid, userId: user.id, currency, canSeeAll: true,
+          restaurantId: rid, userId: user.id, currency, canSeeAll: true, canOpen: true,
         })],
       ['petty cash', async () =>
         (await import('@/features/pettycash/queries')).getPettyCashPageData({

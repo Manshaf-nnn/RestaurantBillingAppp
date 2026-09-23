@@ -5,7 +5,7 @@ import { z } from 'zod'
 
 import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, assignableRoles, canActOnRole } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission, assertBranchAccess } from '@/server/auth/guard'
@@ -138,7 +138,7 @@ export async function createAccessLink(
        * dialog states in words before you create it.
        */
       if (person) {
-        if (person.role === 'OWNER' || !assignableRoles(admin.role).includes(person.role)) {
+        if (person.role === 'OWNER' || !canActOnRole(admin.role, person.role)) {
           throw new ForbiddenError('You cannot create a link for that person')
         }
         await assertBranchAccess(admin, person.branchId)

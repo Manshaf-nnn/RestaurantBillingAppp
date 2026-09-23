@@ -132,7 +132,7 @@ export async function GET(request: NextRequest) {
      * numbers, amounts and ids — from a route every station polls all day.
      * `[]` is a confined account with no branch: it hears nothing.
      */
-    const reach = visibleBranchIds({ role: user.role, branchId: user.branchId })
+    const reach = visibleBranchIds(user)
     const stream = await readOutbox({
       restaurantId: user.restaurantId,
       branchIds: branchId ? [branchId] : reach,
@@ -156,10 +156,10 @@ export async function GET(request: NextRequest) {
  * guards rely on everywhere else.
  */
 async function callerMaySeeBranch(
-  user: { role: UserRole; branchId?: string | null },
+  user: { role: UserRole; branchId?: string | null; branchIds?: string[] | null },
   branchId: string,
 ): Promise<boolean> {
-  const allowed = visibleBranchIds({ role: user.role, branchId: user.branchId ?? null })
+  const allowed = visibleBranchIds(user)
   return allowed === null || allowed.includes(branchId)
 }
 

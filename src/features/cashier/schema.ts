@@ -62,3 +62,17 @@ export const voidItemSchema = z.object({
   itemId: z.string().min(1),
   reason: z.string().trim().min(2, 'Give a reason').max(200),
 })
+
+/**
+ * A discount on one line of a bill (pro.A.md §10).
+ *
+ * The amount is in MINOR units and is the whole reduction for that line, not
+ * per unit — "two burgers, 100 off" is 100, not 200. Zero clears it, which is
+ * how a cashier takes a discount back off.
+ */
+export const setItemDiscountSchema = z.object({
+  orderId: z.string().cuid(),
+  itemId: z.string().cuid(),
+  amount: z.coerce.number().int().min(0, 'A discount cannot be negative').max(100_000_00),
+  reason: z.string().trim().max(160).optional().or(z.literal('')),
+})

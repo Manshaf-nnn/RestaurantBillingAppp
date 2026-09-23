@@ -13,8 +13,14 @@ export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 /** "YYYY-MM-DD". A rota day is a calendar day, not an instant. */
 export const DATE_KEY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
+/*
+ * CASHIER stays alongside POS (staff.A.md §10) so a template saved before the
+ * rename still validates. Nothing offers it — `templates-manager.tsx` lists
+ * POS — but a schema that refused a stored value would make an old template
+ * uneditable rather than simply out of date.
+ */
 const ROLES = [
-  'OWNER', 'MANAGER', 'KITCHEN', 'CASHIER', 'WAITER', 'ADMIN',
+  'OWNER', 'MANAGER', 'KITCHEN', 'POS', 'CASHIER', 'WAITER', 'ADMIN',
   'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER', 'ACCOUNTANT',
 ] as const
 

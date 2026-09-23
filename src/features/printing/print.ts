@@ -41,6 +41,9 @@ interface ReceiptLine {
   quantity: number | null
   unitPrice?: string | null
   lineTotal: string
+  /** What came off this line, and what it cost after (pro.A.md §10). */
+  discountAmount?: string | null
+  netTotal?: string | null
 }
 
 /*
@@ -317,7 +320,19 @@ function receiptLineRow(line: ReceiptLine): string {
   const qty = line.quantity === null ? '' : `${line.quantity}×`
   const unit = line.unitPrice ? `<div class="muted">@ ${escapeHtml(line.unitPrice)}</div>` : ''
   const options = line.optionsLabel ? `<div class="muted">${escapeHtml(line.optionsLabel)}</div>` : ''
-  return `<tr><td class="qty">${qty}</td><td>${escapeHtml(line.name)}${options}${unit}</td><td class="right">${escapeHtml(line.lineTotal)}</td></tr>`
+  /*
+   * A discounted line prints three facts, not one: what the dish costs, what
+   * came off it, and what that leaves. The gross is struck through so the
+   * guest can see the arithmetic rather than being asked to trust a number
+   * that does not match the menu.
+   */
+  const discount = line.discountAmount
+    ? `<div class="muted">less ${escapeHtml(line.discountAmount)}</div>`
+    : ''
+  const amount = line.netTotal
+    ? `<s class="muted">${escapeHtml(line.lineTotal)}</s><br>${escapeHtml(line.netTotal)}`
+    : escapeHtml(line.lineTotal)
+  return `<tr><td class="qty">${qty}</td><td>${escapeHtml(line.name)}${options}${unit}${discount}</td><td class="right">${amount}</td></tr>`
 }
 
 /** Shared receipt markup so the printed and downloaded copies cannot drift. */
