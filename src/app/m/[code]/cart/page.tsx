@@ -4,6 +4,8 @@ import { notFound } from 'next/navigation'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
 import { CartCheckout } from '@/features/orders/components/cart-checkout'
 import { askedForPreview, qrAccess } from '@/features/qr/access'
+import { narrowAppearance } from '@/features/guest/appearance'
+import { getGuestAppearance } from '@/features/guest/queries'
 import { qrPath } from '@/features/qr/guest-path'
 import { resolveExperience } from '@/features/qr/queries'
 import { localeForCurrency } from '@/lib/money'
@@ -45,6 +47,8 @@ export default async function QrCartPage({
   )
   if (!branch) notFound()
 
+  const appearance = narrowAppearance(await getGuestAppearance(experience.restaurantId), experience)
+
   return (
     <CartCheckout
       currency={experience.restaurant.currency}
@@ -62,6 +66,13 @@ export default async function QrCartPage({
       qrCode={experience.publicId}
       requiresTable={experience.askTable}
       branchCode={branch.code}
+      showCoupon={appearance.checkoutShowCoupon}
+      showName={appearance.checkoutShowName}
+      showPhone={appearance.checkoutShowPhone}
+      showNote={appearance.checkoutShowNote}
+      showPointsEarned={appearance.checkoutShowPointsEarned}
+      detailsHeading={appearance.checkoutDetailsHeading}
+      phoneHint={appearance.checkoutPhoneHint}
     />
   )
 }

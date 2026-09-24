@@ -67,6 +67,8 @@ export function MenuBrowser({
   showImages = true,
   showDescriptions = true,
   showFeatured = true,
+  showDietFilter = true,
+  showCallStaff = true,
   branchName = null,
   taxLabel,
   addingTo = null,
@@ -116,6 +118,10 @@ export function MenuBrowser({
   showImages?: boolean
   showDescriptions?: boolean
   showFeatured?: boolean
+  /** The Veg / Non-veg chips. */
+  showDietFilter?: boolean
+  /** The "Call a waiter" button in the header. */
+  showCallStaff?: boolean
   /** Shown when the restaurant has more than one place to order from. */
   branchName?: string | null
   /** The guest's own open order these picks join (aO.md §3), from `?add=`. */
@@ -249,6 +255,7 @@ export function MenuBrowser({
           </div>
 
           <ThemeToggle className="guest-ink shrink-0 hover:bg-black/5 dark:hover:bg-white/10" />
+          {showCallStaff ? (
           <ServiceRequestDialog
             tableId={state.table?.tableId ?? null}
             slug={slug}
@@ -256,6 +263,7 @@ export function MenuBrowser({
             // table — a call bell must ring in the room the guest is sitting in.
             branchCode={state.table?.branchCode ?? null}
           />
+          ) : null}
         </div>
 
         {showSearch ? (
@@ -278,16 +286,20 @@ export function MenuBrowser({
         ) : null}
 
         <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3">
-          <Chip active={diet === 'VEG'} onClick={() => setDiet(diet === 'VEG' ? 'ALL' : 'VEG')}>
-            <span className="text-emerald-400">●</span> Veg
-          </Chip>
-          <Chip
-            active={diet === 'NON_VEG'}
-            onClick={() => setDiet(diet === 'NON_VEG' ? 'ALL' : 'NON_VEG')}
-          >
-            <span className="text-red-400">●</span> Non-veg
-          </Chip>
-          <span className="guest-divider my-1 w-px shrink-0" />
+          {showDietFilter ? (
+            <>
+              <Chip active={diet === 'VEG'} onClick={() => setDiet(diet === 'VEG' ? 'ALL' : 'VEG')}>
+                <span className="text-emerald-400">●</span> Veg
+              </Chip>
+              <Chip
+                active={diet === 'NON_VEG'}
+                onClick={() => setDiet(diet === 'NON_VEG' ? 'ALL' : 'NON_VEG')}
+              >
+                <span className="text-red-400">●</span> Non-veg
+              </Chip>
+              <span className="guest-divider my-1 w-px shrink-0" />
+            </>
+          ) : null}
           <Chip active={category === 'ALL'} onClick={() => setCategory('ALL')}>
             All
           </Chip>

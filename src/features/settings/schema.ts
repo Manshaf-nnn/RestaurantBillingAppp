@@ -281,7 +281,24 @@ export const guestAppearanceSchema = z.object({
   menuShowImages: z.coerce.boolean(),
   menuShowDescriptions: z.coerce.boolean(),
   menuShowFeatured: z.coerce.boolean(),
+  menuShowDietFilter: z.coerce.boolean(),
+  menuShowCallStaff: z.coerce.boolean(),
   menuLayout: z.enum(['LIST', 'GRID']),
+
+  checkoutShowCoupon: z.coerce.boolean(),
+  checkoutShowName: z.coerce.boolean(),
+  checkoutShowPhone: z.coerce.boolean(),
+  checkoutShowNote: z.coerce.boolean(),
+  checkoutShowPointsEarned: z.coerce.boolean(),
+  checkoutDetailsHeading: z.string().trim().max(60).optional().or(z.literal('')),
+  checkoutPhoneHint: z.string().trim().max(120).optional().or(z.literal('')),
+
+  trackShowSteps: z.coerce.boolean(),
+  trackShowItems: z.coerce.boolean(),
+  trackShowLoyalty: z.coerce.boolean(),
+  trackAllowAdding: z.coerce.boolean(),
+  trackShowBill: z.coerce.boolean(),
+  trackShowEdit: z.coerce.boolean(),
 
   accentMode: z.enum(['AUTO', 'CUSTOM']),
   accentColour: z

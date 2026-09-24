@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { LocationType } from '@prisma/client'
+import type { LocationType, Prisma } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { parseOpeningHours } from '@/lib/opening-hours'
@@ -130,6 +130,8 @@ export interface TransferSummary {
   fromName: string
   toName: string
   lineCount: number
+  /** Σ requested across the lines — the "Total Qty" column. */
+  totalQty: number
   requestedAt: string
   requestedByName: string | null
   hasVariance: boolean
@@ -176,11 +178,27 @@ export async function listTransfers(params: {
       fromBranch: { select: { name: true } },
       toBranch: { select: { name: true } },
       requestedBy: { select: { name: true } },
-      lines: { select: { variance: true } },
+      lines: { select: { variance: true, requestedQty: true } },
     },
   })
 
-  return transfers.map((t) => ({
+  return transfers.map(toSummary)
+}
+
+/** One row of the list, from a transfer with its lines and both branch names. */
+function toSummary(t: {
+  id: string
+  number: string
+  status: string
+  fromBranchId: string
+  toBranchId: string
+  fromBranch: { name: string }
+  toBranch: { name: string }
+  requestedAt: Date
+  requestedBy: { name: string } | null
+  lines: Array<{ variance: number | null; requestedQty: number }>
+}): TransferSummary {
+  return {
     id: t.id,
     number: t.number,
     status: t.status,
@@ -189,10 +207,183 @@ export async function listTransfers(params: {
     fromName: t.fromBranch.name,
     toName: t.toBranch.name,
     lineCount: t.lines.length,
+    totalQty: roundQty(t.lines.reduce((sum, line) => sum + line.requestedQty, 0)),
     requestedAt: t.requestedAt.toISOString(),
     requestedByName: t.requestedBy?.name ?? null,
     hasVariance: t.lines.some((l) => l.variance !== null && Math.abs(l.variance) > 1e-6),
-  }))
+  }
+}
+
+/* ── The Transfers screen ─────────────────────────────────────────────────── */
+
+export interface TransferFilter {
+  search?: string
+  /** Branch ids. Empty means every location this person can already see. */
+  fromBranchId?: string | null
+  toBranchId?: string | null
+  /** A `StockTransferStatus`, or one of the derived buckets below. */
+  status?: string | null
+  itemId?: string | null
+  /** ISO dates, inclusive. */
+  from?: string | null
+  to?: string | null
+  page?: number
+  perPage?: number
+}
+
+export interface TransferStats {
+  total: number
+  inTransit: number
+  pending: number
+  received: number
+  variance: number
+}
+
+export interface TransferBoard {
+  rows: TransferSummary[]
+  total: number
+  page: number
+  perPage: number
+  pages: number
+  stats: TransferStats
+}
+
+/**
+ * Statuses grouped the way the screen's cards count them.
+ *
+ * The transfer's own `status` column is untouched — these are read-only
+ * groupings over it, so the workflow keeps exactly the states it always had
+ * and only the counting is new.
+ */
+const IN_TRANSIT_STATUSES = ['DISPATCHED', 'IN_TRANSIT'] as const
+const PENDING_STATUSES = ['REQUESTED', 'APPROVED'] as const
+const DONE_STATUSES = ['RECEIVED', 'COMPLETED'] as const
+
+/** The screen's status filter, including the three grouped ones. */
+export function transferStatusWhere(status: string | null | undefined): Prisma.StockTransferWhereInput {
+  switch (status) {
+    case 'IN_TRANSIT_GROUP':
+      return { status: { in: [...IN_TRANSIT_STATUSES] } }
+    case 'PENDING_GROUP':
+      return { status: { in: [...PENDING_STATUSES] } }
+    case 'DONE_GROUP':
+      return { status: { in: [...DONE_STATUSES] } }
+    case 'VARIANCE':
+      return { lines: { some: { variance: { not: null } } } }
+    case undefined:
+    case null:
+    case '':
+    case 'ALL':
+      return {}
+    default:
+      return { status: status as Prisma.StockTransferWhereInput['status'] }
+  }
+}
+
+/**
+ * The Transfers screen: the rows for one page, the count behind them, and the
+ * five figures across the top.
+ *
+ * `visibleBranchIds` is applied first and always, so every figure on the screen
+ * counts the same transfers the table can show. A stat card that counted things
+ * the person cannot open would be worse than no card.
+ */
+export async function getTransferBoard(params: {
+  restaurantId: string
+  /** Null means every location; `[]` means none, which is a real answer. */
+  branchIds: string[] | null
+  filter: TransferFilter
+}): Promise<TransferBoard> {
+  const { filter } = params
+  const term = filter.search?.trim()
+  const page = Math.max(1, filter.page ?? 1)
+  const perPage = Math.min(100, Math.max(5, filter.perPage ?? 10))
+
+  /*
+   * What this person may see at all. A transfer is visible from either end, so
+   * this is an OR over both columns — the same rule the old grouped list used.
+   */
+  const reach: Prisma.StockTransferWhereInput[] =
+    params.branchIds === null
+      ? []
+      : [{ OR: [{ fromBranchId: { in: params.branchIds } }, { toBranchId: { in: params.branchIds } }] }]
+
+  const where: Prisma.StockTransferWhereInput = {
+    restaurantId: params.restaurantId,
+    AND: [
+      ...reach,
+      ...(filter.fromBranchId ? [{ fromBranchId: filter.fromBranchId }] : []),
+      ...(filter.toBranchId ? [{ toBranchId: filter.toBranchId }] : []),
+      ...(filter.itemId ? [{ lines: { some: { itemId: filter.itemId } } }] : []),
+      ...(filter.from || filter.to
+        ? [
+            {
+              requestedAt: {
+                ...(filter.from ? { gte: new Date(`${filter.from}T00:00:00.000Z`) } : {}),
+                // Inclusive: a date picked as the end means the whole of it.
+                ...(filter.to ? { lte: new Date(`${filter.to}T23:59:59.999Z`) } : {}),
+              },
+            },
+          ]
+        : []),
+      ...(term
+        ? [
+            {
+              OR: [
+                { number: { contains: term, mode: 'insensitive' as const } },
+                { notes: { contains: term, mode: 'insensitive' as const } },
+                { fromBranch: { name: { contains: term, mode: 'insensitive' as const } } },
+                { toBranch: { name: { contains: term, mode: 'insensitive' as const } } },
+                { lines: { some: { item: { name: { contains: term, mode: 'insensitive' as const } } } } },
+              ],
+            },
+          ]
+        : []),
+    ],
+  }
+
+  // The status filter narrows the table but NOT the cards: the cards are what
+  // you click to set it, so they have to keep counting the whole filtered set.
+  const tableWhere: Prisma.StockTransferWhereInput = {
+    ...where,
+    AND: [...(where.AND as Prisma.StockTransferWhereInput[]), transferStatusWhere(filter.status)],
+  }
+
+  const [rows, total, counts, varianceCount] = await Promise.all([
+    prisma.stockTransfer.findMany({
+      where: tableWhere,
+      orderBy: { requestedAt: 'desc' },
+      skip: (page - 1) * perPage,
+      take: perPage,
+      include: {
+        fromBranch: { select: { name: true } },
+        toBranch: { select: { name: true } },
+        requestedBy: { select: { name: true } },
+        lines: { select: { variance: true, requestedQty: true } },
+      },
+    }),
+    prisma.stockTransfer.count({ where: tableWhere }),
+    prisma.stockTransfer.groupBy({ by: ['status'], where, _count: { _all: true } }),
+    prisma.stockTransfer.count({ where: { ...where, lines: { some: { variance: { not: null } } } } }),
+  ])
+
+  const by = (list: readonly string[]) =>
+    counts.filter((row) => list.includes(row.status)).reduce((sum, row) => sum + row._count._all, 0)
+
+  return {
+    rows: rows.map(toSummary),
+    total,
+    page,
+    perPage,
+    pages: Math.max(1, Math.ceil(total / perPage)),
+    stats: {
+      total: counts.reduce((sum, row) => sum + row._count._all, 0),
+      inTransit: by(IN_TRANSIT_STATUSES),
+      pending: by(PENDING_STATUSES),
+      received: by(DONE_STATUSES),
+      variance: varianceCount,
+    },
+  }
 }
 
 /** One location's stock, with the three quantities kept apart. */

@@ -93,11 +93,25 @@ export function OrderTracker({
   currency,
   locale,
   restaurantName,
+  showSteps = true,
+  showItems = true,
+  showBill = true,
+  allowAdding = true,
+  showEdit = true,
 }: {
   order: TrackedOrder
   currency: string
   locale: string
   restaurantName: string
+  /**
+   * What this screen shows (ar.md §13), from Settings → Guest experience.
+   * Every default reproduces exactly what it showed before.
+   */
+  showSteps?: boolean
+  showItems?: boolean
+  showBill?: boolean
+  allowAdding?: boolean
+  showEdit?: boolean
 }) {
   const router = useRouter()
   // Every link out of here keeps the branch (a bare /order/menu lost it).
@@ -333,6 +347,7 @@ export function OrderTracker({
                 </p>
               </div>
 
+              {showSteps ? (
               <ol className="space-y-0 p-5">
                 {STEPS.map((step, index) => {
                   const done = index < activeIndex
@@ -381,10 +396,12 @@ export function OrderTracker({
                   )
                 })}
               </ol>
+              ) : null}
             </motion.section>
           )}
         </AnimatePresence>
 
+        {showItems ? (
         <section className="surface p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold">Your items</h2>
@@ -429,13 +446,18 @@ export function OrderTracker({
             <span>{formatMoney(initial.grandTotal, currency, locale)}</span>
           </div>
         </section>
+        ) : null}
 
-        <div className="grid grid-cols-2 gap-3">
+        {showBill || allowAdding ? (
+        <div className={cn('grid gap-3', showBill && allowAdding ? 'grid-cols-2' : 'grid-cols-1')}>
+          {showBill ? (
           <Button variant="outline" asChild>
             <Link href={`/order/bill/${initial.id}`}>
               <Receipt /> View bill
             </Link>
           </Button>
+          ) : null}
+          {allowAdding ? (
           <Button variant="outline" asChild>
             {/* aO.md §3: while the order is still theirs to change, new dishes
                 join it; once served or paid, a fresh order is the way. */}
@@ -449,8 +471,11 @@ export function OrderTracker({
               </Link>
             )}
           </Button>
+          ) : null}
         </div>
+        ) : null}
 
+        {showEdit ? (
         <section className="surface p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -511,6 +536,7 @@ export function OrderTracker({
             </div>
           ) : null}
         </section>
+        ) : null}
       </div>
     </div>
   )

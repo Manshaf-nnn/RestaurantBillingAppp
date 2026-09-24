@@ -8,11 +8,20 @@ export function PageHeader({
   title,
   description,
   branch,
+  icon,
   actions,
   className,
 }: {
   title: string
   description?: string
+  /**
+   * A mark beside the title, in a tinted square.
+   *
+   * Optional and used sparingly: an icon on all 104 headers is decoration,
+   * and decoration is what people stop seeing. It earns its place on the
+   * screens somebody lands on directly and has to recognise at a glance.
+   */
+  icon?: React.ReactNode
   /**
    * Which location this page is showing (correctionA.md §6).
    *
@@ -31,7 +40,13 @@ export function PageHeader({
 }) {
   return (
     <div className={cn('mb-6 flex flex-wrap items-start justify-between gap-4', className)}>
-      <div className="min-w-0">
+      <div className="flex min-w-0 items-start gap-3">
+        {icon ? (
+          <span className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            {icon}
+          </span>
+        ) : null}
+        <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
           {branch ? (
@@ -44,6 +59,7 @@ export function PageHeader({
         {description ? (
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         ) : null}
+        </div>
       </div>
       {/*
         No `shrink-0`. It kept the action row at its natural width, so a header

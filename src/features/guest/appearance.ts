@@ -18,6 +18,15 @@
  * written before it existed. That is why reads merge over `DEFAULT_APPEARANCE`
  * rather than trusting the stored Json to be whole.
  *
+ * ── What is deliberately NOT here ───────────────────────────────────────────
+ *
+ * The BILL. What a guest's bill shows — logo, subtotal, discount, service
+ * charge, tax, rounding, grand total — is already `ReceiptFields` on
+ * `Restaurant.receiptConfig`, written by Settings → Printer & bill and read by
+ * `GuestBill` as well as by the printer. Repeating those switches here would
+ * be two forms deciding one thing, which is how they come to disagree. The
+ * guest-experience editor links across to that tab instead.
+ *
  * Pure: no database, no `server-only`, so the settings editor, the live
  * preview and the guest screens all read the same shape.
  */
@@ -64,12 +73,52 @@ export interface GuestAppearance {
   menuShowDescriptions: boolean
   /** The "Chef's picks & favourites" rail above the sections. */
   menuShowFeatured: boolean
+  /** The Veg / Non-veg chips above the sections. */
+  menuShowDietFilter: boolean
+  /** The "Call a waiter" button in the menu's header. */
+  menuShowCallStaff: boolean
   /**
    * `LIST` is a row per dish with the image on the right — dense, and what
    * this app has always shown. `GRID` is two cards across, which reads better
    * for a short menu with good photography and worse for a long one.
    */
   menuLayout: MenuLayout
+
+  /* ── Checkout (ar.md §13) ─────────────────────────────────────────────── */
+  /**
+   * The "Have a coupon?" box. Off for a restaurant that does not run codes —
+   * an empty box invites a guest to hunt for one that does not exist.
+   */
+  checkoutShowCoupon: boolean
+  /**
+   * The two boxes under "Your details". Both are optional on the form already,
+   * and a blank phone simply means no customer record — so hiding them is safe.
+   * Hiding the phone DOES cost loyalty and any offer aimed at a customer,
+   * because both are found by that number; the editor says so.
+   */
+  checkoutShowName: boolean
+  checkoutShowPhone: boolean
+  /** "Note for the kitchen" — allergies, spice, anything else. */
+  checkoutShowNote: boolean
+  /** "You will earn N points on this order", under the total. */
+  checkoutShowPointsEarned: boolean
+  /** The heading over those boxes, and the line under the phone one. */
+  checkoutDetailsHeading: string
+  checkoutPhoneHint: string
+
+  /* ── Order tracking ───────────────────────────────────────────────────── */
+  /** The Received → Preparing → Ready → Served ladder. */
+  trackShowSteps: boolean
+  /** "Your items", each with its own state, and the order total. */
+  trackShowItems: boolean
+  /** The points panel. Only ever appears when loyalty is on for the restaurant. */
+  trackShowLoyalty: boolean
+  /** "Add more items" while the order is still open and unpaid. */
+  trackAllowAdding: boolean
+  /** The "View bill" button. */
+  trackShowBill: boolean
+  /** "Update your order" — changing quantities after it has gone to the kitchen. */
+  trackShowEdit: boolean
 
   /* ── The look ─────────────────────────────────────────────────────────── */
   /**
@@ -109,7 +158,24 @@ export const DEFAULT_APPEARANCE: GuestAppearance = {
   menuShowImages: true,
   menuShowDescriptions: true,
   menuShowFeatured: true,
+  menuShowDietFilter: true,
+  menuShowCallStaff: true,
   menuLayout: 'LIST',
+
+  checkoutShowCoupon: true,
+  checkoutShowName: true,
+  checkoutShowPhone: true,
+  checkoutShowNote: true,
+  checkoutShowPointsEarned: true,
+  checkoutDetailsHeading: 'Your details',
+  checkoutPhoneHint: 'Add it to collect loyalty points on this order',
+
+  trackShowSteps: true,
+  trackShowItems: true,
+  trackShowLoyalty: true,
+  trackAllowAdding: true,
+  trackShowBill: true,
+  trackShowEdit: true,
 
   accentMode: 'AUTO',
   accentColour: '#f97316',
@@ -158,7 +224,24 @@ export function readAppearance(stored: unknown): GuestAppearance {
     menuShowImages: flag('menuShowImages'),
     menuShowDescriptions: flag('menuShowDescriptions'),
     menuShowFeatured: flag('menuShowFeatured'),
+    menuShowDietFilter: flag('menuShowDietFilter'),
+    menuShowCallStaff: flag('menuShowCallStaff'),
     menuLayout: raw.menuLayout === 'GRID' ? 'GRID' : 'LIST',
+
+    checkoutShowCoupon: flag('checkoutShowCoupon'),
+    checkoutShowName: flag('checkoutShowName'),
+    checkoutShowPhone: flag('checkoutShowPhone'),
+    checkoutShowNote: flag('checkoutShowNote'),
+    checkoutShowPointsEarned: flag('checkoutShowPointsEarned'),
+    checkoutDetailsHeading: text('checkoutDetailsHeading'),
+    checkoutPhoneHint: text('checkoutPhoneHint'),
+
+    trackShowSteps: flag('trackShowSteps'),
+    trackShowItems: flag('trackShowItems'),
+    trackShowLoyalty: flag('trackShowLoyalty'),
+    trackAllowAdding: flag('trackAllowAdding'),
+    trackShowBill: flag('trackShowBill'),
+    trackShowEdit: flag('trackShowEdit'),
 
     accentMode: raw.accentMode === 'CUSTOM' ? 'CUSTOM' : 'AUTO',
     accentColour: typeof raw.accentColour === 'string' && HEX.test(raw.accentColour)

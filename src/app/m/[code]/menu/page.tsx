@@ -110,6 +110,9 @@ export default async function QrMenuPage({
         showImages={appearance.menuShowImages}
         showDescriptions={appearance.menuShowDescriptions}
         showFeatured={appearance.menuShowFeatured}
+        showDietFilter={appearance.menuShowDietFilter}
+        /* A code with no table has nobody to call — the button needs one. */
+        showCallStaff={appearance.menuShowCallStaff && experience.askTable}
         addingTo={addingTo}
         branchName={orderable.length > 1 ? branch.name : null}
       />

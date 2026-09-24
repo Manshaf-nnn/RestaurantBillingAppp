@@ -32,6 +32,8 @@ import {
 } from '@/features/printing/receipt-fields'
 import { callAction } from '@/lib/use-action'
 import { PaymentDestinations } from './payment-destinations'
+import { GuestAppearanceEditor } from './guest-appearance-editor'
+import type { GuestAppearance } from '@/features/guest/appearance'
 import type { PaymentDestination } from '@/features/payments/destinations'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
@@ -102,7 +104,19 @@ export interface SettingsData {
   live: LiveBoardPolicy
 }
 
-export function SettingsView({ initial, canManage }: { initial: SettingsData; canManage: boolean }) {
+export function SettingsView({
+  initial,
+  canManage,
+  guest,
+  initialTab = 'profile',
+}: {
+  initial: SettingsData
+  canManage: boolean
+  /** What guests meet on every code, and the restaurant facts its preview needs. */
+  guest: { appearance: GuestAppearance; isOpen: boolean; openingLabel: string | null }
+  /** `?tab=` — so the old Guest experience link still lands on its screen. */
+  initialTab?: string
+}) {
   const [form, setForm] = React.useState(initial)
   const [payment, setPayment] = React.useState(initial.payment)
   const [savingProfile, setSavingProfile] = React.useState(false)
@@ -177,7 +191,7 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
     <>
       <PageHeader title="Settings" description="Your restaurant profile, tax, payments and loyalty" />
 
-      <Tabs defaultValue="profile">
+      <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="billing">Tax & charges</TabsTrigger>
@@ -186,7 +200,26 @@ export function SettingsView({ initial, canManage }: { initial: SettingsData; ca
           <TabsTrigger value="printer">Printer &amp; bill</TabsTrigger>
           <TabsTrigger value="cash">Cash controls</TabsTrigger>
           <TabsTrigger value="live">Live floor</TabsTrigger>
+          <TabsTrigger value="guest">Guest experience</TabsTrigger>
         </TabsList>
+
+        {/*
+          ar.md §13 — what a guest meets on every code, table QR and QR menu
+          alike. Its own tab rather than its own page: an owner changing what
+          their customers see is doing the same kind of thing as changing the
+          tax label, and Settings is where that lives.
+        */}
+        <TabsContent value="guest" className="space-y-4">
+          <GuestAppearanceEditor
+            appearance={guest.appearance}
+            restaurantName={form.name}
+            tagline={form.tagline || null}
+            logoUrl={form.logoUrl || null}
+            coverUrl={form.coverUrl || null}
+            isOpen={guest.isOpen}
+            openingLabel={guest.openingLabel}
+          />
+        </TabsContent>
 
         <TabsContent value="profile" className="space-y-4">
           <SectionCard title="Restaurant details">

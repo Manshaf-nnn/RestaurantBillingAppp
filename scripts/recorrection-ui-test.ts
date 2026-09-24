@@ -238,10 +238,17 @@ async function main() {
 
     console.log('\n── 3. The list, from the destination ──')
     {
+      /*
+       * DELIBERATE layout change 2026-09: the four grouped sections became one
+       * filtered table. The thing they existed for — "is this waiting on ME",
+       * which needs the status AND which end you stand at — is the same
+       * `sectionFor` call, now read into a line under each row. These
+       * assertions follow it there; the facts are unchanged.
+       */
       await jayPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
-      check('filed under Pending approval', await seen(jayPage, /Pending approval \(1\)/))
-      check('waiting for Kandy', await seen(jayPage, 'Waiting for Kandy to approve'))
-      check('no Pending dispatch section for the destination', !(await seen(jayPage, /Pending dispatch/)))
+      check('the row is on the destination\'s list', await seen(jayPage, 'Waiting for Kandy to approve'))
+      check('shown as requested, not yet theirs to act on', await seen(jayPage, /Requested/))
+      check('and it is not claimed to be waiting on them', !(await seen(jayPage, 'Waiting on you to dispatch')))
     }
 
     console.log('\n── 4. The task picker scrolls inside the dialog and shows role + location ──')
@@ -310,12 +317,17 @@ async function main() {
     console.log('\n── 6. The list, from each end, after the decision ──')
     {
       await ownerPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
-      check('the owner (at both ends) sees Pending dispatch', await seen(ownerPage, /Pending dispatch \(1\)/))
-      check('waiting on them', await seen(ownerPage, 'Waiting on you to dispatch'))
+      check('the owner (at both ends) is told it is theirs to dispatch', await seen(ownerPage, 'Waiting on you to dispatch'))
+      check('and the status reads Approved', await seen(ownerPage, /Approved/))
 
       await jayPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
-      check('Jaffna sees it under Pending receive', await seen(jayPage, /Pending receive \(1\)/))
-      check('waiting for Kandy to send it', await seen(jayPage, /waiting for Kandy to dispatch/))
+      check('Jaffna is told it is not theirs yet', await seen(jayPage, /waiting for Kandy to dispatch/))
+      check('and never that it is waiting on them to dispatch', !(await seen(jayPage, 'Waiting on you to dispatch')))
+
+      // The screen's own furniture, which the owner asked for.
+      check('the five figures are across the top', await seen(ownerPage, 'Total Transfers') && await seen(ownerPage, 'In Transit') && await seen(ownerPage, 'Issue / Variance'))
+      check('one table, with the columns the design names', await seen(ownerPage, 'Total Qty') && await seen(ownerPage, 'Created By'))
+      check('and the filter bar', await seen(ownerPage, 'From Location') && await seen(ownerPage, 'To Location'))
     }
 
     const mayo = `Mayo UI ${stamp}`

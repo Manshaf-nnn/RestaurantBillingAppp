@@ -62,6 +62,17 @@ interface Props {
    * becomes a TAKEAWAY and the branch comes from the code.
    */
   requiresTable?: boolean
+  /**
+   * What this screen shows and says (ar.md §13), from Settings → Guest
+   * experience. Every default reproduces exactly what it showed before.
+   */
+  showCoupon?: boolean
+  showName?: boolean
+  showPhone?: boolean
+  showNote?: boolean
+  showPointsEarned?: boolean
+  detailsHeading?: string
+  phoneHint?: string
   /** The branch that code belongs to, since no table can settle it. */
   branchCode?: string | null
 }
@@ -78,6 +89,13 @@ export function CartCheckout({
   qrCode = null,
   requiresTable = true,
   branchCode = null,
+  showCoupon = true,
+  showName = true,
+  showPhone = true,
+  showNote = true,
+  showPointsEarned = true,
+  detailsHeading = 'Your details',
+  phoneHint = 'Add it to collect loyalty points on this order',
 }: Props) {
   const router = useRouter()
   const { state, hydrated, itemCount, subtotal, setQuantity, removeLine, setCoupon, setCustomer, clearLines, stopAdding } =
@@ -390,7 +408,7 @@ export function CartCheckout({
         </section>
 
         {/* ── coupon (a new order only) ─────────────────────────── */}
-        {adding ? null : (
+        {adding || !showCoupon ? null : (
         <section className="surface p-4">
           <div className="mb-2 flex items-center gap-2">
             <Ticket className="size-4 text-primary" />
@@ -420,10 +438,11 @@ export function CartCheckout({
         )}
 
         {/* ── guest details (a new order only) ───────────────────── */}
-        {adding ? null : (
+        {adding || (!showName && !showPhone && !showNote) ? null : (
         <section className="surface space-y-4 p-4">
-          <h2 className="text-sm font-semibold">Your details</h2>
+          <h2 className="text-sm font-semibold">{detailsHeading}</h2>
 
+          {showName ? (
           <Field label="Name (optional)" htmlFor="customerName" error={fieldErrors.customerName}>
             <Input
               id="customerName"
@@ -433,11 +452,13 @@ export function CartCheckout({
               autoComplete="name"
             />
           </Field>
+          ) : null}
 
+          {showPhone ? (
           <Field
             label="Mobile number (optional)"
             htmlFor="customerPhone"
-            hint="Add it to collect loyalty points on this order"
+            hint={phoneHint}
             error={fieldErrors.customerPhone}
           >
             <Input
@@ -450,7 +471,9 @@ export function CartCheckout({
               autoComplete="tel"
             />
           </Field>
+          ) : null}
 
+          {showNote ? (
           <Field label="Note for the kitchen" htmlFor="orderNotes">
             <Textarea
               id="orderNotes"
@@ -460,6 +483,7 @@ export function CartCheckout({
               rows={2}
             />
           </Field>
+          ) : null}
         </section>
         )}
 
@@ -499,7 +523,7 @@ export function CartCheckout({
             <span>{formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}</span>
           </div>
 
-          {loyaltyEnabled && loyaltyEarnRateX100 > 0
+          {showPointsEarned && loyaltyEnabled && loyaltyEarnRateX100 > 0
             ? (() => {
                 const earned = pointsEarned(totals?.grandTotal ?? subtotal, loyaltyEarnRateX100)
                 return earned > 0 ? (

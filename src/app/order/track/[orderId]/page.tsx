@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { OrderTracker } from '@/features/orders/components/order-tracker'
 import { getOrderForGuest, readOptions } from '@/features/orders/queries'
+import { getGuestAppearance } from '@/features/guest/queries'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { GuestLoyalty } from '@/features/loyalty/components/guest-loyalty'
@@ -43,10 +44,18 @@ export default async function TrackOrderPage({
     )
   }
 
+  // The same setting the welcome screen, the menu and the checkout read.
+  const appearance = await getGuestAppearance(restaurant.id)
+
   return (
     <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
       <OrderTracker
         restaurantName={restaurant.name}
+        showSteps={appearance.trackShowSteps}
+        showItems={appearance.trackShowItems}
+        showBill={appearance.trackShowBill}
+        allowAdding={appearance.trackAllowAdding}
+        showEdit={appearance.trackShowEdit}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         order={{
@@ -84,7 +93,7 @@ export default async function TrackOrderPage({
         Only while the bill is unpaid: after settlement there is nothing to
         spend a reward against, and the points earned are already theirs.
       */}
-      {restaurant.loyaltyEnabled && order.paymentStatus === 'UNPAID' ? (
+      {appearance.trackShowLoyalty && restaurant.loyaltyEnabled && order.paymentStatus === 'UNPAID' ? (
         <div className="mx-auto w-full max-w-lg px-4 pb-6">
           <GuestLoyalty
             orderId={order.id}

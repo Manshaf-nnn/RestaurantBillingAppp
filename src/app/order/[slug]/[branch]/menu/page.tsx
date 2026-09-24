@@ -82,6 +82,8 @@ export default async function BranchMenuPage({
         showImages={appearance.menuShowImages}
         showDescriptions={appearance.menuShowDescriptions}
         showFeatured={appearance.menuShowFeatured}
+        showDietFilter={appearance.menuShowDietFilter}
+        showCallStaff={appearance.menuShowCallStaff}
         addingTo={addingTo}
         // Named on the menu too — it never was, so a guest browsing the wrong
         // branch's prices had nothing on screen to tell them.

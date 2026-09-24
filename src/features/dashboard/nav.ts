@@ -14,7 +14,6 @@ import {
   ScanLine,
   ScrollText,
   Settings,
-  Smartphone,
   ShieldCheck,
   Smile,
   Sparkles,
@@ -441,12 +440,7 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: PERMISSIONS.AUDIT_VIEW,
       },
       { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: PERMISSIONS.SETTINGS_VIEW },
-      /*
-       * ar.md §13 — what a guest sees when they scan, for every code at once.
-       * Its own row because an owner looking for "what do my customers see"
-       * is not looking inside tax rates and printer settings.
-       */
-      { href: '/dashboard/settings/guest', label: 'Guest experience', icon: Smartphone, permission: PERMISSIONS.SETTINGS_MANAGE },
+
       { href: '/dashboard/links', label: 'Share links', icon: UsersRound, permission: PERMISSIONS.STAFF_MANAGE },
     ],
   },

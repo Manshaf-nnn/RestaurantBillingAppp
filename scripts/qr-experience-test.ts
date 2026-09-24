@@ -610,6 +610,31 @@ async function main() {
     check('an unknown layout falls back', junk.menuLayout === 'LIST')
     check('and a colour that is not a colour falls back', junk.accentColour === '#f97316')
 
+    /*
+     * Every guest screen, not just the welcome one: the owner sets the menu,
+     * the tracker, the bill and the wording around the questions in one place.
+     */
+    /*
+     * Every guest screen the owner actually has: welcome, menu, checkout —
+     * which is where a guest types their name and number, there being no
+     * separate details page — and tracking.
+     */
+    check('the menu, the checkout and the tracker are all in the one setting',
+      defaults.menuShowDietFilter && defaults.checkoutShowPhone && defaults.trackShowSteps)
+    check('the checkout owns the name and number, because that is where they are asked',
+      defaults.checkoutShowName && defaults.checkoutDetailsHeading === 'Your details')
+    check('and each falls back on its own when the stored value is wrong',
+      readAppearance({ trackShowSteps: 'yes', checkoutDetailsHeading: '  ' }).trackShowSteps === true
+        && readAppearance({ checkoutDetailsHeading: '  ' }).checkoutDetailsHeading === 'Your details')
+
+    /*
+     * The BILL is deliberately absent: what it shows is `ReceiptFields` on
+     * Printer & bill, read by the printed bill and the on-screen one alike.
+     * Two forms deciding one thing is how they come to disagree.
+     */
+    check('the bill is not configured twice',
+      !Object.keys(defaults).some((key) => key.startsWith('bill')))
+
     check('hex parses to the channels the screens use', JSON.stringify(hexToRgb('#f97316')) === JSON.stringify({ r: 249, g: 115, b: 22 }))
     check('and refuses anything else', hexToRgb('#fff') === null && hexToRgb('nonsense') === null)
 
@@ -655,6 +680,20 @@ async function main() {
 
     const access = readFileSync('src/features/qr/access.ts', 'utf8')
     check('preview checks the tenant, not just that somebody is signed in', access.includes('user.restaurantId === params.experience.restaurantId'))
+
+    // The owner's screens: one switcher, one setting, one place.
+    const editor = readFileSync('src/features/settings/components/guest-appearance-editor.tsx', 'utf8')
+    check('the editor switches between the guest screens that exist',
+      ['front', 'menu', 'checkout', 'tracking'].every((key) => editor.includes(`'${key}'`)))
+    check('and invents no page the guest app does not have', !editor.includes("'details'"))
+    check('the bill points at Printer & bill rather than repeating it',
+      editor.includes('/dashboard/settings?tab=printer'))
+    check('and the welcome preview is still the real component', editor.includes('<GuestCover'))
+    const settings = readFileSync('src/features/settings/components/settings-view.tsx', 'utf8')
+    check('guest experience lives inside Settings, as a tab',
+      settings.includes('<TabsTrigger value="guest">') && settings.includes('<GuestAppearanceEditor'))
+    const moved = readFileSync('src/app/dashboard/settings/guest/page.tsx', 'utf8')
+    check('and the old address still lands on it', moved.includes("permanentRedirect('/dashboard/settings?tab=guest')"))
 
     const middleware = readFileSync('src/middleware.ts', 'utf8')
     check('/m is not auth-gated', !middleware.includes("'/m'"))

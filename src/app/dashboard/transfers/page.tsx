@@ -1,191 +1,155 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { Plus, Truck } from 'lucide-react'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/feedback'
-import { LocalDateTime } from '@/components/local-time'
-import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
+import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ExportMenu } from '@/features/reports/components/export-menu'
-import { listTransfers, type TransferSummary } from '@/features/transfers/queries'
-import { sectionFor, type TransferSection } from '@/features/transfers/sections'
-import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { PERMISSIONS, can, canAccessBranch } from '@/lib/rbac'
-import { SearchBox } from '@/components/search-box'
+import { TransfersBoard } from '@/features/transfers/components/transfers-board'
+import { getTransferBoard } from '@/features/transfers/queries'
+import { branchNameFor, selectedBranch } from '@/features/dashboard/selected-branch'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Transfers' }
 
-const STATUS: Record<string, { label: string; variant: 'secondary' | 'warning' | 'success' | 'destructive' }> = {
-  REQUESTED: { label: 'Requested', variant: 'secondary' },
-  APPROVED: { label: 'Approved', variant: 'success' },
-  DISPATCHED: { label: 'On its way', variant: 'warning' },
-  IN_TRANSIT: { label: 'In transit', variant: 'warning' },
-  RECEIVED: { label: 'Received', variant: 'success' },
-  COMPLETED: { label: 'Completed', variant: 'success' },
-  REJECTED: { label: 'Rejected', variant: 'destructive' },
-  CANCELLED: { label: 'Cancelled', variant: 'destructive' },
-}
-
-
+/**
+ * Stock moving between locations.
+ *
+ * ── The screen was rebuilt; the process was not ─────────────────────────────
+ *
+ * This used to be four stacked lists — pending approval, pending dispatch,
+ * pending receive, closed — filed by status AND by which end the viewer stands
+ * at. It is now five figures, one filter bar and one table, which is what an
+ * owner asked for and what scales past a few dozen rows.
+ *
+ * What did NOT change: every status, every transition, every permission and
+ * every action still belongs to `features/transfers/service`. The filing rule
+ * that answered "is this waiting on ME" survives as `sectionFor`, read per row
+ * into a line under it and into a filter chip — losing that would have been
+ * losing the only thing the old grouping was for.
+ */
 export default async function TransfersPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const user = await requirePagePermission(PERMISSIONS.TRANSFER_VIEW, '/dashboard/transfers')
+  const params = await searchParams
+
+  const one = (key: string) => {
+    const value = params[key]
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+  }
 
   /*
-   * This used to read `ids && ids.length === 1 ? ids[0] : null`, which failed
-   * open: a warehouse worker with no location assigned got `[]`, the ternary
-   * fell through to null, and they saw every transfer in the restaurant.
-   * `scopeToOne` returns an id that matches nothing in that case, so the answer
-   * is "none" rather than "all".
+   * `visibleBranchIds` decides what exists for this person at all, and the
+   * switcher narrows within it. This used to be `scopeToOne`, which answers a
+   * different question — "which single branch" — and is the wrong shape now
+   * that the screen has its own From and To filters.
    */
-  const params = await searchParams
-  const search = (typeof params.search === 'string' ? params.search : '').trim()
   const selection = await selectedBranch(user, params)
-  const [transfers, branchName] = await Promise.all([
-    listTransfers({
+  const reach = visibleBranchIds(user)
+  const branchIds = selection.branchId
+    ? [selection.branchId]
+    : reach
+
+  const [board, branchName, branches, items] = await Promise.all([
+    getTransferBoard({
       restaurantId: user.restaurantId,
-      branchId: scopeToOne(selection),
-      search,
+      branchIds,
+      filter: {
+        search: one('search') ?? undefined,
+        fromBranchId: one('fromBranch'),
+        toBranchId: one('toBranch'),
+        status: one('status'),
+        itemId: one('item'),
+        from: one('from'),
+        to: one('to'),
+        page: Number(one('page') ?? '1') || 1,
+        perPage: 10,
+      },
     }),
     branchNameFor(user.restaurantId, selection.branchId),
+    prisma.branch.findMany({
+      where: {
+        restaurantId: user.restaurantId,
+        deletedAt: null,
+        isActive: true,
+        ...(reach === null ? {} : { id: { in: reach } }),
+      },
+      select: { id: true, name: true },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: user.restaurantId },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+      take: 500,
+    }),
   ])
 
-  // The list, in the four states a transfer waits in (recorrection.md §1),
-  // filed by status and by which end the viewer stands at — see `sectionFor`.
-  const sections: Record<TransferSection, Array<{ t: TransferSummary; hint: string }>> = {
-    approval: [], dispatch: [], receive: [], closed: [],
-  }
-  for (const t of transfers) {
-    const atSource = canAccessBranch(user, t.fromBranchId)
-    const atDestination = canAccessBranch(user, t.toBranchId)
-    const [section, hint] = sectionFor(t, atSource, atDestination)
-    sections[section].push({ t, hint })
-  }
-
-  const waiting = sections.approval.length + sections.dispatch.length + sections.receive.length
+  /*
+   * "Waiting on me" is decided in the browser from the same `sectionFor` the
+   * old list used, so it needs to know which branches this person stands at.
+   * Null means every one.
+   */
+  const rows =
+    one('mine') === '1'
+      ? board.rows.filter((row) => {
+          const atSource = reach === null || reach.includes(row.fromBranchId)
+          const atDestination = reach === null || reach.includes(row.toBranchId)
+          if (row.status === 'REQUESTED' || row.status === 'APPROVED') return atSource
+          if (row.status === 'DISPATCHED' || row.status === 'IN_TRANSIT' || row.status === 'RECEIVED') {
+            return atDestination
+          }
+          return false
+        })
+      : board.rows
 
   return (
     <>
       <PageHeader
         title="Transfers"
         branch={branchName}
-        description="Stock moving between locations. The branch that needs it asks; the source approves and sends; it arrives on receipt."
+        icon={<Truck className="size-6" />}
+        description="Track and manage stock movement between your locations."
         actions={
           <>
             {can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="transfers" /> : null}
             {can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
               <Button asChild>
-                <Link href="/dashboard/transfers/new">Request stock</Link>
+                <Link href="/dashboard/transfers/new">
+                  <Plus /> Create New Transfer
+                </Link>
               </Button>
             ) : null}
           </>
         }
       />
 
-      <div className="mb-4 max-w-sm">
-        <SearchBox placeholder="Transfer number, location or item…" defaultValue={search} />
-      </div>
-
-      {transfers.length === 0 ? (
-        <SectionCard title="Transfers">
-          <EmptyState
-            title={search ? `Nothing matches “${search}”` : 'No transfers yet'}
-            description={
-              search
-                ? 'Try the transfer number, either location, or an item that was moved.'
-                : 'Ask another location for stock, and it shows up here at every step until it arrives.'
-            }
-          />
-        </SectionCard>
-      ) : null}
-
-      {sections.approval.length > 0 && (
-        <Group
-          title="Pending approval"
-          count={sections.approval.length}
-          description="Requested and not yet ruled on. The source decides on the Approvals desk."
-          rows={sections.approval}
-        />
-      )}
-      {sections.dispatch.length > 0 && (
-        <Group
-          title="Pending dispatch"
-          count={sections.dispatch.length}
-          description="Approved and reserved. Stock leaves when it is dispatched."
-          rows={sections.dispatch}
-        />
-      )}
-      {sections.receive.length > 0 && (
-        <Group
-          title="Pending receive"
-          count={sections.receive.length}
-          description="On its way, or approved and being prepared. It arrives when the destination receives it."
-          rows={sections.receive}
-        />
-      )}
-      {sections.closed.length > 0 && (
-        <Group
-          title={waiting > 0 ? 'Completed and closed' : 'All transfers'}
-          count={sections.closed.length}
-          description="Finished, rejected or cancelled."
-          rows={sections.closed}
-        />
-      )}
+      <TransfersBoard
+        rows={rows}
+        total={board.total}
+        page={board.page}
+        perPage={board.perPage}
+        pages={board.pages}
+        stats={board.stats}
+        branches={branches}
+        items={items}
+        reachableBranchIds={reach}
+        /*
+         * The same rule the actions enforce. Offering Dispatch to the
+         * receiving branch and answering the click with "only someone at the
+         * sending location can do that" teaches people the app is broken.
+         */
+        can={{
+          dispatch: can(user, PERMISSIONS.TRANSFER_DISPATCH),
+          receive: can(user, PERMISSIONS.TRANSFER_RECEIVE),
+        }}
+      />
     </>
-  )
-}
-
-function Group({
-  title,
-  count,
-  description,
-  rows,
-}: {
-  title: string
-  count: number
-  description: string
-  rows: Array<{ t: TransferSummary; hint: string }>
-}) {
-  return (
-    <SectionCard title={`${title} (${count})`} description={description}>
-      <ul className="divide-y divide-border">
-        {rows.map(({ t, hint }) => <Row key={t.id} t={t} hint={hint} />)}
-      </ul>
-    </SectionCard>
-  )
-}
-
-function Row({ t, hint }: { t: TransferSummary; hint: string }) {
-  const status = STATUS[t.status] ?? STATUS.REQUESTED
-  const mine = hint.includes('on you')
-  return (
-    <li>
-      <Link
-        href={`/dashboard/transfers/${t.id}`}
-        className="-mx-2 flex flex-wrap items-center gap-3 rounded-lg px-2 py-3 hover:bg-muted"
-      >
-        <span className="font-medium tabular-nums">{t.number}</span>
-        <Badge variant={status.variant}>{status.label}</Badge>
-        <span className="text-sm">{t.fromName} → {t.toName}</span>
-        <span className="text-sm text-muted-foreground">
-          {t.lineCount} item{t.lineCount === 1 ? '' : 's'}
-        </span>
-        {t.hasVariance && <Badge variant="destructive">variance</Badge>}
-        {hint ? (
-          <span className={mine ? 'text-xs font-medium text-primary' : 'text-xs text-muted-foreground'}>
-            {hint}
-          </span>
-        ) : null}
-        <span className="ml-auto text-xs text-muted-foreground">
-          <LocalDateTime value={t.requestedAt} />
-          {t.requestedByName ? ` · ${t.requestedByName}` : ''}
-        </span>
-      </Link>
-    </li>
   )
 }

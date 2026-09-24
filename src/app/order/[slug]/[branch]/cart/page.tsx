@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 
 import { CartCheckout } from '@/features/orders/components/cart-checkout'
 import { resolvePublicBranch } from '@/features/branches/public-branch'
+import { getGuestAppearance } from '@/features/guest/queries'
 import { guestPath } from '@/features/orders/guest-path'
 import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
@@ -34,6 +35,9 @@ export default async function BranchCartPage({
   const branch = await resolvePublicBranch(restaurant.id, branchCode).catch(() => null)
   if (!branch) notFound()
 
+  // The same setting the welcome screen and the menu read (ar.md §13).
+  const appearance = await getGuestAppearance(restaurant.id)
+
   return (
     <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
       <CartCheckout
@@ -45,6 +49,13 @@ export default async function BranchCartPage({
         loyaltyEarnRateX100={restaurant.loyaltyEarnRateX100}
         slug={slug}
         basePath={guestPath(slug, branch.code)}
+        showCoupon={appearance.checkoutShowCoupon}
+        showName={appearance.checkoutShowName}
+        showPhone={appearance.checkoutShowPhone}
+        showNote={appearance.checkoutShowNote}
+        showPointsEarned={appearance.checkoutShowPointsEarned}
+        detailsHeading={appearance.checkoutDetailsHeading}
+        phoneHint={appearance.checkoutPhoneHint}
       />
     </BrandTheme>
   )

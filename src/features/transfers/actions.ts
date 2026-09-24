@@ -10,6 +10,8 @@ import { requirePermission } from '@/server/auth/guard'
 import { notifyLocation } from '@/features/instructions/service'
 import { assertApproved, requestApproval } from '@/features/approvals/service'
 import { prisma } from '@/server/db/prisma'
+import { getTransferDetail } from './queries'
+import type { TransferDetailView } from './components/transfer-panel'
 import {
   approveTransfer, assertTransferSide, closeTransfer, completeTransfer, dispatchTransfer,
   receiveTransfer, recallTransfer,
@@ -434,4 +436,24 @@ export async function recallTransferAction(
     },
     'Recalled. The stock is back at the source.',
   )
+}
+
+/**
+ * One transfer, for the quick-view drawer on the list.
+ *
+ * A read, not a write — but a Server Action rather than a route handler
+ * because it needs the same session, the same tenant and the same
+ * `assertTransferSide` rule the full page applies. A transfer between two
+ * other locations is none of a branch manager's business, and the drawer must
+ * refuse it for exactly the reason the page does.
+ */
+export async function transferDetailAction(
+  transferId: string,
+): Promise<ActionResult<TransferDetailView>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.TRANSFER_VIEW)
+    const detail = await getTransferDetail({ restaurantId: user.restaurantId, transferId })
+    assertTransferSide(user, detail, 'EITHER')
+    return detail
+  }, 'transfers.detail')
 }
