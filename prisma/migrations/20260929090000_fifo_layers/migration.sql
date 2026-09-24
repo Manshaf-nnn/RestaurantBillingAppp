@@ -225,9 +225,58 @@ WITH branch_gap AS (
       FROM "stock_batches"
      GROUP BY "itemId", "branchId"
   ) b ON b."itemId" = s."itemId" AND b."branchId" = s."branchId"
+
+  UNION ALL
+
+  /*
+   * ── Stock that exists on the item but on no shelf ─────────────────────────
+   *
+   * An item's quantity lives in two places: `inventory_items.quantity`, which
+   * is restaurant-wide, and `inventory_stock.available`, which is per branch.
+   * They are meant to agree. On production, two items have a quantity and a
+   * value on the item row and NO `inventory_stock` row at all — legacy stock
+   * that predates the per-branch table.
+   *
+   * The arm above reads only `inventory_stock`, so those items produced no
+   * gap row, got no opening layer, and arrived at the closing check with a
+   * pool of 1,400,000 against layers of 0. The check did exactly its job and
+   * refused the whole migration — correctly, because the alternative was to
+   * quietly drop that value off the balance sheet.
+   *
+   * So they are placed explicitly, at the branch the item itself names, then
+   * the restaurant's default, then its oldest branch — the same order the app
+   * resolves a branch in when a write does not name one. The value follows the
+   * ordinary residual rule below; this only decides WHERE it lands.
+   */
+  SELECT
+    i."id"                                    AS "itemId",
+    COALESCE(
+      i."branchId",
+      (SELECT b2."id" FROM "branches" b2
+        WHERE b2."restaurantId" = i."restaurantId" AND b2."isDefault" = true
+        ORDER BY b2."id" LIMIT 1),
+      (SELECT b3."id" FROM "branches" b3
+        WHERE b3."restaurantId" = i."restaurantId"
+        ORDER BY b3."createdAt", b3."id" LIMIT 1)
+    )                                         AS "branchId",
+    ROUND(i."quantity"::NUMERIC, 6)           AS qty
+  FROM "inventory_items" i
+  WHERE i."quantity" > 0.000001
+    AND NOT EXISTS (
+      SELECT 1 FROM "inventory_stock" s2
+       WHERE s2."itemId" = i."id" AND s2."available" > 0.000001
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM "stock_batches" b4
+       WHERE b4."itemId" = i."id" AND b4."remainingQty" > 0.000001
+    )
 ),
 positive_gap AS (
-  SELECT * FROM branch_gap WHERE qty > 0.000001
+  -- `stock_batches.branchId` is NOT NULL, so an item at a restaurant with no
+  -- branch at all is skipped rather than failing the insert. The closing check
+  -- still reports it, which is the right outcome: there is nowhere to put that
+  -- stock, and that is a fact about the data, not something to paper over.
+  SELECT * FROM branch_gap WHERE qty > 0.000001 AND "branchId" IS NOT NULL
 ),
 item_residual AS (
   SELECT

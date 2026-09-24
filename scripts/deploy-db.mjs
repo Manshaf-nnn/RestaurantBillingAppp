@@ -106,6 +106,29 @@ const RESOLVABLE_FAILURES = [
    * against a copy of production's exact state before this line was added.
    */
   '20260922100000_crm_and_item_discounts',
+  /*
+   * 20260929090000_fifo_layers: failed 2026-09-24 on its own closing check —
+   * "would restate inventory value on 2 item(s). First: Mozzrella — pool
+   * 1400000, layers 0". That check is the migration's whole safety argument
+   * and it worked: rather than moving the balance sheet by 1.4m it refused.
+   *
+   * The cause was a gap in the opening-layer step, not in the check. An item's
+   * quantity lives both on `inventory_items` (restaurant-wide) and in
+   * `inventory_stock` (per branch); the step read only the latter, and these
+   * two legacy items have a quantity on the item row and no `inventory_stock`
+   * row at all. So they got no opening layer and reached the check with value
+   * the layers could not account for.
+   *
+   * Both bars are met. Every statement in the file is transactional in
+   * Postgres — ALTER TABLE ADD COLUMN, CREATE TABLE / INDEX, UPDATE, INSERT,
+   * ADD CONSTRAINT ... NOT VALID, CREATE OR REPLACE FUNCTION and DO blocks,
+   * with no CONCURRENTLY anywhere — and the failure itself reported "Nothing
+   * has been committed", so no partial schema exists. And the file has been
+   * amended: the opening-layer step now has a second arm that places such
+   * stock at the item's own branch, then the restaurant's default, then its
+   * oldest — so the re-apply covers these items on the same data.
+   */
+  '20260929090000_fifo_layers',
 ]
 
 /** Migration folder names, in the order Prisma applies them. */
