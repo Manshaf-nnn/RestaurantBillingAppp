@@ -11,7 +11,6 @@ import { resolveStockLocation } from '@/features/branches/service'
 import { resolveCategory } from '@/features/catalog/service'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
-import { upsertBatch } from './batches'
 import { nextPurchaseNumber } from '@/features/purchasing/service'
 import { notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
@@ -564,25 +563,16 @@ export async function createPurchase(input: unknown): Promise<ActionResult<{ id:
           })
 
           /*
-           * A batch-tracked item must gain a LOT, or the delivery is invisible
-           * to FEFO and the expiry board and the batches drift behind the
-           * balance for ever. The quick form has no expiry field — that is
-           * what the full goods-receiving flow is for — so the lot lands
-           * dateless and the board treats it as "no expiry recorded", which
-           * is the truth of what was keyed.
+           * The layer is created by `postMovement` above, which now does it
+           * for every inbound movement. This used to call `upsertBatch` as
+           * well; since the ledger took the job on, that would give one
+           * delivery two layers.
+           *
+           * The quick form has no expiry field — that is what the full
+           * goods-receiving flow is for — so the layer lands dateless and the
+           * expiry board treats it as "no expiry recorded", which is the truth
+           * of what was keyed.
            */
-          // DELIBERATE behaviour change 2026-09 (pro.b.md §5): every purchase
-          // is a lot, whatever the item's flag says — see `receiving.ts`.
-          {
-            await upsertBatch(tx, {
-              restaurantId: user.restaurantId,
-              itemId: line.itemId,
-              batchNo: number,
-              quantity: line.quantity,
-              unitCost: line.unitCost,
-              branchId: destination,
-            })
-          }
         }
 
         return created

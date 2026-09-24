@@ -39,6 +39,11 @@ const STATIC = [
   // never the parent a custom role can hold with the feature switched off.
   'no-parent-permission-actions',
   'no-item-branch-filter',
+  // FIFO.md — stock is worth the sum of its layers, never quantity × a blended
+  // rate. Thirteen screens did the latter, and since `costPerUnit` is
+  // restaurant-wide while the quantity is per branch, not one of them agreed
+  // with the layers or with each other.
+  'no-average-cost-valuation',
   // production.md §1 — nothing in src may rewrite an append-only record; the
   // database refuses it too, this just fails in CI instead of in front of a user.
   'no-audit-mutation',
@@ -48,6 +53,13 @@ const STATIC = [
   // production.md §15/§17 — migrations stay additive and deployable. Reads the
   // SQL, so it costs nothing and belongs with the other grep-level guards.
   'migration-safety-test',
+  // Bring-your-own SMS: that an owner's gateway URL cannot reach the private
+  // network, that a template cannot break out of its body, that HTTP 200 with
+  // an error inside is not a success — and, above all, that `phoneKey` still
+  // treats 0771234567 and +94771234567 as two different customers. Pure
+  // functions only; the end-to-end lives in scripts/sms-e2e-test.ts, which
+  // needs a database and the fake gateway running.
+  'sms-test',
   // athu.md — only a credential or deactivation event may write `revokedAt`.
   // A feature-flag edit once logged a whole restaurant out by copying six lines.
   'no-collateral-session-revocation',
@@ -55,6 +67,18 @@ const STATIC = [
   // resolveRange, no page starting its window at the current instant, and a
   // selector on every screen that shows figures for a range.
   'range-convergence-test',
+  // The transfers export narrowed with `scopeToOne`, which is null for a
+  // manager who reaches several branches and has picked none — and a null
+  // branch applied no filter at all. Pins the scope, and that screen, paper and
+  // file all run through one where-builder.
+  'transfer-report-test',
+  // Who may rule on what. The rule used to live inline in the approvals page,
+  // where a browser was the only way to exercise it.
+  'approval-decidability-test',
+  // FIFO.md — the walk itself: the spec's worked ladder number for number, and
+  // the property that makes it exact, over ten thousand randomised layers.
+  // Pure arithmetic, no database.
+  'fifo-engine-test',
   // sidebar.md §7 — a favorite or a recent page is only ever an href resolved
   // through the sidebar's own permission filter, so revoking a permission
   // removes the shortcut and no second permission system exists to drift.
@@ -67,6 +91,32 @@ const SERVICE = [
   'phase6-test', 'phase7-test', 'phase8-test', 'phase9-test', 'phase11-test',
   'storage-stock-test', 'connection-url-test', 'action-transport-test',
   'staff-login-test', 'order-lifecycle-test', 'cogs-test',
+  // A waiter takes the order at the table and it reaches the kitchen with no
+  // cashier in the way: ACCEPTED on placement, routed, depleted, on the rail,
+  // joining the table's open sitting, and idempotent against a double tap.
+  'waiter-order-test',
+  // The transfer report and the live tables screen read what they claim to:
+  // one where-builder behind screen, paper and file, and a branch the viewer
+  // cannot reach returns nothing.
+  'transfer-lines-test',
+  // The sales report shows one breakdown at a time, and an item's drill-down
+  // reports the BILLS it was on — a payment settles a bill, and nothing
+  // divides one across its lines.
+  'sales-views-test',
+  // FIFO.md — the books tie to the layers after purchase, sale, wastage,
+  // adjustment, transfer and reversal: layer quantity equals what the branch
+  // holds, layer value equals the item's value, and every movement's trace
+  // sums to what the movement was worth.
+  'fifo-invariants-test',
+  // FIFO.md — "the destination receives the same cost layers": a transfer
+  // hands over one layer per source layer, at their values and their ORIGINAL
+  // receipt dates, so the stock keeps its place in the queue at the far end.
+  'fifo-transfer-test',
+  // FIFO.md — a return to supplier is the undoing of a receipt, not an issue
+  // of stock: the goods go back off the delivery that brought them, so what
+  // leaves inventory is what the supplier credits. Drawing oldest-first booked
+  // the price difference as a profit on sending goods back.
+  'fifo-returns-test',
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
   'stock-location-test',
   'branch-scope-test',
@@ -336,6 +386,11 @@ const RUNTIME = [
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
+  // The approvals desk and the transfers board still SAY what the browser test
+  // looks for. `recorrection-ui-test` owns that contract and needs Playwright's
+  // browser; this checks the same text over plain HTTP, so the contract does
+  // not quietly lapse wherever that browser is not installed.
+  'approvals-render-test',
   // recorrection.md §1/§4 — the task picker scrolls under the wheel inside its
   // dialog and names role and location; the pending desk opens details and
   // approves from the dialog; the transfer form locks TO for a confined

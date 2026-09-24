@@ -454,7 +454,29 @@ export async function getSmartInventory(params: {
   )
 
   const idle = rows.filter((row) => row.outlook === 'NO_USAGE' && row.available > 0)
-  const costById = new Map(items.map((item) => [item.id, item.costPerUnit]))
+
+  /*
+   * What the dead stock is actually worth: the sum of the layers still holding
+   * it (FIFO.md), scoped to the location being looked at.
+   *
+   * This multiplied each idle quantity by the item's `costPerUnit`, which is a
+   * blend across every branch — so the headline "money sitting still" was
+   * priced partly at other locations' purchases. Slow-moving stock is also the
+   * stock most likely to be the OLDEST layer at a price nobody pays any more,
+   * which is precisely the case an average hides.
+   */
+  const idleValue = idle.length
+    ? await prisma.stockBatch.aggregate({
+        where: {
+          restaurantId,
+          itemId: { in: idle.map((row) => row.itemId) },
+          remainingQty: { gt: 0 },
+          ...(branchId ? { branchId } : {}),
+        },
+        _sum: { remainingValue: true },
+      })
+    : null
+
   return {
     asOf: now.toISOString(),
     windowDays: USAGE_WINDOW_DAYS,
@@ -465,7 +487,7 @@ export async function getSmartInventory(params: {
       needOrder: rows.filter((row) => row.recommendedQty > 0).length,
       urgent: rows.filter((row) => row.outlook === 'OUT' || row.outlook === 'URGENT').length,
       noUsage: idle.length,
-      noUsageValue: Math.round(idle.reduce((sum, row) => sum + row.available * (costById.get(row.itemId) ?? 0), 0)),
+      noUsageValue: idleValue?._sum.remainingValue ?? 0,
     },
   }
 }

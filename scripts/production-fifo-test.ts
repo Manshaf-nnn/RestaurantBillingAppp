@@ -28,7 +28,6 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/production-fifo-test.ts
  */
 import { prisma } from '../src/server/db/prisma'
-import { upsertBatch } from '../src/features/inventory/batches'
 import { postMovement } from '../src/features/inventory/ledger'
 import { fifoCostFor } from '../src/features/production/costing'
 import { getProductionRun, getProductionWorkspace } from '../src/features/production/queries'
@@ -124,17 +123,22 @@ async function main() {
    * This is what `receiveGoods` does on every line; `receivedAt` is set
    * explicitly so the order of arrival is not left to the clock.
    */
+  /*
+   * DELIBERATE 2026-09 (FIFO.md): receiving stock is ONE act now.
+   *
+   * This used to post the movement and then call `upsertBatch`, because the
+   * ledger only made layers for items with batch tracking switched on. The
+   * ledger makes one for every inbound movement now, so doing both would give
+   * each delivery two layers — which is exactly the bug this change removed
+   * from the three real receiving paths.
+   */
   const receive = async (item: { id: string }, qty: number, unitCost: number, batchNo: string, receivedAt: Date) => {
     await prisma.$transaction(async (tx) => {
       await postMovement(tx, {
         restaurantId: restaurant.id, itemId: item.id, type: 'PURCHASE', quantity: qty,
         unitCost, totalValue: qty * unitCost, branchId: kitchen.id, locationId: null, userId: cook.id,
-        batchNo,
+        batchNo, receivedAt,
       })
-      const lot = await upsertBatch(tx, {
-        restaurantId: restaurant.id, itemId: item.id, batchNo, quantity: qty, unitCost, branchId: kitchen.id,
-      })
-      await tx.stockBatch.update({ where: { id: lot.id }, data: { receivedAt } })
     })
   }
   const day = (n: number) => new Date(Date.UTC(2026, 8, n))
@@ -202,7 +206,14 @@ async function main() {
     check('chicken shows 25 kg here in two lots', row?.available === 25 && row.lots.length === 2, JSON.stringify(row?.lots))
     check('oldest first, at 12.00 then 12.80', row?.lots[0]?.unitCost === M(12.0) && row.lots[1]?.unitCost === M(12.8))
     check('and the FIFO cost column is the oldest lot’s price', row?.nextUnitCost === M(12.0))
-    check('nothing is unlotted', row?.unlotted === 0)
+    // DELIBERATE 2026-09 (FIFO.md): there is no "unlotted" any more. Every
+    // inbound movement creates a layer, and the opening-balance migration gave
+    // one to the stock that predated them, so a branch's layers always account
+    // for its whole balance.
+    check(
+      'the lots account for the whole shelf — nothing is unlotted',
+      (row?.lots ?? []).reduce((sum, l) => sum + l.remaining, 0) === row?.available,
+    )
     const elsewhere = await getProductionWorkspace({ restaurantId: restaurant.id, branchId: other.id, timeZone: 'UTC' })
     const there = elsewhere.items.find((i) => i.id === chicken.id)
     check('the other branch holds none of it and sees no lots', there?.available === 0 && there.lots.length === 0)
@@ -388,31 +399,65 @@ async function main() {
     check('completion costs from the 2 kg that were issued', done.totalValue === 2 * M(12.8) + 50)
   }
 
-  console.log('\n── 10. Stock received before lots were universal: the remainder layer ──')
+  console.log('\n── 10. Every receipt is a layer, so nothing is ever unlotted ──')
   {
-    // A legacy balance with no lot behind it: the branch holds more than its
-    // lots explain. FIFO takes the lots first, then the rest at the average,
-    // and the trace says so with a lot-less row.
+    /*
+     * DELIBERATE behaviour change 2026-09 (FIFO.md).
+     *
+     * This section used to test the opposite: a balance with no lot behind it,
+     * drawn after every real lot at the item's running weighted average, and
+     * recorded with a lot-less trace row. That was the last place the average
+     * decided a cost, and it grew with every transfer, return and adjustment —
+     * so FIFO decayed toward weighted average a little more with each one.
+     *
+     * `postMovement` creates a layer for every inbound movement now, whatever
+     * the caller passes and whatever the item's flags say, so the condition
+     * this tested can no longer be produced. What is asserted instead is that
+     * it cannot: a bare PURCHASE through the ledger leaves a layer behind, and
+     * the draw that follows is costed from it rather than from an average.
+     */
+    const before = (await lotsOf(oil.id)).length
     await prisma.$transaction((tx) => postMovement(tx, {
       restaurantId: restaurant.id, itemId: oil.id, type: 'PURCHASE', quantity: 2, unitCost: M(9.0), totalValue: 2 * M(9.0),
       branchId: kitchen.id, locationId: null, userId: cook.id,
     }))
-    // Oil: lot holds 4 L @ 8.00; shelf holds 6 L. Average is (4×8 + 2×9) / 6.
+    const after = await lotsOf(oil.id)
+    check('a plain ledger purchase leaves a layer behind', after.length === before + 1)
+
     const oilItem = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: oil.id } })
-    const average = Number(oilItem.stockValue) / oilItem.quantity
+    const layered = after.reduce((sum, l) => sum + l.remainingValue, 0)
+    check(
+      'and the item’s value is its layers, not a pool maintained beside them',
+      Math.round(Number(oilItem.stockValue)) === layered,
+      `${Math.round(Number(oilItem.stockValue))} vs ${layered}`,
+    )
+
+    // Oil: 4 L @ 8.00 received first, then 2 L @ 9.00. Five litres is the
+    // whole first layer and one litre of the second — at 9.00, not at a blend.
     const preview = await fifoCostFor(prisma, { restaurantId: restaurant.id, itemId: oil.id, branchId: kitchen.id, quantity: 5, unit: 'LITRE' })
-    check('5 L previews as 4 from the lot @ 8.00 + 1 unlotted at the average',
-      preview?.allocation.lots.length === 1 && preview.allocation.lots[0].quantity === 4 && preview.allocation.remainder?.quantity === 1
-      && Math.abs(preview.totalCost - (4 * M(8.0) + average)) < 1, JSON.stringify(preview?.allocation))
+    check(
+      '5 L previews as 4 @ 8.00 + 1 @ 9.00 — layer by layer',
+      preview?.allocation.lots.length === 2 &&
+        preview.allocation.lots[0].quantity === 4 &&
+        preview.allocation.lots[1].quantity === 1 &&
+        preview.totalCost === 4 * M(8.0) + M(9.0),
+      JSON.stringify(preview?.allocation.lots),
+    )
+
     const created = await startBatch({
       restaurantId: restaurant.id, branchId: kitchen.id, userId: cook.id, clientRequestId: key(),
       plan: { name, itemId, quantity: 1, unit: 'KG', ingredients: [{ itemId: oil.id, quantity: 5, unit: 'LITRE' }] },
     })
     const issued = await issueIngredients({ restaurantId: restaurant.id, batchId: created.id, userId: cook.id })
+    check('issued at exactly what the preview said', issued.totalValue === 4 * M(8.0) + M(9.0), String(issued.totalValue))
+
     const line = await prisma.productionConsumption.findFirstOrThrow({ where: { orderId: created.id }, include: { lots: { orderBy: { createdAt: 'asc' } } } })
-    check('issued as the preview said', Math.abs(issued.totalValue - Math.round(4 * M(8.0) + average)) <= 1, String(issued.totalValue))
-    check('two trace rows: the lot, then the lot-less remainder', line.lots.length === 2 && line.lots[0].batchId !== null && line.lots[1].batchId === null && line.lots[1].quantity === 1)
-    check('the shelf holds 1 L, and the lot none', (await stockAt(oil.id, kitchen.id)) === 1 && (await lotsOf(oil.id))[0].remainingQty === 0)
+    check(
+      'two trace rows, both naming a real layer — none lot-less',
+      line.lots.length === 2 && line.lots.every((l) => l.batchId !== null),
+    )
+    check('the shelf holds 1 L, and the first layer is spent',
+      (await stockAt(oil.id, kitchen.id)) === 1 && (await lotsOf(oil.id))[0].remainingQty === 0)
     await completeBatch({ restaurantId: restaurant.id, batchId: created.id, userId: cook.id, clientRequestId: key(), actualQuantity: 1 })
   }
 

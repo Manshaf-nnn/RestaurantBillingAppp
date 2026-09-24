@@ -2,6 +2,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
+import { currentUnitCostMany } from '@/features/inventory/fifo'
 import type { DateRange } from './range'
 import { roundQty } from '@/lib/quantity'
 import { utc } from '@/server/db/sql-time'
@@ -164,6 +165,13 @@ export async function getReconciliationReport(params: {
     byItem.set(row.itemId, list)
   }
 
+  /* What the next unit of each item costs — the oldest open layer's rate. */
+  const nextCost = await currentUnitCostMany(prisma, {
+    restaurantId: params.restaurantId,
+    branchId: params.branchId ?? null,
+    itemIds: items.map((i) => i.id),
+  })
+
   const lines: ReconciliationLine[] = []
 
   for (const item of items) {
@@ -227,7 +235,16 @@ export async function getReconciliationReport(params: {
       expected,
       cached,
       drift: roundQty(cached - expected),
-      valueAtCost: Math.round(Math.max(0, expected) * item.costPerUnit),
+      /*
+       * What the expected quantity would be worth at today's FIFO rate — the
+       * cost of the next unit out (FIFO.md), not a blended average.
+       *
+       * It cannot simply be the sum of the layers: `expected` is a REPLAYED
+       * figure and the layers describe what is actually on the shelf, which is
+       * the very thing this report exists to compare. Valuing the replay at
+       * the current rate keeps the two sides comparable.
+       */
+      valueAtCost: Math.round(Math.max(0, expected) * (nextCost.get(item.id) ?? item.costPerUnit)),
       valueIn,
       valueOut,
     })

@@ -169,18 +169,36 @@ export function PreparedItemsTable({
                   <TableCell className="text-right tabular-nums">{row.runs}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      {/*
+                        The batch waiting on somebody, when there is exactly
+                        one. With several open there is no single "the" batch,
+                        so the item page lists them — but Details is offered
+                        either way, which it was not before: an item with two
+                        open batches used to lose its action button entirely.
+                      */}
                       {open.length === 1 && canManage ? (
                         <Button size="sm" asChild>
                           <Link href={`/dashboard/production/${open[0].id}`}>{open[0].issued ? 'Complete production' : 'Issue ingredients'}</Link>
                         </Button>
-                      ) : (
-                        <Button variant="ghost" size="sm" asChild>
-                          <Link href={`/dashboard/production/items/${row.id}`}>Details</Link>
-                        </Button>
-                      )}
+                      ) : null}
+                      <Button variant="ghost" size="sm" asChild>
+                        <Link href={`/dashboard/production/items/${row.id}`}>
+                          {open.length > 1 ? `Details (${open.length} open)` : 'Details'}
+                        </Link>
+                      </Button>
+                      {/*
+                        Another batch of the SAME item (pro.b.md §12), never a
+                        duplicate item.
+
+                        `?tab=make` is what makes this work at all. It used to
+                        be `?make=<id>` alone, a same-route navigation that left
+                        the tab state on Prepared — so the click did nothing
+                        visible, and the form it was meant to open was not even
+                        mounted. The tab is read from the URL now.
+                      */}
                       {canManage ? (
                         <Button variant="outline" size="sm" asChild>
-                          <Link href={`/dashboard/production?make=${row.id}`}>Make more</Link>
+                          <Link href={`/dashboard/production?tab=make&make=${row.id}`}>Make more</Link>
                         </Button>
                       ) : null}
                     </div>

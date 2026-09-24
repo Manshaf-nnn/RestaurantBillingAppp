@@ -165,15 +165,30 @@ export async function getInventorySummary(params: {
   let outOfStock = 0
   let lowStock = 0
   let overstock = 0
-  let inventoryValue = 0
+  /*
+   * Stock value from the layers (FIFO.md), not `quantity × costPerUnit`.
+   *
+   * The multiplication took a restaurant-wide rate — and, when a branch was
+   * chosen, multiplied it by that branch's quantity, so a location holding an
+   * item bought cheaply was valued at the blend of every branch's purchases.
+   * `remainingValue` already is what each layer holds, so this is an integer
+   * sum scoped to whichever branch was asked about.
+   */
+  const layerValue = await prisma.stockBatch.aggregate({
+    where: {
+      restaurantId: params.restaurantId,
+      remainingQty: { gt: 0 },
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+    },
+    _sum: { remainingValue: true },
+  })
+  const inventoryValue = layerValue._sum.remainingValue ?? 0
 
   for (const item of items) {
     const level = levelFor(item)
     if (level === 'OUT_OF_STOCK') outOfStock += 1
     else if (level === 'LOW_STOCK') lowStock += 1
     else if (level === 'OVERSTOCK') overstock += 1
-
-    if (item.quantity > 0) inventoryValue += item.quantity * item.costPerUnit
   }
 
   return {

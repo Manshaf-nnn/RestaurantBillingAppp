@@ -76,8 +76,39 @@ export default async function TablesPage({
       orderBy: [{ area: 'asc' }, { sortOrder: 'asc' }, { number: 'asc' }],
       include: {
         branch: { select: { name: true } },
-        _count: {
-          select: { orders: { where: { status: { notIn: ['COMPLETED', 'CANCELLED'] } } } },
+        /*
+         * What each table is actually waiting for.
+         *
+         * This was `_count.orders` — a number. "Table 3 has 2 open orders" is
+         * not what anybody on the floor needs to know; "table 3 is waiting on a
+         * pizza and a burger, and the burger is ready" is. The kitchen has been
+         * publishing per-line progress all along (`ORDER_ITEM_STATUS`); the
+         * floor screen was the one board that never listened.
+         *
+         * Open orders only, with their lines. `servedQty` is what makes "still
+         * coming" answerable per line rather than per order: half a line served
+         * is a real state and the counter is already kept.
+         */
+        orders: {
+          where: { status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+          orderBy: { placedAt: 'asc' },
+          select: {
+            id: true,
+            orderNumber: true,
+            status: true,
+            placedAt: true,
+            items: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                name: true,
+                quantity: true,
+                servedQty: true,
+                preparedQty: true,
+                status: true,
+              },
+            },
+          },
         },
       },
     }),
@@ -113,12 +144,19 @@ export default async function TablesPage({
   const states = await tableStatesFor(prisma, {
     restaurantId: user.restaurantId,
     branchId,
-    occupiedIds: tables.filter((t) => t._count.orders > 0).map((t) => t.id),
+    occupiedIds: tables.filter((t) => t.orders.length > 0).map((t) => t.id),
   })
 
   return (
     <>
-      <AutoRefresh scope="catalog" intervalMs={10000} />
+      {/*
+        `catalog` watches foods, categories and stock definitions — it would
+        never have noticed an order, which is now most of what this screen is
+        about. `live` is the orders/items/tables token, and the interval comes
+        down to match: the socket carries the change in under a second, and
+        this is the fallback for the serverless path where there is no socket.
+      */}
+      <AutoRefresh scope="live" intervalMs={5000} />
     <ReportFilters
       preset={range.preset}
       from={range.from.toISOString().slice(0, 10)}
@@ -134,6 +172,14 @@ export default async function TablesPage({
       // What the switcher is showing, so the form opens on the right location.
       // Null means "All locations", and then the form makes the owner choose.
       selectedBranchId={selection.branchId}
+      /*
+       * Which locations this screen is showing, so a live order from another
+       * branch can be dropped on arrival. Socket rooms carry no branch
+       * segment, so every board receives every event — without this the card
+       * would briefly grow another site's dishes and then lose them on the
+       * next render.
+       */
+      branchIds={branchId ? [branchId] : selection.branchIds}
       tables={tables.map((table) => ({
         id: table.id,
         number: table.number,
@@ -145,7 +191,21 @@ export default async function TablesPage({
         notes: table.notes,
         branchId: table.branchId,
         branchName: table.branch.name,
-        openOrders: table._count.orders,
+        openOrders: table.orders.length,
+        orders: table.orders.map((order) => ({
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          placedAt: order.placedAt.toISOString(),
+          items: order.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            servedQty: item.servedQty,
+            preparedQty: item.preparedQty,
+            status: item.status,
+          })),
+        })),
       }))}
     />
     <WaiterCallsHistory

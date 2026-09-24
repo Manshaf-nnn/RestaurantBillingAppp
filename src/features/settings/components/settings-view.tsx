@@ -33,6 +33,8 @@ import {
 import { callAction } from '@/lib/use-action'
 import { PaymentDestinations } from './payment-destinations'
 import { GuestAppearanceEditor } from './guest-appearance-editor'
+import { SmsSettings } from './sms-settings'
+import type { PublicSmsConfig } from '@/features/sms/types'
 import type { GuestAppearance } from '@/features/guest/appearance'
 import type { PaymentDestination } from '@/features/payments/destinations'
 
@@ -108,12 +110,18 @@ export function SettingsView({
   initial,
   canManage,
   guest,
+  sms,
+  credentialStoreReady,
   initialTab = 'profile',
 }: {
   initial: SettingsData
   canManage: boolean
   /** What guests meet on every code, and the restaurant facts its preview needs. */
   guest: { appearance: GuestAppearance; isOpen: boolean; openingLabel: string | null }
+  /** The shop's own gateway, with the credential ciphertext already stripped. */
+  sms: PublicSmsConfig
+  /** Whether the server has a key to encrypt a pasted API key with. */
+  credentialStoreReady: boolean
   /** `?tab=` — so the old Guest experience link still lands on its screen. */
   initialTab?: string
 }) {
@@ -201,7 +209,22 @@ export function SettingsView({
           <TabsTrigger value="cash">Cash controls</TabsTrigger>
           <TabsTrigger value="live">Live floor</TabsTrigger>
           <TabsTrigger value="guest">Guest experience</TabsTrigger>
+          <TabsTrigger value="sms">SMS</TabsTrigger>
         </TabsList>
+
+        {/*
+          The shop's own SMS gateway. A tab rather than its own page because an
+          owner plugging in the account they already pay for is doing the same
+          kind of thing as setting their tax label, and this is where that lives.
+        */}
+        <TabsContent value="sms" className="space-y-4">
+          <SmsSettings
+            initial={sms}
+            canManage={canManage}
+            currency={form.currency}
+            credentialStoreReady={credentialStoreReady}
+          />
+        </TabsContent>
 
         {/*
           ar.md §13 — what a guest meets on every code, table QR and QR menu

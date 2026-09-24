@@ -4,6 +4,7 @@ import type { Prisma, StockUnit } from '@prisma/client'
 
 import { prisma } from '@/server/db/prisma'
 import { acceptableUnits, toBaseUnits } from '@/features/inventory/units'
+import { nextUnitCost } from '@/features/inventory/fifo-walk'
 import { roundQty } from '@/lib/quantity'
 import { visibleBranchIds } from '@/lib/rbac'
 import { fifoCostFor } from './costing'
@@ -176,7 +177,10 @@ export async function getProductionWorkspace(params: {
     branchId
       ? prisma.stockBatch.findMany({
           where: { restaurantId, branchId, remainingQty: { gt: 0 } },
-          select: { id: true, itemId: true, batchNo: true, remainingQty: true, unitCost: true },
+          select: {
+            id: true, itemId: true, batchNo: true,
+            remainingQty: true, remainingValue: true, unitCost: true,
+          },
           orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
         })
       : Promise.resolve([]),
@@ -185,7 +189,13 @@ export async function getProductionWorkspace(params: {
   const lotsByItem = new Map<string, WorkspaceItem['lots']>()
   for (const lot of lots) {
     const list = lotsByItem.get(lot.itemId) ?? []
-    list.push({ batchId: lot.id, batchNo: lot.batchNo, remaining: lot.remainingQty, unitCost: lot.unitCost })
+    list.push({
+      batchId: lot.id,
+      batchNo: lot.batchNo,
+      remaining: lot.remainingQty,
+      remainingValue: lot.remainingValue,
+      unitCost: lot.unitCost,
+    })
     lotsByItem.set(lot.itemId, list)
   }
 
@@ -210,13 +220,10 @@ export async function getProductionWorkspace(params: {
     isPrepared: item.isPrepared,
     category: item.category,
     lots: lotsByItem.get(item.id) ?? [],
-    unlotted: Math.max(
-      0,
-      roundQty((available.get(item.id) ?? 0) - (lotsByItem.get(item.id) ?? []).reduce((sum, lot) => sum + lot.remaining, 0)),
-    ),
-    nextUnitCost:
-      lotsByItem.get(item.id)?.[0]?.unitCost ??
-      (item.quantity > 0 ? Math.round(Number(item.stockValue) / item.quantity) : item.costPerUnit),
+    // The next layer's own rate. No average fallback: after the opening-layer
+    // migration an item with stock has a layer, and an item without has no
+    // cost to report rather than an invented one (FIFO.md).
+    nextUnitCost: nextUnitCost(lotsByItem.get(item.id) ?? []),
   }))
 
   const prepared: PreparedItemRow[] = items
@@ -224,13 +231,15 @@ export async function getProductionWorkspace(params: {
     .map((item) => {
       const here = available.get(item.id) ?? 0
       const runs = produced.get(item.id)
+      const mine = lotsByItem.get(item.id) ?? []
       return {
         id: item.id,
         name: item.name,
         unit: item.unit,
         available: here,
         costPerUnit: item.costPerUnit,
-        stockValue: Math.round(here * item.costPerUnit),
+        // The layers' own sum (FIFO.md), not quantity × a blended rate.
+        stockValue: mine.reduce((sum, lot) => sum + lot.remainingValue, 0),
         lastProducedAt: runs?.last?.toISOString() ?? null,
         runs: runs?.runs ?? 0,
       }
@@ -407,6 +416,16 @@ export async function getPreparedItemPage(params: {
   }
 
   const here = roundQty(onHand._sum.available ?? 0)
+  /* What this branch's layers of it are worth (FIFO.md). */
+  const layerValue = await prisma.stockBatch.aggregate({
+    where: {
+      restaurantId: params.restaurantId,
+      itemId: item.id,
+      ...(params.branchId ? { branchId: params.branchId } : {}),
+      remainingQty: { gt: 0 },
+    },
+    _sum: { remainingValue: true },
+  })
   return {
     item: { id: item.id, name: item.name, unit: item.unit, units: acceptableUnits(item) },
     branch,
@@ -414,7 +433,7 @@ export async function getPreparedItemPage(params: {
       here,
       total: roundQty(item.quantity),
       costPerUnit: item.costPerUnit,
-      value: Math.round(here * item.costPerUnit),
+      value: layerValue._sum?.remainingValue ?? 0,
       lastProducedAt: runs._max.completedAt?.toISOString() ?? null,
       runs: runs._count._all,
     },

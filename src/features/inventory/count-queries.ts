@@ -4,6 +4,7 @@ import type { StockCountStatus, StockUnit } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
+import { currentUnitCostMany } from './fifo'
 
 /**
  * Reads for the stock-count screens.
@@ -166,13 +167,19 @@ export async function getStockCountDetail(params: {
    * adjusting several. An approver has to see everything they are signing.
    */
   const itemById = new Map(items.map((i) => [i.id, i]))
+  const nextCost = await currentUnitCostMany(prisma, {
+    restaurantId: count.restaurantId,
+    branchId: count.branchId ?? null,
+    itemIds: count.lines.map((l) => l.itemId),
+  })
   const review: CountReviewLine[] = []
   let netVarianceValue = 0
   let withVariance = 0
 
   for (const line of count.lines) {
     const item = itemById.get(line.itemId) ?? (await countedItem(line.itemId))
-    const varianceValue = Math.round(line.variance * item.costPerUnit)
+    // Valued at the next unit's cost (FIFO.md), not the blended average.
+    const varianceValue = Math.round(line.variance * (nextCost.get(item.id) ?? item.costPerUnit))
     netVarianceValue += varianceValue
     if (Math.abs(line.variance) > 1e-6) withVariance += 1
 

@@ -3,10 +3,9 @@ import 'server-only'
 import type { GoodsReceipt, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
-import { prisma, guardLocks} from '@/server/db/prisma'
+import { prisma, guardLocks, type TxClient } from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { toBaseUnits } from '@/features/inventory/units'
-import { upsertBatch } from '@/features/inventory/batches'
 import { nextNumber, requirePurchase } from './service'
 
 /**
@@ -228,6 +227,15 @@ export async function receiveGoods(params: {
         const acceptedBase = toBaseUnits(accepted, unit, purchaseItem.item)
         const costPerBase = acceptedBase > 0 ? Math.round((accepted * unitCost) / acceptedBase) : unitCost
 
+        /*
+         * A tracked item delivered without a supplier lot number still needs
+         * one, or its stock cannot be traced at all. Falling back to the GRN
+         * is honest — that is genuinely which delivery it came from.
+         */
+        const batchNo =
+          line.batchNo?.trim().toUpperCase() ||
+          `${receipt.number}-${purchaseItem.item.sku ?? purchaseItem.itemId.slice(-4).toUpperCase()}`
+
         const movement = await postMovement(tx, {
           restaurantId: params.restaurantId,
           itemId: purchaseItem.itemId,
@@ -249,56 +257,36 @@ export async function receiveGoods(params: {
           purchaseId: po.id,
           branchId: destinationBranchId,
           locationId: destinationLocationId,
-          batchNo: line.batchNo?.trim() || null,
+          batchNo,
           expiryDate: line.expiryDate ?? null,
           userId: params.userId,
         })
 
         /*
-         * Batch-tracked items get a lot record so the stock can be traced back
-         * to this delivery, and so expiry and FEFO have something to work with.
-         * Without this the batch tables stay empty however many deliveries
-         * arrive, and the expiry board is permanently blank.
+         * The layer was created by `postMovement` above, from the exact
+         * invoice value it was given.
          *
-         * `trackExpiry` counts too, not just `trackBatches`. An item with only
-         * the expiry flag was in a trap: the receiving screen REFUSES to submit
-         * without a date for it, and then nothing was created to hang that date
-         * on — so the date went to the receipt line, was read by nothing, and
-         * the item could never reach the expiry board. The item form now sets
-         * both flags together, and this is the safety net for rows that predate
-         * it.
+         * This used to call `upsertBatch` as well. Since the ledger started
+         * creating layers that would make TWO for one delivery — and it handed
+         * over the rounded per-base price, so the layer was worth something
+         * different from the movement that created it: 650 paid for 1,000 g
+         * became 1 a gram and the layer claimed 1,000, a 54% overstatement.
+         * One layer, one value, one source.
          */
-        /*
-         * Every delivery is a lot. DELIBERATE behaviour change 2026-09
-         * (pro.b.md §5): this was gated on `trackBatches || trackExpiry`, so
-         * FIFO could only ever see the deliveries of items somebody had
-         * remembered to flag, and a production run drawing chicken that was
-         * never flagged had no layers to draw from. A lot is a cheap row, and
-         * a delivery that leaves none is a delivery whose price is lost the
-         * moment it is blended into the average.
-         */
-        {
-          const batchNo =
-            line.batchNo?.trim().toUpperCase() ||
-            // A tracked item delivered without a supplier lot number still needs
-            // one, or its stock cannot be traced at all. Falling back to the GRN
-            // is honest — that is genuinely which delivery it came from.
-            `${receipt.number}-${purchaseItem.item.sku ?? purchaseItem.itemId.slice(-4).toUpperCase()}`
-
-          const batch = await upsertBatch(tx, {
+        const batch = await tx.stockBatch.findFirst({
+          where: {
             restaurantId: params.restaurantId,
             itemId: purchaseItem.itemId,
-            batchNo,
-            quantity: acceptedBase,
-            unitCost: costPerBase,
-            expiryDate: line.expiryDate ?? null,
-            locationId: destinationLocationId,
             branchId: destinationBranchId,
-          })
-
+            batchNo,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, batchNo: true },
+        })
+        if (batch) {
           await tx.stockMovement.update({
             where: { id: movement.movement.id },
-            data: { batchId: batch.id, batchNo },
+            data: { batchId: batch.id, batchNo: batch.batchNo },
           })
         }
 
@@ -411,9 +399,61 @@ export async function createPurchaseReturn(params: {
         purchaseId: params.purchaseId ?? null,
         branchId: params.branchId,
         userId: params.userId,
+        /*
+         * Goods go back off the delivery they came in on (FIFO.md), so what
+         * leaves inventory is what the supplier is about to credit. Without
+         * this the return draws the oldest layer instead, and the difference
+         * between that price and the invoice's books as a profit on sending
+         * goods back. A return with no purchase named has nothing to prefer
+         * and falls through to ordinary FIFO.
+         */
+        preferLayers: await layersFromPurchase(tx, {
+          restaurantId: params.restaurantId,
+          purchaseId: params.purchaseId ?? null,
+          itemId: line.itemId,
+        }),
       })
     }
 
     return record
   })
+}
+
+/**
+ * The layers one purchase put on the shelf for one item, oldest first.
+ *
+ * Every inbound movement writes a `StockMovementLot` row naming the layer it
+ * created, so the trail from a purchase order back to its own stock already
+ * exists — this just walks it. Used by returns, which must take the goods back
+ * off the delivery that brought them rather than off the front of the queue.
+ *
+ * A layer already drawn down to nothing is still listed: it costs nothing to
+ * include and the allocator simply never sees it, because `lockedLayers` only
+ * reads open ones. Filtering here would need a second query to find out.
+ */
+async function layersFromPurchase(
+  tx: TxClient,
+  params: { restaurantId: string; purchaseId: string | null; itemId: string },
+): Promise<string[] | null> {
+  if (!params.purchaseId) return null
+
+  const rows = await tx.stockMovementLot.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      batchId: { not: null },
+      movement: {
+        purchaseId: params.purchaseId,
+        itemId: params.itemId,
+        // Inbound only. The same purchase's own returns are outbound and their
+        // lot rows name the layers they DREW, which would send a second return
+        // back to a layer the first one already emptied.
+        quantity: { gt: 0 },
+      },
+    },
+    select: { batchId: true },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  const ids = [...new Set(rows.map((row) => row.batchId!).filter(Boolean))]
+  return ids.length > 0 ? ids : null
 }

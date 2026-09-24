@@ -344,7 +344,20 @@ async function main() {
     })
 
     const mayoBefore = await onHand(mayoId, kitchen.id)
-    const mayoCost = (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: mayoId } })).costPerUnit
+    /*
+     * DELIBERATE basis change 2026-09 (FIFO.md): the line is snapshotted at
+     * the cost of the stock it is about to consume — the oldest open layer's
+     * own rate — not at the item's blended average.
+     *
+     * The mayonnaise was made in two runs at two costs, so the two differ:
+     * that difference IS the change. The snapshot is still written once and
+     * never rewritten, so a later run cannot re-price a plate already sold.
+     */
+    const mayoLayer = await prisma.stockBatch.findFirstOrThrow({
+      where: { itemId: mayoId, branchId: kitchen.id, remainingQty: { gt: 0 } },
+      orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+    })
+    const mayoCost = Math.round(mayoLayer.remainingValue / mayoLayer.remainingQty)
     const order = await placeOrder({
       restaurantId: restaurant.id, branchId: kitchen.id, type: 'TAKEAWAY',
       customerName: 'Guest', customerPhone: '',
@@ -363,7 +376,7 @@ async function main() {
     const sale = await prisma.stockMovement.findFirst({ where: { orderId: order.id, itemId: mayoId, type: 'SALE' } })
     check('prepared stock → the order is in the ledger', sale !== null)
     const line = await prisma.orderItem.findFirstOrThrow({ where: { orderId: order.id } })
-    check('the sold line snapshots the mayonnaise at its average cost — LKR 13 for 20 g',
+    check('the sold line snapshots the mayonnaise at the layer it will draw, for 20 g',
       line.costPrice === Math.round(mayoCost * 0.02), `${line.costPrice} vs ${Math.round(mayoCost * 0.02)}`)
     const range = customRange(new Date(Date.now() - 86_400_000), new Date(Date.now() + 86_400_000), 'Asia/Colombo')
     const profit = await getProfitReport({ restaurantId: restaurant.id, range })

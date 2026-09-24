@@ -7,7 +7,10 @@ import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import { readAppearance } from '@/features/guest/appearance'
+import { mergeSmsConfig } from '@/features/sms/config'
+import { publicSmsConfig } from '@/features/sms/types'
 import { isOpenNow, parseOpeningHours, todayLabel } from '@/lib/opening-hours'
+import { isCredentialStoreReady } from '@/lib/env'
 import { minorUnitFactor } from '@/lib/money'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -42,6 +45,10 @@ export default async function SettingsPage({
         isOpen: isOpenNow(hours, restaurant.timezone),
         openingLabel: todayLabel(hours, restaurant.timezone),
       }}
+      /* Ciphertext stripped here, at the boundary — the browser gets which
+       * slots are filled and their last four characters, never the values. */
+      sms={publicSmsConfig(mergeSmsConfig(restaurant.smsConfig as never))}
+      credentialStoreReady={isCredentialStoreReady()}
       initial={{
         name: restaurant.name,
         tagline: restaurant.tagline ?? '',

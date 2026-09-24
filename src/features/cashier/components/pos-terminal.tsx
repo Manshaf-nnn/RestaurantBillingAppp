@@ -429,6 +429,100 @@ export function PosTerminal({
             <BillPanel bill={bill} restaurant={restaurant} onPrint={print} onNew={startNew} />
           ) : (
             <>
+              {/*
+                ── Who this is, and what they are owed ───────────────────────
+
+                The guest's offers and points sit at the TOP of the order
+                column, above the dishes. They used to be four fields down,
+                under the phone box, which is the wrong way round: a discount
+                the cashier has to scroll to find is a discount that gets
+                forgotten, and the guest is standing there.
+
+                The phone box is directly beneath, because it is what produces
+                them — type a number and the panel above fills in. The panel
+                renders nothing at all until a customer resolves, so an
+                anonymous walk-in still sees the phone box first and no empty
+                frame above it.
+              */}
+              <div className="space-y-2 border-b border-border p-4">
+                <GuestPanel
+                  customer={picked}
+                  lines={lines.map((l) => ({
+                    foodId: l.item.id,
+                    categoryId: l.item.categoryId,
+                    quantity: l.quantity,
+                    lineTotal: Math.max(0, unitOf(l) * l.quantity - l.discount),
+                  }))}
+                  branchId={branchId}
+                  currency={currency}
+                  locale={restaurant.locale}
+                  couponCode={couponCode}
+                  onCouponChange={(code, amount) => {
+                    setCouponCode(code)
+                    setCouponAmount(amount)
+                  }}
+                  redeemPoints={redeemPoints}
+                  onRedeemPointsChange={setRedeemPoints}
+                  loyalty={loyalty}
+                  discountableTotal={subtotal}
+                />
+
+                <div className="space-y-1">
+                  <Label htmlFor="pos-phone" className="text-xs">
+                    Phone {type === 'DELIVERY' ? '' : <span className="text-muted-foreground">(optional)</span>}
+                  </Label>
+                  {/*
+                    Phone first, and then say who it is (pro.A.md §5). Typing a
+                    number used to create a customer silently, with whatever
+                    name was in the box; now the till says who it belongs to,
+                    or offers to add them — through the same shared form the
+                    CRM uses.
+                  */}
+                  <CustomerPhoneField
+                    id="pos-phone"
+                    phone={phone}
+                    name={name}
+                    onPhoneChange={(next) => {
+                      setPhone(next)
+                      setPicked(null)
+                    }}
+                    onPick={(customer) => {
+                      setPhone(customer.phone)
+                      setName(customer.name)
+                      setPicked(customer)
+                    }}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="pos-name" className="text-xs">
+                    Customer {type === 'COUNTER' && <span className="text-muted-foreground">(optional)</span>}
+                  </Label>
+                  <Input
+                    id="pos-name"
+                    placeholder={type === 'COUNTER' ? 'Walk-in' : 'Name'}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+
+                {/*
+                  Always here, not only once a number is typed (pro.A.md §5,
+                  §6). A cashier looking for "where do I add this guest" should
+                  find it whatever is in the boxes, and it opens the SAME form
+                  the customer screen uses.
+                */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setAddOpen(true)}
+                >
+                  <UserPlus /> Add customer
+                </Button>
+              </div>
+
               {lines.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-muted-foreground">
                   Tap a dish to start the order.
@@ -604,87 +698,6 @@ export function PosTerminal({
                     </div>
                   )}
 
-                  <div className="space-y-1">
-                    <Label htmlFor="pos-name" className="text-xs">
-                      Customer {type === 'COUNTER' && <span className="text-muted-foreground">(optional)</span>}
-                    </Label>
-                    <Input
-                      id="pos-name"
-                      placeholder={type === 'COUNTER' ? 'Walk-in' : 'Name'}
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="pos-phone" className="text-xs">
-                      Phone {type === 'DELIVERY' ? '' : <span className="text-muted-foreground">(optional)</span>}
-                    </Label>
-                    <CustomerPhoneField
-                      id="pos-phone"
-                      phone={phone}
-                      name={name}
-                      onPhoneChange={(next) => {
-                        setPhone(next)
-                        setPicked(null)
-                      }}
-                      onPick={(customer) => {
-                        setPhone(customer.phone)
-                        setName(customer.name)
-                        setPicked(customer)
-                      }}
-                    />
-                    {/*
-                      Phone first, and then say who it is (pro.A.md §5).
-                      Typing a number that nobody has used to create a customer
-                      silently, with whatever name was in the box; now the till
-                      says who it belongs to, or offers to add them — through
-                      the same shared form the CRM uses.
-                    */}
-                    {/*
-                      The name, the points, the offers this number qualifies
-                      for, and what those points are worth on THIS bill — one
-                      component, shared with the Cashier tab's New order
-                      dialog, because a guest must not get a different answer
-                      depending on which screen the cashier opened.
-                    */}
-                    <GuestPanel
-                      customer={picked}
-                      lines={lines.map((l) => ({
-                        foodId: l.item.id,
-                        categoryId: l.item.categoryId,
-                        quantity: l.quantity,
-                        lineTotal: Math.max(0, unitOf(l) * l.quantity - l.discount),
-                      }))}
-                      branchId={branchId}
-                      currency={currency}
-                      locale={restaurant.locale}
-                      couponCode={couponCode}
-                      onCouponChange={(code, amount) => {
-                        setCouponCode(code)
-                        setCouponAmount(amount)
-                      }}
-                      redeemPoints={redeemPoints}
-                      onRedeemPointsChange={setRedeemPoints}
-                      loyalty={loyalty}
-                      discountableTotal={subtotal}
-                    />
-                    {/*
-                      Always here, not only once a number is typed
-                      (pro.A.md §5, §6). A cashier looking for "where do I add
-                      this guest" should find it whatever is in the boxes, and
-                      it opens the SAME form the customer screen uses — name,
-                      category, date of birth, anniversary and the rest.
-                    */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => setAddOpen(true)}
-                    >
-                      <UserPlus /> Add customer
-                    </Button>
-                  </div>
                   <div className="space-y-1">
                     <Label htmlFor="pos-notes" className="text-xs">
                       {type === 'DELIVERY' ? 'Address / notes' : 'Notes'}

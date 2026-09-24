@@ -37,6 +37,21 @@ const REDACTED_KEYS = new Set([
   'keyHash',
   'qrPayload',
   'accountNumber',
+  // A third party's SMS gateway credentials, and the codes we text to guests.
+  //
+  // Note what is NOT here: a bare `code`. Matching is by exact key name, and
+  // `code` is an ordinary non-secret field all over this schema — the QR entry
+  // payload, coupon codes, branch codes, currency codes. Redacting it would
+  // blind the audit log for all of them to protect one field that is spelled
+  // out explicitly instead.
+  'otp',
+  'otpCode',
+  'verificationCode',
+  'smsCode',
+  'codeHash',
+  'authToken',
+  'apiSecret',
+  'credentials',
 ])
 
 /** Strips credentials before anything is persisted to the audit trail. */
@@ -315,6 +330,16 @@ export const AUDIT_ACTIONS = {
   USER_REACTIVATED: 'user.reactivated',
   JOB_RETRIED: 'job.retried',
   JOBS_RUN: 'job.run',
+
+  /*
+   * SMS. The config action never passes the credential object to `audit()` at
+   * all — it records which slots changed, by name. `REDACTED_KEYS` above is the
+   * second line of defence, not the first.
+   */
+  SMS_CONFIG_UPDATED: 'sms.config_updated',
+  SMS_TEST_SENT: 'sms.test_sent',
+  SMS_DISABLED: 'sms.disabled',
+  SMS_RESENT: 'sms.resent',
   ERROR_RESOLVED: 'error.resolved',
   MAINTENANCE_TOGGLED: 'platform.maintenance_toggled',
   RESTORE_TESTED: 'platform.restore_tested',

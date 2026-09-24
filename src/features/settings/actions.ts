@@ -6,7 +6,23 @@ import type { Prisma } from '@prisma/client'
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { readPaymentConfig } from '@/features/payments/service'
 import { readAppearance } from '@/features/guest/appearance'
-import { runAction, type ActionResult } from '@/lib/action'
+import { phoneKey } from '@/features/customers/phone'
+import {
+  countryFor,
+  gatewayHostAllowlist,
+  mergeCredentials,
+  pruneCredentials,
+  readSmsConfig,
+  resolveFrom,
+} from '@/features/sms/config'
+import { prepareRequest, unknownTokensIn } from '@/features/sms/http-adapter'
+import { E164_FAILURE_MESSAGE, toE164 } from '@/features/sms/msisdn'
+import type { HttpGatewaySpec, SmsConfig } from '@/features/sms/types'
+import { assertSafeGatewayUrl } from '@/server/security/ssrf'
+import { enforceRateLimit } from '@/server/security/rate-limit'
+import { sendSms } from '@/server/sms/send'
+import { ValidationError } from '@/lib/errors'
+import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
@@ -24,6 +40,9 @@ import {
   printerSettingsSchema,
   receiptFieldsSchema,
   restaurantSettingsSchema,
+  smsConfigSchema,
+  smsTestSchema,
+  type SmsConfigInput,
 } from './schema'
 
 export async function updateRestaurantSettings(input: unknown): Promise<ActionResult<{ id: string }>> {
@@ -504,5 +523,336 @@ export async function updateGuestAppearance(input: unknown): Promise<ActionResul
     },
     'Guest experience saved.',
     'settings.guestAppearance',
+  )
+}
+
+// ── SMS ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Save a shop's own gateway.
+ *
+ * Three things here are not ceremony:
+ *
+ *  1. An empty credential means LEAVE UNCHANGED. Without that rule an owner
+ *     cannot correct their sender mask without re-typing an API key they no
+ *     longer have to hand, and the write-only field becomes infuriating.
+ *  2. Changing anything that affects delivery clears `verifiedAt`. A gateway
+ *     proven on Tuesday is not proven after its key is replaced on Friday, and
+ *     a stale tick beside a dead gateway is worse than no tick at all.
+ *  3. The audit row records which credential SLOTS changed, by name, and never
+ *     the values. `REDACTED_KEYS` would also catch them; this is the first line
+ *     of defence rather than the second.
+ */
+export async function updateSmsConfig(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    smsConfigSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      const restaurant = await requireRestaurant(user.restaurantId)
+      const existing = await readSmsConfig(user.restaurantId)
+
+      const { credentials, hints, changed } = mergeCredentials(existing, data.credentials)
+      const spec = specFromInput(data)
+
+      /* An owner-supplied URL is a request the server will make. Check it now,
+       * at the one moment there is a human waiting to read the reason. */
+      if (spec?.url) {
+        const unknown = unknownTokensIn(spec)
+        if (unknown.length > 0) {
+          throw new ValidationError('That template uses a placeholder we do not recognise', {
+            'spec.bodyTemplate': [
+              `Unknown placeholder${unknown.length > 1 ? 's' : ''}: ${unknown.map((t) => `{${t}}`).join(', ')}`,
+            ],
+          })
+        }
+        await assertSafeGatewayUrl(spec.url, await gatewayHostAllowlist())
+      }
+
+      /*
+       * What invalidates a proof. A changed sender mask does not: the same
+       * gateway with a different mask still answers, and re-testing for a
+       * typo in a label would train owners to click through the test.
+       */
+      const deliveryChanged =
+        changed.length > 0 ||
+        data.provider !== existing.provider ||
+        JSON.stringify(spec) !== JSON.stringify(existing.spec)
+
+      const verifiedAt = deliveryChanged ? null : existing.verifiedAt
+
+      const anyTrigger = Object.values(data.triggers).some(Boolean)
+      if (anyTrigger && !verifiedAt) {
+        throw new ValidationError('Send a test message before switching any messages on', {
+          triggers: [
+            deliveryChanged
+              ? 'The gateway details changed, so it needs testing again before messages can go out'
+              : 'Send a test message first, so we know the gateway works',
+          ],
+        })
+      }
+
+      const factor = minorUnitFactor(data.costCurrency || restaurant.currency)
+      const next: SmsConfig = {
+        ...existing,
+        enabled: data.enabled,
+        provider: data.provider,
+        senderId: data.senderId,
+        senderIdApproved: data.senderIdApproved,
+        verifiedAt,
+        defaultCountry: 'LK',
+        spec,
+        credentials,
+        credentialHints: hints,
+        caps: data.caps,
+        costMinor: data.cost === null || data.cost === undefined ? null : Math.round(data.cost * factor),
+        costCurrency: data.costCurrency || restaurant.currency,
+        triggers: data.triggers,
+        templates: data.templates,
+        trialOnlyVerified: data.trialOnlyVerified,
+        verifiedRecipients: splitNumbers(data.verifiedRecipients),
+        optOut: splitNumbers(data.optOut),
+      }
+
+      /* Switching gateway leaves the old one's credential slots behind. */
+      const pruned = pruneCredentials(next)
+      next.credentials = pruned.credentials
+      next.credentialHints = pruned.hints
+
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: { smsConfig: next as unknown as Prisma.InputJsonValue },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SMS_CONFIG_UPDATED,
+        entity: 'Restaurant',
+        entityId: user.restaurantId,
+        // Names of what changed, never values. See the note above.
+        after: {
+          provider: next.provider,
+          senderId: next.senderId,
+          enabled: next.enabled,
+          credentialsChanged: changed,
+          verifiedCleared: deliveryChanged && Boolean(existing.verifiedAt),
+          triggers: next.triggers,
+        },
+      })
+
+      revalidatePath('/dashboard/settings')
+      return { id: user.restaurantId }
+    },
+    'SMS settings saved.',
+    'updateSmsConfig',
+  )
+}
+
+export interface SmsTestOutcome {
+  sent: boolean
+  dialled: string
+  segments: number
+  encoding: string
+  providerMessageId: string | null
+  error?: string
+  errorCode?: string
+}
+
+/**
+ * Send one real message to one real phone, and record whether it arrived.
+ *
+ * The whole point of the feature's first phase. It spends one of the owner's
+ * own credits, which is why it is rate limited, and it is the only thing that
+ * sets `verifiedAt` — no trigger may fire until this has worked once.
+ */
+export async function sendTestSms(input: unknown): Promise<ActionResult<SmsTestOutcome>> {
+  return runAction(
+    smsTestSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      await enforceRateLimit('smsTest', user.restaurantId)
+
+      const config = await readSmsConfig(user.restaurantId)
+      if (!resolveFrom(config)) {
+        throw new ValidationError('Fill in the gateway details and save before sending a test', {
+          _root: ['No SMS gateway is configured yet'],
+        })
+      }
+
+      const result = await sendSms({
+        restaurantId: user.restaurantId,
+        to: data.to,
+        text: data.message,
+        purpose: 'TEST',
+        requestedById: user.id,
+        config,
+      })
+
+      const row = result.messageId
+        ? await prisma.smsMessage.findUnique({
+            where: { id: result.messageId },
+            select: { toE164: true, segments: true, encoding: true, providerMessageId: true },
+          })
+        : null
+
+      /*
+       * Stamped on success, cleared on failure. A gateway that stopped working
+       * should lock its own triggers rather than keep firing into the dark.
+       */
+      await prisma.restaurant.update({
+        where: { id: user.restaurantId },
+        data: {
+          smsConfig: {
+            ...config,
+            verifiedAt: result.sent ? new Date().toISOString() : null,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.SMS_TEST_SENT,
+        entity: 'SmsMessage',
+        entityId: result.messageId,
+        after: { sent: result.sent, provider: config.provider, errorCode: result.errorCode ?? null },
+      })
+
+      revalidatePath('/dashboard/settings')
+
+      return {
+        sent: result.sent,
+        dialled: row?.toE164 ?? data.to,
+        segments: row?.segments ?? 1,
+        encoding: row?.encoding ?? 'GSM7',
+        providerMessageId: row?.providerMessageId ?? null,
+        error: result.error,
+        errorCode: result.errorCode,
+      }
+    },
+    undefined,
+    'sendTestSms',
+  )
+}
+
+/** One number per line in, `phoneKey` form out. */
+function splitNumbers(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[\n,;]/)
+        .map((entry) => phoneKey(entry))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  ]
+}
+
+/** Flatten the form's spec fields into the stored shape, or null for a preset. */
+function specFromInput(data: SmsConfigInput): HttpGatewaySpec | null {
+  const spec = data.spec
+  if (!spec || !spec.url) return null
+
+  const success =
+    spec.successKind === 'jsonEquals'
+      ? {
+          kind: 'jsonEquals' as const,
+          path: spec.successPath ?? 'status',
+          equals: (spec.successEquals ?? '')
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        }
+      : spec.successKind === 'jsonTruthy'
+        ? { kind: 'jsonTruthy' as const, path: spec.successPath ?? 'id' }
+        : spec.successKind === 'bodyContains'
+          ? { kind: 'bodyContains' as const, needle: spec.successNeedle ?? 'OK' }
+          : { kind: 'httpStatus' as const }
+
+  return {
+    method: spec.method,
+    url: spec.url,
+    headers: spec.headers ?? {},
+    bodyEncoding: spec.bodyEncoding,
+    bodyTemplate: spec.bodyTemplate ?? '',
+    auth:
+      spec.authMode === 'header'
+        ? { mode: 'header', header: spec.authHeader ?? 'X-API-Key' }
+        : { mode: spec.authMode },
+    success,
+    messageIdPath: spec.messageIdPath || undefined,
+    errorMessagePath: spec.errorMessagePath || undefined,
+    errorCodePath: spec.errorCodePath || undefined,
+    numberFormat: spec.numberFormat,
+    encoding: spec.encoding,
+    unicodeField: spec.unicodeFieldName
+      ? {
+          name: spec.unicodeFieldName,
+          gsm7Value: spec.unicodeGsm7Value ?? 'plain',
+          unicodeValue: spec.unicodeValue ?? 'unicode',
+        }
+      : undefined,
+  }
+}
+
+export interface SmsRequestPreview {
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string | null
+  dialled: string
+}
+
+/**
+ * The exact request that will go out, with credentials masked.
+ *
+ * The highest-value panel on the page. Recipient format, sender mask and the
+ * success rule are the three settings that fail silently — a gateway handed
+ * the wrong number shape accepts it, bills for it and drops it — and this is
+ * the one place an owner can see all three before spending a credit.
+ *
+ * A server action rather than client-side assembly because building the
+ * request needs the decrypted credentials, and the whole design turns on those
+ * never reaching a browser. What comes back is already masked.
+ */
+export async function previewSmsRequest(to: string): Promise<ActionResult<SmsRequestPreview>> {
+  return runSafe(
+    async () => {
+      const user = await requirePermission(PERMISSIONS.SETTINGS_MANAGE)
+      const config = await readSmsConfig(user.restaurantId)
+      const resolved = resolveFrom(config)
+      if (!resolved) throw new ValidationError('No gateway is configured yet', {})
+
+      const country = countryFor(config)
+      const number = toE164(to, country)
+      if (!number.ok) {
+        throw new ValidationError(E164_FAILURE_MESSAGE[number.reason], { to: [E164_FAILURE_MESSAGE[number.reason]] })
+      }
+
+      const prepared = prepareRequest(
+        resolved,
+        {
+          to: number.e164,
+          text: config.templates.receipt || 'Test message from your restaurant.',
+          sender: config.senderId || undefined,
+          reference: 'preview',
+        },
+        country,
+        { maskCredentials: true },
+      )
+
+      return {
+        method: prepared.method,
+        url: prepared.url,
+        headers: prepared.headers,
+        body: prepared.body ?? null,
+        dialled: prepared.dialled,
+      }
+    },
+    undefined,
+    'previewSmsRequest',
   )
 }

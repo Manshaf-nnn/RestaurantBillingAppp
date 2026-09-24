@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Building2, CalendarDays, Clock, Truck, User, X } from 'lucide-react'
+import { ArrowRight, Building2, CalendarDays, Clock, Printer, Truck, User, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -366,6 +366,12 @@ export function TransferDrawer({
 
             <Button variant="outline" asChild>
               <Link href={`/dashboard/transfers/${detail.id}`}>Open</Link>
+            </Button>
+            {/* The signed note, for the file or for the driver. */}
+            <Button variant="outline" size="icon" asChild aria-label="Print transfer note">
+              <Link href={`/dashboard/transfers/${detail.id}/print`}>
+                <Printer />
+              </Link>
             </Button>
           </div>
         ) : null}

@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { prisma } from '@/server/db/prisma'
+import { currentUnitCostMany } from './fifo'
 
 /**
  * Inventory variance.
@@ -73,11 +74,40 @@ function dayKeyIn(timeZone?: string): (date: Date) => string {
   return (date: Date) => format.format(date)
 }
 
+/**
+ * The branch predicate, from a chosen branch and/or the viewer's reach.
+ *
+ * Spreading two `branchId` keys into one object would have the second silently
+ * clobber the first, which is how a narrowing turns into a widening. Both given
+ * means both apply: the chosen branch, but only if it is within reach.
+ */
+function branchWhere(
+  branchId: string | null | undefined,
+  branchIds: string[] | null | undefined,
+): { branchId?: string | { in: string[] } } {
+  if (branchId && branchIds) {
+    return { branchId: branchIds.includes(branchId) ? branchId : { in: [] } }
+  }
+  if (branchId) return { branchId }
+  if (branchIds) return { branchId: { in: branchIds } }
+  return {}
+}
+
 export async function getVarianceReport(params: {
   restaurantId: string
   days?: number
   now?: Date
   branchId?: string | null
+  /**
+   * The viewer's whole reach, for callers that have not narrowed to one branch.
+   *
+   * `branchId` comes from `scopeToOne`, which is null whenever the viewer can
+   * reach more than one location and has not picked one — and a null branch
+   * applied no predicate at all, so the caller got every location's shortfalls.
+   * Pass `visibleBranchIds` here and that cannot happen; `[]` means none, which
+   * is a real answer. Both may be given: they intersect.
+   */
+  branchIds?: string[] | null
   /** The restaurant's own zone, so "same day" means the same day to its staff. */
   timeZone?: string
 }): Promise<VarianceReport> {
@@ -98,7 +128,7 @@ export async function getVarianceReport(params: {
       restaurantId: params.restaurantId,
       status: 'APPROVED',
       countedAt: { gte: from, lte: now },
-      ...(params.branchId ? { branchId: params.branchId } : {}),
+      ...branchWhere(params.branchId, params.branchIds),
     },
     include: {
       approvedBy: { select: { name: true } },
@@ -126,6 +156,19 @@ export async function getVarianceReport(params: {
     wastageByItemDay.set(key, (wastageByItemDay.get(key) ?? 0) + w.quantity)
   }
 
+  /*
+   * What the next unit of each counted item costs, at the branch counted.
+   *
+   * The variance is valued at this rather than at `costPerUnit`, which is a
+   * restaurant-wide blend — so a shortfall at a branch that had bought cheaply
+   * used to be reported as a bigger loss than it was.
+   */
+  const nextCost = await currentUnitCostMany(prisma, {
+    restaurantId: params.restaurantId,
+    branchId: params.branchId ?? null,
+    itemIds: [...new Set(counts.flatMap((c) => c.lines.map((l) => l.itemId)))],
+  })
+
   const lines: VarianceLine[] = []
   let netValue = 0
   let lossValue = 0
@@ -139,7 +182,12 @@ export async function getVarianceReport(params: {
     for (const line of count.lines) {
       if (Math.abs(line.variance) < 1e-6) continue
 
-      const value = Math.round(line.variance * line.item.costPerUnit)
+      /*
+       * The variance valued at what the next unit costs (FIFO.md), not at a
+       * blended average. A shortfall is stock that walked out of the door, and
+       * what it was worth is what the shelf it came off was carrying.
+       */
+      const value = Math.round(line.variance * (nextCost.get(line.itemId) ?? line.item.costPerUnit))
       const wasted = wastageByItemDay.get(`${line.itemId}:${day}`) ?? 0
       // A shortfall is treated as explained when same-day wastage covers at
       // least 80% of it — exact matches are rare, and demanding one would mark

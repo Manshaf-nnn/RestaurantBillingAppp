@@ -246,10 +246,34 @@ async function main() {
     check('no "What did you make?"', !form.includes('What did you make?'))
     check('no location select on the form', !form.includes('Made at') && !/<select[^>]*value=\{branch\}/.test(form))
     check('it names the location it is acting on', form.includes('Making at'))
-    check('three steps: Recipe Setup, Check Available Stock, Create Production Order',
-      form.includes('Recipe Setup') && form.includes('Check Available Stock') && form.includes('Create Production Order'))
-    check('step 1 saves the recipe and step 3 creates the order — never the one-shot',
+    /*
+     * DELIBERATE layout change 2026-09 (pro.b.md §11, "do not add unnecessary
+     * screens"). The 1-2-3 stepper is gone. What it walked through has not
+     * changed and is still all here:
+     *
+     *   - the recipe is still written and saved, moving nothing;
+     *   - stock is still checked before an order — inside the order panel now,
+     *     against the quantity actually being made rather than the recipe's own
+     *     yield, which is the only version of that check worth having;
+     *   - the order is still created separately and still moves nothing.
+     *
+     * The stepper made somebody walk all three every time, and a recipe is
+     * written once and produced from many times. So the tab is the recipe
+     * editor plus a list of saved recipes, and picking one opens the order.
+     */
+    check('the recipe editor is still there', form.includes('Recipe Master'))
+    check('saved recipes are listed on the same page to produce from',
+      form.includes('Saved recipes') && form.includes('savedRecipes'))
+    check('the stock check survived, inside the order panel (pro.b.md §2)',
+      form.includes('Check Available Stock') && form.includes('orderStock'))
+    check('and it is checked against the quantity being made, not the recipe yield',
+      form.includes('scaledLines') && /orderStock[\s\S]{0,400}scaledLines/.test(form))
+    check('Create Production Order is still its own act', form.includes('Create Production Order'))
+    check('the stepper itself is gone', !form.includes('production-steps'))
+    check('saving the recipe creates the order — never the one-shot',
       form.includes('saveProductionRecipeAction') && form.includes('startBatchAction') && !form.includes('produceItemAction'))
+    check('saving a recipe does not march on into an order',
+      /onDone: \(data\) => \{[\s\S]{0,600}?router\.refresh\(\)/.test(form) && !form.includes('setStep('))
     check('costs are the FIFO walk the issue uses', form.includes('walkFifo'))
     check('Create Order leads to the order page, where the ingredients are issued',
       form.includes('router.push(`/dashboard/production/${data.id}`)'))
@@ -261,10 +285,23 @@ async function main() {
     check('and asks for the wastage quantity (§6)', done.includes('Wastage Quantity') && done.includes('wastageQuantity'))
 
     const workspace = readFileSync('src/features/production/components/production-workspace.tsx', 'utf8')
-    check('orders in progress are listed under the steps, each linking to its own page',
+    check('orders in progress are listed under the tab, each linking to its own page',
       !workspace.includes('OpenBatches') && workspace.includes('/dashboard/production/${batch.id}'))
+    /*
+     * The tab is read from the URL, not held in React state. That is what
+     * makes "Make more" work: it links to `?tab=make&make=<id>` on this same
+     * route, and a same-route navigation preserves client state — so with the
+     * tab in state the click left you on Prepared, with the form it meant to
+     * open not even mounted.
+     */
+    check('the tab comes from the URL so a link can point at one',
+      !/useState<'make'/.test(workspace) && workspace.includes('useSearchParams'))
     const table = readFileSync('src/features/production/components/prepared-items-table.tsx', 'utf8')
     check('and each row opens the item\'s page', table.includes('/dashboard/production/items/${row.id}'))
+    check('Make more names the tab it needs, or it silently does nothing',
+      table.includes('/dashboard/production?tab=make&make=${row.id}'))
+    check('an item with several open batches still gets a way in',
+      /Details \(\$\{open\.length\} open\)/.test(table))
   }
 }
 

@@ -559,6 +559,10 @@ enum NotificationAudience {
 enum TokenPurpose {
   EMAIL_VERIFICATION
   PASSWORD_RESET
+  /// A code texted to a phone that belongs to a real `User` — staff sign-in by
+  /// SMS. NOT the guest path: a diner scanning a QR code has no User row, so
+  /// guest codes live in `PhoneOtp`, which is keyed on the phone itself.
+  PHONE_VERIFICATION
 }
 
 enum FeedbackCategory {
@@ -743,6 +747,7 @@ model Restaurant {
   goodsReceipts      GoodsReceipt[]
   purchaseReturns    PurchaseReturn[]
   stockBatches       StockBatch[]
+  stockMovementLots  StockMovementLot[]
   wastageRecords     WastageRecord[]
   inventoryStock     InventoryStock[]
   stockTransfers     StockTransfer[]
@@ -776,8 +781,28 @@ model Restaurant {
   /// worth a second pair of eyes", which is a different question from "how long
   /// is too long to wait for food".
   liveBoardPolicy    Json?
+
+  /// [SmsConfig] — this shop's OWN SMS gateway.
+  ///
+  /// Bring-your-own, because most owners already pay for a Notify.lk, Text.lk
+  /// or Dialog account before they ever ask us for SMS. The credentials for it
+  /// live here.
+  ///
+  /// Its own column, never folded into `paymentConfig`, for exactly the reason
+  /// `receiptConfig` is separate from `printerConfig`: two forms writing one
+  /// column is how one silently erases the other's fields.
+  ///
+  /// `credentials.*` are AES-256-GCM ciphertext (src/server/crypto/secret-box.ts),
+  /// never plaintext, and never sent to a browser — the settings page receives
+  /// only which slots are filled and their last four characters.
+  ///
+  /// Null means SMS is off, which is what every existing tenant is.
+  smsConfig          Json?
+
   customerCategories CustomerCategory[]
   qrExperiences      QrExperience[]
+  smsMessages        SmsMessage[]
+  phoneOtps          PhoneOtp[]
 
   @@index([isActive])
   @@map("restaurants")
@@ -2755,7 +2780,16 @@ model StockMovement {
   /// Written inside the same transaction that moves the stock, so the ledger
   /// explains itself without replaying every earlier row.
   balanceAfter    Float?
+  /// Per base unit, rounded. Display and history; `valueMoved` is the figure.
   unitCost        Int               @default(0)
+  /// ── What this movement was actually worth, minor units (FIFO.md) ─────────
+  ///
+  /// The exact value was already being computed and then discarded: the row
+  /// held a rounded per-unit cost and nothing else, so multiplying it back out
+  /// could not reproduce what left the shelf, and the ledger could not be
+  /// replayed at cost. Outbound, this is the sum of the layers drawn; inbound,
+  /// what was paid. Frozen by the append-only trigger alongside `quantity`.
+  valueMoved      Int               @default(0)
   reason          String?
   notes           String?
 
@@ -2768,6 +2802,9 @@ model StockMovement {
   batchNo    String?
   batchId    String?
   batch      StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  /// Every layer this movement drew from, with what each slice was worth.
+  /// `batchId` above names at most one; a draw can span several.
+  lots       StockMovementLot[]
   expiryDate DateTime?
 
   branchId     String
@@ -4297,8 +4334,27 @@ model StockBatch {
   receivedQty  Float
   /// Base units left. Zero means the batch is used up, not that it never was.
   remainingQty Float
-  /// Cost per base unit for this batch specifically — the groundwork FIFO and
-  /// batch-accurate costing would need.
+  /// ── What this layer cost, exactly (FIFO.md) ──────────────────────────────
+  ///
+  /// The layer carries VALUE, not a price. A price cannot be exact: minor
+  /// units are integers, so 650 paid for 1,000 g is 0.65 a gram, which rounds
+  /// to 1 and books the delivery at 1,000 — a 54% overstatement. The ledger
+  /// already knew this and passes an exact `totalValue` on receipt; only the
+  /// layer was left holding the rounded price.
+  ///
+  /// So `receivedValue` is exactly what was paid and `remainingValue` is
+  /// exactly what is left, both in minor units. A draw takes a proportional
+  /// slice, and the draw that empties a layer takes whatever value remains —
+  /// so the sum of everything issued out of a layer equals what came in, to
+  /// the minor unit, always. The rounding residue can never escape the layer.
+  ///
+  /// Inventory value is `SUM(remainingValue)`: an integer sum, with no
+  /// float multiplication anywhere in it.
+  receivedValue  Int @default(0)
+  remainingValue Int @default(0)
+  /// Cost per base unit, DERIVED from the value above for display and for
+  /// ordering decisions. Never the basis of a calculation: `remainingValue`
+  /// is. Kept because a great many screens read a per-unit cost.
   unitCost     Int       @default(0)
 
   locationId String?
@@ -4316,12 +4372,76 @@ model StockBatch {
   productionOutputs ProductionOutput[]
   /// Production runs that drew from this lot (pro.b.md §9).
   consumedBy        ProductionConsumptionLot[] @relation("ConsumedFromBatch")
+  /// Every movement that drew from this lot, whatever kind (FIFO.md).
+  drawnBy           StockMovementLot[]         @relation("DrawnFromBatch")
 
-  @@unique([itemId, batchNo])
+  /// A lot number is unique within a BRANCH, not across the business.
+  ///
+  /// It was `[itemId, batchNo]`, and `upsertBatch` looked lots up by that pair
+  /// with no restaurant or branch filter — so two branches receiving the same
+  /// supplier lot number for the same item merged into ONE layer, carrying the
+  /// first branch's `branchId`. The second branch's stock became invisible to
+  /// its own FIFO walk and the first could draw stock it had never held.
+  @@unique([restaurantId, branchId, itemId, batchNo])
   @@index([restaurantId, expiryDate])
   @@index([itemId, remainingQty])
   @@index([restaurantId, branchId])
+  /// The FIFO walk: open layers for one item at one branch, oldest first.
+  @@index([itemId, branchId, receivedAt])
   @@map("stock_batches")
+}
+
+/// Which layers one movement drew from, and what each was worth (FIFO.md).
+///
+/// ── Why every movement needs this ────────────────────────────────────────────
+///
+/// `ProductionConsumptionLot` recorded this for production runs and nothing
+/// recorded it for anything else, so a sale, a wastage or a transfer that
+/// spanned three layers left no trace of which three. Two things were
+/// impossible as a result:
+///
+///   • a reversal could not put stock back where it came from. Cancelling an
+///     order returned the quantity at whatever the average happened to be that
+///     day, so cancelling created or destroyed value whenever prices had moved.
+///   • the ledger could not be replayed at cost. `stock_movements` carries a
+///     rounded per-unit figure and nothing else, so "what did this actually
+///     cost" had no answer once the movement was written.
+///
+/// One row per layer per movement. `batchId` is null for a draw that no layer
+/// could cover — see `uncosted` — so the gap is recorded rather than papered
+/// over with an invented price.
+model StockMovementLot {
+  id           String        @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  movementId   String
+  movement     StockMovement @relation(fields: [movementId], references: [id], onDelete: Cascade)
+
+  /// The layer drawn from. Null means no layer covered this part of the draw.
+  batchId String?
+  batch   StockBatch? @relation("DrawnFromBatch", fields: [batchId], references: [id], onDelete: SetNull)
+  /// Denormalised so the trace survives the lot being cleaned up.
+  batchNo String?
+
+  /// Base units taken from this layer.
+  quantity  Float
+  /// The layer's price per base unit at the moment of the draw, for reading.
+  unitCost  Int   @default(0)
+  /// What this slice was worth, minor units. The figure of record: the sum of
+  /// these across a movement equals the movement's `valueMoved`, exactly.
+  lineValue Int   @default(0)
+
+  /// No layer covered it. The quantity moved and the value is zero — never a
+  /// guess. Restaurants that allow negative stock can reach this; the
+  /// reconciliation report lists it until the missing purchase is entered.
+  uncosted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([movementId])
+  @@index([batchId])
+  @@index([restaurantId, uncosted])
+  @@map("stock_movement_lots")
 }
 
 /// Something thrown away.
@@ -5275,4 +5395,185 @@ model QrExperienceField {
   @@index([experienceId, sortOrder])
   @@index([categoryId])
   @@map("qr_experience_fields")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Every SMS this platform attempted, and what became of it.
+ *
+ * ── Why not the audit log ───────────────────────────────────────────────────
+ *
+ * `AuditLog` is append-only — a database trigger enforces it and
+ * `scripts/no-audit-mutation.ts` fails the build on any writer that tries. A
+ * delivery status is mutable by definition: QUEUED → SENT → DELIVERED arrives
+ * over minutes, from a webhook, long after the row was written. The audit log
+ * records that somebody CHANGED the SMS settings; this records what the
+ * gateway DID.
+ *
+ * ── Why not the realtime outbox ─────────────────────────────────────────────
+ *
+ * `OutboxEvent` is a UI delivery log with no worker, no status column, no
+ * retry and a seven-day trim. It cannot answer "did this guest get their code".
+ *
+ * ── The body rule ───────────────────────────────────────────────────────────
+ *
+ * `body` is NULL when `purpose = OTP`. Always, enforced in `sendSms()` rather
+ * than by convention. A support engineer reading this table must not be able
+ * to read somebody's live verification code, and a backup of this table must
+ * not be a list of them.
+ */
+model SmsMessage {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId     String?
+
+  purpose SmsPurpose
+  status  SmsStatus  @default(QUEUED)
+
+  /// Which gateway sent it. Kept on the row because a tenant may switch
+  /// gateway, and last month's failures belong to last month's provider.
+  provider String
+
+  /// What we dialled, and what the human typed. Both, deliberately: "the
+  /// number was right but the dialling was wrong" is otherwise unanswerable.
+  toE164   String
+  toRaw    String
+  senderId String?
+
+  /// NULL for OTP. See the note above.
+  body      String?
+  segments  Int         @default(1)
+  encoding  SmsEncoding @default(GSM7)
+  /// Minor units of the config's `costCurrency`, at the time of sending.
+  costMinor Int?
+
+  providerMessageId String?
+  /// The gateway's own word for the state, verbatim — vocabularies differ.
+  providerStatus    String?
+  errorCode         String?
+  errorMessage      String?
+  /// First 2KB of the gateway's response. Truncated on purpose: a misconfigured
+  /// URL can otherwise make this column a mirror of somebody else's server.
+  rawResponse       String?
+
+  attempts Int @default(0)
+
+  /// Idempotency, the same mechanism as `Job.dedupeKey`. `order-ready:<orderId>`
+  /// means a double status write cannot text the guest twice.
+  dedupeKey String? @unique
+
+  /// What this message was about, for the log and for "resend".
+  entity        String?
+  entityId      String?
+  /// Null for a guest-triggered or system-triggered send.
+  requestedById String?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, status, createdAt])
+  @@index([restaurantId, purpose, createdAt])
+  /// A delivery report arrives knowing only the gateway's own id.
+  @@index([providerMessageId])
+  /// The per-recipient abuse cap counts over this.
+  @@index([restaurantId, toE164, createdAt])
+  @@map("sms_messages")
+}
+
+enum SmsPurpose {
+  TEST
+  OTP
+  RECEIPT
+  ORDER_STATUS
+  RESERVATION
+  STAFF
+  MARKETING
+}
+
+enum SmsStatus {
+  QUEUED
+  SENDING
+  /// The gateway accepted it.
+  SENT
+  /// A delivery report said it landed.
+  DELIVERED
+  /// A delivery report said it did not.
+  UNDELIVERED
+  /// We could not hand it over.
+  FAILED
+  /// We chose not to send: cap hit, kill switch, opt-out, unverified trial
+  /// number, unresolvable country code. Recorded rather than silent, because
+  /// "nothing happened and nobody knows why" is the failure this prevents.
+  SUPPRESSED
+}
+
+enum SmsEncoding {
+  GSM7
+  UCS2
+}
+
+/**
+ * A code texted to a phone that belongs to no account.
+ *
+ * ── Why not VerificationToken ───────────────────────────────────────────────
+ *
+ * That model's `userId` is a required FK to `User`, and a diner scanning a QR
+ * code has no user. Its `tokenHash` is `@unique`, which for a six-digit code
+ * means the second tenant to mint `481920` this minute gets a constraint
+ * violation instead of an OTP. And it has no attempt counter, so there is
+ * nowhere to put the lockout a 10^6 keyspace requires.
+ *
+ * ── Why the hash is keyed ───────────────────────────────────────────────────
+ *
+ * `hashToken()` is a bare SHA-256 — right for a 48-byte token, useless here,
+ * where a dump of this table is a million-entry rainbow table away from every
+ * live code. `codeHash` is an HMAC under the application secret over
+ * restaurantId + phoneKey + purpose + code, so a dump alone yields nothing and
+ * a table built against one tenant is worthless against another.
+ */
+model PhoneOtp {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  purpose      OtpPurpose
+
+  /// The identity form, from `phoneKey()` — so a guest who typed 077… once and
+  /// +94 77… the next time is one person to the throttle and to the lockout.
+  phoneKey String
+  /// What was actually dialled.
+  toE164   String
+
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  usedAt      DateTime?
+  /// Set when attempts run out. A locked row is NOT deleted: the lockout has to
+  /// outlive the code it protected, or a resend walks straight past it.
+  lockedAt    DateTime?
+
+  smsMessageId String?
+  /// Binds the code to the browser that asked for it.
+  guestSessionId String?
+  ipHash         String?
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, phoneKey, purpose, createdAt])
+  @@index([expiresAt])
+  @@map("phone_otps")
+}
+
+enum OtpPurpose {
+  LOYALTY_LOOKUP
+  GUEST_ORDER
+  RESERVATION
+  STAFF_LOGIN
 }

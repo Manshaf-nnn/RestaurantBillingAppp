@@ -1115,6 +1115,17 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
       revalidatePath('/dashboard/orders')
       revalidatePath('/cashier')
       revalidatePath('/cashier/pos')
+      /*
+       * The two screens that now watch a staff order from the moment it is
+       * placed. A staff order is written ACCEPTED and committed to the kitchen
+       * in the same transaction, so the rail and the waiter's own board have it
+       * immediately — but only if their cached render is dropped. The socket
+       * carries the change to an open tab; this is for the next navigation and
+       * for the serverless path where there is no socket.
+       */
+      revalidatePath('/kitchen')
+      revalidatePath('/waiter')
+      revalidatePath('/dashboard/tables')
 
       return {
         orderId: order.id,

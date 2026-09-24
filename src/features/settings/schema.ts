@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { phoneSchema } from '@/features/auth/schema'
 import { imageUrlField } from '@/lib/media-url'
 
 export const restaurantSettingsSchema = z.object({
@@ -308,3 +309,182 @@ export const guestAppearanceSchema = z.object({
     .optional()
     .or(z.literal('')),
 })
+
+/**
+ * A shop's own SMS gateway.
+ *
+ * Shape and format only. Three rules that need server state live in the action
+ * instead: that a trigger cannot be switched on before a test send has
+ * succeeded, that a template references no unknown placeholder, and that the
+ * gateway URL survives the SSRF guard. A zod schema imported by a client
+ * component can check none of those.
+ */
+const smsSpecSchema = z.object({
+  method: z.enum(['GET', 'POST']),
+  url: z.string().trim().max(2000),
+  headers: z.record(z.string().max(200)).default({}),
+  bodyEncoding: z.enum(['none', 'json', 'form']),
+  bodyTemplate: z.string().max(4000).default(''),
+  authMode: z.enum(['none', 'field', 'bearer', 'basic', 'header']),
+  authHeader: z.string().trim().max(100).optional(),
+  successKind: z.enum(['httpStatus', 'jsonEquals', 'jsonTruthy', 'bodyContains']),
+  successPath: z.string().trim().max(200).optional(),
+  /** Comma-separated on the way in; the action splits it. */
+  successEquals: z.string().trim().max(400).optional(),
+  successNeedle: z.string().trim().max(200).optional(),
+  messageIdPath: z.string().trim().max(200).optional(),
+  errorMessagePath: z.string().trim().max(200).optional(),
+  errorCodePath: z.string().trim().max(200).optional(),
+  numberFormat: z.enum(['e164Plus', 'e164NoPlus', 'nationalLeadingZero']),
+  encoding: z.enum(['auto', 'gsm7', 'unicode']),
+  unicodeFieldName: z.string().trim().max(100).optional(),
+  unicodeGsm7Value: z.string().trim().max(100).optional(),
+  unicodeValue: z.string().trim().max(100).optional(),
+})
+
+export const smsConfigSchema = z
+  .object({
+    enabled: z.coerce.boolean(),
+    provider: z.enum(['notifylk', 'textlk', 'dialog', 'mobitel', 'custom']),
+    /*
+     * An alphanumeric mask is at most 11 characters and a numeric one at most
+     * 15 — a GSM limit, not ours, and a mask over it is silently replaced by
+     * the operator's default.
+     */
+    senderId: z.string().trim().max(15),
+    senderIdApproved: z.coerce.boolean(),
+
+    /** Empty means LEAVE UNCHANGED, which is what makes a write-only field usable. */
+    credentials: z
+      .object({
+        apiKey: z.string().max(512).optional(),
+        apiSecret: z.string().max(512).optional(),
+        username: z.string().max(128).optional(),
+        password: z.string().max(512).optional(),
+        accountId: z.string().max(128).optional(),
+      })
+      .default({}),
+
+    spec: smsSpecSchema.nullish(),
+
+    caps: z.object({
+      perDay: z.coerce.number().int().min(1).max(10_000),
+      perRecipientPerDay: z.coerce.number().int().min(1).max(100),
+      otpPerHour: z.coerce.number().int().min(1).max(5_000),
+    }),
+
+    /** Typed in whole currency; the action converts to minor units. */
+    cost: z.coerce.number().min(0).max(10_000).nullish(),
+    costCurrency: z.string().trim().max(8).nullish(),
+
+    triggers: z.object({
+      otp: z.coerce.boolean(),
+      receipt: z.coerce.boolean(),
+      orderReady: z.coerce.boolean(),
+      reservationConfirm: z.coerce.boolean(),
+      reservationReminder: z.coerce.boolean(),
+      marketing: z.coerce.boolean(),
+    }),
+
+    templates: z.record(z.string().max(480)).default({}),
+
+    trialOnlyVerified: z.coerce.boolean(),
+    /** One number per line on the way in; the action normalises to phoneKey form. */
+    verifiedRecipients: z.string().max(4000).default(''),
+    optOut: z.string().max(20_000).default(''),
+  })
+  .superRefine((value, ctx) => {
+    const needsOwnSpec = value.provider === 'custom' || value.provider === 'dialog' || value.provider === 'mobitel'
+
+    if (needsOwnSpec && !value.spec?.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['spec', 'url'],
+        message: 'This gateway has no built-in endpoint — paste the send URL from its documentation',
+      })
+    }
+
+    if (value.spec) {
+      if (value.spec.successKind === 'jsonEquals' && !value.spec.successPath) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'successPath'],
+          message: 'Give the field to read, e.g. status',
+        })
+      }
+      if (value.spec.successKind === 'jsonEquals' && !value.spec.successEquals) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'successEquals'],
+          message: 'Give the value that means success, e.g. success',
+        })
+      }
+      if (value.spec.successKind === 'jsonTruthy' && !value.spec.successPath) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'successPath'],
+          message: 'Give the field that is present on success, e.g. sid',
+        })
+      }
+      if (value.spec.successKind === 'bodyContains' && !value.spec.successNeedle) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'successNeedle'],
+          message: 'Give the text that means success, e.g. OK',
+        })
+      }
+      if (value.spec.authMode === 'header' && !value.spec.authHeader) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'authHeader'],
+          message: 'Name the header your gateway expects, e.g. X-API-Key',
+        })
+      }
+      /*
+       * A gateway that needs an explicit unicode flag and does not get one
+       * sends Sinhala as mojibake, which arrives looking like a delivery
+       * success and reads as nonsense.
+       */
+      if (value.spec.encoding !== 'gsm7' && value.spec.unicodeFieldName && !value.spec.unicodeValue) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'unicodeValue'],
+          message: 'Give the value this field takes for a unicode message',
+        })
+      }
+    }
+
+    /* A mask nobody approved delivers nothing, and does it without an error. */
+    const anyTrigger = Object.values(value.triggers).some(Boolean)
+    if (anyTrigger && !value.senderIdApproved) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['senderIdApproved'],
+        message: 'Confirm your sender mask is approved before switching any messages on',
+      })
+    }
+    if (anyTrigger && !value.senderId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['senderId'],
+        message: 'A sender ID is needed before any messages can be sent',
+      })
+    }
+    /* Marketing is the only one that legally needs a way out. */
+    if (value.triggers.marketing && !value.templates.marketing?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['templates', 'marketing'],
+        message: 'Write the offer message, including how to opt out',
+      })
+    }
+  })
+
+export type SmsConfigInput = z.infer<typeof smsConfigSchema>
+
+/** One test message to one number, from the settings page. */
+export const smsTestSchema = z.object({
+  to: phoneSchema,
+  message: z.string().trim().min(1, 'Write something to send').max(480),
+})
+export type SmsTestInput = z.infer<typeof smsTestSchema>

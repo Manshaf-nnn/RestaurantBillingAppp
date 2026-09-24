@@ -341,9 +341,17 @@ async function main() {
       check('the form names the location it is acting on', await seen(ownerPage, /Making at/))
       check('no "Make it now"', (await ownerPage.getByRole('button', { name: 'Make it now' }).count()) === 0)
       check('no location select on the form', (await ownerPage.getByText('Made at').count()) === 0)
-      check('the three steps are named', await seen(ownerPage, 'Recipe Setup') && await seen(ownerPage, 'Check Available Stock') && await seen(ownerPage, 'Create Production Order'))
+      /*
+       * DELIBERATE layout change 2026-09 (pro.b.md §11, "do not add
+       * unnecessary screens"): the 1-2-3 stepper is gone. The tab is the
+       * recipe editor plus the saved recipes; picking one opens the order,
+       * with the stock check inside it against the quantity being made. The
+       * flow itself is unchanged and the steps below still walk all of it.
+       */
+      check('the recipe editor is there', await seen(ownerPage, 'Recipe Master'))
+      check('and the saved recipes to produce from', await seen(ownerPage, 'Saved recipes'))
 
-      // 1. Recipe Setup
+      // 1. Write the recipe
       await ownerPage.getByRole('combobox').filter({ hasText: 'Choose any item from stock' }).click()
       await ownerPage.getByRole('option', { name: /New item/ }).click()
       await ownerPage.getByPlaceholder('Chicken Shawarma Filling, mayonnaise, dough…').fill(mayo)
@@ -365,9 +373,7 @@ async function main() {
       check('Save recipe is enabled once the recipe is complete', await saveButton.isEnabled())
       await saveButton.click()
 
-      // 2. Check Available Stock
-      await ownerPage.getByText('Stock Balance').waitFor({ timeout: 15_000 }).catch(() => undefined)
-      check('step 2 shows the stock balance of each ingredient here', await seen(ownerPage, 'Stock Balance') && await seen(ownerPage, 'Available Qty') && await seen(ownerPage, chicken.name))
+      // 2. It is saved, and listed on the same page to produce from
       const item = await eventually(
         () => prisma.inventoryItem.findFirst({ where: { restaurantId: restaurant.id, name: mayo } }),
         (i) => i !== null,
@@ -376,12 +382,16 @@ async function main() {
       check('with its recipe', (await prisma.recipe.count({ where: { producesItemId: item?.id ?? '', isActive: true } })) === 1)
       const chickenBefore = await prisma.inventoryStock.findFirst({ where: { itemId: chicken.id, branchId: kandy.id } })
       check('and nothing has left stock', chickenBefore?.available === 10, String(chickenBefore?.available))
-      await ownerPage.getByRole('button', { name: 'Create Production Order', exact: true }).click()
 
-      // 3. Create Production Order
-      await ownerPage.getByText('New Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
-      check('step 3 is the order form with the recipe named', await seen(ownerPage, 'New Production Order') && await seen(ownerPage, 'Planned Quantity') && await seen(ownerPage, 'Production Type'))
-      check('planned quantity is pre-filled from the yield', (await ownerPage.getByPlaceholder('10').inputValue()) === '900')
+      await ownerPage.locator('[data-testid="saved-recipes"]').getByText(mayo).waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('the saved recipe is on the same page', await seen(ownerPage, 'Saved recipes') && await seen(ownerPage, mayo))
+
+      // 3. Pick it: the order panel, with the stock check inside it
+      await ownerPage.locator('[data-testid="saved-recipes"]').getByText(mayo).first().click()
+      await ownerPage.getByText('Create Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('picking a saved recipe opens the order', await seen(ownerPage, 'Create Production Order') && await seen(ownerPage, 'Quantity to make') && await seen(ownerPage, 'Production Type'))
+      check('with the stock check against that quantity', await seen(ownerPage, 'Check Available Stock') && await seen(ownerPage, chicken.name))
+      check('quantity pre-filled from the yield', (await ownerPage.getByPlaceholder('10').inputValue()) === '900')
       await ownerPage.getByRole('button', { name: 'Create Order', exact: true }).click()
       await ownerPage.waitForURL(/\/dashboard\/production\/[^/?]+$/, { timeout: 15_000 }).catch(() => undefined)
       check('Create Order lands on the order\'s own page', /\/dashboard\/production\/(?!items)[^/?]+$/.test(ownerPage.url()), ownerPage.url())
@@ -440,7 +450,7 @@ async function main() {
         plan: { name: mayo, itemId: mayoItem.id, quantity: 500, unit: 'GRAM', ingredients: [{ itemId: chicken.id, quantity: 1, unit: 'KG' }] },
       })
       await ownerPage.goto(`${BASE}/dashboard/production`, { waitUntil: 'networkidle' })
-      check('the order in progress is listed under the steps', await seen(ownerPage, /1 production order in progress/))
+      check('the order in progress is listed under the tab', await seen(ownerPage, /1 production order in progress/))
       await ownerPage.getByRole('tab', { name: /Prepared/ }).click()
       const row = ownerPage.locator('tr[data-state="in-progress"]')
       check('the item is a row in the in-progress state', (await row.count()) === 1 && (await row.first().innerText().catch(() => '')).includes(mayo))
@@ -465,16 +475,35 @@ async function main() {
       )
       check('completed from the order page', done.status === 'COMPLETED' && done.actualQty === 500 && done.variance === 0)
 
-      // Make More: the item page opens step 3 with the recipe; a new order, never a new item (pro.b.md §12).
+      // Make More: another batch of the SAME item, never a new item (pro.b.md §12).
       const runsBefore = await prisma.productionOrder.count({
         where: { restaurantId: restaurant.id, outputItemId: mayoItem.id, status: 'COMPLETED' },
       })
+
+      /*
+       * From the Prepared tab's own button first. This is the one that was
+       * broken: it links to `?tab=make&make=<id>` on the route it is already
+       * on, and while the tab was React state the click left you standing on
+       * Prepared with nothing visibly changed.
+       */
+      await ownerPage.goto(`${BASE}/dashboard/production?tab=prepared`, { waitUntil: 'networkidle' })
+      await ownerPage.locator('tr').filter({ hasText: mayo }).first().getByRole('link', { name: 'Make more' }).click()
+      await ownerPage.waitForURL(/\/dashboard\/production\?tab=make&make=/, { timeout: 15_000 }).catch(() => undefined)
+      await ownerPage.getByText('Create Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check(
+        'Make more on the Prepared tab opens the order for that recipe',
+        await seen(ownerPage, 'Create Production Order') &&
+          (await ownerPage.locator('input[readonly]').first().inputValue()) === mayo,
+      )
+
+      // And from the item's own page, which reaches the same panel.
       await ownerPage.goto(`${BASE}/dashboard/production/items/${mayoItem.id}`, { waitUntil: 'networkidle' })
       check('the page offers Add Production / Make More', await seen(ownerPage, /Add Production/))
       await ownerPage.getByRole('link', { name: 'New production order' }).click()
-      await ownerPage.waitForURL(/\/dashboard\/production\?make=/, { timeout: 15_000 }).catch(() => undefined)
-      await ownerPage.getByText('New Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
-      check('Make more lands on step 3 with the recipe', await seen(ownerPage, 'New Production Order') && (await ownerPage.locator('input[readonly]').first().inputValue()) === mayo)
+      await ownerPage.waitForURL(/\/dashboard\/production\?tab=make&make=/, { timeout: 15_000 }).catch(() => undefined)
+      await ownerPage.getByText('Create Production Order').waitFor({ timeout: 15_000 }).catch(() => undefined)
+      check('Make more opens the order with the recipe', await seen(ownerPage, 'Create Production Order') && (await ownerPage.locator('input[readonly]').first().inputValue()) === mayo)
+      // The extra quantity: a different amount from the recipe's own yield.
       await ownerPage.getByPlaceholder('10').fill('200')
       await ownerPage.getByRole('button', { name: 'Create Order', exact: true }).click()
       await ownerPage.waitForURL(/\/dashboard\/production\/(?!items)[^/?]+$/, { timeout: 15_000 }).catch(() => undefined)

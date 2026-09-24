@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Timer } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -17,13 +18,25 @@ import type { ProductionWorkspaceData } from '../types'
 /**
  * Kitchen Production: three tabs (pro.b.md §11), one flow through them:
  *
- *   Make an Item / Production — recipe → stock check → production order,
- *                               then the order's own page for issue and completion
+ *   Make an Item / Production — the recipe, then the saved recipes to produce
+ *                               from; the order's own page issues and completes
  *   Prepared / Produced Items — every item, in progress or stocked
  *   Production History        — every run, whatever state it is in
  *
- * Orders in progress are listed under the steps, so a cook who left the
- * screen mid-shift gets back to the one they were on without hunting.
+ * Orders in progress are listed under the tab, so a cook who left the screen
+ * mid-shift gets back to the one they were on without hunting.
+ *
+ * ── Why the tab lives in the URL ────────────────────────────────────────────
+ *
+ * It was React state, and that quietly broke "Make more" on the Prepared tab.
+ * That button links to `?make=<id>` on THIS route — a soft same-route
+ * navigation, which re-renders the server component and preserves client
+ * state. So the tab stayed on Prepared, and `MakeItemForm` was not even
+ * mounted (Radix unmounts an inactive `TabsContent`), so the effect that reads
+ * the prefill never ran. The button appeared to do nothing at all.
+ *
+ * With the tab in the URL the server decides which one is open, so a link can
+ * point at a tab — which is what that button was always trying to do.
  */
 export function ProductionWorkspace({
   data,
@@ -34,6 +47,7 @@ export function ProductionWorkspace({
   locale,
   canManage,
   prefill,
+  tab,
 }: {
   data: ProductionWorkspaceData
   branchId: string | null
@@ -42,15 +56,30 @@ export function ProductionWorkspace({
   currency: string
   locale: string
   canManage: boolean
-  prefill: { itemId: string; name: string; step?: 1 | 2 | 3 } | null
+  prefill: { itemId: string; name: string; order?: boolean } | null
+  /** Which tab the URL asks for, already resolved against `canManage`. */
+  tab: 'make' | 'prepared' | 'history'
 }) {
-  const [tab, setTab] = React.useState<'make' | 'prepared' | 'history'>(canManage ? 'make' : 'prepared')
+  const router = useRouter()
+  const pathname = usePathname()
+  const params = useSearchParams()
+
+  const go = (next: string) => {
+    const query = new URLSearchParams(params.toString())
+    if (next === (canManage ? 'make' : 'prepared')) query.delete('tab')
+    else query.set('tab', next)
+    // Switching tab by hand drops whichever recipe a link had opened.
+    query.delete('make')
+    query.delete('recipe')
+    const search = query.toString()
+    router.push(search ? `${pathname}?${search}` : pathname, { scroll: false })
+  }
 
   const inProgress = data.openBatches.length
 
   return (
     <>
-      <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+      <Tabs value={tab} onValueChange={go}>
         <TabsList>
           {canManage ? <TabsTrigger value="make">Make an Item / Production</TabsTrigger> : null}
           <TabsTrigger value="prepared">Prepared / Produced Items ({data.prepared.length})</TabsTrigger>

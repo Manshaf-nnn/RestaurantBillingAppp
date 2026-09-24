@@ -30,14 +30,23 @@ export interface WorkspaceItem {
   /** The item's category — the recipe's "Category" (pro.b.md §1). */
   category: string | null
   /**
-   * The lots still on this branch's shelf, oldest receipt first, each at its
-   * own price (pro.b.md §5). The screens walk these with `walkFifo` — the same
-   * walk the issue runs — so a preview is a dry run of the draw.
+   * The layers still on this branch's shelf, oldest receipt first, each with
+   * the value it holds (FIFO.md). The screens walk these with `walkFifo` — the
+   * same walk the issue runs — so a preview is a dry run of the draw.
+   *
+   * `unlotted` used to sit beside this: stock no layer accounted for, drawn
+   * last at the item's running average. The opening-layer migration gave that
+   * stock a real layer, so every unit on the shelf belongs to one and the
+   * average has no part in a preview any more.
    */
-  lots: Array<{ batchId: string; batchNo: string; remaining: number; unitCost: number }>
-  /** Base units on hand here that no lot accounts for; drawn last, at `unitCost`. */
-  unlotted: number
-  /** The oldest lot's own price — what the next unit costs. The stock check's column. */
+  lots: Array<{
+    batchId: string
+    batchNo: string
+    remaining: number
+    remainingValue: number
+    unitCost: number
+  }>
+  /** The oldest layer's own rate — what the next unit costs (FIFO.md). */
   nextUnitCost: number
 }
 

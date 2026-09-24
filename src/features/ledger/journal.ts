@@ -115,6 +115,42 @@ function entry(params: {
   }
 }
 
+/**
+ * What a stock movement did to the inventory account, in minor units.
+ *
+ * ── Why not quantity × unitCost ─────────────────────────────────────────────
+ *
+ * Because that is a reconstruction, and it does not reconstruct. `unitCost` is
+ * a per-unit figure rounded to whole minor units for display; the FIFO
+ * allocator records the exact figure in `valueMoved`, and the two disagree
+ * twice over:
+ *
+ *   · rounding — 650 paid for 1,000 g is 0.65 a gram, which stores as 1 and
+ *     multiplies back to 1,000. The journal booked a 54% overstatement into
+ *     account 1200 and the trial balance still balanced, because both legs
+ *     were built from the same wrong number;
+ *   · layer spans — a draw crossing two layers has no single unit cost at all,
+ *     so no multiplication can recover what it took.
+ *
+ * `valueMoved` is the sum of the layer draws the movement actually made, so
+ * posting it means account 1200's movement equals the change in the sum of the
+ * layers, exactly. That tie is the whole reason the balance sheet can be
+ * trusted against the stock screens, and it is checked in `ledger-test`.
+ *
+ * The fallback is for movements written before `valueMoved` existed — the
+ * migration backfilled them, but a zero on a real quantity would silently
+ * drop stock out of the books, and the old reconstruction is a better answer
+ * than none.
+ */
+function stockValueOf(movement: {
+  quantity: number
+  unitCost: number
+  valueMoved: number
+}): number {
+  if (movement.valueMoved !== 0) return Math.abs(Math.round(movement.valueMoved))
+  return Math.round(Math.abs(movement.quantity) * movement.unitCost)
+}
+
 const MAX_ROWS = 500
 
 export async function buildJournal(params: {
@@ -135,7 +171,8 @@ export async function buildJournal(params: {
           id: true, orderNumber: true, placedAt: true, subtotal: true, discountTotal: true,
           loyaltyDiscount: true, taxTotal: true, serviceCharge: true, tipAmount: true,
           roundingAdj: true, grandTotal: true, taxInclusive: true,
-          items: { where: { status: { not: 'CANCELLED' } }, select: { costPrice: true, quantity: true } },
+          // The lines themselves are no longer read: COGS comes from the stock
+          // the order actually consumed, not from the cost pinned on the line.
         },
         orderBy: { placedAt: 'desc' },
         take: MAX_ROWS,
@@ -202,13 +239,13 @@ export async function buildJournal(params: {
       }),
       prisma.stockMovement.findMany({
         where: { restaurantId, type: { in: ['ADJUSTMENT_IN', 'ADJUSTMENT_OUT'] }, createdAt: within },
-        select: { id: true, type: true, quantity: true, unitCost: true, createdAt: true, item: { select: { name: true } } },
+        select: { id: true, type: true, quantity: true, unitCost: true, valueMoved: true, createdAt: true, item: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
         take: MAX_ROWS,
       }),
       prisma.stockMovement.findMany({
         where: { restaurantId, type: 'OPENING_BALANCE', createdAt: within },
-        select: { id: true, quantity: true, unitCost: true, createdAt: true, item: { select: { name: true } } },
+        select: { id: true, quantity: true, unitCost: true, valueMoved: true, createdAt: true, item: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
         take: MAX_ROWS,
       }),
@@ -229,6 +266,82 @@ export async function buildJournal(params: {
         take: MAX_ROWS,
       }),
     ])
+
+  /*
+   * What each bill's ingredients actually cost the inventory (FIFO.md).
+   *
+   * ── Why not the cost pinned on the line ─────────────────────────────────────
+   *
+   * Because `OrderItem.costPrice` is two different things wearing one name, and
+   * only one of them is a transaction:
+   *
+   *   · on a line WITH a recipe it is the resolved ingredient cost, and the
+   *     stock really does leave — measured against the layers on live data,
+   *     the two agreed to the minor unit;
+   *   · on a line with NO recipe it is `Food.costPrice`, a figure typed into
+   *     the menu dialog. Nothing leaves stock, because there is no recipe
+   *     saying what would.
+   *
+   * The second was being credited to Inventory anyway. On this database that
+   * was 18,826,500 across 889 lines against 15,600 of stock that actually
+   * moved — the inventory account being written down by a thousand times what
+   * left the shelves, every figure still balancing, because both legs of the
+   * entry were built from the same invented number.
+   *
+   * And it double-counted: a bought-in cake was already expensed when it was
+   * bought, through the goods receipt (J5) or the expense payment (J8).
+   * Booking the menu card's guess as a second expense charges the restaurant
+   * twice for one cake.
+   *
+   * So J4 posts what the ledger did: the value the FIFO allocator took off the
+   * layers for this order, net of anything a cancelled line put back. The
+   * estimate still has a home — the profit report uses it for per-dish margin,
+   * which is a management question, not a posting. This is the tie that lets
+   * account 1200 be checked against the stock screens at all.
+   */
+  const consumedByOrder = new Map<string, number>()
+  if (orders.length > 0) {
+    const consumed = await prisma.stockMovement.groupBy({
+      by: ['orderId', 'type'],
+      where: {
+        restaurantId,
+        orderId: { in: orders.map((o) => o.id) },
+        type: { in: ['SALE', 'SALE_REVERSAL'] },
+      },
+      _sum: { valueMoved: true },
+    })
+    for (const row of consumed) {
+      if (!row.orderId) continue
+      // `valueMoved` is a magnitude; the type says the direction. A reversal
+      // put stock back, so it reduces what this bill consumed.
+      const signed = (row.type === 'SALE_REVERSAL' ? -1 : 1) * Math.abs(row._sum.valueMoved ?? 0)
+      consumedByOrder.set(row.orderId, (consumedByOrder.get(row.orderId) ?? 0) + signed)
+    }
+  }
+
+  /*
+   * What the returned stock was actually carrying, per return.
+   *
+   * A movement names its return through `referenceType`/`referenceId` rather
+   * than a foreign key, so this cannot be an `include` on the query above.
+   */
+  const returnedValue = new Map<string, number>()
+  if (returns.length > 0) {
+    const moved = await prisma.stockMovement.groupBy({
+      by: ['referenceId'],
+      where: {
+        restaurantId,
+        referenceType: 'PurchaseReturn',
+        referenceId: { in: returns.map((r) => r.id) },
+      },
+      _sum: { valueMoved: true },
+    })
+    for (const row of moved) {
+      if (row.referenceId) {
+        returnedValue.set(row.referenceId, Math.abs(Math.round(row._sum.valueMoved ?? 0)))
+      }
+    }
+  }
 
   // J1 — the sale. Balances algebraically: grandTotal = subtotal − discounts
   // + tax + service + rounding, so receivable + discounts ≡ the credit side.
@@ -264,9 +377,10 @@ export async function buildJournal(params: {
     })
     if (made) entries.push(made)
 
-    // J4 — the ingredients those sold lines consumed, at the cost pinned on
-    // the line when it sold. Zero when nothing has a recipe behind it.
-    const cogs = order.items.reduce((sum, item) => sum + Math.round(item.costPrice * item.quantity), 0)
+    // J4 — the ingredients those sold lines consumed, at what the FIFO layers
+    // gave up for them. Zero when nothing has a recipe behind it, because then
+    // nothing left the store — see `consumedByOrder` above.
+    const cogs = Math.max(0, Math.round(consumedByOrder.get(order.id) ?? 0))
     const cogsEntry = entry({
       id: `cogs:${order.id}`,
       date: order.placedAt,
@@ -361,9 +475,30 @@ export async function buildJournal(params: {
     if (made) entries.push(made)
   }
 
-  // J7 — goods sent back: the payable falls with the stock.
+  /*
+   * J7 — goods sent back: the payable falls with the stock.
+   *
+   * Two different figures, which is why this entry has three legs where it
+   * used to have two:
+   *
+   *   · what the SUPPLIER credits — the invoice price on the return note, and
+   *     the only thing that may reduce the payable;
+   *   · what the STOCK was carrying — the layers the goods actually came off,
+   *     and the only thing that may reduce inventory.
+   *
+   * Both were posted at the first figure, so returning goods silently rewrote
+   * the inventory account to whatever the supplier happened to credit. They
+   * agree whenever the return names its purchase, because the allocator takes
+   * the goods back off the layers that delivery created; they part company on
+   * a return with no purchase behind it, which falls through to ordinary FIFO
+   * and can send back stock that came in at another price. That difference is
+   * a gain or loss on the stock, and it belongs in 6210 with the other stock
+   * differences rather than hidden inside the payable.
+   */
   for (const ret of returns) {
-    const value = ret.lines.reduce((sum, line) => sum + Math.round(line.quantity * line.unitCost), 0)
+    const credited = ret.lines.reduce((sum, line) => sum + Math.round(line.quantity * line.unitCost), 0)
+    const stock = returnedValue.get(ret.id) ?? credited
+    const difference = credited - stock
     const made = entry({
       id: `return:${ret.id}`,
       date: ret.createdAt,
@@ -372,8 +507,11 @@ export async function buildJournal(params: {
       narrative: `Returned to supplier ${ret.number}`,
       href: '/dashboard/purchases',
       lines: [
-        { account: '2000', debit: value },
-        { account: '1200', credit: value },
+        { account: '2000', debit: credited },
+        { account: '1200', credit: stock },
+        // Credited for more than the stock was carrying is a gain, and less a
+        // loss. Zero on an ordinary return, so the leg simply does not appear.
+        { account: '6210', credit: difference > 0 ? difference : 0, debit: difference < 0 ? -difference : 0 },
       ],
     })
     if (made) entries.push(made)
@@ -430,9 +568,9 @@ export async function buildJournal(params: {
     if (made) entries.push(made)
   }
 
-  // J11 — a counted stock adjustment, valued at the item's cost.
+  // J11 — a counted stock adjustment, at exactly what the layers moved by.
   for (const movement of adjustments) {
-    const value = Math.round(Math.abs(movement.quantity) * movement.unitCost)
+    const value = stockValueOf(movement)
     const isIn = movement.type === 'ADJUSTMENT_IN'
     const made = entry({
       id: `adjust:${movement.id}`,
@@ -456,7 +594,7 @@ export async function buildJournal(params: {
 
   // J12 — opening stock: what was on the shelves before the books began.
   for (const movement of openings) {
-    const value = Math.round(Math.abs(movement.quantity) * movement.unitCost)
+    const value = stockValueOf(movement)
     const made = entry({
       id: `opening:${movement.id}`,
       date: movement.createdAt,

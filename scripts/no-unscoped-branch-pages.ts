@@ -97,6 +97,8 @@ const GROUP_WIDE: Record<string, string> = {
   // ── Reads that carry the branch on the record instead of in a selection.
   'dashboard/orders/[orderId]': 'One order; its own branch is checked with canAccessBranch',
   'dashboard/transfers/[transferId]': 'Guarded by assertTransferSide on the transfer’s two ends',
+  'dashboard/transfers/[transferId]/print':
+    'IS one transfer; the same assertTransferSide the detail page applies, on the id in the URL',
   'dashboard/transfers/new': 'The form picks both ends explicitly',
   'dashboard/purchases/[purchaseId]': 'One order; its own branch is checked',
   'dashboard/purchases/[purchaseId]/edit': 'As above',

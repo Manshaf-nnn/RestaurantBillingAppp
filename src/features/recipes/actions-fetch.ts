@@ -6,6 +6,7 @@ import { runSafe } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePermission } from '@/server/auth/guard'
 import { costDraftLines } from '@/features/inventory/recipe-resolver'
+import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { prisma } from '@/server/db/prisma'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
@@ -36,6 +37,15 @@ const lineSchema = z.object({
  * the number on this screen and the number in the ledger cannot drift apart.
  * `previewRecipeCost` could not be reused: it takes a saved recipe id, and the
  * whole point here is that nothing has been saved yet.
+ *
+ * ── Which location's cost ───────────────────────────────────────────────────
+ *
+ * The branch on screen, so the price quoted is what making this dish would
+ * actually consume HERE — the next layer off that location's shelf (FIFO.md).
+ * A server action has no URL to read it from, hence the same cookie the branch
+ * switcher writes. On "all locations" there is no one shelf to price against
+ * and the resolver falls back to the item's blended rate, which is the right
+ * answer to a question asked about no location in particular.
  */
 export async function costRecipeLines(input: unknown) {
   return runSafe(async () => {
@@ -49,6 +59,7 @@ export async function costRecipeLines(input: unknown) {
       restaurantId: user.restaurantId,
       yieldQty: parsed.yieldQty ?? 1,
       lines: parsed.lines,
+      branchId: scopeToOne(await selectedBranch(user)),
     })
 
     return {

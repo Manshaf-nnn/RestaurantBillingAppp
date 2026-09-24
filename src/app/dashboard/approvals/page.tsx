@@ -1,23 +1,22 @@
 import type { Metadata } from 'next'
-import type { ApprovalKind } from '@prisma/client'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ExportMenu } from '@/features/reports/components/export-menu'
-import { CentralApprovals, type ApprovalRow } from '@/features/approvals/components/central-approvals'
+import { ApprovalsBoard, type ApprovalRow } from '@/features/approvals/components/approvals-board'
 import { ApprovalQueue, type ApprovalRow as DecidedRow } from '@/features/approvals/components/approval-queue'
-import { getApprovalsInbox, type InboxKind } from '@/features/accounting/inbox'
+import { getApprovalsInbox } from '@/features/accounting/inbox'
 import {
   RESTAURANT_WIDE,
   getApprovalPolicy,
   listApprovals,
 } from '@/features/approvals/service'
-import { DECIDE_PERMISSION } from '@/features/approvals/permissions'
+import { decidabilityFor } from '@/features/approvals/decidability'
 import { ApprovalFilters } from '@/features/approvals/components/approval-filters'
 import { ApprovalAccess } from '@/features/approvals/components/approval-access'
 import { listSwitchableLocations } from '@/features/transfers/queries'
-import { ROLE_LABELS, canAccessBranch, permissionsFor, visibleBranchIds } from '@/lib/rbac'
+import { ROLE_LABELS, permissionsFor, visibleBranchIds } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
-import { PERMISSIONS, can, type Permission } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { localeForCurrency, type CurrencyCode } from '@/lib/money'
 import { branchNameFor, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
@@ -38,19 +37,6 @@ export const metadata: Metadata = { title: 'Approvals' }
  * routes to the guarded action that already owns its queue — so permissions,
  * branch guards and audit stay where they are.
  */
-
-/**
- * Which permission lets somebody decide each of the OTHER queues. The generic
- * queue is per kind — `DECIDE_PERMISSION` — because a transfer and a refund
- * are different acts with different owners (recorrection.md §1).
- */
-const PERMISSION_FOR_KIND: Record<Exclude<InboxKind, 'APPROVAL_REQUEST'>, Permission> = {
-  OUTGOING_PAYMENT: PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE,
-  PETTY_CASH: PERMISSIONS.PETTY_CASH_APPROVE,
-  STOCK_COUNT: PERMISSIONS.INVENTORY_COUNT_APPROVE,
-  PURCHASE: PERMISSIONS.PURCHASE_APPROVE,
-  WASTAGE: PERMISSIONS.INVENTORY_WASTAGE_APPROVE,
-}
 
 export default async function ApprovalsPage({
   searchParams,
@@ -131,20 +117,13 @@ export default async function ApprovalsPage({
 
   const rows: ApprovalRow[] = waiting.map((item) => {
     /*
-     * Computed here rather than in the service: whether YOU may decide this
-     * depends on who is asking, and services do not read permissions.
-     *
-     * Three things have to be true: the permission for this queue (for the
-     * generic queue, for this KIND), and being at the branch that owns the
-     * decision — a transfer's is the source. The destination sees its own
-     * request as a watcher, and the row says what it is waiting for.
+     * Whether YOU may decide this depends on who is asking, and services do not
+     * read permissions — so it is computed here rather than in the query. The
+     * rule itself lives in `features/approvals/decidability`, which is pure and
+     * has its own tests; it used to be written out inline right here, where the
+     * only way to exercise it was to render this page in a browser.
      */
-    const permission =
-      item.kind === 'APPROVAL_REQUEST'
-        ? (DECIDE_PERMISSION[item.approvalKind as ApprovalKind] ?? null)
-        : PERMISSION_FOR_KIND[item.kind]
-    const atBranch = item.branchId === null || canAccessBranch(user, item.branchId)
-    const canDecide = permission !== null && can(user, permission) && atBranch
+    const verdict = decidabilityFor(user, item)
 
     return {
       category: item.category,
@@ -156,16 +135,13 @@ export default async function ApprovalsPage({
       amount: item.amount,
       branchName: item.branchName,
       requestedByName: item.requestedByName,
-      isOwnRequest: item.requestedById === user.id,
+      isOwnRequest: verdict.isOwnRequest,
       requestedAt: item.requestedAt.toISOString(),
       reference: item.reference,
       consequence: item.consequence,
       decidable: item.decidable,
-      canDecide,
-      waitingOn:
-        item.transfer && !atBranch
-          ? `Waiting for ${item.transfer.fromBranchName} to approve`
-          : null,
+      canDecide: verdict.canDecide,
+      waitingOn: verdict.waitingOn,
       href: item.href,
       transfer: item.transfer
         ? {
@@ -273,33 +249,41 @@ export default async function ApprovalsPage({
         actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="approvals" /> : null}
       />
       <div className="space-y-5">
-        <ApprovalFilters
-          locations={locations.map((l) => ({ id: l.id, name: l.name }))}
-          staff={staff.map(person)}
-          // Only kinds that something actually raises. Stock adjustments,
-          // purchase orders and price overrides have their own queues and
-          // never create a request of this table's kind; a filter for them
-          // matched nothing and looked broken.
-          kinds={[
-            { value: 'STOCK_TRANSFER', label: 'Stock transfer' },
-            { value: 'REFUND', label: 'Refund' },
-            { value: 'DISCOUNT', label: 'Discount' },
-            { value: 'STOCK_WRITEOFF', label: 'Stock write-off' },
-          ]}
-          statuses={[
-            { value: 'PENDING', label: 'Waiting' },
-            { value: 'APPROVED', label: 'Approved' },
-            { value: 'REJECTED', label: 'Rejected' },
-            { value: 'WITHDRAWN', label: 'Cancelled' },
-          ]}
-        />
-
-        <CentralApprovals
+        {/*
+          Same five-part shape as the Transfers screen: figures, filter bar,
+          one table, one right drawer. The filter bar is passed in rather than
+          built inside the board, because it needs the location and staff
+          lists — both server reads — and an element serializes across the
+          boundary where a handler would not.
+        */}
+        <ApprovalsBoard
           rows={rows}
           currency={restaurant.currency as CurrencyCode}
           timeZone={restaurant.timezone}
           locale={locale}
           filtered={filtered}
+          filters={
+            <ApprovalFilters
+              locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+              staff={staff.map(person)}
+              // Only kinds that something actually raises. Stock adjustments,
+              // purchase orders and price overrides have their own queues and
+              // never create a request of this table's kind; a filter for them
+              // matched nothing and looked broken.
+              kinds={[
+                { value: 'STOCK_TRANSFER', label: 'Stock transfer' },
+                { value: 'REFUND', label: 'Refund' },
+                { value: 'DISCOUNT', label: 'Discount' },
+                { value: 'STOCK_WRITEOFF', label: 'Stock write-off' },
+              ]}
+              statuses={[
+                { value: 'PENDING', label: 'Waiting' },
+                { value: 'APPROVED', label: 'Approved' },
+                { value: 'REJECTED', label: 'Rejected' },
+                { value: 'WITHDRAWN', label: 'Cancelled' },
+              ]}
+            />
+          }
         />
 
         {manages && accessRows.length > 0 ? (

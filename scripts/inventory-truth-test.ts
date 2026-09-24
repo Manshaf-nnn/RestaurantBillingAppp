@@ -6,9 +6,11 @@
  *   • A variant option with a recipe DEPLETES and COSTS it (§29 / C7) —
  *     "extra chicken" was the largest silent margin overstatement in the
  *     system: it consumed nothing, on every plate, for ever.
- *   • WAC carries VALUE (§39): an item costing under one minor unit per base
- *     unit no longer rounds its whole delivery to worthless; issues leave at
- *     the running average; reversals bring value back, not zero.
+ *   • Value is carried exactly (§39, and FIFO.md): an item costing under one
+ *     minor unit per base unit no longer rounds its whole delivery to
+ *     worthless. Issues leave at the OLDEST LAYER's price — not the running
+ *     average, which this section used to pin — and reversals bring value
+ *     back rather than zero.
  *   • A branch cannot sell stock it does not hold, even while another branch
  *     still holds plenty.
  *   • FEFO drains lots at the branch the stock actually left.
@@ -87,30 +89,48 @@ async function main() {
     check('value is the exact sum of the receipts', Number(row.stockValue) === 6000, `${row.stockValue}`)
     check('the cached average is value ÷ quantity', row.costPerUnit === 4, `${row.costPerUnit}`)
 
-    // 750g leaves at the running average of 4: value drops by exactly 3000.
+    /*
+     * DELIBERATE basis change 2026-09 (FIFO.md).
+     *
+     * 750 g used to leave at the running average of 4, taking 3000 with it.
+     * It leaves at the OLDEST LAYER's own price now — the 1,000 g bought at 3
+     * — so it takes 2,250 and the shelf keeps 250 @ 3 plus 500 @ 6 = 3,750.
+     *
+     * Both figures are arithmetically sound; they answer different questions.
+     * The average answers "what is a gram of my flour worth on aggregate", the
+     * layer answers "what did the flour I just threw away actually cost me".
+     * The second is the one a food-cost percentage is built from, and it is
+     * what FIFO.md asks for throughout.
+     */
     await prisma.$transaction((tx) => postMovement(tx, {
       restaurantId: restaurant.id, itemId: flour.id, type: 'WASTAGE',
       quantity: 750, branchId: main.id, userId: user.id,
     }))
     row = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: flour.id } })
-    check('an issue takes value at the average', Number(row.stockValue) === 3000, `${row.stockValue}`)
+    check('an issue takes the oldest layer’s value: 750 × 3', Number(row.stockValue) === 3750, `${row.stockValue}`)
 
     const saleRow = await prisma.stockMovement.findFirst({
       where: { itemId: flour.id, type: 'WASTAGE' },
     })
-    check('the outbound row is stamped with the average', saleRow?.unitCost === 4, `${saleRow?.unitCost}`)
+    check('and the row is stamped at that layer’s rate, not the blend', saleRow?.unitCost === 3, `${saleRow?.unitCost}`)
 
-    // A reversal brings the value BACK — these rows used to come back at zero.
+    /*
+     * Stock arriving with no stated price takes the item's own recorded cost —
+     * 3,750 over 750 g is 5 — rather than nothing. An ADJUSTMENT_IN is new
+     * stock found on a shelf, not the reversal of a known consumption; a
+     * SALE_REVERSAL names the order it unwinds and goes back onto the exact
+     * layers that order drew, at their values.
+     */
     await prisma.$transaction((tx) => postMovement(tx, {
       restaurantId: restaurant.id, itemId: flour.id, type: 'ADJUSTMENT_IN',
       quantity: 250, branchId: main.id, userId: user.id,
     }))
     row = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: flour.id } })
-    check('stock coming back carries value, not zero', Number(row.stockValue) === 4000, `${row.stockValue}`)
+    check('stock coming back carries value, not zero', Number(row.stockValue) === 5000, `${row.stockValue}`)
     const reversalRow = await prisma.stockMovement.findFirst({
       where: { itemId: flour.id, type: 'ADJUSTMENT_IN' },
     })
-    check('…and its row carries the cost it came back at', reversalRow?.unitCost === 4, `${reversalRow?.unitCost}`)
+    check('…and its row carries the cost it came back at', reversalRow?.unitCost === 5, `${reversalRow?.unitCost}`)
   }
 
   console.log('\n── 2. A branch cannot sell what it does not hold ──')

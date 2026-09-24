@@ -10,6 +10,9 @@
  *   • COGS in the ledger IS the profit report's COGS
  *   • payables in the ledger IS the supplier ledger's outstanding
  *   • the inventory account moves by receipts − consumption − waste
+ *   • the inventory account IS the sum of the FIFO layers (FIFO.md) — the tie
+ *     that makes the derived balance sheet checkable against the stock screens
+ *     instead of merely internally consistent
  *   • the cash book's closing balance is what the drawer maths says
  *   • cancelled bills contribute nothing at all
  *   • every line carries a source you can click to
@@ -20,6 +23,7 @@ import { openDrawer } from '../src/features/cashdrawer/service'
 import { createPurchaseOrder, setPurchaseStatus } from '../src/features/purchasing/service'
 import { receiveGoods } from '../src/features/purchasing/receiving'
 import { buildJournal } from '../src/features/ledger/journal'
+import { postMovement } from '../src/features/inventory/ledger'
 import { foldCashBook, foldPosition, foldProfitAndLoss, foldTrialBalance } from '../src/features/ledger/queries'
 import { getProfitReport } from '../src/features/reports/profit'
 import { getSalesReport } from '../src/features/reports/sales'
@@ -114,6 +118,37 @@ async function main() {
     restaurantId: restaurant.id, purchaseId: purchase.id,
     lines: [{ purchaseItemId: purchaseItems[0].id, acceptedQty: 50 }], userId: user.id,
   })
+  /*
+   * The bill above actually ate some of that rice.
+   *
+   * DELIBERATE (FIFO.md): the fixture used to pin `costPrice: 30_000` on the
+   * order line and move no stock at all, and the journal credited Inventory
+   * for it anyway. That is the defect this suite is now pinning — on live data
+   * it was crediting 18,826,500 out of an inventory account against 15,600 of
+   * stock that had actually moved, because dishes with no recipe carry a cost
+   * typed into the menu dialog and consume nothing.
+   *
+   * So COGS is posted from the layers the sale drew, and a sale in a fixture
+   * has to draw some. 0.75 kg off a 50 kg layer worth 2,000,000 is 30,000
+   * exactly — the same figure the line was always asserted at, now with a
+   * stock movement behind it. Must run after `receiveGoods`: there is nothing
+   * to allocate against before the rice arrives.
+   */
+  await prisma.$transaction(async (tx) => {
+    await postMovement(tx, {
+      restaurantId: restaurant.id,
+      itemId: item.id,
+      branchId: branch.id,
+      type: 'SALE',
+      quantity: 0.75,
+      reason: 'Recipe consumption',
+      referenceType: 'Order',
+      referenceId: order.id,
+      orderId: order.id,
+      userId: user.id,
+    })
+  })
+
   // Paid half of it by bank transfer.
   await prisma.supplierPayment.create({
     data: {
@@ -130,12 +165,33 @@ async function main() {
       paymentDate: now, createdByName: 'Ledger keeper',
     },
   })
-  // Wastage of 5,000.
-  await prisma.wastageRecord.create({
-    data: {
-      restaurantId: restaurant.id, branchId: branch.id, itemId: item.id,
-      quantity: 1, costValue: 5_000, reason: 'SPOILED', createdById: user.id,
-    },
+  /*
+   * Wastage of 5,000 — and the stock to go with it.
+   *
+   * DELIBERATE (FIFO.md): this wrote a 5,000 wastage record against a 1 kg
+   * quantity, on an item whose stock is worth 40,000 a kg. The journal read
+   * `costValue` and never looked, so the books said 5,000 while the shelf lost
+   * either nothing or eight times that, depending on which record you asked.
+   * 0.125 kg off the 40,000/kg layer IS 5,000, so the two now describe one
+   * event and §3 below can hold the inventory account against the layers.
+   */
+  await prisma.$transaction(async (tx) => {
+    const wasted = await postMovement(tx, {
+      restaurantId: restaurant.id,
+      itemId: item.id,
+      branchId: branch.id,
+      type: 'WASTAGE',
+      quantity: 0.125,
+      reason: 'Spoiled',
+      userId: user.id,
+    })
+    await tx.wastageRecord.create({
+      data: {
+        restaurantId: restaurant.id, branchId: branch.id, itemId: item.id,
+        quantity: 0.125, costValue: wasted.valueMoved, reason: 'SPOILED',
+        createdById: user.id, movementId: wasted.movement.id,
+      },
+    })
   })
   // A drawer opened with a 50,000 float and closed 500 short.
   const session = await openDrawer({
@@ -211,6 +267,27 @@ async function main() {
       accountBalance('1200') === expected, `${accountBalance('1200')} vs ${expected}`)
     check('wastage is an expense, not a silent disappearance',
       accountBalance('6200') === 5_000)
+
+    /*
+     * The tie that makes the balance sheet checkable (FIFO.md).
+     *
+     * Account 1200 is a projection of events; the layers are the stock itself.
+     * If the two can disagree, one of the screens an owner reads is lying and
+     * nothing in the app can say which. Every posting to 1200 now comes from
+     * `StockMovement.valueMoved` — the exact value the allocator moved — so
+     * this is an equality rather than a tolerance.
+     *
+     * It is also the assertion that would have caught the two defects this
+     * fixture used to contain: a sale crediting inventory with a cost typed on
+     * the menu card, and a wastage record naming a value no stock ever had.
+     */
+    const layers = await prisma.stockBatch.aggregate({
+      where: { restaurantId: restaurant.id, remainingQty: { gt: 0 } },
+      _sum: { remainingValue: true },
+    })
+    check('the inventory account IS the sum of the FIFO layers',
+      accountBalance('1200') === (layers._sum.remainingValue ?? 0),
+      `1200 ${accountBalance('1200')} vs layers ${layers._sum.remainingValue ?? 0}`)
   }
 
   console.log('\n── 4. Cash is followed to the note ──')

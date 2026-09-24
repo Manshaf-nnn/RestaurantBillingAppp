@@ -51,6 +51,19 @@ const serverSchema = z.object({
 
   BACKUP_DIR: z.string().default('./backups'),
   BACKUP_RETENTION_DAYS: z.coerce.number().int().default(14),
+
+  /*
+   * Encrypts third-party credentials at rest — today, the SMS gateway keys a
+   * shop owner pastes into Settings.
+   *
+   * Optional, falling back to JWT_ACCESS_SECRET so an existing deployment
+   * keeps working the moment this ships. Setting it properly is still worth
+   * doing: rotating JWT_ACCESS_SECRET is a routine action that signs everyone
+   * out, and if gateway keys hang off it too, that routine action ALSO breaks
+   * every tenant's SMS days later with nothing to connect the two. See
+   * src/server/crypto/secret-box.ts.
+   */
+  CREDENTIAL_ENCRYPTION_KEY: z.string().min(32).optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverSchema>
@@ -111,3 +124,13 @@ export const isCloudinaryConfigured = () =>
 
 export const isSmtpConfigured = () =>
   Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD)
+
+/**
+ * Whether credentials can be sealed at all.
+ *
+ * Per-tenant rather than global, unlike its neighbours: the gateway belongs to
+ * the shop, so "is SMS configured" is a question about a restaurant row. This
+ * only answers the platform half — whether there is a key to encrypt with.
+ */
+export const isCredentialStoreReady = () =>
+  Boolean(process.env.CREDENTIAL_ENCRYPTION_KEY || process.env.JWT_ACCESS_SECRET)

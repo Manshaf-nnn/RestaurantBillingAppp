@@ -40,8 +40,27 @@ import {
   updateTableStatus,
 } from '../actions'
 
-import { SETTABLE_TABLE_STATES, type SettableTableState, type TableState } from '@/features/floor/table-state'
+import {
+  SETTABLE_TABLE_STATES,
+  normalizeTableStatus,
+  type SettableTableState,
+  type TableState,
+} from '@/features/floor/table-state'
 import { callAction } from '@/lib/use-action'
+import {
+  servedCount,
+  stillComing,
+  type LineState,
+  type TableOrder,
+} from '@/features/floor/table-orders'
+import { useSocketEvent } from '@/hooks/use-socket'
+import {
+  EVENTS,
+  type OrderItemProgressPayload,
+  type OrderStatusPayload,
+  type OrderSummaryPayload,
+  type TablePayload,
+} from '@/lib/realtime/events'
 
 export interface ManagedTable {
   id: string
@@ -58,6 +77,22 @@ export interface ManagedTable {
   branchId: string
   branchName: string
   openOrders: number
+  /**
+   * What the table has ordered and not yet been given.
+   *
+   * The card used to show a count. A count tells the floor how many bills are
+   * open; it does not tell them that table 3 is waiting on a pizza while the
+   * burger is sitting under the pass. The kitchen writes those per-line
+   * counters already — this is the screen reading them.
+   */
+  orders: TableOrder[]
+}
+
+/** How each state reads on the card. The rule itself is in `table-orders`. */
+const LINE_STATE: Record<LineState, { label: string; className: string }> = {
+  QUEUED: { label: 'Queued', className: 'bg-muted text-muted-foreground' },
+  PREPARING: { label: 'Preparing', className: 'bg-warning/15 text-warning' },
+  READY: { label: 'Ready', className: 'bg-success/15 text-success' },
 }
 
 export interface TableBranch {
@@ -75,6 +110,7 @@ export function TablesManager({
   canCall = false,
   branches,
   selectedBranchId,
+  branchIds = null,
 }: {
   tables: ManagedTable[]
   canManage: boolean
@@ -86,6 +122,12 @@ export function TablesManager({
   branches: TableBranch[]
   /** What the top-bar switcher is showing. Null means "All locations". */
   selectedBranchId: string | null
+  /**
+   * Which locations this screen is showing, so a live event from another one
+   * can be ignored. Null means every location — an owner watching the whole
+   * business on purpose.
+   */
+  branchIds?: string[] | null
 }) {
   const [tables, setTables] = React.useState(initial)
   const [editing, setEditing] = React.useState<ManagedTable | null>(null)
@@ -123,6 +165,115 @@ export function TablesManager({
   const showBranch = selectedBranchId === null && branches.length > 1
 
   React.useEffect(() => setTables(initial), [initial])
+
+  /* ── Live ─────────────────────────────────────────────────────────────────
+   *
+   * The kitchen already publishes every one of these; this screen was the one
+   * board that never subscribed, so a table's card only changed on the next
+   * poll. Nothing about the emitter changes — the rooms are keyed
+   * `r:<restaurantId>:<role>` with no branch segment, so every event arrives
+   * everywhere and each board filters on the payload's own `branchId`.
+   */
+  const isOurs = React.useCallback(
+    (payload: { branchId?: string | null }) =>
+      branchIds === null || !payload.branchId || branchIds.includes(payload.branchId),
+    [branchIds],
+  )
+
+  // A line moved: the kitchen ticked some prepared, or the floor served some.
+  useSocketEvent(EVENTS.ORDER_ITEM_STATUS, (payload: OrderItemProgressPayload) => {
+    if (!isOurs(payload)) return
+    setTables((current) =>
+      current.map((table) => {
+        if (!table.orders.some((order) => order.id === payload.orderId)) return table
+        return {
+          ...table,
+          orders: table.orders.map((order) =>
+            order.id === payload.orderId
+              ? {
+                  ...order,
+                  items: order.items.map((item) =>
+                    item.id === payload.itemId
+                      ? {
+                          ...item,
+                          status: payload.status,
+                          quantity: payload.quantity,
+                          preparedQty: payload.preparedQty,
+                          servedQty: payload.servedQty,
+                        }
+                      : item,
+                  ),
+                }
+              : order,
+          ),
+        }
+      }),
+    )
+  })
+
+  // A whole order closed or was cancelled — it stops being the table's problem.
+  useSocketEvent(EVENTS.ORDER_STATUS, (payload: OrderStatusPayload) => {
+    if (!isOurs(payload)) return
+    const gone = payload.status === 'COMPLETED' || payload.status === 'CANCELLED'
+    setTables((current) =>
+      current.map((table) => {
+        if (!table.orders.some((order) => order.id === payload.orderId)) return table
+        const orders = gone
+          ? table.orders.filter((order) => order.id !== payload.orderId)
+          : table.orders.map((order) =>
+              order.id === payload.orderId ? { ...order, status: payload.status } : order,
+            )
+        return { ...table, orders, openOrders: orders.length }
+      }),
+    )
+  })
+
+  // A new round arrived — from the till, from a QR code, or from a waiter.
+  useSocketEvent(EVENTS.ORDER_CREATED, (payload: OrderSummaryPayload) => {
+    if (!isOurs(payload) || !payload.tableId) return
+    setTables((current) =>
+      current.map((table) => {
+        if (table.id !== payload.tableId) return table
+        if (table.orders.some((order) => order.id === payload.id)) return table
+        const orders = [
+          ...table.orders,
+          {
+            id: payload.id,
+            orderNumber: payload.orderNumber,
+            status: payload.status as string,
+            placedAt: payload.placedAt,
+            items: payload.items.map((item) => ({
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              preparedQty: item.preparedQty,
+              servedQty: item.servedQty,
+              status: item.status,
+            })),
+          },
+        ]
+        return {
+          ...table,
+          orders,
+          openOrders: orders.length,
+          // A table with an order on it is occupied, whatever the column says.
+          status: table.status === 'AVAILABLE' ? 'OCCUPIED' : table.status,
+        }
+      }),
+    )
+  })
+
+  // Somebody seated, cleared or held a table from another screen.
+  useSocketEvent(EVENTS.TABLE_UPDATED, (payload: TablePayload) => {
+    if (!isOurs(payload)) return
+    setTables((current) =>
+      current.map((table) =>
+        table.id === payload.id
+          ? { ...table, status: normalizeTableStatus(payload.status) }
+          : table,
+      ),
+    )
+  })
 
   const areas = groupBy(tables, (table) => table.area ?? 'Main')
 
@@ -196,8 +347,20 @@ export function TablesManager({
           {Object.entries(areas).map(([area, areaTables]) => (
             <section key={area}>
               <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{area}</h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-                {areaTables.map((table) => (
+              {/*
+                Wider cards than before. Six columns held a table number and a
+                dot; they cannot hold a list of dishes, and a dish list that
+                wraps to one word a line is not readable at arm's length.
+              */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {areaTables.map((table) => {
+                  const coming = stillComing(table.orders)
+                  const served = servedCount(table.orders)
+                  // Six lines, then a count. A card that grows without limit
+                  // pushes every other table off the screen.
+                  const shown = coming.slice(0, 6)
+                  const hidden = coming.length - shown.length
+                  return (
                   <div
                     key={table.id}
                     className={cn(
@@ -228,6 +391,50 @@ export function TablesManager({
                         Reserved for {table.reservedFor}
                       </p>
                     ) : null}
+
+                    {/* ── What this table is still waiting for ───────────── */}
+                    {table.orders.length > 0 ? (
+                      <div className="mt-2 rounded-lg border bg-background/60 p-2">
+                        {coming.length === 0 ? (
+                          <p className="text-xs font-medium text-success">
+                            Everything served · waiting on the bill
+                          </p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {shown.map((line) => (
+                              <li key={line.key} className="flex items-center gap-1.5 text-xs">
+                                <span className="shrink-0 font-medium tabular-nums">
+                                  {line.outstanding}×
+                                </span>
+                                <span className="min-w-0 flex-1 truncate">{line.name}</span>
+                                <span
+                                  className={cn(
+                                    'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                                    LINE_STATE[line.state].className,
+                                  )}
+                                >
+                                  {LINE_STATE[line.state].label}
+                                </span>
+                              </li>
+                            ))}
+                            {hidden > 0 ? (
+                              <li className="text-xs text-muted-foreground">+{hidden} more</li>
+                            ) : null}
+                          </ul>
+                        )}
+                        {/*
+                          Quiet on purpose. What has already gone out is
+                          context, not a thing to act on — the floor is here
+                          for what is still coming.
+                        */}
+                        {served > 0 && coming.length > 0 ? (
+                          <p className="mt-1.5 border-t pt-1.5 text-[11px] text-muted-foreground">
+                            {served} served
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     {canSwap && table.status === 'OCCUPIED' ? (
                       <Button
                         variant="outline"
@@ -325,7 +532,8 @@ export function TablesManager({
                       </div>
                     )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </section>
           ))}

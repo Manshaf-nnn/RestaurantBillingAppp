@@ -44,6 +44,18 @@ export interface ItemHistory {
     minStock: number
     maxStock: number | null
     costPerUnit: number
+    /**
+     * What the next unit off this shelf costs — the first open layer's rate.
+     *
+     * FIFO.md's "current unit cost", and the figure the page shows. It used to
+     * show `costPerUnit`, labelled "Average cost", which is a blend of every
+     * delivery ever received across every branch: on an item bought at 250 and
+     * then at 400 it reported 325, a price the restaurant has never paid and
+     * will not pay next.
+     */
+    nextUnitCost: number
+    /** The sum of the open layers, which is what this stock is worth. */
+    stockValue: number
     lastPurchaseCost: number | null
     branchName: string | null
     locationName: string | null
@@ -140,7 +152,7 @@ export async function getItemHistory(params: {
     },
   })
 
-  const [sum, locationStock, receiptLines] = await Promise.all([
+  const [sum, locationStock, receiptLines, layers] = await Promise.all([
     prisma.stockMovement.aggregate({
       where: { itemId: item.id, restaurantId: params.restaurantId, ...branchWhere },
       _sum: { quantity: true },
@@ -181,14 +193,44 @@ export async function getItemHistory(params: {
         },
       },
     }),
+    /*
+     * The open layers behind this balance, oldest first — the same order the
+     * allocator draws in, so the first row is what the next unit will cost and
+     * the sum is what the stock is worth. Narrowed to the branches this viewer
+     * may see, exactly like the movements and the balances above; an owner
+     * looking at every location gets every location's layers.
+     */
+    prisma.stockBatch.findMany({
+      where: {
+        itemId: item.id,
+        restaurantId: params.restaurantId,
+        remainingQty: { gt: 0 },
+        ...branchWhere,
+      },
+      orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+      select: { remainingQty: true, remainingValue: true, unitCost: true },
+    }),
   ])
+
+  const stockValue = layers.reduce((total, layer) => total + layer.remainingValue, 0)
+  const oldest = layers[0]
+  /*
+   * The item's own recorded rate is the fallback for stock that has no layer —
+   * an item never received through the system, or one whose layers are spent
+   * while the cached balance still says otherwise. Better than showing nothing
+   * and far better than showing zero, which reads as "free".
+   */
+  const nextUnitCost = oldest && oldest.remainingQty > 0
+    ? Math.round(oldest.remainingValue / oldest.remainingQty)
+    : item.costPerUnit
 
   return {
     item: {
       id: item.id, name: item.name, sku: item.sku, unit: item.unit,
       quantity: item.quantity, reorderLevel: item.reorderLevel,
       minStock: item.minStock, maxStock: item.maxStock,
-      costPerUnit: item.costPerUnit, lastPurchaseCost: item.lastPurchaseCost,
+      costPerUnit: item.costPerUnit, nextUnitCost, stockValue,
+      lastPurchaseCost: item.lastPurchaseCost,
       branchName: item.branch?.name ?? null,
       category: item.category,
       barcode: item.barcode,

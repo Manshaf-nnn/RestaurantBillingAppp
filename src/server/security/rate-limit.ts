@@ -44,6 +44,14 @@ export const RATE_LIMITS = {
    * people's balances is how often they may ask. A guest checks their own
    * points once or twice a visit.
    */
+  /*
+   * Sending a test SMS from the settings page.
+   *
+   * Every press spends one of the owner's own credits against their own
+   * gateway, so this is not protecting us — it is stopping a stuck button or
+   * an impatient double-click from costing them a handful of messages.
+   */
+  smsTest: { limit: 5, windowSeconds: 600 },
   loyaltyLookup: { limit: 8, windowSeconds: 600 },
   /** per venue IP — a dining room's worth of guests checking their points */
   loyaltyLookupBurst: { limit: 120, windowSeconds: 600 },

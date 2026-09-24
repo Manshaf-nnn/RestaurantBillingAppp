@@ -2,6 +2,7 @@ import 'server-only'
 
 import type { DateRange } from '@/features/reports/range'
 import type { WhatIfDish, WhatIfInput } from './what-if-math'
+import { currentUnitCost } from '@/features/inventory/fifo'
 import { prisma } from '@/server/db/prisma'
 
 /**
@@ -35,6 +36,27 @@ export async function getIngredientImpact(params: {
   })
   if (!item) return null
 
+  /*
+   * The price the simulation moves AWAY from (FIFO.md).
+   *
+   * This field is called `currentUnitCost` and was filled with the item's
+   * blended rate, which is the one thing FIFO.md says those words must never
+   * mean: "the cost of the NEXT FIFO stock to be consumed, NOT average cost /
+   * latest purchase price". The distinction is the whole question being asked
+   * here — "if chicken goes from 800 to 900" starts from what the next kilo
+   * costs, not from an average of every kilo ever bought, which on a rising
+   * market is always stale and always low. Anchoring the baseline too low made
+   * every simulated increase look larger than it is.
+   *
+   * Branch-scoped when the viewer is looking at one location, and the item's
+   * own rate as the fallback where no layer exists to quote.
+   */
+  const branchId = branchIds?.length === 1 ? branchIds[0] : null
+  const nextCost = branchId
+    ? await currentUnitCost(prisma, { restaurantId, itemId: item.id, branchId })
+    : 0
+  const baselineCost = nextCost > 0 ? nextCost : item.costPerUnit
+
   // Every menu recipe that uses this ingredient directly.
   const ingredients = await prisma.recipeIngredient.findMany({
     where: {
@@ -57,7 +79,7 @@ export async function getIngredientImpact(params: {
       itemId: item.id,
       itemName: item.name,
       unit: item.unit,
-      currentUnitCost: item.costPerUnit,
+      currentUnitCost: baselineCost,
       dishes: [],
       totalUnitsUsed: 0,
       rangeLabel: range.label,
@@ -140,7 +162,7 @@ export async function getIngredientImpact(params: {
     itemId: item.id,
     itemName: item.name,
     unit: item.unit,
-    currentUnitCost: item.costPerUnit,
+    currentUnitCost: baselineCost,
     dishes,
     totalUnitsUsed: dishes.reduce((sum, dish) => sum + dish.quantityPerDish * dish.unitsSold, 0),
     rangeLabel: range.label,

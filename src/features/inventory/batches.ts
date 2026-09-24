@@ -4,7 +4,6 @@ import type { StockBatch } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
-import { roundQty } from '@/lib/quantity'
 import { walkFifo } from './fifo-walk'
 
 /**
@@ -30,10 +29,35 @@ export interface BatchAllocation {
   expiryDate: Date | null
   /** Base units to draw from this batch. */
   quantity: number
+  /** The layer's rate at the moment of the draw, for reading. */
   unitCost: number
+  /**
+   * What this slice is worth, minor units — the figure of record.
+   *
+   * Taken from the walk, never rebuilt as quantity × unitCost: an integer rate
+   * cannot express a cost below one minor unit, so the multiplication drifts
+   * and the trace stops agreeing with the ledger it belongs to.
+   */
+  lineValue: number
 }
 
-/** Create or top up a batch as stock is received. */
+/**
+ * A layer, for a test fixture or a caller building a shelf directly.
+ *
+ * ── Ordinary receipts do NOT come through here any more ─────────────────────
+ *
+ * `postMovement` creates the layer for every inbound movement, so a caller
+ * that posts a receipt and then calls this would make two layers for one
+ * delivery. The three callers that used to do both no longer do.
+ *
+ * ── It no longer merges ─────────────────────────────────────────────────────
+ *
+ * A second delivery under the same supplier lot number used to top up the
+ * first layer and overwrite its price. That collapsed two deliveries bought at
+ * two prices into one layer at the newer price — destroying exactly the
+ * information FIFO exists to keep, and doing it silently. A repeat number is
+ * suffixed instead; the label is a delivery's name, not its identity.
+ */
 export async function upsertBatch(
   tx: TxClient,
   params: {
@@ -41,42 +65,56 @@ export async function upsertBatch(
     itemId: string
     batchNo: string
     quantity: number
+    /** Exactly what was paid, minor units. Preferred over `unitCost`. */
+    value?: number
     unitCost?: number
     expiryDate?: Date | null
     locationId?: string | null
-    /** Which location. Required, in step with the ledger. */
     branchId: string
+    receivedAt?: Date | null
   },
 ): Promise<StockBatch> {
-  const existing = await tx.stockBatch.findFirst({
-    where: { itemId: params.itemId, batchNo: params.batchNo },
-  })
+  /*
+   * The exact total where the caller has one, else the per-unit price times
+   * the quantity. A per-unit price cannot carry an exact total — 650 over
+   * 1,000 g rounds to 1 a gram and books the delivery at 1,000 — which is why
+   * `value` wins wherever it is known.
+   */
+  const value =
+    params.value !== undefined && params.value >= 0
+      ? Math.round(params.value)
+      : Math.round(params.quantity * (params.unitCost ?? 0))
 
-  if (existing) {
-    return tx.stockBatch.update({
-      where: { id: existing.id },
-      data: {
-        receivedQty: { increment: params.quantity },
-        remainingQty: { increment: params.quantity },
-        // A later delivery of the same lot can carry a different cost; the
-        // batch keeps the most recent, which is what a recall would quote.
-        ...(params.unitCost ? { unitCost: params.unitCost } : {}),
-        ...(params.expiryDate ? { expiryDate: params.expiryDate } : {}),
+  let batchNo = params.batchNo
+  for (let attempt = 1; attempt <= 50; attempt += 1) {
+    const clash = await tx.stockBatch.findFirst({
+      where: {
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
+        itemId: params.itemId,
+        batchNo,
       },
+      select: { id: true },
     })
+    if (!clash) break
+    batchNo = `${params.batchNo}#${attempt + 1}`
   }
 
   return tx.stockBatch.create({
     data: {
       restaurantId: params.restaurantId,
       itemId: params.itemId,
-      batchNo: params.batchNo,
+      batchNo,
       receivedQty: params.quantity,
       remainingQty: params.quantity,
-      unitCost: params.unitCost ?? 0,
+      receivedValue: value,
+      remainingValue: value,
+      // Derived from the value, for display and for recall.
+      unitCost: params.quantity > 0 ? Math.round(value / params.quantity) : 0,
       expiryDate: params.expiryDate ?? null,
       locationId: params.locationId ?? null,
       branchId: params.branchId,
+      ...(params.receivedAt ? { receivedAt: params.receivedAt } : {}),
     },
   })
 }
@@ -116,23 +154,36 @@ export async function allocateFefo(
     ...batches.filter((b) => b.expiryDate === null),
   ]
 
-  const allocations: BatchAllocation[] = []
-  let left = params.quantity
-
-  for (const batch of ordered) {
-    if (left <= 1e-9) break
-    const take = Math.min(batch.remainingQty, left)
-    allocations.push({
+  /*
+   * The same walk the FIFO draw uses, on a differently ordered list.
+   *
+   * It had its own loop, which is how the two came to disagree: this one
+   * computed no value at all, so anything costed through it was left to the
+   * running average. One walk means one arithmetic — including the rule that
+   * a draw emptying a layer takes exactly what is left in it.
+   */
+  const draw = walkFifo({
+    lots: ordered.map((batch) => ({
       batchId: batch.id,
       batchNo: batch.batchNo,
-      expiryDate: batch.expiryDate,
-      quantity: roundQty(take),
+      remaining: batch.remainingQty,
+      remainingValue: batch.remainingValue,
       unitCost: batch.unitCost,
-    })
-    left = roundQty(left - take)
-  }
+    })),
+    quantity: params.quantity,
+  })
 
-  return { allocations, shortfall: Math.max(0, roundQty(left)) }
+  const byId = new Map(ordered.map((batch) => [batch.id, batch]))
+  const allocations: BatchAllocation[] = draw.lots.map((lot) => ({
+    batchId: lot.batchId!,
+    batchNo: lot.batchNo!,
+    expiryDate: byId.get(lot.batchId!)?.expiryDate ?? null,
+    quantity: lot.quantity,
+    unitCost: lot.unitCost,
+    lineValue: lot.lineValue,
+  }))
+
+  return { allocations, shortfall: draw.shortfall }
 }
 
 /** Draw stock down from specific batches. */
@@ -277,36 +328,33 @@ export function assertBatchNo(batchNo: string): string {
 
 
 /**
- * What one outbound draw of `quantity` comes to, oldest receipt first.
+ * What one outbound draw of `quantity` WOULD come to, oldest receipt first.
  *
- * ── FIFO, beside FEFO, and why it is its own function ───────────────────────
+ * ── A preview. The allocator is elsewhere ───────────────────────────────────
  *
- * `allocateFefo` orders by expiry and exists so a sale eats the lot that will
- * spoil first. Production (pro.b.md §5) asks a different question: what did
- * the stock we are using up actually cost, delivery by delivery. That is
- * receipt order, and an undated lot on the shelf for a month must come before
- * a dated one that arrived yesterday — the opposite of what FEFO would say.
+ * This reads layers and costs a draw without touching anything, for the
+ * screens that show what an issue is about to cost. The draw that actually
+ * moves stock is `allocateAndConsume` in `./fifo`, called from `postMovement`
+ * and nowhere else — this function used to be called just before that, which
+ * is precisely how two production runs could allocate the same layer twice:
+ * the read happened before the lock was taken.
  *
- * ── The layer that has no lot ───────────────────────────────────────────────
+ * Both walk the same layers with the same `walkFifo`, so the preview and the
+ * draw agree by construction.
  *
- * Every receipt creates a lot from now on, but stock received before that has
- * none. Rather than a backfill that invents lot prices, that stock is treated
- * as one layer valued at the item's running average, drawn only after every
- * real lot is exhausted, and reported separately so the trace can say "this
- * part had no lot". Its cost is honest — the average IS what that stock is
- * worth on the books — and it disappears on its own as the old stock is used.
+ * ── What is gone ────────────────────────────────────────────────────────────
  *
- * `shortfall` is what even that could not cover. The caller has already run
- * `assertSufficient`, so it is zero in practice; it is returned rather than
- * thrown for the same reason `allocateFefo` returns it.
+ * The "unlotted" remainder — stock no layer accounted for, priced at the
+ * item's running average and drawn after every real layer. The opening-layer
+ * migration gave that stock a real layer, so the average has no part in this
+ * any more. A shortfall is still reported and still has no price (FIFO.md).
  */
 export interface FifoAllocation {
-  /** Real lots, oldest receipt first, each with its own price. */
+  /** Layers, oldest receipt first, each at its own rate. */
   lots: BatchAllocation[]
-  /** Stock on hand that no lot accounts for, at the running average. */
-  remainder: { quantity: number; unitCost: number } | null
+  /** Base units no layer covers. Never priced. */
   shortfall: number
-  /** The exact value of everything allocated, minor units, unrounded. */
+  /** The exact value of everything allocated, minor units. An integer. */
   totalValue: number
 }
 
@@ -318,48 +366,26 @@ export async function allocateFifo(
     throw new AppError('Quantity must be above zero', 400, 'STOCK_BAD_QUANTITY')
   }
 
-  const [batches, item, held] = await Promise.all([
-    db.stockBatch.findMany({
-      where: {
-        restaurantId: params.restaurantId,
-        itemId: params.itemId,
-        branchId: params.branchId,
-        remainingQty: { gt: 0 },
-      },
-      // Receipt order, then creation order for two receipts in the same instant.
-      orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
-    }),
-    db.inventoryItem.findFirst({
-      where: { id: params.itemId, restaurantId: params.restaurantId },
-      select: { quantity: true, stockValue: true, costPerUnit: true },
-    }),
-    db.inventoryStock.aggregate({
-      where: { itemId: params.itemId, branchId: params.branchId },
-      _sum: { available: true },
-    }),
-  ])
+  const batches = await db.stockBatch.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      itemId: params.itemId,
+      branchId: params.branchId,
+      remainingQty: { gt: 0 },
+    },
+    // Receipt order, then creation order for two receipts in the same instant.
+    orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+  })
 
-  /*
-   * How much of this branch's balance no lot explains. Only that much may be
-   * drawn as the average-priced layer; anything beyond it is a real shortfall,
-   * whatever the item-wide balance says.
-   */
-  const lotted = batches.reduce((sum, batch) => sum + batch.remainingQty, 0)
-  const unlotted = Math.max(0, roundQty((held._sum.available ?? 0) - lotted))
-  const average =
-    item && item.quantity > 0 ? Number(item.stockValue) / item.quantity : (item?.costPerUnit ?? 0)
-
-  // The same walk the screens preview with, on the same list.
   const draw = walkFifo({
     lots: batches.map((batch) => ({
       batchId: batch.id,
       batchNo: batch.batchNo,
       remaining: batch.remainingQty,
+      remainingValue: batch.remainingValue,
       unitCost: batch.unitCost,
     })),
     quantity: params.quantity,
-    unlotted,
-    averageCost: average,
   })
 
   const byId = new Map(batches.map((batch) => [batch.id, batch]))
@@ -370,8 +396,8 @@ export async function allocateFifo(
       expiryDate: byId.get(lot.batchId!)?.expiryDate ?? null,
       quantity: lot.quantity,
       unitCost: lot.unitCost,
+      lineValue: lot.lineValue,
     })),
-    remainder: draw.remainder ? { quantity: draw.remainder.quantity, unitCost: draw.remainder.unitCost } : null,
     shortfall: draw.shortfall,
     totalValue: draw.totalValue,
   }

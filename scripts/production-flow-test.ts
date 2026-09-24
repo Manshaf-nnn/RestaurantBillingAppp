@@ -388,7 +388,14 @@ async function main() {
 
     const page = readFileSync('src/features/production/components/prepared-item-page.tsx', 'utf8')
     check('the page shows the ingredients and Production Cost', page.includes('Production Cost') && page.includes('Ingredients'))
-    check('and Add Production / Make More opens a new order for the same item', page.includes('Add Production') && page.includes('/dashboard/production?make=${item.id}'))
+    /*
+     * DELIBERATE 2026-09: the link gained `?tab=make`. Without it the click
+     * did nothing — it is a same-route navigation, and the tab was React
+     * state, so the workspace stayed on whichever tab was already open and the
+     * form it meant to reach was not mounted. The tab is read from the URL now
+     * and every "make more" link has to name it.
+     */
+    check('and Add Production / Make More opens a new order for the same item', page.includes('Add Production') && page.includes('/dashboard/production?tab=make&make=${item.id}'))
     check('and this item\'s history', page.includes('<ProductionHistory'))
 
     const done = readFileSync('src/features/production/components/mark-done-form.tsx', 'utf8')

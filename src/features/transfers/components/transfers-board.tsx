@@ -440,6 +440,9 @@ export function TransfersBoard({
                             <DropdownMenuItem asChild>
                               <Link href={`/dashboard/transfers/${row.id}`}>Open full transfer</Link>
                             </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link href={`/dashboard/transfers/${row.id}/print`}>Print transfer note</Link>
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>

@@ -2,8 +2,12 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 
 import { WaiterBoard, type WaiterOrder } from '@/features/waiter/components/waiter-board'
+import { WaiterOrderPad } from '@/features/waiter/components/waiter-order-pad'
+import { resolveWaiterTab, waiterHref } from '@/features/waiter/tabs'
 import { getWaiterBoard } from '@/features/orders/queries'
-import { PERMISSIONS, ROLE_LABELS } from '@/lib/rbac'
+import { getPublicMenu } from '@/features/menu/queries'
+import { OpsShell } from '@/components/ops-shell'
+import { PERMISSIONS, ROLE_LABELS, can } from '@/lib/rbac'
 import { StationExit } from '@/features/dashboard/components/station-exit'
 import {
   listStationBranches,
@@ -71,7 +75,8 @@ export default async function WaiterPage({
    * confined account gets their own and cannot widen it. Where it is not — an
    * owner who has not chosen — the screen asks rather than showing everything.
    */
-  const selection = await selectedBranch(user, await searchParams)
+  const params = await searchParams
+  const selection = await selectedBranch(user, params)
   const branchId = scopeToOne(selection)
 
   if (!branchId) {
@@ -91,13 +96,62 @@ export default async function WaiterPage({
 
   const branchIds = branchId ? [branchId] : selection.branchIds
 
-
   const [restaurant, branchName, board] = await Promise.all([
     requireRestaurant(user.restaurantId),
     // correctionA.md §6 — the station says which floor it is serving.
     branchNameFor(user.restaurantId, branchId),
     getWaiterBoard(user.restaurantId, branchIds),
   ])
+
+  const locale =
+    restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
+
+  /*
+   * ── Taking an order ───────────────────────────────────────────────────────
+   *
+   * A separate mode, reached at `?tab=order`, rather than a fourth panel inside
+   * `WaiterBoard`. The board mounts `<AutoRefresh intervalMs={3000} />`, and a
+   * half-typed cart living inside a component whose server props are replaced
+   * every three seconds is a bug waiting to be filed. Branching here means the
+   * refresh loop is not mounted at all while somebody is taking an order.
+   */
+  if (resolveWaiterTab(params.tab) === 'order') {
+    if (!can(user, PERMISSIONS.ORDER_CREATE)) redirect(waiterHref('board', branchId))
+
+    const menu = await getPublicMenu(user.restaurantId, restaurant.timezone, branchId)
+
+    return (
+      <OpsShell
+        title="Take an order"
+        subtitle={restaurant.name}
+        branch={branchName}
+        branchIds={branchIds}
+        user={{ name: user.name, role: ROLE_LABELS[user.role] }}
+        actions={<StationExit user={user} current="/waiter" />}
+      >
+        <WaiterOrderPad
+          menu={menu}
+          currency={restaurant.currency}
+          locale={locale}
+          branchId={branchId}
+          backHref={waiterHref('board', branchId)}
+          tables={board.tables.map((table) => ({
+            id: table.id,
+            number: table.number,
+            label: table.label,
+            area: table.area,
+            capacity: table.capacity,
+            status: table.state,
+            openOrders: table.orders.map((order) => ({
+              id: order.id,
+              orderNumber: order.orderNumber,
+            })),
+            seatedGuests: table.seatedGuests ?? null,
+          }))}
+        />
+      </OpsShell>
+    )
+  }
 
   return (
     <WaiterBoard
@@ -110,6 +164,13 @@ export default async function WaiterPage({
       locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       user={{ name: user.name, role: ROLE_LABELS[user.role] }}
       exit={<StationExit user={user} current="/waiter" />}
+      /*
+       * The door to the order pad, and null when this person may not open it.
+       * WAITER already holds ORDER_CREATE — what was missing was a screen, not
+       * a permission — but a custom role built on Waiter without it must not
+       * be offered a button that ends in a 403.
+       */
+      orderHref={can(user, PERMISSIONS.ORDER_CREATE) ? waiterHref('order', branchId) : null}
       initialReady={board.ready.map(toWaiterOrder)}
       initialServing={board.serving.map(toWaiterOrder)}
       initialRequests={board.requests.map((request) => ({

@@ -19,12 +19,25 @@ import { roundPercent } from '@/lib/quantity'
  *   LAST     — the most recent purchase price. Closer to replacement cost,
  *              which is what matters when deciding today's menu price.
  *
- * FIFO needs per-batch layers with their own costs. The ledger already records
- * batch numbers and per-movement unit costs, so the data is there when it is
- * wanted; it is deliberately not built now because nothing yet needs it.
+ * FIFO is built now and is the default (FIFO.md): every receipt is a layer
+ * carrying the value it was bought at, so "what the next stock out costs" is a
+ * real figure rather than a blend. The other two stay as comparisons for a
+ * menu-engineering screen, which is a legitimate place to ask what a dish
+ * would cost on a different basis — they are not a costing basis anywhere the
+ * books can see.
  */
 
-export type CostingMethod = 'AVERAGE' | 'LAST'
+/**
+ * How an ingredient is priced for this report.
+ *
+ * `FIFO` is the default and the one the books use: what the NEXT stock out of
+ * the shelf costs, which is what making the dish would actually consume. The
+ * other two are kept because a menu-engineering screen legitimately wants to
+ * ask "what if" — what would this dish cost at the blended rate, or at what we
+ * last paid — but neither is a costing basis anywhere else in the system, and
+ * `LAST` in particular is the latest purchase price FIFO.md forbids as one.
+ */
+export type CostingMethod = 'FIFO' | 'AVERAGE' | 'LAST'
 
 export interface FoodCostBreakdown {
   foodId: string
@@ -45,8 +58,10 @@ export async function getFoodCost(params: {
   restaurantId: string
   foodId: string
   method?: CostingMethod
+  /** Which shelf to price against. FIFO needs one; the others ignore it. */
+  branchId?: string | null
 }): Promise<FoodCostBreakdown> {
-  const method = params.method ?? 'AVERAGE'
+  const method = params.method ?? 'FIFO'
 
   const food = await prisma.food.findFirstOrThrow({
     where: { id: params.foodId, restaurantId: params.restaurantId },
@@ -73,6 +88,9 @@ export async function getFoodCost(params: {
     restaurantId: params.restaurantId,
     recipeId: recipe.id,
     portions: 1,
+    // FIFO prices from the layers at this location; the resolver falls back to
+    // the item's own rate where there is no branch or no stock.
+    branchId: method === 'FIFO' ? params.branchId ?? null : null,
   })
 
   const priced = await applyMethod(params.restaurantId, resolved.ingredients, method)
@@ -103,7 +121,13 @@ async function applyMethod(
   ingredients: ResolvedIngredient[],
   method: CostingMethod,
 ): Promise<Array<ResolvedIngredient & { lineCost: number }>> {
-  if (method === 'AVERAGE') {
+  /*
+   * FIFO and AVERAGE both multiply the rate the resolver already worked out —
+   * the difference is which rate it was asked for. `resolveRecipe` returns the
+   * next layer's cost when given a branch and the item's blended rate when
+   * not, so there is nothing more to do here for either.
+   */
+  if (method === 'FIFO' || method === 'AVERAGE') {
     return ingredients.map((line) => ({
       ...line,
       lineCost: Math.round(line.quantity * line.costPerUnit),

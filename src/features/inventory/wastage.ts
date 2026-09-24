@@ -7,7 +7,6 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient, isUniqueViolation, uniqueViolationTargets } from '@/server/db/prisma'
 import { postMovement } from './ledger'
 import { toBaseUnits } from './units'
-import { allocateFefo, consumeBatches } from './batches'
 
 /**
  * Wastage.

@@ -61,17 +61,20 @@ async function main() {
       quantity: 0, costPerUnit: 100, trackBatches: true, useFefo: true,
     },
   })
+  /*
+   * DELIBERATE 2026-09 (FIFO.md): receiving stock is ONE act.
+   *
+   * This used to post the movement and then create the layer by hand, because
+   * the ledger only made layers for flagged items. It makes one for every
+   * inbound movement now, so doing both gave this fixture two layers of 100
+   * against a balance of 100 — and the sale drew the one the test was not
+   * looking at.
+   */
   await prisma.$transaction(async (tx) => {
     await postMovement(tx, {
       restaurantId: restaurant.id, itemId: patty.id, type: 'OPENING_BALANCE',
       quantity: 100, unitCost: 100, branchId: branch.id,
-    })
-    await tx.stockBatch.create({
-      data: {
-        restaurantId: restaurant.id, branchId: branch.id, itemId: patty.id, batchNo: `B-${stamp}`,
-        receivedQty: 100, remainingQty: 100, unitCost: 100,
-        expiryDate: new Date(Date.now() + 5 * 86_400_000),
-      },
+      batchNo: `B-${stamp}`, expiryDate: new Date(Date.now() + 5 * 86_400_000),
     })
   })
 

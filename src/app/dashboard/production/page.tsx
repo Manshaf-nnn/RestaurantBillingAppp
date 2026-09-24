@@ -54,15 +54,32 @@ export default async function ProductionPage({
   const canManage = can(user, PERMISSIONS.PRODUCTION_MANAGE)
 
   /*
-   * "Make more" from an item's page lands on step 3 with its recipe (pro.b.md
-   * §12) — another batch of the same item, never a duplicate item. `recipe`
-   * opens step 1 to edit how it is made.
+   * "Make more" — another batch of the SAME item, never a duplicate item
+   * (pro.b.md §12). `?make=` opens the order panel on that item's recipe;
+   * `?recipe=` loads it into the editor to change how it is made.
    */
   const makeId = typeof params.make === 'string' ? params.make : typeof params.recipe === 'string' ? params.recipe : null
   const makeItem = makeId ? data.items.find((item) => item.id === makeId) ?? null : null
   const prefill = makeItem
-    ? { itemId: makeItem.id, name: makeItem.name, step: (typeof params.make === 'string' ? 3 : 1) as 1 | 3 }
+    ? { itemId: makeItem.id, name: makeItem.name, order: typeof params.make === 'string' }
     : null
+
+  /*
+   * The tab comes from the URL so a link can point at one — see the note in
+   * `ProductionWorkspace`. A deep link that names an item means the Make tab
+   * whatever else is asked for, and somebody who cannot manage production has
+   * no Make tab to land on.
+   */
+  const asked = typeof params.tab === 'string' ? params.tab : null
+  const tab: 'make' | 'prepared' | 'history' = !canManage
+    ? asked === 'history'
+      ? 'history'
+      : 'prepared'
+    : makeItem
+      ? 'make'
+      : asked === 'prepared' || asked === 'history'
+        ? asked
+        : 'make'
 
   return (
     <>
@@ -86,6 +103,7 @@ export default async function ProductionPage({
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
         canManage={canManage}
         prefill={prefill}
+        tab={tab}
       />
 
       <AutoRefresh scope="catalog" intervalMs={10000} />

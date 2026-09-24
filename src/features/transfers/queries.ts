@@ -76,14 +76,29 @@ export async function listLocations(
     },
   })
 
+  /*
+   * What each location's stock is worth: the sum of its layers (FIFO.md).
+   *
+   * It was `available × item.costPerUnit` — a per-branch quantity multiplied
+   * by a RESTAURANT-WIDE rate, so two branches holding the same item bought at
+   * genuinely different prices were both reported at the blend of the two.
+   * Layers carry their own branch, so this is exact per location and it is an
+   * integer sum with no multiplication in it.
+   */
+  const layerValue = await prisma.stockBatch.groupBy({
+    by: ['branchId'],
+    where: { restaurantId, remainingQty: { gt: 0 }, ...(branchIds ? { branchId: { in: branchIds } } : {}) },
+    _sum: { remainingValue: true },
+  })
+  const valueAt = new Map(layerValue.map((row) => [row.branchId, row._sum.remainingValue ?? 0]))
+
   return branches.map((b) => {
-    let stockValue = 0
+    const stockValue = valueAt.get(b.id) ?? 0
     let lowStock = 0
     let outOfStock = 0
     let inTransitLines = 0
 
     for (const row of b.stock) {
-      if (row.available > 0) stockValue += row.available * row.item.costPerUnit
       if (row.inTransit > 0) inTransitLines += 1
       const level = levelFor({
         quantity: row.available,
@@ -227,6 +242,18 @@ export interface TransferFilter {
   /** ISO dates, inclusive. */
   from?: string | null
   to?: string | null
+  /**
+   * The same range, already resolved to instants.
+   *
+   * `from`/`to` are compared by pasting `T00:00:00.000Z` onto a date, which is
+   * midnight in UTC and not midnight anywhere a restaurant actually is. The
+   * report is driven entirely by its date range, so it resolves the boundary
+   * once in the page through the canonical `resolveRange` and passes the
+   * instants here. When these are set they win; the strings stay for the board,
+   * whose filters are a rough narrowing rather than an accounting boundary.
+   */
+  fromAt?: Date | null
+  toAt?: Date | null
   page?: number
   perPage?: number
 }
@@ -281,47 +308,49 @@ export function transferStatusWhere(status: string | null | undefined): Prisma.S
 }
 
 /**
- * The Transfers screen: the rows for one page, the count behind them, and the
- * five figures across the top.
+ * Everything except the status, which is applied separately.
  *
- * `visibleBranchIds` is applied first and always, so every figure on the screen
- * counts the same transfers the table can show. A stat card that counted things
- * the person cannot open would be worse than no card.
+ * Extracted so the board, the report and the export cannot disagree. They used
+ * to build their own predicates — which is how the export came to apply no
+ * branch filter at all while the screen above its button applied one — and a
+ * report whose figures differ from the screen it was launched from is worse
+ * than no report.
+ *
+ * `branchIds` is `visibleBranchIds`: null means every location, `[]` means
+ * none, which is a real answer and not a missing one. A transfer is visible
+ * from either end, so the reach is an OR over both columns.
  */
-export async function getTransferBoard(params: {
+export function transferBoardWhere(params: {
   restaurantId: string
-  /** Null means every location; `[]` means none, which is a real answer. */
   branchIds: string[] | null
   filter: TransferFilter
-}): Promise<TransferBoard> {
+}): Prisma.StockTransferWhereInput {
   const { filter } = params
   const term = filter.search?.trim()
-  const page = Math.max(1, filter.page ?? 1)
-  const perPage = Math.min(100, Math.max(5, filter.perPage ?? 10))
 
-  /*
-   * What this person may see at all. A transfer is visible from either end, so
-   * this is an OR over both columns — the same rule the old grouped list used.
-   */
   const reach: Prisma.StockTransferWhereInput[] =
     params.branchIds === null
       ? []
       : [{ OR: [{ fromBranchId: { in: params.branchIds } }, { toBranchId: { in: params.branchIds } }] }]
 
-  const where: Prisma.StockTransferWhereInput = {
+  // Resolved instants win over the date strings; see `TransferFilter.fromAt`.
+  const gte = filter.fromAt ?? (filter.from ? new Date(`${filter.from}T00:00:00.000Z`) : null)
+  const lte = filter.toAt ?? (filter.to ? new Date(`${filter.to}T23:59:59.999Z`) : null)
+
+  return {
     restaurantId: params.restaurantId,
     AND: [
       ...reach,
       ...(filter.fromBranchId ? [{ fromBranchId: filter.fromBranchId }] : []),
       ...(filter.toBranchId ? [{ toBranchId: filter.toBranchId }] : []),
       ...(filter.itemId ? [{ lines: { some: { itemId: filter.itemId } } }] : []),
-      ...(filter.from || filter.to
+      ...(gte || lte
         ? [
             {
               requestedAt: {
-                ...(filter.from ? { gte: new Date(`${filter.from}T00:00:00.000Z`) } : {}),
+                ...(gte ? { gte } : {}),
                 // Inclusive: a date picked as the end means the whole of it.
-                ...(filter.to ? { lte: new Date(`${filter.to}T23:59:59.999Z`) } : {}),
+                ...(lte ? { lte } : {}),
               },
             },
           ]
@@ -341,13 +370,42 @@ export async function getTransferBoard(params: {
         : []),
     ],
   }
+}
+
+/** The same predicate with the status filter folded in. */
+function withStatus(
+  where: Prisma.StockTransferWhereInput,
+  status: string | null | undefined,
+): Prisma.StockTransferWhereInput {
+  return {
+    ...where,
+    AND: [...((where.AND as Prisma.StockTransferWhereInput[]) ?? []), transferStatusWhere(status)],
+  }
+}
+
+/**
+ * The Transfers screen: the rows for one page, the count behind them, and the
+ * five figures across the top.
+ *
+ * `visibleBranchIds` is applied first and always, so every figure on the screen
+ * counts the same transfers the table can show. A stat card that counted things
+ * the person cannot open would be worse than no card.
+ */
+export async function getTransferBoard(params: {
+  restaurantId: string
+  /** Null means every location; `[]` means none, which is a real answer. */
+  branchIds: string[] | null
+  filter: TransferFilter
+}): Promise<TransferBoard> {
+  const { filter } = params
+  const page = Math.max(1, filter.page ?? 1)
+  const perPage = Math.min(100, Math.max(5, filter.perPage ?? 10))
+
+  const where = transferBoardWhere(params)
 
   // The status filter narrows the table but NOT the cards: the cards are what
   // you click to set it, so they have to keep counting the whole filtered set.
-  const tableWhere: Prisma.StockTransferWhereInput = {
-    ...where,
-    AND: [...(where.AND as Prisma.StockTransferWhereInput[]), transferStatusWhere(filter.status)],
-  }
+  const tableWhere = withStatus(where, filter.status)
 
   const [rows, total, counts, varianceCount] = await Promise.all([
     prisma.stockTransfer.findMany({
@@ -384,6 +442,167 @@ export async function getTransferBoard(params: {
       variance: varianceCount,
     },
   }
+}
+
+/* ── The transfer report ──────────────────────────────────────────────────── */
+
+/**
+ * One line of one transfer, with the whole transfer's context repeated on it.
+ *
+ * The report and the export are both about what physically moved, so the row is
+ * the line and not the transfer: "who sent 6kg of chicken to Beach Road, who
+ * signed for it, and were two cases short" is a question about a line. The
+ * header fields are duplicated onto every line of a transfer, which is what
+ * makes the file sortable and pivotable in a spreadsheet.
+ */
+export interface TransferLineRow {
+  transferId: string
+  number: string
+  status: string
+  fromName: string
+  toName: string
+  notes: string | null
+  rejectReason: string | null
+  requestedByName: string | null
+  approvedByName: string | null
+  dispatchedByName: string | null
+  receivedByName: string | null
+  requestedAt: string
+  approvedAt: string | null
+  dispatchedAt: string | null
+  receivedAt: string | null
+  lineId: string
+  itemId: string
+  itemName: string
+  unit: string
+  requestedQty: number
+  sentQty: number | null
+  receivedQty: number | null
+  variance: number | null
+  varianceReason: string | null
+  varianceNote: string | null
+  /** Cents per base unit, snapshotted at dispatch. */
+  unitCost: number
+  /** Cents. What actually arrived, at the cost it was sent at. */
+  lineValue: number
+}
+
+export interface TransferReportTotals {
+  transfers: number
+  lines: number
+  requestedQty: number
+  sentQty: number
+  receivedQty: number
+  /** Cents. */
+  value: number
+  varianceLines: number
+}
+
+/**
+ * Every line matching the filter, newest transfer first.
+ *
+ * Deliberately takes `branchIds` — the viewer's whole reach — and never a
+ * single branch id. The export used to narrow with `scopeToOne`, which returns
+ * null for someone who can reach several branches and has not picked one, and a
+ * null branch applied no predicate at all: a manager confined to two of five
+ * locations downloaded all five. The reach is the only correct scope here, and
+ * `[]` genuinely means nothing is returned.
+ */
+export async function listTransferLines(params: {
+  restaurantId: string
+  branchIds: string[] | null
+  filter: TransferFilter
+  /** Safety rail for the export, which streams to a file. */
+  limit?: number
+}): Promise<{ rows: TransferLineRow[]; totals: TransferReportTotals; truncated: boolean }> {
+  const where = withStatus(transferBoardWhere(params), params.filter.status)
+  const limit = params.limit ?? 5_000
+
+  const transfers = await prisma.stockTransfer.findMany({
+    where,
+    orderBy: [{ requestedAt: 'desc' }, { number: 'desc' }],
+    // One over the limit, so "there is more" is known rather than guessed.
+    take: limit + 1,
+    include: {
+      fromBranch: { select: { name: true } },
+      toBranch: { select: { name: true } },
+      requestedBy: { select: { name: true } },
+      approvedBy: { select: { name: true } },
+      dispatchedBy: { select: { name: true } },
+      receivedBy: { select: { name: true } },
+      lines: {
+        orderBy: { createdAt: 'asc' },
+        include: { item: { select: { id: true, name: true, unit: true } } },
+      },
+    },
+  })
+
+  const truncated = transfers.length > limit
+  const kept = truncated ? transfers.slice(0, limit) : transfers
+
+  const rows: TransferLineRow[] = []
+  const totals: TransferReportTotals = {
+    transfers: kept.length,
+    lines: 0,
+    requestedQty: 0,
+    sentQty: 0,
+    receivedQty: 0,
+    value: 0,
+    varianceLines: 0,
+  }
+
+  for (const t of kept) {
+    for (const l of t.lines) {
+      // What arrived is the honest basis for value; before it arrives, what was
+      // sent; before that, what was asked for.
+      const valuedQty = l.receivedQty ?? l.sentQty ?? l.requestedQty
+      const lineValue = Math.round(valuedQty * l.unitCost)
+      const hasVariance = l.variance !== null && Math.abs(l.variance) > 1e-6
+
+      rows.push({
+        transferId: t.id,
+        number: t.number,
+        status: t.status as string,
+        fromName: t.fromBranch.name,
+        toName: t.toBranch.name,
+        notes: t.notes,
+        rejectReason: t.rejectReason,
+        requestedByName: t.requestedBy?.name ?? null,
+        approvedByName: t.approvedBy?.name ?? null,
+        dispatchedByName: t.dispatchedBy?.name ?? null,
+        receivedByName: t.receivedBy?.name ?? null,
+        requestedAt: t.requestedAt.toISOString(),
+        approvedAt: t.approvedAt?.toISOString() ?? null,
+        dispatchedAt: t.dispatchedAt?.toISOString() ?? null,
+        receivedAt: t.receivedAt?.toISOString() ?? null,
+        lineId: l.id,
+        itemId: l.itemId,
+        itemName: l.item.name,
+        unit: (l.unit ?? l.item.unit) as string,
+        requestedQty: l.requestedQty,
+        sentQty: l.sentQty,
+        receivedQty: l.receivedQty,
+        variance: l.variance,
+        varianceReason: (l.varianceReason as string | null) ?? null,
+        varianceNote: l.varianceNote,
+        unitCost: l.unitCost,
+        lineValue,
+      })
+
+      totals.lines += 1
+      totals.requestedQty += l.requestedQty
+      totals.sentQty += l.sentQty ?? 0
+      totals.receivedQty += l.receivedQty ?? 0
+      totals.value += lineValue
+      if (hasVariance) totals.varianceLines += 1
+    }
+  }
+
+  totals.requestedQty = roundQty(totals.requestedQty)
+  totals.sentQty = roundQty(totals.sentQty)
+  totals.receivedQty = roundQty(totals.receivedQty)
+
+  return { rows, totals, truncated }
 }
 
 /** One location's stock, with the three quantities kept apart. */
@@ -520,6 +739,20 @@ export async function getLocationDetail(params: {
 
   const merged = [...byItem.values()]
 
+  /*
+   * Each item's value AT THIS LOCATION, from its layers (FIFO.md).
+   *
+   * It was `available × item.costPerUnit`, and `costPerUnit` is a
+   * restaurant-wide figure — so an item held at two branches that bought it at
+   * different prices was reported at the blend of both, at both.
+   */
+  const itemValue = await prisma.stockBatch.groupBy({
+    by: ['itemId'],
+    where: { restaurantId: params.restaurantId, branchId: params.branchId, remainingQty: { gt: 0 } },
+    _sum: { remainingValue: true },
+  })
+  const valueOf = new Map(itemValue.map((row) => [row.itemId, row._sum.remainingValue ?? 0]))
+
   return {
     branch: {
       id: branch.id,
@@ -562,7 +795,7 @@ export async function getLocationDetail(params: {
       reserved: s.reserved,
       inTransit: s.inTransit,
       free: roundQty(s.available - s.reserved),
-      value: Math.round(Math.max(0, s.available) * s.item.costPerUnit),
+      value: valueOf.get(s.item.id) ?? 0,
       level: levelFor({
         quantity: s.available,
         reorderLevel: s.item.reorderLevel,
@@ -632,7 +865,10 @@ export async function getTransferDetail(params: {
       approvedBy: { select: { name: true } },
       dispatchedBy: { select: { name: true } },
       receivedBy: { select: { name: true } },
-      lines: { include: { item: { select: { name: true, unit: true } } } },
+      lines: {
+        orderBy: { createdAt: 'asc' },
+        include: { item: { select: { id: true, name: true, unit: true } } },
+      },
     },
   })
   if (!t) throw new NotFoundError('Transfer')
@@ -646,6 +882,12 @@ export async function getTransferDetail(params: {
     fromName: t.fromBranch.name,
     toName: t.toBranch.name,
     notes: t.notes,
+    /*
+     * Why it was refused. It was already stored and never read back, so a
+     * rejected transfer told you it was rejected and not why — the one thing
+     * anybody opening a rejected transfer wants to know.
+     */
+    rejectReason: t.rejectReason,
     requestedByName: t.requestedBy?.name ?? null,
     approvedByName: t.approvedBy?.name ?? null,
     dispatchedByName: t.dispatchedBy?.name ?? null,
@@ -656,6 +898,7 @@ export async function getTransferDetail(params: {
     receivedAt: t.receivedAt?.toISOString() ?? null,
     lines: t.lines.map((l) => ({
       id: l.id,
+      itemId: l.itemId,
       name: l.item.name,
       unit: (l.unit ?? l.item.unit) as string,
       requestedQty: l.requestedQty,
@@ -663,9 +906,17 @@ export async function getTransferDetail(params: {
       receivedQty: l.receivedQty,
       variance: l.variance,
       varianceReason: (l.varianceReason as string | null) ?? null,
+      /** The free-text half of a variance — what the receiver actually wrote. */
+      varianceNote: l.varianceNote,
+      /** Cents per base unit, snapshotted at dispatch. */
+      unitCost: l.unitCost,
+      /** Cents, on the same "what arrived" basis the report uses. */
+      lineValue: Math.round((l.receivedQty ?? l.sentQty ?? l.requestedQty) * l.unitCost),
     })),
   }
 }
+
+export type TransferDetail = Awaited<ReturnType<typeof getTransferDetail>>
 
 /**
  * Locations and items for the "new transfer" form.

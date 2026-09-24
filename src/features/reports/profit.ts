@@ -373,9 +373,17 @@ export async function getBranchComparison(params: {
       },
       _sum: { costValue: true },
     }),
-    prisma.inventoryStock.findMany({
-      where: { restaurantId: params.restaurantId },
-      include: { item: { select: { costPerUnit: true } } },
+    /*
+     * Each branch's stock value, from its own layers (FIFO.md).
+     *
+     * It was `available × item.costPerUnit` — a per-branch quantity times a
+     * RESTAURANT-WIDE rate — so a branch comparison, whose whole purpose is to
+     * tell two branches apart, valued their stock at the same blended figure.
+     */
+    prisma.stockBatch.groupBy({
+      by: ['branchId'],
+      where: { restaurantId: params.restaurantId, remainingQty: { gt: 0 } },
+      _sum: { remainingValue: true },
     }),
   ])
 
@@ -393,11 +401,7 @@ export async function getBranchComparison(params: {
   const wastageByBranch = new Map(wastage.map((w) => [w.branchId ?? 'none', w._sum?.costValue ?? 0]))
   const ordersByBranch = new Map(orderCounts.map((o) => [o.branchId ?? 'none', o._count]))
 
-  const stockValue = new Map<string, number>()
-  for (const s of stock) {
-    if (s.available <= 0) continue
-    stockValue.set(s.branchId, (stockValue.get(s.branchId) ?? 0) + s.available * s.item.costPerUnit)
-  }
+  const stockValue = new Map(stock.map((row) => [row.branchId, row._sum?.remainingValue ?? 0]))
 
   const rows = branches.map((b) => {
     const p = profitByBranch.get(b.id)

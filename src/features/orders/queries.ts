@@ -253,6 +253,19 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
           where: { status: { notIn: ['COMPLETED', 'CANCELLED'] } },
           select: { id: true, orderNumber: true, status: true, grandTotal: true, paymentStatus: true },
         },
+        /*
+         * The party already seated, when there is an open sitting.
+         *
+         * `placeOrder` reads `guestCount` only when it OPENS a session and
+         * ignores it on a later round, so a screen taking a second order at a
+         * seated table must show the party rather than ask for it again —
+         * offering an input that is discarded is worse than offering none.
+         */
+        sessions: {
+          where: { status: 'OPEN' },
+          select: { guestCount: true },
+          take: 1,
+        },
       },
     }),
   ])
@@ -272,6 +285,8 @@ export async function getWaiterBoard(restaurantId: string, branchIds?: string[] 
       ...t,
       state: states.get(t.id)?.state ?? normalizeTableStatus(t.status),
       reservedFor: states.get(t.id)?.reservation?.customerName ?? null,
+      /** The party on the open sitting, where one has been recorded. */
+      seatedGuests: t.sessions[0]?.guestCount ?? null,
     })),
   }
 }

@@ -58,7 +58,7 @@ export async function fifoCostFor(
       unitCost: item.costPerUnit,
       totalCost: 0,
       nextUnitCost: item.costPerUnit,
-      allocation: { lots: [], remainder: null, shortfall: 0, totalValue: 0 },
+      allocation: { lots: [], shortfall: 0, totalValue: 0 },
     }
   }
 
@@ -70,18 +70,20 @@ export async function fifoCostFor(
   })
 
   /*
-   * A shortfall is priced at the running average so the screen still shows a
-   * figure — "not enough" is said by the stock check, not by a blank cost.
+   * What the layers hold, and nothing for what they do not (FIFO.md: "do not
+   * invent a fake FIFO cost"). A shortfall used to be priced at the running
+   * average so the screen showed a rounder number; that number was a guess
+   * about stock which is not there. "Not enough" is said by the stock check.
    */
-  const covered = base - allocation.shortfall
-  const projected = allocation.totalValue + allocation.shortfall * item.costPerUnit
-  const nextUnitCost =
-    allocation.lots[0]?.unitCost ?? allocation.remainder?.unitCost ?? item.costPerUnit
+  const covered = roundQty(base - allocation.shortfall)
+  const nextUnitCost = allocation.lots[0]?.unitCost ?? 0
 
   return {
     quantity: base,
-    unitCost: covered > 0 ? Math.round(projected / base) : item.costPerUnit,
-    totalCost: projected,
+    // Per unit of what was actually covered, so a partly-covered draw reports
+    // the real rate of the stock it found rather than a diluted one.
+    unitCost: covered > 0 ? Math.round(allocation.totalValue / covered) : 0,
+    totalCost: allocation.totalValue,
     nextUnitCost,
     allocation,
   }

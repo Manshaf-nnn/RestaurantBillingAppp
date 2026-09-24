@@ -84,10 +84,26 @@ export default async function ItemHistoryPage({
           }
         />
         <Figure label="Reorder at" value={formatQuantity(item.reorderLevel, item.unit)} />
-        <Figure label="Average cost" value={`${money(item.costPerUnit)} / ${UNIT_LABELS[item.unit]}`} />
+        {/*
+          What the NEXT unit costs, not an average of every delivery ever made.
+          This said "Average cost" and showed the restaurant-wide blend, which
+          is a price nobody paid: an item bought at 250 and then at 400 read
+          325, while the next plate cooked would draw the 250 layer. FIFO.md
+          calls this the current unit cost and it is what the stock screens,
+          the recipe costs and the variance report all price at now.
+        */}
         <Figure
-          label="Last purchase"
-          value={item.lastPurchaseCost ? `${money(item.lastPurchaseCost)} / ${UNIT_LABELS[item.unit]}` : '—'}
+          label="Next cost / unit"
+          value={`${money(item.nextUnitCost)} / ${UNIT_LABELS[item.unit]}`}
+        />
+        <Figure
+          label="Stock value"
+          value={money(item.stockValue)}
+          badge={
+            item.lastPurchaseCost ? (
+              <Badge variant="secondary">last paid {money(item.lastPurchaseCost)}</Badge>
+            ) : null
+          }
         />
       </div>
 

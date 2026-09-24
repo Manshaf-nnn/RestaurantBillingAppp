@@ -103,8 +103,20 @@ export function InventoryManager({
   branchName = null,
   locations = [],
   selectedBranchId = null,
+  stockValue = 0,
+  nextUnitCosts = {},
 }: {
   items: InventoryRow[]
+  /** The sum of this location's layers, minor units (FIFO.md). */
+  stockValue?: number
+  /**
+   * What the NEXT unit of each item costs — the first open layer's rate.
+   *
+   * FIFO.md is explicit that "current unit cost" means the cost of the next
+   * stock to be consumed, never an average and never the latest purchase
+   * price. Keyed by item id; an item with no stock has no entry and no cost.
+   */
+  nextUnitCosts?: Record<string, number>
   suppliers: Array<{ id: string; name: string }>
   /*
    * The units and categories on offer, from the managed lists rather than a
@@ -176,7 +188,14 @@ export function InventoryManager({
   }, [])
 
   const lowStock = items.filter(isLow)
-  const stockValue = items.reduce((sum, item) => sum + Math.round(item.quantity * item.costPerUnit), 0)
+  /*
+   * Stock value comes from the server, summed from the layers (FIFO.md).
+   *
+   * It used to be `quantity × costPerUnit` computed here — a blended rate
+   * times a quantity, which cannot equal the sum of layers bought at different
+   * prices, and which for a chosen branch multiplied that branch's quantity by
+   * a restaurant-wide rate.
+   */
   const expiringSoon = items.filter((item) => {
     const days = daysToExpiry(item)
     return days !== null && days <= 7
@@ -332,7 +351,7 @@ export function InventoryManager({
                 <TableHead>Item</TableHead>
                 <TableHead>In stock</TableHead>
                 <TableHead className="hidden md:table-cell">Alert below</TableHead>
-                <TableHead className="hidden lg:table-cell">Cost / unit</TableHead>
+                <TableHead className="hidden lg:table-cell">Next cost / unit</TableHead>
                 <TableHead className="hidden md:table-cell">Expiry</TableHead>
                 <TableHead className="hidden lg:table-cell">Supplier</TableHead>
                 {canManage ? <TableHead className="w-10" /> : null}
@@ -384,7 +403,16 @@ export function InventoryManager({
                         : '—'}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
-                      {formatMoney(item.costPerUnit, currency, locale)}
+                      {/*
+                        What the NEXT unit costs — the oldest open layer's rate
+                        (FIFO.md), not the average of everything ever bought.
+                        An item with no stock has no layer and so no cost to
+                        report, which is said with a dash rather than a stale
+                        number.
+                      */}
+                      {nextUnitCosts[item.id] !== undefined
+                        ? formatMoney(nextUnitCosts[item.id], currency, locale)
+                        : <span className="text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       {(() => {
@@ -759,8 +787,10 @@ function ItemDialog({
             */}
             {item?.id ? (
               <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                {form.costPerUnit || '0'} — the average of what you have paid. Receive stock at a
-                new price and this moves on its own.
+                {form.costPerUnit || '0'} — the average of what is on the shelf now, worked out
+                from the deliveries behind it. Receive stock at a new price and this moves on its
+                own. What a sale or a production run is charged is the oldest delivery&rsquo;s own
+                price, not this.
               </p>
             ) : (
               <Input type="number" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: e.target.value })} />

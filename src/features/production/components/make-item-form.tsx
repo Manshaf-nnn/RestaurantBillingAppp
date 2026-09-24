@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Check, MapPin, Plus, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, MapPin, Plus, Trash2 } from 'lucide-react'
 import type { StockUnit } from '@prisma/client'
 import { toast } from 'sonner'
 
@@ -23,15 +23,31 @@ import { saveProductionRecipeAction, startBatchAction } from '../actions'
 import type { OpenBatch, PrepRecipe, WorkspaceItem } from '../types'
 
 /**
- * Make an Item / Production — the first three of the six screens (pro.b.md).
+ * Make an Item / Production.
  *
- *   1. Recipe Setup           what it is and how it is made, costed FIFO
- *   2. Check Available Stock  what this branch holds of each ingredient
- *   3. Create Production Order how much, what kind, when — nothing moves
+ * ── Two things, not three steps ─────────────────────────────────────────────
+ *
+ * This was a 1-2-3 stepper: Recipe Setup → Check Available Stock → Create
+ * Production Order. The flow pro.b.md describes is unchanged — a recipe is
+ * still set, stock is still checked before an order, an order still moves
+ * nothing until the ingredients are issued — but walking it as three screens
+ * every single time was wrong, because a recipe is written ONCE and produced
+ * from MANY times. Steps 2 and 3 were a toll gate on the common case.
+ *
+ * So the tab holds two things:
+ *
+ *   1. the recipe editor — write or change how something is made, and save it
+ *   2. the saved recipes — pick one to produce
+ *
+ * Picking one opens the production order panel, and the stock check lives
+ * inside it rather than before it. That is the better place for it: "is there
+ * enough?" is not a question about a recipe, it is a question about a
+ * PLANNED QUANTITY, and the old step 2 could only ever check the recipe's own
+ * yield. Now the required column scales with what is actually being made.
  *
  * Screens 4–6 — Issue ingredients, Complete, Finished item in stock — are the
- * order's own page, which step 3 lands on. The order is the thing the kitchen
- * carries from that point, so it has its own address.
+ * order's own page, which Create Order lands on. The order is the thing the
+ * kitchen carries from that point, so it has its own address.
  *
  * ── Costs are a dry run of the draw ─────────────────────────────────────────
  *
@@ -47,7 +63,6 @@ import type { OpenBatch, PrepRecipe, WorkspaceItem } from '../types'
  */
 
 type Row = { key: string; itemId: string; quantity: string; unit: StockUnit | '' }
-type Step = 1 | 2 | 3
 
 const ALL_UNITS = Object.keys(UNIT_LABELS) as StockUnit[]
 const SELECT = 'h-10 w-full rounded-lg border border-input bg-background px-2 text-sm'
@@ -77,32 +92,91 @@ export function MakeItemForm({
   branchIsFallback: boolean
   currency: string
   locale: string
-  /** Opened to make a particular item again: its recipe loads, and `step` says where to land. */
-  prefill: { itemId: string; name: string; step?: Step } | null
+  /**
+   * Opened to make a particular item again ("Make more"): its recipe loads and
+   * the order panel opens on it. `order: false` means only load it for editing.
+   */
+  prefill: { itemId: string; name: string; order?: boolean } | null
 }) {
   const router = useRouter()
   const { busy, run } = useAction()
   const requestKey = React.useRef(newRequestKey('prod'))
 
-  const [step, setStep] = React.useState<Step>(1)
+  /*
+   * ── Opened from a link, on the very first render ──────────────────────────
+   *
+   * "Make more" arrives as `?tab=make&make=<itemId>` and has to land on the
+   * order panel. Doing that in an effect would render the recipe editor first
+   * and swap it a frame later, which on a slow tablet is a visible flash of the
+   * wrong screen — and it means the server sends HTML that is about to be
+   * replaced. Computed here instead, so the first render is already right.
+   */
+  const opened = React.useMemo(() => {
+    const item = prefill ? items.find((row) => row.id === prefill.itemId) ?? null : null
+    const recipe = prefill ? recipes[prefill.itemId] ?? null : null
+    if (!item || !recipe) return null
+    return {
+      item,
+      recipe,
+      /** Only `?make=` opens the order; `?recipe=` just loads it for editing. */
+      order: Boolean(prefill?.order),
+    }
+    // Deliberately keyed on the prefill alone: a later refresh of `items` must
+    // not reopen a panel the cook has closed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.itemId, prefill?.order])
 
-  // ── step 1 state ──
+  // ── the recipe editor ──
   const [choice, setChoice] = React.useState<string>(prefill?.itemId ?? '')
   const [newName, setNewName] = React.useState('')
-  const [category, setCategory] = React.useState('')
-  const [yieldQty, setYieldQty] = React.useState('')
-  const [yieldUnit, setYieldUnit] = React.useState<StockUnit>('KG')
-  const [instructions, setInstructions] = React.useState('')
-  const [rows, setRows] = React.useState<Row[]>([newRow()])
-  /** What step 1 saved — the recipe steps 2 and 3 are about. */
-  const [saved, setSaved] = React.useState<{ itemId: string; name: string; unit: StockUnit; recipeId: string | null } | null>(null)
+  const [category, setCategory] = React.useState(() => opened?.item.category ?? '')
+  const [yieldQty, setYieldQty] = React.useState(() => (opened ? String(opened.recipe.yieldQty) : ''))
+  const [yieldUnit, setYieldUnit] = React.useState<StockUnit>(
+    () => opened?.recipe.yieldUnit ?? opened?.item.unit ?? 'KG',
+  )
+  const [instructions, setInstructions] = React.useState(() => opened?.recipe.instructions ?? '')
+  const [rows, setRows] = React.useState<Row[]>(() =>
+    opened && opened.recipe.ingredients.length > 0
+      ? opened.recipe.ingredients.map((line) => ({
+          key: `r${++rowSeq}`,
+          itemId: line.itemId,
+          quantity: String(line.quantity),
+          unit: line.unit,
+        }))
+      : [newRow()],
+  )
 
-  // ── step 2 state ──
-  const [stockSearch, setStockSearch] = React.useState('')
+  /**
+   * The saved recipe the order panel is open on, or null when nothing is being
+   * ordered. Set by clicking one in the list below, or by `?make=` from the
+   * Prepared Items tab's "Make more".
+   */
+  const [ordering, setOrdering] = React.useState<{
+    itemId: string
+    name: string
+    unit: StockUnit
+    recipeId: string | null
+  } | null>(() =>
+    opened?.order
+      ? {
+          itemId: opened.item.id,
+          name: opened.item.name,
+          unit: opened.item.unit,
+          recipeId: opened.recipe.recipeId,
+        }
+      : null,
+  )
 
-  // ── step 3 state ──
-  const [planned, setPlanned] = React.useState('')
-  const [plannedUnit, setPlannedUnit] = React.useState<StockUnit>('KG')
+  /** The recipe just saved, so the list below can point at which one it was. */
+  const [justSaved, setJustSaved] = React.useState<string | null>(null)
+
+  // ── the order panel ──
+  const [planned, setPlanned] = React.useState(() =>
+    opened?.order ? String(opened.recipe.yieldQty) : '',
+  )
+  const [plannedUnit, setPlannedUnit] = React.useState<StockUnit>(
+    () => (opened?.order ? opened.recipe.yieldUnit ?? opened.item.unit : 'KG'),
+  )
   const [productionType, setProductionType] = React.useState<'SEMI_FINISHED' | 'FINISHED'>('SEMI_FINISHED')
   const [requiredDate, setRequiredDate] = React.useState('')
   const [remarks, setRemarks] = React.useState('')
@@ -187,27 +261,56 @@ export function MakeItemForm({
   const choose = (next: string) => {
     setChoice(next)
     setNewName('')
-    setSaved(null)
+    setOrdering(null)
     if (next && next !== NEW_ITEM) fill(next)
   }
 
-  /*
-   * "Make more" lands on step 3 with the recipe already saved — there is
-   * nothing to decide about how it is made, only how much and when.
+  /**
+   * Open the order panel on a saved recipe.
+   *
+   * The editor is filled from the same recipe, because the order's scaled
+   * ingredient lines are derived from the editor's rows — one source of truth
+   * for "what this recipe is made of", whether you are editing it or producing
+   * from it. Planned quantity starts at the recipe's own yield, which is the
+   * batch size somebody already decided was sensible.
    */
-  React.useEffect(() => {
-    if (!prefill) return
-    setChoice(prefill.itemId)
-    fill(prefill.itemId)
-    const item = byId.get(prefill.itemId)
-    const recipe = recipes[prefill.itemId]
-    if (prefill.step === 3 && item && recipe) {
-      setSaved({ itemId: item.id, name: item.name, unit: item.unit, recipeId: recipe.recipeId })
+  const openOrder = React.useCallback(
+    (itemId: string) => {
+      const item = byId.get(itemId)
+      const recipe = recipes[itemId]
+      if (!item || !recipe) return
+      setChoice(itemId)
+      setNewName('')
+      fill(itemId)
+      setOrdering({ itemId: item.id, name: item.name, unit: item.unit, recipeId: recipe.recipeId })
       setPlanned(String(recipe.yieldQty))
       setPlannedUnit(recipe.yieldUnit ?? item.unit)
-      setStep(3)
+    },
+    [byId, recipes, fill],
+  )
+
+  /*
+   * A LATER link to a different item, without a full reload.
+   *
+   * The first render is already set up from `opened` above, so this only has to
+   * catch the case where the URL changes while the form is mounted — clicking
+   * "Make more" for a second item, say. Keyed on the id so it does not fire
+   * again on every refresh of the item list.
+   */
+  const openedId = React.useRef(prefill?.itemId ?? null)
+  React.useEffect(() => {
+    const next = prefill?.itemId ?? null
+    if (next === openedId.current) return
+    openedId.current = next
+    if (!next) return
+    if (prefill?.order && recipes[next]) {
+      openOrder(next)
+      return
     }
-  }, [prefill, fill, byId, recipes])
+    setChoice(next)
+    setOrdering(null)
+    fill(next)
+  }, [prefill?.itemId, prefill?.order, fill, openOrder, recipes])
 
   const ingredientOptions = React.useMemo(
     () =>
@@ -235,8 +338,13 @@ export function MakeItemForm({
       try {
         const base = roundQty(toBaseUnits(qty, row.unit, item))
         // The same walk the issue runs, on the same lots.
-        const draw = walkFifo({ lots: item.lots, quantity: base, unlotted: item.unlotted, averageCost: item.unitCost })
-        const value = draw.totalValue + draw.shortfall * item.unitCost
+        const draw = walkFifo({ lots: item.lots, quantity: base })
+        /*
+         * What the layers hold, and nothing for what they do not. Stock that
+         * is not on the shelf has no cost — FIFO.md: "do not invent a fake
+         * FIFO cost". The short badge beside the line is what says so.
+         */
+        const value = draw.totalValue
         return { row, item, base, unitCost: draw.unitCost, value, error: null, short: base > item.available }
       } catch {
         return { row, item, base: 0, unitCost: 0, value: 0, error: `Enter ${item.name} in ${item.units.map((u) => UNIT_LABELS[u]).join(', ')}`, short: false }
@@ -309,34 +417,25 @@ export function MakeItemForm({
         }),
       {
         onDone: (data) => {
-          setSaved({ itemId: data.item.id, name: data.item.name, unit: data.item.unit as StockUnit, recipeId: data.recipeId })
-          setPlanned(yieldQty)
-          setPlannedUnit(yieldUnit)
-          toast.success(data.item.isNew ? `${data.item.name} created with its recipe` : 'Recipe saved')
-          // The item list and its lots are the page's; a new item joins it.
+          toast.success(
+            data.item.isNew
+              ? `${data.item.name} created — it is in Saved recipes below`
+              : `${data.item.name} saved`,
+          )
+          /*
+           * Refresh and stop. The saved recipe joins the list below, which is
+           * what the cook then clicks to produce from it — the form does not
+           * march them onward into an order they may not want to create yet.
+           * Writing a recipe and making a batch are different acts.
+           */
+          setJustSaved(data.item.id)
           router.refresh()
-          setStep(2)
         },
       },
     )
   }
 
-  /* ── Step 2: what this branch holds ───────────────────────────────────── */
-
-  const stockRows = React.useMemo(() => {
-    const needle = stockSearch.trim().toLowerCase()
-    return recipeCost.lines
-      .filter((l) => l.item && l.base > 0)
-      .map((l) => ({
-        item: l.item!,
-        required: l.base,
-        short: l.base > l.item!.available,
-      }))
-      .filter((r) => !needle || r.item.name.toLowerCase().includes(needle))
-  }, [recipeCost.lines, stockSearch])
-  const anyShort = recipeCost.lines.some((l) => l.item && l.base > 0 && l.base > l.item.available)
-
-  /* ── Step 3: the order ────────────────────────────────────────────────── */
+  /* ── The order ────────────────────────────────────────────────────────── */
 
   /*
    * Planned quantity scales the recipe: the ratio of what is being made to
@@ -345,8 +444,8 @@ export function MakeItemForm({
    * unit family alone.
    */
   const scaling = React.useMemo(() => {
-    const item = saved ? byId.get(saved.itemId) : null
-    const like = item ?? { name: saved?.name ?? outputName, unit: saved?.unit ?? yieldUnit, purchaseUnit: null, unitsPerPurchaseUnit: null }
+    const item = ordering ? byId.get(ordering.itemId) : null
+    const like = item ?? { name: ordering?.name ?? outputName, unit: ordering?.unit ?? yieldUnit, purchaseUnit: null, unitsPerPurchaseUnit: null }
     const wanted = Number(planned)
     const yieldQ = Number(yieldQty)
     if (!(wanted > 0) || !(yieldQ > 0)) return { ratio: 0, error: null as string | null }
@@ -357,7 +456,7 @@ export function MakeItemForm({
     } catch {
       return { ratio: 0, error: `${like.name} cannot be measured in ${UNIT_LABELS[plannedUnit]}` }
     }
-  }, [saved, byId, planned, plannedUnit, yieldQty, yieldUnit, outputName])
+  }, [ordering, byId, planned, plannedUnit, yieldQty, yieldUnit, outputName])
 
   const scaledLines = React.useMemo(
     () =>
@@ -373,23 +472,23 @@ export function MakeItemForm({
       if (!item) continue
       try {
         const base = roundQty(toBaseUnits(line.quantity, line.unit, item))
-        const draw = walkFifo({ lots: item.lots, quantity: base, unlotted: item.unlotted, averageCost: item.unitCost })
-        total += draw.totalValue + draw.shortfall * item.unitCost
+        const draw = walkFifo({ lots: item.lots, quantity: base })
+        total += draw.totalValue
       } catch { /* refused at the form already */ }
     }
     return total
   }, [scaledLines, byId])
 
-  const orderReady = Boolean(saved && branchId) && scaling.ratio > 0 && !scaling.error && scaledLines.length > 0
+  const orderReady = Boolean(ordering && branchId) && scaling.ratio > 0 && !scaling.error && scaledLines.length > 0
 
   const createOrder = async () => {
-    if (!orderReady || !saved || !branchId) return
+    if (!orderReady || !ordering || !branchId) return
     await run(
       () =>
         startBatchAction({
           clientRequestId: requestKey.current,
           branchId,
-          output: { itemId: saved.itemId, name: saved.name, quantity: Number(planned), unit: plannedUnit },
+          output: { itemId: ordering.itemId, name: ordering.name, quantity: Number(planned), unit: plannedUnit },
           ingredients: scaledLines,
           waste: [],
           productionType,
@@ -406,33 +505,83 @@ export function MakeItemForm({
     )
   }
 
-  /* ── The screens ──────────────────────────────────────────────────────── */
+  /*
+   * Every recipe that has been saved, with what a batch of it costs today.
+   *
+   * The same `walkFifo` the editor and the issue use, so the figure on the card
+   * is the figure the order panel will show and the issue will draw.
+   */
+  const savedRecipes = React.useMemo(() => {
+    const list = Object.entries(recipes)
+      .map(([itemId, recipe]) => {
+        const item = byId.get(itemId)
+        if (!item) return null
+        let total = 0
+        let short = false
+        for (const line of recipe.ingredients) {
+          const ing = byId.get(line.itemId)
+          if (!ing) continue
+          try {
+            const base = roundQty(toBaseUnits(line.quantity, line.unit, ing))
+            const draw = walkFifo({ lots: ing.lots, quantity: base })
+            total += draw.totalValue
+            if (base > ing.available) short = true
+          } catch {
+            /* a unit the ingredient cannot be measured in — the editor says so */
+          }
+        }
+        let yieldBase = 0
+        try {
+          yieldBase = roundQty(toBaseUnits(recipe.yieldQty, recipe.yieldUnit ?? item.unit, item))
+        } catch {
+          yieldBase = 0
+        }
+        return { item, recipe, total, perBase: yieldBase > 0 ? total / yieldBase : 0, short }
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+    return list.sort((a, b) => a.item.name.localeCompare(b.item.name))
+  }, [recipes, byId])
 
-  const stepLabel = (n: Step, label: string) => (
-    <button
-      type="button"
-      onClick={() => { if (n < step || (n === 2 && saved) || (n === 3 && saved)) setStep(n) }}
-      className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm ${
-        step === n ? 'bg-primary text-primary-foreground' : n < step || saved ? 'bg-muted hover:bg-muted/80' : 'text-muted-foreground'
-      }`}
-      aria-current={step === n ? 'step' : undefined}
-    >
-      <span className={`flex size-5 items-center justify-center rounded-full text-xs font-semibold ${step === n ? 'bg-primary-foreground/20' : 'bg-background'}`}>
-        {n < step || (saved && n <= 2 && step > n) ? <Check className="size-3" /> : n}
-      </span>
-      {label}
-    </button>
+  /*
+   * What the order will draw, checked against the shelf.
+   *
+   * This is pro.b.md §2 — "before production, the user must be able to check
+   * current ingredient stock" — moved inside the order panel, where Required
+   * is the SCALED quantity rather than the recipe's own yield. Checking a
+   * recipe's base quantities before choosing how much to make answered a
+   * question nobody had asked.
+   */
+  const orderStock = React.useMemo(
+    () =>
+      scaledLines
+        .map((line) => {
+          const item = byId.get(line.itemId)
+          if (!item) return null
+          let base = 0
+          try {
+            base = roundQty(toBaseUnits(line.quantity, line.unit, item))
+          } catch {
+            return null
+          }
+          const draw = walkFifo({ lots: item.lots, quantity: base })
+          return {
+            item,
+            required: base,
+            short: base > item.available,
+            cost: draw.totalValue,
+          }
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null),
+    [scaledLines, byId],
   )
+  const anyShort = orderStock.some((row) => row.short)
+
+  /* ── The screen ───────────────────────────────────────────────────────── */
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2" data-testid="production-steps">
-        {stepLabel(1, 'Recipe Setup')}
-        <ArrowRight className="size-4 text-muted-foreground" />
-        {stepLabel(2, 'Check Available Stock')}
-        <ArrowRight className="size-4 text-muted-foreground" />
-        {stepLabel(3, 'Create Production Order')}
-        <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <MapPin className="size-3.5" />
           Making at <strong>{branchName ?? 'no location'}</strong>
           {branchIsFallback ? ' — not chosen on the switcher' : ''}
@@ -445,8 +594,8 @@ export function MakeItemForm({
         </Alert>
       ) : null}
 
-      {/* ── 1. Recipe Setup ──────────────────────────────────────────────── */}
-      {step === 1 ? (
+      {/* ── The recipe ───────────────────────────────────────────────────── */}
+      {!ordering ? (
         <div className="grid gap-5 lg:grid-cols-3">
           <div className="space-y-5 lg:col-span-2">
             <Card>
@@ -584,98 +733,118 @@ export function MakeItemForm({
                   </Alert>
                 ) : null}
                 <Button className="w-full" size="lg" onClick={saveRecipe} disabled={!recipeReady} loading={busy}>
-                  Save recipe <ArrowRight />
+                  Save recipe
                 </Button>
-                <p className="text-xs text-muted-foreground">Saves the item and its recipe, then checks the stock. Nothing leaves the shelf.</p>
+                <p className="text-xs text-muted-foreground">
+                  Saves the item and its recipe and nothing else. Nothing leaves the shelf until a
+                  production order&rsquo;s ingredients are issued.
+                </p>
               </CardContent>
             </Card>
           </div>
         </div>
       ) : null}
 
-      {/* ── 2. Check Available Stock ─────────────────────────────────────── */}
-      {step === 2 && saved ? (
+      {/* ── Saved recipes: pick one to produce ───────────────────────────── */}
+      {!ordering ? (
         <Card>
           <CardHeader>
-            <CardTitle>Stock Balance</CardTitle>
+            <CardTitle>Saved recipes</CardTitle>
             <CardDescription>
-              What {branchName ?? 'this location'} holds of each ingredient in <strong>{saved.name}</strong>, and what the next unit of each costs (FIFO — the oldest lot).
+              Everything that can be made here. Pick one to start a production order &mdash; choosing
+              how much comes next, and nothing moves until the ingredients are issued.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <Input
-              value={stockSearch}
-              onChange={(e) => setStockSearch(e.target.value)}
-              placeholder="Search item…"
-              startIcon={<Search className="size-4" />}
-              className="max-w-sm"
-            />
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="pb-2 font-medium">Item</th>
-                    <th className="pb-2 text-right font-medium">Available Qty</th>
-                    <th className="pb-2 text-right font-medium">Required</th>
-                    <th className="pb-2 font-medium">Unit</th>
-                    <th className="pb-2 text-right font-medium">FIFO Cost</th>
-                    <th className="pb-2 font-medium" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockRows.map(({ item, required, short }) => (
-                    <tr key={item.id} className="border-b border-border/50 last:border-0">
-                      <td className="py-2">
-                        <Link href={`/dashboard/inventory/${item.id}`} className="hover:underline">{item.name}</Link>
-                      </td>
-                      <td className={`py-2 text-right tabular-nums ${short ? 'text-destructive' : ''}`}>{formatQuantity(item.available, item.unit)}</td>
-                      <td className="py-2 text-right tabular-nums text-muted-foreground">{formatQuantity(required, item.unit)}</td>
-                      <td className="py-2">{UNIT_LABELS[item.unit]}</td>
-                      <td className="py-2 text-right tabular-nums">{perUnit(item.nextUnitCost)}</td>
-                      <td className="py-2 text-right">
-                        {short ? <Badge variant="destructive" size="sm">short</Badge> : <Badge variant="success" size="sm">enough</Badge>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {anyShort ? (
-              <Alert variant="warning" title="Not enough of something here">
-                An order can still be created, but the ingredients cannot be issued until the shelf holds them — production never draws stock below zero.
-              </Alert>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setStep(1)}><ArrowLeft /> Back</Button>
-              <Button onClick={() => setStep(3)}>Create Production Order <ArrowRight /></Button>
-            </div>
+          <CardContent>
+            {savedRecipes.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No recipes yet. Write one above and save it, and it appears here to produce from.
+              </p>
+            ) : (
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="saved-recipes">
+                {savedRecipes.map(({ item, recipe, total, perBase, short }) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      onClick={() => openOrder(item.id)}
+                      className={`w-full rounded-xl border p-3 text-left transition hover:border-primary/50 hover:bg-muted/40 ${
+                        justSaved === item.id ? 'border-primary ring-1 ring-primary' : 'border-border'
+                      }`}
+                    >
+                      <p className="flex items-center gap-2 font-medium">
+                        <span className="truncate">{item.name}</span>
+                        {justSaved === item.id ? <Badge variant="success" size="sm">saved</Badge> : null}
+                        {short ? <Badge variant="destructive" size="sm">short</Badge> : null}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Makes {formatQuantity(recipe.yieldQty, recipe.yieldUnit ?? item.unit)} &middot;{' '}
+                        {recipe.ingredients.length} ingredient{recipe.ingredients.length === 1 ? '' : 's'}
+                      </p>
+                      <p className="mt-1.5 text-xs">
+                        <span className="text-muted-foreground">Batch costs</span>{' '}
+                        <strong className="tabular-nums">{money(total)}</strong>
+                        {perBase > 0 ? (
+                          <span className="text-muted-foreground">
+                            {' '}&middot; {perUnit(perBase)}/{UNIT_LABELS[item.unit]}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatQuantity(item.available, item.unit)} in stock here
+                      </p>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
       ) : null}
 
-      {/* ── 3. Create Production Order ───────────────────────────────────── */}
-      {step === 3 && saved ? (
+      {/* ── Create Production Order, with the stock check inside it ──────── */}
+      {ordering ? (
         <div className="grid gap-5 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>New Production Order</CardTitle>
-              <CardDescription>Plan or start production in the kitchen. Creating the order deducts nothing — stock leaves when the ingredients are issued.</CardDescription>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <CardTitle>Create Production Order</CardTitle>
+                  <CardDescription>
+                    Making <strong>{ordering.name}</strong>. Creating the order deducts nothing &mdash;
+                    stock leaves when the ingredients are issued.
+                  </CardDescription>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setOrdering(null)}>
+                  <ArrowLeft /> Back to recipes
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-sm sm:col-span-2">
                   <span className="mb-1 block text-muted-foreground">Recipe</span>
-                  <Input value={saved.name} readOnly />
+                  <Input value={ordering.name} readOnly />
                 </label>
+                {/*
+                  How much to make. The whole point of "make more": the recipe
+                  says what a batch is, this says how many batches&rsquo; worth,
+                  and every ingredient line below scales with it.
+                */}
                 <label className="block text-sm">
-                  <span className="mb-1 block text-muted-foreground">Planned Quantity</span>
+                  <span className="mb-1 block text-muted-foreground">Quantity to make</span>
                   <div className="grid grid-cols-[1fr_7rem] gap-2">
                     <Input type="number" inputMode="decimal" min={0} step="any" value={planned} onChange={(e) => setPlanned(e.target.value)} placeholder="10" />
                     <select className={SELECT} value={plannedUnit} onChange={(e) => setPlannedUnit(e.target.value as StockUnit)}>
-                      {(byId.get(saved.itemId)?.units ?? ALL_UNITS).map((u) => <option key={u} value={u}>{UNIT_LABELS[u]}</option>)}
+                      {(byId.get(ordering.itemId)?.units ?? ALL_UNITS).map((u) => <option key={u} value={u}>{UNIT_LABELS[u]}</option>)}
                     </select>
                   </div>
-                  {scaling.error ? <span className="mt-1 block text-xs text-destructive">{scaling.error}</span> : null}
+                  {scaling.error ? (
+                    <span className="mt-1 block text-xs text-destructive">{scaling.error}</span>
+                  ) : scaling.ratio > 0 && Math.abs(scaling.ratio - 1) > 0.001 ? (
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {scaling.ratio.toLocaleString(locale, { maximumFractionDigits: 2 })}&times; the saved recipe
+                    </span>
+                  ) : null}
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block text-muted-foreground">Production Type</span>
@@ -694,15 +863,58 @@ export function MakeItemForm({
                 </label>
               </div>
 
+              {/* pro.b.md §2, against the quantity actually being made. */}
+              <div>
+                <p className="mb-2 text-sm font-medium">Check Available Stock</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-muted-foreground">
+                        <th className="pb-2 font-medium">Item</th>
+                        <th className="pb-2 text-right font-medium">Required</th>
+                        <th className="pb-2 text-right font-medium">Available</th>
+                        <th className="pb-2 font-medium">Unit</th>
+                        <th className="pb-2 text-right font-medium">FIFO Cost</th>
+                        <th className="pb-2 font-medium" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orderStock.map(({ item, required, short, cost }) => (
+                        <tr key={item.id} className="border-b border-border/50 last:border-0">
+                          <td className="py-2">
+                            <Link href={`/dashboard/inventory/${item.id}`} className="hover:underline">{item.name}</Link>
+                          </td>
+                          <td className="py-2 text-right tabular-nums">{formatQuantity(required, item.unit)}</td>
+                          <td className={`py-2 text-right tabular-nums ${short ? 'text-destructive' : 'text-muted-foreground'}`}>
+                            {formatQuantity(item.available, item.unit)}
+                          </td>
+                          <td className="py-2">{UNIT_LABELS[item.unit]}</td>
+                          <td className="py-2 text-right tabular-nums">{money(cost)}</td>
+                          <td className="py-2 text-right">
+                            {short ? <Badge variant="destructive" size="sm">short</Badge> : <Badge variant="success" size="sm">enough</Badge>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {anyShort ? (
+                <Alert variant="warning" title="Not enough of something here">
+                  The order can still be created, but the ingredients cannot be issued until the shelf
+                  holds them — production never draws stock below zero.
+                </Alert>
+              ) : null}
+
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => setStep(2)}><ArrowLeft /> Back</Button>
                 <Button size="lg" onClick={createOrder} disabled={!orderReady} loading={busy}>
                   Create Order
                 </Button>
               </div>
               {openBatches.length > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  {openBatches.length} order{openBatches.length === 1 ? '' : 's'} already in progress at this location — see the list below the steps.
+                  {openBatches.length} order{openBatches.length === 1 ? '' : 's'} already in progress at this location — see the list below.
                 </p>
               ) : null}
             </CardContent>
@@ -711,7 +923,7 @@ export function MakeItemForm({
           <Card>
             <CardHeader>
               <CardTitle>What this order will take</CardTitle>
-              <CardDescription>The recipe scaled to the planned quantity, costed FIFO. Issued at the real lots when the kitchen starts.</CardDescription>
+              <CardDescription>The recipe scaled to the quantity above, costed FIFO. Issued at the real lots when the kitchen starts.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <ul className="divide-y divide-border">
@@ -729,9 +941,6 @@ export function MakeItemForm({
             </CardContent>
           </Card>
         </div>
-      ) : null}
-      {step === 3 && !saved ? (
-        <Alert variant="warning" title="Save the recipe first">Step 3 creates an order from a saved recipe.</Alert>
       ) : null}
     </div>
   )

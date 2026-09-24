@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { OrderItemStatus, ServiceRequestType } from '@prisma/client'
 import {
@@ -10,6 +11,7 @@ import {
   ChefHat,
   Clock,
   HandPlatter,
+  Plus,
   Receipt,
   ShoppingBag,
   Sparkles,
@@ -40,7 +42,6 @@ import {
   progressItemsAction,
   resolveServiceRequest,
   serveOrder,
-  updateOrderStatus,
 } from '@/features/orders/actions'
 import { setServiceTableStatus } from '@/features/floor/actions'
 import { SwapTableDialog } from '@/features/floor/components/swap-table-dialog'
@@ -121,6 +122,7 @@ export function WaiterBoard({
   currency,
   locale,
   branchIds,
+  orderHref = null,
 }: {
   initialReady: WaiterOrder[]
   initialServing: WaiterOrder[]
@@ -138,6 +140,14 @@ export function WaiterBoard({
   exit?: React.ReactNode
   /** Locations this screen is showing. Null means all of them. */
   branchIds: string[] | null
+  /**
+   * Where "New order" goes, or null when this person may not create one.
+   *
+   * A string rather than a callback: the permission check and the branch that
+   * belongs in the URL both live on the server, and an href serializes across
+   * the boundary where a handler would not (`no-function-props`).
+   */
+  orderHref?: string | null
 
   restaurantName: string
   /** Which floor this station is serving (correctionA.md §6). */
@@ -417,6 +427,23 @@ export function WaiterBoard({
           <TabsTrigger value="tables" className="flex-1 sm:flex-none">
             <Users className="size-4" /> Tables
           </TabsTrigger>
+          {/*
+            A link, not a tab, and deliberately in the same strip.
+
+            Taking an order is a mode that fills the screen and holds a cart, so
+            it is its own URL — the three above are views of one board and
+            switch without a round trip, which is what a waiter tapping between
+            them all shift actually wants. Rendered here because "new order" is
+            one of the things this station does, not a separate destination.
+          */}
+          {orderHref ? (
+            <Link
+              href={orderHref}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 active:scale-95"
+            >
+              <Plus className="size-4" /> New order
+            </Link>
+          ) : null}
         </TabsList>
 
         {/* ── ready to serve ─────────────────────────────────────── */}

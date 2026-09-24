@@ -10,7 +10,8 @@ import { EVENTS } from '@/lib/realtime/events'
 import { prisma, type TxClient, guardLocks} from '@/server/db/prisma'
 import { toBaseUnits, formatQuantity } from './units'
 import { applyLocationDelta } from './location-stock'
-import { allocateFefo, consumeBatches, type BatchAllocation } from './batches'
+import { type BatchAllocation } from './batches'
+import { allocateAndConsume, createLayer, restoreToLayers } from './fifo'
 
 /**
  * The stock ledger.
@@ -153,6 +154,49 @@ export interface PostMovementParams {
   branchId: string
   locationId?: string | null
   userId?: string | null
+  /**
+   * When this stock was received, for the layer it creates.
+   *
+   * A transfer passes the SOURCE layer's date so the stock keeps its place in
+   * the FIFO queue at the far end. Everything else leaves it unset and the
+   * layer is dated now.
+   */
+  receivedAt?: Date | null
+  /**
+   * Put this stock back on the layers a previous movement took it off.
+   *
+   * Named by what caused the original — the order, the transfer — because a
+   * reversal is usually a net correction across several movements rather than
+   * the undoing of one. `SALE_REVERSAL` does this automatically from its own
+   * reference; anything else asks.
+   */
+  restoreFrom?: { referenceType: string; referenceId: string } | null
+  /**
+   * Create exactly these layers instead of one (FIFO.md).
+   *
+   * A transfer arriving is not one delivery at a blended price — it is the
+   * source's layers, moved. One destination layer per source layer, each
+   * carrying the value and the ORIGINAL receipt date, so six-month-old stock
+   * does not arrive looking fresh and stop being drawn first. Inbound only.
+   */
+  intoLayers?: Array<{
+    quantity: number
+    /** Minor units, exact. */
+    value: number
+    batchNo?: string | null
+    receivedAt?: Date | null
+    expiryDate?: Date | null
+  }> | null
+  /**
+   * Draw from these layers first, then normal FIFO for anything left.
+   *
+   * For an outbound movement that is undoing a specific receipt rather than
+   * issuing stock — a return to supplier being the one that matters. The goods
+   * leave at what that delivery charged, which is what the supplier credits,
+   * so the return nets to zero instead of booking a profit on the difference
+   * between that price and the oldest layer's.
+   */
+  preferLayers?: string[] | null
   batchNo?: string | null
   /** Ties the movement to a specific lot when the item is batch-tracked. */
   batchId?: string | null
@@ -312,18 +356,93 @@ export async function postMovement(
   }
 
   /*
-   * What this stock was worth when it moved.
+   * ── What this stock was worth when it moved (FIFO.md) ─────────────────────
    *
-   * Inbound movements bring their own price and it must not be invented — the
-   * weighted average is computed from it below. Outbound movements had no cost
-   * at all, so every SALE, WASTAGE and TRANSFER_OUT row recorded zero, and the
-   * ledger could not answer "what did we consume, in money" — which is exactly
-   * what COGS is. Stamping the average in force at the moment of the movement
-   * makes the ledger the source of truth for cost as well as quantity, and it is
-   * a snapshot: later price changes cannot rewrite what last month cost.
+   * This is the change the whole FIFO rebuild turns on.
+   *
+   * It used to be `valueUpdate`: a weighted-average pool on the item, with an
+   * inbound movement recomputing `costPerUnit = value / quantity` and an
+   * outbound one removing a pro-rata slice of it. The FIFO layers sat beside
+   * that pool as a side record, drained only when the item happened to have
+   * batch tracking switched on, and consulted for costing by exactly one
+   * caller out of twenty. Two systems, two answers, and the average won.
+   *
+   * Now the layers ARE the valuation. Outbound draws them oldest first and is
+   * worth exactly what it drew; inbound creates one and is worth exactly what
+   * was paid. `stockValue` and `costPerUnit` on the item become caches of the
+   * layers, recomputed below, rather than the thing being maintained.
+   *
+   * Allocation happens HERE, inside the item lock taken above, and not in the
+   * caller. That is not tidiness: production used to allocate just before
+   * calling this, so a second run could compute its draw against layers the
+   * first had already taken and both would commit. Inside the lock, it cannot.
    */
-  const valuation = valueUpdate(item, signed, params.unitCost, params.totalValue)
-  const unitCost = valuation.movementUnitCost
+  /*
+   * A reversal puts stock back where it came from.
+   *
+   * `SALE_REVERSAL` names the order it is unwinding, so the trace rows that
+   * order's consumption wrote say which layers to credit and by how much. Any
+   * caller can ask for the same by naming a reference explicitly.
+   */
+  const restoreRef =
+    params.restoreFrom ??
+    (signed > 0 && params.type === 'SALE_REVERSAL' && params.referenceType && params.referenceId
+      ? { referenceType: params.referenceType, referenceId: params.referenceId }
+      : null)
+
+  const restoring = restoreRef
+    ? await restoreToLayers(tx, {
+        restaurantId: params.restaurantId,
+        itemId: item.id,
+        branchId: params.branchId,
+        referenceType: restoreRef.referenceType,
+        referenceId: restoreRef.referenceId,
+        quantity: magnitude,
+      })
+    : null
+
+  const drawn = signed < 0
+    ? await allocateAndConsume(tx, {
+        restaurantId: params.restaurantId,
+        itemId: item.id,
+        branchId: params.branchId,
+        quantity: magnitude,
+        preferLayers: params.preferLayers ?? null,
+      })
+    : null
+
+  /*
+   * What an inbound movement is worth, in order of authority:
+   *
+   *   1. the caller's exact total — a delivery knows its invoice, a production
+   *      run knows what its ingredients cost, a transfer knows what the source
+   *      layer held;
+   *   2. the per-unit price it quoted;
+   *   3. the item's own recorded cost.
+   *
+   * (3) is a fallback, not an average: `costPerUnit` is a figure somebody
+   * recorded for this item, and a receipt keyed without a price is a gap in
+   * the paperwork rather than a free delivery. Valuing it at nothing would
+   * write stock onto the shelf worth zero and quietly understate the books.
+   *
+   * What is NOT here is the old rule: value an unpriced receipt at the running
+   * weighted average of everything on hand. That is how a transfer used to
+   * arrive valued at the destination's blend rather than at what the source
+   * actually paid for it.
+   */
+  const inboundValue = signed > 0
+    ? params.intoLayers && params.intoLayers.length > 0
+      // The layers say what it is worth; nothing else can contradict them.
+      ? params.intoLayers.reduce((sum, spec) => sum + Math.round(spec.value), 0)
+      : params.totalValue !== undefined && params.totalValue >= 0
+        ? Math.round(params.totalValue)
+        : params.unitCost !== undefined && params.unitCost > 0
+          ? Math.round(magnitude * params.unitCost)
+          : Math.round(magnitude * item.costPerUnit)
+    : 0
+
+  const valueMoved = signed < 0 ? (drawn?.totalValue ?? 0) : (restoring?.totalValue ?? inboundValue)
+  const unitCost = magnitude > 0 ? Math.round(valueMoved / magnitude) : 0
 
   const movement = await tx.stockMovement.create({
     data: {
@@ -335,6 +454,9 @@ export async function postMovement(
       enteredUnit,
       balanceAfter,
       unitCost,
+      // The exact figure. `unitCost` above is it rounded per unit, which cannot
+      // be multiplied back out to reproduce this.
+      valueMoved,
       reason: params.reason ?? null,
       notes: params.notes ?? null,
       referenceType: params.referenceType ?? null,
@@ -352,47 +474,152 @@ export async function postMovement(
   })
 
   /*
-   * Draw outgoing stock out of real lots, earliest expiry first.
+   * ── The layers this movement touched ──────────────────────────────────────
    *
-   * Only wastage did this, so anything sold or used in production left batch
-   * quantities untouched: `remainingQty` stayed at what was received, FEFO kept
-   * offering lots that were long gone, and the expiry board warned about stock
-   * that had already been eaten. Doing it here rather than in each caller means
-   * every outward movement is covered by construction — the same reason
-   * `postMovement` owns the balance itself.
+   * Outbound was already drawn down by `allocateAndConsume` above, inside the
+   * item lock. Inbound makes a layer here.
    *
-   * A caller naming a specific batch has already decided; anything else is
-   * allocated. A shortfall is not an error: batches can legitimately lag behind
-   * the balance for stock received before batch tracking was turned on, and
-   * refusing the movement would block a sale over a bookkeeping detail.
+   * It used to be neither, for most movements: layers were only consumed when
+   * `item.trackBatches` was true — off by default — and only created by three
+   * of twenty callers. So on an ordinary item layers grew with every delivery
+   * and never came down, while transfers, returns, reversals and count gains
+   * added stock that belonged to no layer at all and had to be costed at the
+   * running average for ever after. Both halves are unconditional now.
    */
-  if (signed < 0 && params.allocations) {
+  if (signed > 0 && restoring) {
     /*
-     * The caller decided which lots, and by what rule (pro.b.md §5: oldest
-     * receipt first, for production). Regardless of `trackBatches` — a lot
-     * that exists is a lot that was drawn from, whatever the item's flag says.
+     * Stock coming back goes onto the layers it came off, at their values.
+     *
+     * Without this a reversal returns the quantity at whatever the item
+     * happens to be worth today, so cancelling an order creates or destroys
+     * value whenever prices have moved since the sale — which is how
+     * cancelling last week's order can change last week's margin. The trace
+     * rows written by the original movement are what make it possible.
      */
-    await consumeBatches(tx, params.allocations)
-  } else if (item.trackBatches && signed < 0) {
-    if (params.batchId) {
-      await tx.stockBatch.update({
-        where: { id: params.batchId },
-        data: { remainingQty: { decrement: magnitude } },
+    for (const draw of restoring.draws) {
+      await tx.stockMovementLot.create({
+        data: {
+          restaurantId: params.restaurantId,
+          movementId: movement.id,
+          batchId: draw.batchId,
+          batchNo: draw.batchNo,
+          quantity: draw.quantity,
+          unitCost: draw.unitCost,
+          lineValue: draw.lineValue,
+          uncosted: draw.uncosted,
+        },
       })
-    } else {
-      const { allocations } = await allocateFefo(tx, {
+    }
+  } else if (signed > 0 && params.intoLayers && params.intoLayers.length > 0) {
+    // The source's layers, recreated here — see `intoLayers`.
+    for (const spec of params.intoLayers) {
+      const layer = await createLayer(tx, {
         restaurantId: params.restaurantId,
         itemId: item.id,
-        quantity: magnitude,
         branchId: params.branchId,
+        locationId: params.locationId ?? item.locationId ?? null,
+        quantity: spec.quantity,
+        value: spec.value,
+        batchNo: spec.batchNo ?? null,
+        expiryDate: spec.expiryDate ?? params.expiryDate ?? null,
+        receivedAt: spec.receivedAt ?? null,
       })
-      await consumeBatches(tx, allocations)
+      if (layer) {
+        await tx.stockMovementLot.create({
+          data: {
+            restaurantId: params.restaurantId,
+            movementId: movement.id,
+            batchId: layer.id,
+            batchNo: layer.batchNo,
+            quantity: spec.quantity,
+            unitCost: spec.quantity > 0 ? Math.round(spec.value / spec.quantity) : 0,
+            lineValue: spec.value,
+          },
+        })
+      }
+    }
+  } else if (signed > 0) {
+    const layer = await createLayer(tx, {
+      restaurantId: params.restaurantId,
+      itemId: item.id,
+      branchId: params.branchId,
+      locationId: params.locationId ?? item.locationId ?? null,
+      quantity: magnitude,
+      value: inboundValue,
+      batchNo: params.batchNo ?? null,
+      expiryDate: params.expiryDate ?? null,
+      /*
+       * A transfer hands on the source layer's date so the stock keeps its
+       * place in the FIFO queue. Copy today's date instead and six-month-old
+       * stock arrives looking fresh and stops being drawn first — FIFO order
+       * would break silently on every transfer.
+       */
+      receivedAt: params.receivedAt ?? null,
+    })
+    if (layer) {
+      await tx.stockMovementLot.create({
+        data: {
+          restaurantId: params.restaurantId,
+          movementId: movement.id,
+          batchId: layer.id,
+          batchNo: layer.batchNo,
+          quantity: magnitude,
+          unitCost,
+          lineValue: inboundValue,
+        },
+      })
+    }
+  } else if (drawn) {
+    /*
+     * One row per layer drawn. This is what makes a reversal able to put stock
+     * back where it came from, and what makes the ledger replayable at cost —
+     * neither was possible when a movement recorded only a rounded per-unit
+     * figure and at most one batch id.
+     */
+    for (const draw of drawn.draws) {
+      await tx.stockMovementLot.create({
+        data: {
+          restaurantId: params.restaurantId,
+          movementId: movement.id,
+          batchId: draw.batchId,
+          batchNo: draw.batchNo,
+          quantity: draw.quantity,
+          unitCost: draw.unitCost,
+          lineValue: draw.lineValue,
+          uncosted: draw.uncosted,
+        },
+      })
     }
   }
 
+  /*
+   * The item's cached value, recomputed from its layers.
+   *
+   * `stockValue` and `costPerUnit` were the weighted-average pool the ledger
+   * maintained; they are derived figures now, in exactly the relationship
+   * `quantity` has always had with the movements. Every screen that reads them
+   * keeps working and starts showing a number that agrees with the layers.
+   */
+  const layerValue = await tx.stockBatch.aggregate({
+    where: { restaurantId: params.restaurantId, itemId: item.id, remainingQty: { gt: 0 } },
+    _sum: { remainingValue: true },
+  })
+  const stockValue = Math.max(0, layerValue._sum.remainingValue ?? 0)
+
   const updated = await tx.inventoryItem.update({
     where: { id: item.id },
-    data: { quantity: balanceAfter, ...valuation.item },
+    data: {
+      quantity: balanceAfter,
+      stockValue,
+      // The blended rate of what is on hand. Display only — never a costing
+      // basis. `currentUnitCost` in ./fifo is what the next unit costs.
+      costPerUnit: balanceAfter > 0 ? Math.round(stockValue / balanceAfter) : item.costPerUnit,
+      // A purchase still records what it paid; the LAST costing method and the
+      // reorder screen read it, and neither is a costing basis any more.
+      ...(signed > 0 && params.unitCost !== undefined && params.unitCost > 0
+        ? { lastPurchaseCost: params.unitCost }
+        : {}),
+    },
   })
 
   // Mirror the change onto the location that owns it. The item total above is
@@ -440,108 +667,31 @@ export async function postMovement(
     balanceBefore,
     balanceAfter,
     wentNegative: balanceBefore >= 0 && balanceAfter < 0,
-    valueMoved: valuation.valueMoved,
+    valueMoved,
   }
 }
 
-/**
- * Value-carrying weighted average cost.
+/*
+ * ── The weighted-average engine that used to live here ──────────────────────
  *
- * The average used to live only as a rounded Int per base unit, recomputed on
- * receipt — and for an item counted in grams, a real cost of 0.4 cents per
- * gram rounded to 0, so entire deliveries were worth nothing on the books.
- * The VALUE on hand is now the tracked figure, exact: receipts add at their
- * own price, everything leaving subtracts at the running average, and
- * `costPerUnit` becomes a rounded cache of value ÷ quantity.
+ * `valueUpdate` maintained `InventoryItem.stockValue` as a value pool: an
+ * inbound movement added its cost and recomputed `costPerUnit = value ÷
+ * quantity`; an outbound one removed `(value × out) ÷ quantity`, a pro-rata
+ * slice of the blend. It was careful, value-carrying and internally
+ * consistent — and it was a second costing system running beside the FIFO
+ * layers, which is what FIFO.md exists to end.
  *
- * Rules the numbers follow:
- *   • Outbound never moves the average — selling stock cannot change what the
- *     rest of it cost.
- *   • Inbound WITHOUT a price (a sale reversal, a transfer in) comes back at
- *     the running average, so returned stock carries the value it left with —
- *     these rows used to be stamped zero and the value ladder could not close.
- *   • When the balance empties or goes negative the value is written to zero:
- *     negative stock is a quantity problem, and pretending it holds negative
- *     value would poison the next receipt's average.
+ * It had one clause worth remembering, because its removal is deliberate: an
+ * outbound movement's value was capped at `Math.min(explicitTotalValue,
+ * prevValue)`, so a caller could never remove more worth than the pool held.
+ * Under FIFO that cap cannot fire honestly — a draw takes value out of layers
+ * that hold it, so it is bounded by construction — and if it ever did fire it
+ * would be silently swallowing a disagreement between the layers and the
+ * cache, which is exactly the drift the new invariants exist to expose.
+ *
+ * The value of a movement is now whatever its layers were worth. See the
+ * allocation above.
  */
-function valueUpdate(
-  item: InventoryItem,
-  signedBase: number,
-  explicitUnitCost?: number,
-  explicitTotalValue?: number,
-): {
-  item: { stockValue: number; costPerUnit?: number; lastPurchaseCost?: number }
-  movementUnitCost: number
-  valueMoved: number
-} {
-  const prevQty = Math.max(0, item.quantity)
-  const prevValue = Math.max(0, Number(item.stockValue))
-  const average = prevQty > 0 ? prevValue / prevQty : item.costPerUnit
-
-  if (signedBase > 0) {
-    /*
-     * Three ways an inbound movement can be valued, in order of authority:
-     * an exact total (production handing on what its ingredients were worth),
-     * a per-unit price (a receipt), or — neither given — the running average
-     * (a reversal, a transfer in). A total is its own "priced" signal: a real
-     * cost below one minor unit per base unit rounds to a per-unit price of 0,
-     * and 0 used to read as "not priced" and fall back to the average — which
-     * for a brand-new item is 0. That is how a batch of sauce could be worth
-     * nothing on the books the moment it was made.
-     */
-    const totalled = explicitTotalValue !== undefined && explicitTotalValue >= 0
-    const priced = !totalled && explicitUnitCost !== undefined && explicitUnitCost > 0
-    const added = totalled
-      ? explicitTotalValue!
-      : signedBase * (priced ? explicitUnitCost! : average)
-    const nextQty = prevQty + signedBase
-    const nextValue = prevValue + added
-    return {
-      item: {
-        // stockValue is value, not quantity, but it is carried at the same six
-        // places and for the same reason: quantity × unitCost is Float, so the
-        // running value drifts unless it is cut off at each step. Rounding it
-        // coarser than the quantity that produced it would make the value
-        // ladder disagree with the balance ladder.
-        stockValue: roundQty(nextValue),
-        costPerUnit: nextQty > 0 ? Math.round(nextValue / nextQty) : item.costPerUnit,
-        // A production output is not a purchase; only a priced receipt sets this.
-        ...(priced ? { lastPurchaseCost: explicitUnitCost } : {}),
-      },
-      // The per-unit snapshot on the movement row is rounded, so a report that
-      // multiplies it back out can differ from `stockValue` by under half a
-      // minor unit per unit moved. `valueMoved` is the exact figure.
-      movementUnitCost: Math.round(added / signedBase),
-      valueMoved: added,
-    }
-  }
-
-  const out = Math.min(-signedBase, prevQty)
-  /*
-   * The value leaving: what the caller measured, if it measured it, else the
-   * pro-rata slice of the pool. DELIBERATE behaviour change 2026-09
-   * (pro.b.md §5) — production hands in the value of the lots it actually
-   * drew. Never more than the pool holds: a lot's recorded price can exceed
-   * the average only because later receipts were cheaper, and taking the
-   * lot's full price out of a smaller pool would leave a negative worth on
-   * stock that is still on the shelf.
-   */
-  const measured =
-    explicitTotalValue !== undefined && explicitTotalValue >= 0
-      ? Math.min(explicitTotalValue, prevValue)
-      : null
-  const outValue = measured ?? (prevQty > 0 ? (prevValue * out) / prevQty : 0)
-  const nextQty = prevQty + signedBase
-  const nextValue = nextQty <= 0 ? 0 : Math.max(0, prevValue - outValue)
-  return {
-    // The average itself is deliberately not recomputed on the way out.
-    item: { stockValue: roundQty(nextValue) },
-    movementUnitCost:
-      explicitUnitCost ??
-      (measured !== null && out > 0 ? Math.round(measured / out) : Math.round(average)),
-    valueMoved: outValue,
-  }
-}
 
 /**
  * Replay the ledger for one item.

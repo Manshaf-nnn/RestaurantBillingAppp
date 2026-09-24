@@ -158,16 +158,16 @@ export function PreparedItemPage({
         <SectionCard
           id="make-more"
           title="Add Production — Make More"
-          description="Another batch of this item, from its recipe: planned quantity, type and date on the next screen, then issue and complete on the order. Never a duplicate item."
+          description="Another batch of this item, from its recipe: how much, what type and when on the next screen, then issue and complete on the order. Never a duplicate item."
         >
           {recipe && recipe.lines.length > 0 ? (
             <Button asChild>
-              <Link href={`/dashboard/production?make=${item.id}`}><Plus /> New production order</Link>
+              <Link href={`/dashboard/production?tab=make&make=${item.id}`}><Plus /> New production order</Link>
             </Button>
           ) : (
             <p className="text-sm text-muted-foreground">
               There is no recipe on file for {item.name} yet —{' '}
-              <Link href={`/dashboard/production?recipe=${item.id}`} className="underline">set it up on Recipe Setup</Link>{' '}
+              <Link href={`/dashboard/production?tab=make&recipe=${item.id}`} className="underline">write one on Make an Item</Link>{' '}
               and Make More can repeat it.
             </p>
           )}

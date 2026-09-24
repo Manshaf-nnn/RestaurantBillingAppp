@@ -175,7 +175,18 @@ async function main() {
     restaurantId: shop.id, branchId: shopBranch, itemId: rice.id, type: 'SALE', quantity: 5, userId: user.id,
   }))
   const ricedAfter = await prisma.inventoryItem.findUniqueOrThrow({ where: { id: rice.id } })
-  ok('a sale does not move the average cost', ricedAfter.costPerUnit === 15000)
+  /*
+   * DELIBERATE basis change 2026-09 (FIFO.md). A sale used to leave the
+   * average untouched by taking a pro-rata slice of the pool. It draws the
+   * OLDEST layer now, so selling 5 takes 5 of the cheap rice and what is left
+   * is dearer: 5 @ 100 + 10 @ 200 over 15 kg is 166.67.
+   *
+   * `costPerUnit` is a display blend of what is on hand, derived from the
+   * layers rather than maintained beside them, so it moves when the mix does —
+   * which is the honest answer to "what is my remaining rice worth".
+   */
+  ok('a sale draws the cheap layer, so what is left is dearer',
+    ricedAfter.costPerUnit === 16667, `got ${ricedAfter.costPerUnit}`)
 
   console.log('\n── 5. Guards ────────────────────────────────────────────')
   await throws('a negative quantity is refused', () => prisma.$transaction((tx) => postMovement(tx, {

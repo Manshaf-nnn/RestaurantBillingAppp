@@ -42,6 +42,7 @@ const PAGES = [
   '/dashboard/customers/analytics',
   '/dashboard/locations',
   '/dashboard/transfers',
+  '/dashboard/transfers/report',
   '/dashboard/transfers/new',
   '/dashboard/production',
   '/dashboard/inventory',

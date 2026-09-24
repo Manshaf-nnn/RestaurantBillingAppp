@@ -115,13 +115,34 @@ async function main() {
   ok('splits across batches correctly', alloc.allocations[0].quantity === 20 && alloc.allocations[1].quantity === 10)
   ok('no shortfall when stock covers it', alloc.shortfall === 0)
 
+  /*
+   * DELIBERATE 2026-09 (FIFO.md): the OPENING_BALANCE above is a layer now.
+   *
+   * Every inbound movement creates one, whatever the item's flags say, so the
+   * 60 kg opening balance this fixture posts is real stock in a real layer.
+   * Drawing 100 therefore finds enough, where it used to fall 40 short — the
+   * shortfall was only ever there because the opening balance had no layer
+   * behind it. Undated layers still sort last among themselves.
+   */
   const big = await allocateFefo(prisma, { restaurantId: shop.id, itemId: chicken.id, quantity: 100 })
-  ok('undated batches are drawn last', big.allocations[big.allocations.length - 1].batchNo === 'CHK-NO-DATE')
-  ok('a shortfall is reported, not thrown', big.shortfall === 40, `got ${big.shortfall}`)
+  ok('dated batches come before undated ones',
+    big.allocations.findIndex((a) => a.batchNo === 'CHK-NO-DATE') >
+      big.allocations.findIndex((a) => a.batchNo === 'CHK-2026-0825'))
+  ok('the opening balance is a layer, so 100 is covered', big.shortfall === 0, `got ${big.shortfall}`)
 
+  /*
+   * DELIBERATE 2026-09 (FIFO.md): a repeat lot number is a SECOND layer.
+   *
+   * `upsertBatch` used to top up the existing layer and overwrite its price,
+   * collapsing two deliveries bought at two prices into one at the newer
+   * price. That destroys the one thing FIFO exists to keep. The label is a
+   * delivery's name, not its identity, so a repeat is suffixed.
+   */
   const topUp = await prisma.$transaction((tx) =>
     upsertBatch(tx, { restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, batchNo: 'CHK-2026-0823', quantity: 5, unitCost: 110_00 }))
-  ok('topping up a batch adds to it', topUp.remainingQty === 25, `got ${topUp.remainingQty}`)
+  ok('a repeat lot number makes its own layer at its own price',
+    topUp.remainingQty === 5 && topUp.unitCost === 110_00 && topUp.batchNo !== 'CHK-2026-0823',
+    `${topUp.batchNo} holds ${topUp.remainingQty} @ ${topUp.unitCost}`)
 
   console.log('\n── 5. Expiry buckets ────────────────────────────────────')
   const now = new Date()
@@ -141,11 +162,26 @@ async function main() {
   const summary = await getExpirySummary({ restaurantId: shop.id, periodDays: 30 })
   ok('summary buckets are populated', summary.WITHIN_3.count >= 1 || summary.WITHIN_7.count >= 1)
 
-  console.log('\n── 6. Wastage draws from batches ────────────────────────')
-  const before = (await prisma.stockBatch.findFirstOrThrow({ where: { itemId: chicken.id, batchNo: 'CHK-2026-0823' } })).remainingQty
+  console.log('\n── 6. Wastage draws from layers ─────────────────────────')
+  /*
+   * DELIBERATE 2026-09 (FIFO.md): wastage draws the OLDEST layer, not the
+   * earliest-expiring one.
+   *
+   * Expiry order is a picking instruction — which carton to reach for — and a
+   * layer is one object with both a quantity and a price. Drawing down one
+   * layer while charging another is incoherent, and it is how the books and
+   * the shelf came to disagree. The expiry board still says what to use first;
+   * it no longer decides what anything cost.
+   */
+  const oldest = await prisma.stockBatch.findFirstOrThrow({
+    where: { itemId: chicken.id, remainingQty: { gt: 0 } },
+    orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+  })
   await recordWastage({ restaurantId: shop.id, branchId: shopBranch, itemId: chicken.id, quantity: 5, reason: 'EXPIRED', userId: user.id })
-  const after = (await prisma.stockBatch.findFirstOrThrow({ where: { itemId: chicken.id, batchNo: 'CHK-2026-0823' } })).remainingQty
-  ok('wastage draws from the earliest-expiring batch', after === before - 5, `${before} -> ${after}`)
+  const drawn = await prisma.stockBatch.findUniqueOrThrow({ where: { id: oldest.id } })
+  ok('wastage draws from the oldest layer', drawn.remainingQty === oldest.remainingQty - 5,
+    `${oldest.remainingQty} -> ${drawn.remainingQty}`)
+  ok('and takes its value with it', drawn.remainingValue < oldest.remainingValue)
 
   console.log('\n── 7. Adjustments ───────────────────────────────────────')
   const before2 = await qty(beef.id)

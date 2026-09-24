@@ -60,6 +60,22 @@ export interface NavItem {
    * collect payment but not take orders still needs the door.
    */
   anyOf?: Permission[]
+  /**
+   * Roles the EDGE lets through to this href, when it is not open to everyone.
+   *
+   * Permissions decide what a page shows; `middleware.ts` decides who reaches
+   * the shell at all, and the two are different lists. A waiter holds
+   * `ORDER_CREATE`, so the permission filter below showed them the POS — and
+   * `ROLE_ALLOWED['/cashier']` in `middleware.ts` does not include WAITER, so
+   * clicking it bounced them to /forbidden. A sidebar entry that leads
+   * somewhere the edge refuses is worse than a missing one.
+   *
+   * Set this ONLY as a literal mirror of the matching `ROLE_ALLOWED` entry in
+   * `src/middleware.ts`, which stays the source of truth. It narrows and never
+   * widens: it cannot grant anything the permission filter has not already
+   * granted. `role-assignment-test.ts` checks the two agree.
+   */
+  roles?: string[]
   exact?: boolean
 }
 
@@ -218,6 +234,15 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: HandPlatter,
         permission: PERMISSIONS.ORDER_CREATE,
         anyOf: [PERMISSIONS.PAYMENT_COLLECT, PERMISSIONS.CASH_DRAWER_OPERATE, PERMISSIONS.CASH_DRAWER_MANAGE],
+        /*
+         * A literal mirror of ROLE_ALLOWED['/cashier'] in `src/middleware.ts`.
+         *
+         * WAITER holds ORDER_CREATE and so passed the permission filter, but
+         * the edge refuses them — so waiters saw a POS link that bounced them
+         * to /forbidden. They take orders at /waiter now, which is the right
+         * door and the only one they need.
+         */
+        roles: ['OWNER', 'MANAGER', 'ADMIN', 'POS', 'CASHIER'],
       },
       {
         href: '/dashboard/payment-details',
@@ -463,7 +488,10 @@ export function visibleSections(user: PermissionSubject): NavSection[] {
   return NAV_SECTIONS.map((section) => ({
     ...section,
     items: section.items.filter(
-      (item) => granted.has(item.permission) || (item.anyOf ?? []).some((p) => granted.has(p)),
+      (item) =>
+        (granted.has(item.permission) || (item.anyOf ?? []).some((p) => granted.has(p))) &&
+        // And the edge has to let them in. See `NavItem.roles`.
+        (!item.roles || item.roles.includes(user.role)),
     ),
   })).filter((section) => section.items.length > 0)
 }

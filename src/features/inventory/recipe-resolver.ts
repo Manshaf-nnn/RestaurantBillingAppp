@@ -6,6 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
 import { convertUnits, toBaseUnits, UnitConversionError, type ConvertibleItem } from './units'
 import { roundQty } from '@/lib/quantity'
+import { currentUnitCostMany } from './fifo'
 
 /**
  * Turning a recipe into a list of ingredients to remove from stock.
@@ -122,6 +123,16 @@ export async function resolveRecipe(
     restaurantId: string
     recipeId: string
     portions: number
+    /**
+     * Where the ingredients would come off (FIFO.md).
+     *
+     * Given, each one is priced at the cost of the NEXT stock to be consumed
+     * at that location — which is what the dish is about to cost to make.
+     * Omitted, the ingredients fall back to the item's blended rate, which is
+     * the only honest answer for a restaurant-wide question like "what does
+     * this recipe cost" asked with no branch in mind.
+     */
+    branchId?: string | null
   },
 ): Promise<ResolvedRecipe> {
   const totals = new Map<string, number>()
@@ -129,7 +140,7 @@ export async function resolveRecipe(
 
   await walk(db, params.restaurantId, params.recipeId, params.portions, totals, problems, [])
 
-  const { ingredients, totalCost } = await priceTotals(db, params.restaurantId, totals, problems)
+  const { ingredients, totalCost } = await priceTotals(db, params.restaurantId, totals, problems, params.branchId ?? null)
   return { recipeId: params.recipeId, ingredients, totalCost, problems }
 }
 
@@ -154,6 +165,8 @@ export async function costDraftLines(
       unit: StockUnit
       wastagePercent?: number
     }>
+    /** Price against this location's layers; omitted, the item's own rate. */
+    branchId?: string | null
   },
 ): Promise<{ totalCost: number; ingredients: ResolvedIngredient[]; problems: string[] }> {
   const totals = new Map<string, number>()
@@ -164,7 +177,7 @@ export async function costDraftLines(
 
   await consumeLines(db, params.restaurantId, hydrated, 1 / yieldQty, totals, problems, [])
 
-  const { ingredients, totalCost } = await priceTotals(db, params.restaurantId, totals, problems)
+  const { ingredients, totalCost } = await priceTotals(db, params.restaurantId, totals, problems, params.branchId ?? null)
   return { totalCost, ingredients, problems }
 }
 
@@ -221,6 +234,7 @@ async function priceTotals(
   restaurantId: string,
   totals: Map<string, number>,
   problems: string[],
+  branchId: string | null,
 ): Promise<{ ingredients: ResolvedIngredient[]; totalCost: number }> {
   const itemIds = [...totals.keys()]
   const items = itemIds.length
@@ -230,6 +244,24 @@ async function priceTotals(
       })
     : []
   const byId = new Map(items.map((i) => [i.id, i]))
+
+  /*
+   * ── What the ingredients actually cost (FIFO.md) ──────────────────────────
+   *
+   * This multiplied each ingredient by `InventoryItem.costPerUnit` — a
+   * weighted average of every delivery ever received. That figure feeds
+   * `OrderItem.costPrice`, so the margin on a dish sold today was computed
+   * from a blend going back months.
+   *
+   * It is the next layer's own rate now: the cost of the stock this dish is
+   * about to consume. An ingredient with no stock at the branch has no layer,
+   * and falls back to the item's recorded cost rather than costing nothing —
+   * a recipe priced at zero because the shelf is empty would read as a dish
+   * with no cost at all.
+   */
+  const fifoRate = branchId && itemIds.length
+    ? await currentUnitCostMany(db as never, { restaurantId, branchId, itemIds })
+    : new Map<string, number>()
 
   const ingredients: ResolvedIngredient[] = []
   let totalCost = 0
@@ -241,13 +273,14 @@ async function priceTotals(
       continue
     }
     const rounded = roundQty(quantity)
-    totalCost += Math.round(rounded * item.costPerUnit)
+    const rate = fifoRate.get(itemId) ?? item.costPerUnit
+    totalCost += Math.round(rounded * rate)
     ingredients.push({
       itemId,
       name: item.name,
       unit: item.unit,
       quantity: rounded,
-      costPerUnit: item.costPerUnit,
+      costPerUnit: rate,
     })
   }
 

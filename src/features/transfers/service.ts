@@ -209,7 +209,14 @@ export async function requestTransfer(params: {
             itemId: l.itemId,
             requestedQty: l.quantity,
             unit: byId.get(l.itemId)!.unit,
-            unitCost: byId.get(l.itemId)!.costPerUnit,
+            /*
+             * Left at zero until dispatch, which writes what actually left
+             * (FIFO.md). It used to be stamped here from the item's cached
+             * average — a figure decided before anybody chose which stock
+             * would go, and never corrected afterwards. A number that is going
+             * to be wrong is worse than a blank.
+             */
+            unitCost: 0,
             batchId: l.batchId ?? null,
           })),
         },
@@ -335,7 +342,16 @@ export async function dispatchTransfer(params: {
         itemName: line.item.name,
       })
 
-      await postMovement(tx, {
+      /*
+       * Dispatch draws the source's layers, oldest first, and what it drew IS
+       * the manifest: the movement's trace rows say which layers and what each
+       * was worth, and the receipt recreates them at the far end.
+       *
+       * Nothing was drawn before — `TRANSFER_OUT` passed no cost at all, so
+       * stock left at the running average and arrived valued at the
+       * destination's blend. Cost was not preserved in any sense.
+       */
+      const sent = await postMovement(tx, {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         type: 'TRANSFER_OUT',
@@ -359,7 +375,20 @@ export async function dispatchTransfer(params: {
         inTransit: sentQty,
       })
 
-      await tx.stockTransferLine.update({ where: { id: line.id }, data: { sentQty } })
+      /*
+       * The line's unit cost, written at DISPATCH from what actually left.
+       *
+       * It used to be stamped at request time from the item's cached average
+       * and never touched again, so the transfer report quoted a price that
+       * had nothing to do with the stock that moved.
+       */
+      await tx.stockTransferLine.update({
+        where: { id: line.id },
+        data: {
+          sentQty,
+          unitCost: sentQty > 0 ? Math.round(sent.valueMoved / sentQty) : 0,
+        },
+      })
     }
 
     return tx.stockTransfer.update({
@@ -449,18 +478,79 @@ export async function receiveTransfer(params: {
         )
       }
 
-      if (receivedQty > 0) {
+      /*
+       * ── The destination receives the SOURCE's layers (FIFO.md) ───────────
+       *
+       * One layer here per layer there, each carrying the value it left with
+       * and — the part that is easy to miss — the ORIGINAL receipt date. Copy
+       * today's date instead and six-month-old stock arrives looking fresh,
+       * stops being drawn first, and FIFO order breaks silently on every
+       * transfer.
+       *
+       * The whole DISPATCHED quantity is received into layers, even when less
+       * arrived; the shortfall is written off immediately below as wastage at
+       * this branch. That keeps the destination's layers equal to the source's
+       * draws exactly, needs no apportionment arithmetic, and turns "value
+       * vanished between two branches" into a named, valued, reportable event.
+       */
+      const manifest = await tx.stockMovementLot.findMany({
+        where: {
+          restaurantId: params.restaurantId,
+          batchId: { not: null },
+          movement: {
+            itemId: line.itemId,
+            type: 'TRANSFER_OUT',
+            referenceType: 'StockTransfer',
+            referenceId: transfer.id,
+          },
+        },
+        select: {
+          quantity: true,
+          lineValue: true,
+          batchNo: true,
+          batch: { select: { receivedAt: true, expiryDate: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      })
+
+      if (sentQty > 0) {
         await postMovement(tx, {
           restaurantId: params.restaurantId,
           itemId: line.itemId,
           type: 'TRANSFER_IN',
-          quantity: receivedQty,
+          quantity: sentQty,
           reason: `Transfer ${transfer.number} from ${transfer.fromBranch.name}`,
           referenceType: 'StockTransfer',
           referenceId: transfer.id,
           branchId: transfer.toBranchId,
           locationId: transfer.toStorageId,
-          batchId: line.batchId,
+          userId: params.userId,
+          intoLayers: manifest.map((row) => ({
+            quantity: row.quantity,
+            value: row.lineValue,
+            batchNo: row.batchNo,
+            receivedAt: row.batch?.receivedAt ?? null,
+            expiryDate: row.batch?.expiryDate ?? null,
+          })),
+        })
+      }
+
+      /*
+       * What did not arrive is written off here, at the cost of the layers it
+       * was: the loss belongs to the branch that was expecting it, and the
+       * source's layers are already gone so there is nothing to charge there.
+       */
+      if (variance < 0) {
+        await postMovement(tx, {
+          restaurantId: params.restaurantId,
+          itemId: line.itemId,
+          type: 'WASTAGE',
+          quantity: Math.abs(variance),
+          reason: `Short on transfer ${transfer.number}${input.varianceReason ? ` — ${input.varianceReason.toLowerCase().replaceAll('_', ' ')}` : ''}`,
+          referenceType: 'StockTransfer',
+          referenceId: transfer.id,
+          branchId: transfer.toBranchId,
+          locationId: transfer.toStorageId,
           userId: params.userId,
         })
       }

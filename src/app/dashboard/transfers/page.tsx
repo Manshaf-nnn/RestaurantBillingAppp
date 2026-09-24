@@ -1,10 +1,9 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Plus, Truck } from 'lucide-react'
+import { FileText, Plus, Truck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/features/dashboard/components/page-header'
-import { ExportMenu } from '@/features/reports/components/export-menu'
 import { TransfersBoard } from '@/features/transfers/components/transfers-board'
 import { getTransferBoard } from '@/features/transfers/queries'
 import { branchNameFor, selectedBranch } from '@/features/dashboard/selected-branch'
@@ -109,6 +108,17 @@ export default async function TransfersPage({
         })
       : board.rows
 
+  /*
+   * The filters, carried to the report as they stand.
+   * `page` and `mine` are deliberately left behind: the report is not paged,
+   * and "waiting on me" is a thing to act on rather than to file.
+   */
+  const reportQuery: Record<string, string> = {}
+  for (const key of ['search', 'fromBranch', 'toBranch', 'status', 'item', 'from', 'to', 'branch']) {
+    const value = one(key)
+    if (value) reportQuery[key] = value
+  }
+
   return (
     <>
       <PageHeader
@@ -118,7 +128,20 @@ export default async function TransfersPage({
         description="Track and manage stock movement between your locations."
         actions={
           <>
-            {can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="transfers" /> : null}
+            {/*
+              Report, not Export.
+              The export button handed back transfer HEADERS — no items, no
+              variance, nobody but the requester — which cannot answer "what
+              moved and who signed for it". The report page answers it, shows
+              the figures on screen first, prints, and carries the same CSV and
+              Excel download inside it. The filters travel in the URL, so the
+              report opens on exactly the set that was on screen here.
+            */}
+            <Button asChild variant="outline" size="sm">
+              <Link href={{ pathname: '/dashboard/transfers/report', query: reportQuery }}>
+                <FileText /> Report
+              </Link>
+            </Button>
             {can(user, PERMISSIONS.TRANSFER_REQUEST) ? (
               <Button asChild>
                 <Link href="/dashboard/transfers/new">

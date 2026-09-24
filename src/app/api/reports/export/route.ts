@@ -9,7 +9,8 @@ import { buildShiftExport, isShiftExportType } from '@/features/shifts/export'
 import { getReportSummary } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { listTransfers } from '@/features/transfers/queries'
+import { listTransferLines } from '@/features/transfers/queries'
+import { formatDateTime } from '@/lib/datetime'
 import { listApprovals } from '@/features/approvals/service'
 import { prisma } from '@/server/db/prisma'
 import { buildReportWorkbook, toCsv, toExcel, type ExportColumn } from '@/features/reports/export'
@@ -72,6 +73,17 @@ export async function GET(request: NextRequest) {
     }
     const preset =
       params.get('preset') ?? LOWER_TO_PRESET[params.get('range') ?? 'week'] ?? 'LAST_7'
+    /*
+     * Whether a period was actually asked for, as opposed to defaulted.
+     *
+     * Every dated report wants the LAST_7 fallback. The transfers export does
+     * not: its screen has no period by default, so silently applying a week
+     * would hand somebody a file quietly missing every transfer older than
+     * Monday — the exact failure the comment above is about.
+     */
+    const rangeRequested = Boolean(
+      params.get('preset') || params.get('range') || params.get('from') || params.get('to'),
+    )
     const canonicalRange = canonicalResolveRange({
       preset,
       from: params.get('from'),
@@ -214,7 +226,11 @@ export async function GET(request: NextRequest) {
       const report = await getVarianceReport({
         restaurantId: user.restaurantId,
         days,
+        // The chosen branch when there is one, but never wider than the
+        // viewer's reach — `scopeToOne` alone is null for a confined manager
+        // who can see several locations, which applied no filter at all.
         branchId: scopeToOne(selection),
+        branchIds,
         timeZone: restaurant.timezone,
       })
       return respond(
@@ -253,11 +269,42 @@ export async function GET(request: NextRequest) {
 
     if (type === 'transfers') {
       await requirePermission(PERMISSIONS.TRANSFER_VIEW)
-      const transfers = await listTransfers({
+      /*
+       * ── A branch-isolation leak, fixed ─────────────────────────────────────
+       *
+       * This used to narrow with `scopeToOne(selection)`, which returns null
+       * when the viewer can reach MORE THAN ONE branch and has not picked one —
+       * and `listTransfers` with a null branch applied no branch predicate at
+       * all. So a manager confined to two of five locations downloaded every
+       * transfer in the restaurant, while the screen above the button showed
+       * only theirs. `branchIds` is the viewer's whole reach and is the only
+       * correct scope here; `[]` returns nothing, which is a real answer.
+       *
+       * It also exported transfer HEADERS, which cannot answer "what moved and
+       * who signed for it". One row per line now, with the people and the
+       * variance on every row so the file sorts and pivots.
+       */
+      const { rows: lines } = await listTransferLines({
         restaurantId: user.restaurantId,
-        branchId: scopeToOne(selection),
+        branchIds,
+        // The same parameter names the board and the report page put in the
+        // URL, because `ExportMenu` forwards the URL verbatim and a name that
+        // does not match is a filter silently dropped from the file.
+        filter: {
+          search: params.get('search') ?? undefined,
+          status: params.get('status'),
+          fromBranchId: params.get('fromBranch'),
+          toBranchId: params.get('toBranch'),
+          itemId: params.get('item'),
+          // The same resolved instants the report page used, so the file and
+          // the screen cover exactly one period — and no period at all when
+          // none was asked for.
+          ...(rangeRequested ? { fromAt: canonicalRange.from, toAt: canonicalRange.to } : {}),
+        },
         limit: EXPORT_LIMIT,
       })
+      const when = (value: string | null) =>
+        value ? formatDateTime(value, { locale: restaurant.locale, timeZone: restaurant.timezone }) : ''
       return respond(
         'Transfers',
         [
@@ -265,20 +312,53 @@ export async function GET(request: NextRequest) {
           { header: 'Status', key: 'status' },
           { header: 'From', key: 'from' },
           { header: 'To', key: 'to' },
-          { header: 'Lines', key: 'lines' },
-          { header: 'Requested', key: 'requested' },
-          { header: 'Requested by', key: 'by' },
+          { header: 'Item', key: 'item' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'Requested qty', key: 'requestedQty' },
+          { header: 'Sent qty', key: 'sentQty' },
+          { header: 'Received qty', key: 'receivedQty' },
           { header: 'Variance', key: 'variance' },
+          { header: 'Variance reason', key: 'varianceReason' },
+          { header: 'Variance note', key: 'varianceNote' },
+          { header: 'Unit cost', key: 'unitCost' },
+          { header: 'Line value', key: 'lineValue' },
+          { header: 'Requested by', key: 'requestedBy' },
+          { header: 'Requested at', key: 'requestedAt' },
+          { header: 'Approved by', key: 'approvedBy' },
+          { header: 'Approved at', key: 'approvedAt' },
+          { header: 'Dispatched by', key: 'dispatchedBy' },
+          { header: 'Dispatched at', key: 'dispatchedAt' },
+          { header: 'Received by', key: 'receivedBy' },
+          { header: 'Received at', key: 'receivedAt' },
+          { header: 'Reject reason', key: 'rejectReason' },
+          { header: 'Notes', key: 'notes' },
         ],
-        transfers.map((t) => ({
-          number: t.number,
-          status: t.status,
-          from: t.fromName,
-          to: t.toName,
-          lines: t.lineCount,
-          requested: t.requestedAt,
-          by: t.requestedByName ?? '',
-          variance: t.hasVariance ? 'Yes' : 'No',
+        lines.map((l) => ({
+          number: l.number,
+          status: l.status,
+          from: l.fromName,
+          to: l.toName,
+          item: l.itemName,
+          unit: l.unit,
+          requestedQty: l.requestedQty,
+          // Blank, not zero: nothing has been sent yet is not "nil sent".
+          sentQty: l.sentQty ?? '',
+          receivedQty: l.receivedQty ?? '',
+          variance: l.variance ?? '',
+          varianceReason: l.varianceReason ?? '',
+          varianceNote: l.varianceNote ?? '',
+          unitCost: money(l.unitCost),
+          lineValue: money(l.lineValue),
+          requestedBy: l.requestedByName ?? '',
+          requestedAt: when(l.requestedAt),
+          approvedBy: l.approvedByName ?? '',
+          approvedAt: when(l.approvedAt),
+          dispatchedBy: l.dispatchedByName ?? '',
+          dispatchedAt: when(l.dispatchedAt),
+          receivedBy: l.receivedByName ?? '',
+          receivedAt: when(l.receivedAt),
+          rejectReason: l.rejectReason ?? '',
+          notes: l.notes ?? '',
         })),
         format,
         stamp,
@@ -334,6 +414,37 @@ export async function GET(request: NextRequest) {
         orderBy: { item: { name: 'asc' } },
         take: EXPORT_LIMIT,
       })
+
+      /*
+       * Value and cost from the layers (FIFO.md).
+       *
+       * The file used to export `available × costPerUnit` under a column
+       * headed "Average cost" — a per-branch quantity times a restaurant-wide
+       * blend. Both figures come from the layers at that branch now: the value
+       * is their sum, and the cost is what the NEXT unit out would cost, which
+       * is what FIFO.md means by current unit cost.
+       */
+      const layers = await prisma.stockBatch.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          remainingQty: { gt: 0 },
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+        },
+        orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+        select: { itemId: true, branchId: true, remainingQty: true, remainingValue: true },
+      })
+      const key = (i: string, b: string) => `${i}:${b}`
+      const valueAt = new Map<string, number>()
+      const nextAt = new Map<string, number>()
+      for (const layer of layers) {
+        const k = key(layer.itemId, layer.branchId)
+        valueAt.set(k, (valueAt.get(k) ?? 0) + layer.remainingValue)
+        // Layers arrive oldest first, so the first one seen is the next drawn.
+        if (!nextAt.has(k) && layer.remainingQty > 0) {
+          nextAt.set(k, Math.round(layer.remainingValue / layer.remainingQty))
+        }
+      }
+
       return respond(
         'Inventory',
         [
@@ -343,7 +454,7 @@ export async function GET(request: NextRequest) {
           { header: 'Unit', key: 'unit' },
           { header: 'Available', key: 'available' },
           { header: 'Reserved', key: 'reserved' },
-          { header: 'Average cost', key: 'cost' },
+          { header: 'Next unit cost (FIFO)', key: 'cost' },
           { header: 'Value', key: 'value' },
         ],
         levels.map((l) => ({
@@ -353,10 +464,10 @@ export async function GET(request: NextRequest) {
           unit: l.item.unit,
           available: l.available,
           reserved: l.reserved,
-          cost: money(l.item.costPerUnit),
-          // The same multiplication the stock screens do, so the file and the
-          // screen add up to the same number.
-          value: money(Math.round(l.available * l.item.costPerUnit)),
+          cost: money(nextAt.get(key(l.itemId, l.branchId)) ?? 0),
+          // The layers' own sum — the same figure the stock screens show, so
+          // the file and the screen add up to the same number.
+          value: money(valueAt.get(key(l.itemId, l.branchId)) ?? 0),
         })),
         format,
         stamp,

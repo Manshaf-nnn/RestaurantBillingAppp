@@ -9,7 +9,7 @@ import {
   guardLocks, isUniqueViolation, prisma, uniqueViolationTargets, type TxClient,
 } from '@/server/db/prisma'
 import { requireBranch } from '@/features/branches/service'
-import { allocateFifo, upsertBatch } from '@/features/inventory/batches'
+import { allocateFifo } from '@/features/inventory/batches'
 import { postMovement } from '@/features/inventory/ledger'
 import { assertSufficient } from '@/features/inventory/location-stock'
 import { UNIT_LABELS, UnitConversionError, toBaseUnits } from '@/features/inventory/units'
@@ -331,21 +331,31 @@ export async function produceItem(params: ProduceItemParams): Promise<ProduceIte
       })
       const unitCost = produced.movement.unitCost
 
+      /*
+       * The run's output layer was created by `postMovement` above, carrying
+       * the exact value its ingredients cost. This used to call `upsertBatch`
+       * as well — which, now the ledger makes a layer for every inbound
+       * movement, would give one batch of sauce two layers and count it twice.
+       */
       let batchId: string | null = null
       {
-        const batch = await upsertBatch(tx, {
-          restaurantId: params.restaurantId,
-          itemId: resolved.item.id,
-          batchNo: batchNumber,
-          quantity: producedBase,
-          unitCost,
-          branchId: params.branchId,
+        const batch = await tx.stockBatch.findFirst({
+          where: {
+            restaurantId: params.restaurantId,
+            itemId: resolved.item.id,
+            branchId: params.branchId,
+            batchNo: batchNumber,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
         })
-        batchId = batch.id
-        await tx.stockMovement.update({
-          where: { id: produced.movement.id },
-          data: { batchId: batch.id },
-        })
+        if (batch) {
+          batchId = batch.id
+          await tx.stockMovement.update({
+            where: { id: produced.movement.id },
+            data: { batchId: batch.id },
+          })
+        }
       }
 
       await tx.productionOutput.create({
@@ -522,26 +532,24 @@ async function consumeIngredients(
     // pool. Not quantity × a rounded cache.
     totalValue += posted.valueMoved
 
-    const lots = [
-      ...allocation.lots.map((lot) => ({
-        batchId: lot.batchId,
-        batchNo: lot.batchNo,
-        quantity: lot.quantity,
-        unitCost: lot.unitCost,
-        lineCost: Math.round(lot.quantity * lot.unitCost),
-      })),
-      ...(allocation.remainder
-        ? [
-            {
-              batchId: null,
-              batchNo: null,
-              quantity: allocation.remainder.quantity,
-              unitCost: allocation.remainder.unitCost,
-              lineCost: Math.round(allocation.remainder.quantity * allocation.remainder.unitCost),
-            },
-          ]
-        : []),
-    ]
+    /*
+     * The layers this line drew, at what each was worth.
+     *
+     * `lineValue` comes from the walk rather than being rebuilt as
+     * quantity × unitCost: the walk's figure is exact and the multiplication
+     * is not, so rebuilding it here would put the run's own trace a minor unit
+     * or two away from the ledger it was posted to.
+     *
+     * The "remainder" row is gone with the unlotted stock it described — every
+     * unit on the shelf belongs to a layer now.
+     */
+    const lots = allocation.lots.map((lot) => ({
+      batchId: lot.batchId,
+      batchNo: lot.batchNo,
+      quantity: lot.quantity,
+      unitCost: lot.unitCost,
+      lineCost: lot.lineValue,
+    }))
 
     await tx.productionConsumption.create({
       data: {

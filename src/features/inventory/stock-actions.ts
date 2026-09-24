@@ -11,6 +11,7 @@ import { can, PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { currentUnitCost } from './fifo'
 import { nextCounterValue } from '@/server/db/counters'
 import { requestApproval } from '@/features/approvals/service'
 import { toBaseUnits } from './units'
@@ -130,8 +131,20 @@ export async function adjustStockAction(
     const seq = await prisma.$transaction((tx) => nextCounterValue(tx, user.restaurantId, 'stockAdjustment'))
     const reference = `ADJ-${String(seq).padStart(4, '0')}`
     const unit = data.unit ?? item.unit
-    // What the correction is worth, for the desk's amount column.
-    const amount = Math.round(Math.abs(toBaseUnits(data.quantity, unit, item)) * item.costPerUnit)
+    /*
+     * What the correction is worth, for the desk's amount column — at what the
+     * next unit costs (FIFO.md), not the blended average. The ledger decides
+     * the real figure when the movement posts; this is what the approver sees
+     * before it does, so the two should agree as closely as they can.
+     */
+    const rate = await currentUnitCost(prisma, {
+      restaurantId: user.restaurantId,
+      itemId: item.id,
+      branchId,
+    })
+    const amount = Math.round(
+      Math.abs(toBaseUnits(data.quantity, unit, item)) * (rate || item.costPerUnit),
+    )
 
     if (!can(user, PERMISSIONS.INVENTORY_ADJUST)) {
       const request = await requestApproval({

@@ -51,7 +51,7 @@ const KIND_LABELS: Record<string, string> = {
  * On a screen listing five live requests, a box saying nothing was waiting is
  * worse than no box: it reads as the page being broken.
  *
- * Deciding lives in `central-approvals.tsx`, which routes each row to the
+ * Deciding lives in `approvals-board.tsx`, which routes each row to the
  * guarded action that owns its queue. This is now a plain server-rendered
  * history — no client bundle, no second decide path to keep in step.
  */

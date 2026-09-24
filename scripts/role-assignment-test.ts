@@ -61,9 +61,13 @@ function check(name: string, ok: boolean, detail = '') {
 const ROLE_ALLOWED: Record<string, string[]> = {
   '/kitchen': ['OWNER', 'MANAGER', 'ADMIN', 'KITCHEN'],
   '/waiter': ['OWNER', 'MANAGER', 'ADMIN', 'WAITER'],
-  '/cashier': ['OWNER', 'MANAGER', 'ADMIN', 'CASHIER'],
+  // POS and CASHIER appear together everywhere (staff.A.md §10): the migration
+  // moved every row to POS, and CASHIER stays so a session signed before that
+  // deploy is not bounced mid-shift. This copy had only CASHIER, which made it
+  // a mirror of something that has not been true for a while.
+  '/cashier': ['OWNER', 'MANAGER', 'ADMIN', 'POS', 'CASHIER'],
   '/dashboard': [
-    'OWNER', 'MANAGER', 'ADMIN', 'CASHIER', 'KITCHEN', 'WAITER',
+    'OWNER', 'MANAGER', 'ADMIN', 'POS', 'CASHIER', 'KITCHEN', 'WAITER',
     'INVENTORY_MANAGER', 'PURCHASING_MANAGER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER', 'ACCOUNTANT',
   ],
 }
@@ -279,6 +283,30 @@ async function main() {
     'a role with nothing ticked produces no sidebar at all',
     reachableNavItems({ role: 'CASHIER' as UserRole, rolePermissions: [] }).length === 0,
     'which the shell now says out loud rather than rendering blank',
+  )
+
+  /*
+   * No sidebar entry may lead somewhere the edge refuses.
+   *
+   * Permissions decide what a page shows; `middleware.ts` decides who reaches
+   * the shell at all. A WAITER holds ORDER_CREATE, so the permission filter
+   * offered them the POS — and ROLE_ALLOWED['/cashier'] excludes WAITER, so
+   * the click ended at /forbidden. Both halves were already in this file and
+   * nothing had ever compared them.
+   */
+  const ROLES_TO_CHECK = [
+    'WAITER', 'KITCHEN', 'CASHIER', 'POS', 'ACCOUNTANT',
+    'INVENTORY_MANAGER', 'WAREHOUSE_STAFF', 'STOCK_KEEPER', 'PURCHASING_MANAGER',
+  ] as const
+  const strayLinks = ROLES_TO_CHECK.flatMap((role) =>
+    reachableNavItems({ role: role as UserRole, rolePermissions: undefined } as never)
+      .filter((item) => !edgeAllows(item.href, role))
+      .map((item) => `${role} → ${item.href}`),
+  )
+  check(
+    'no sidebar entry leads somewhere the edge refuses',
+    strayLinks.length === 0,
+    strayLinks.join(', '),
   )
 
   /*

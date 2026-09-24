@@ -453,3 +453,171 @@ export async function getPaymentsReport(params: {
     drawersClosed: drawers.length,
   }
 }
+
+/* ── One item, and what was actually paid for the bills it was on ─────────── */
+
+/**
+ * A payment settles a BILL, not a dish.
+ *
+ * There is no link from a payment to a line — `Payment.orderId` is the only
+ * join there is, and no allocation table exists. So "the payments for this
+ * item" can only honestly mean: the orders this item appeared on in this
+ * period, and what was paid against each of those orders.
+ *
+ * Splitting a payment across the lines of its bill (line total ÷ subtotal ×
+ * amount) would produce a number that looks precise and was never recorded
+ * anywhere. This reports both figures side by side instead — the item's own
+ * line total, and the bill's payments — which is the same convention the
+ * refunds basis in this file already follows.
+ */
+export interface ItemPaymentRow {
+  orderId: string
+  orderNumber: string
+  placedAt: Date
+  branchName: string | null
+  customerName: string | null
+  /** How many of THIS item were on that order. */
+  quantity: number
+  /** What those lines came to, before the bill's own discounts and tax. */
+  lineTotal: number
+  /** The whole bill. */
+  orderTotal: number
+  orderPaid: number
+  orderStatus: string
+  paymentStatus: string
+  /** Every payment recorded against the order, in the order they were taken. */
+  payments: Array<{
+    id: string
+    method: string
+    methodLabel: string
+    amount: number
+    status: string
+    paidAt: Date | null
+    receivedByName: string | null
+    reference: string | null
+  }>
+  /** Money given back on this bill, whenever it was given. */
+  refunded: number
+}
+
+export interface ItemPaymentDetail {
+  itemName: string
+  orders: number
+  quantity: number
+  /** Σ of this item's line totals across the period. */
+  lineRevenue: number
+  /** Σ of the whole bills those lines were on — deliberately a different figure. */
+  billTotal: number
+  /** Σ paid against those bills. */
+  paid: number
+  refunded: number
+  rows: ItemPaymentRow[]
+  /** More orders matched than are listed. */
+  truncated: boolean
+}
+
+/** The most orders one item's drill-down will list. */
+const ITEM_DETAIL_CAP = 300
+
+export async function getItemPaymentDetail(params: {
+  restaurantId: string
+  range: DateRange
+  branchIds: string[] | null
+  /** The snapshotted line name, which is how `byItem` groups. */
+  itemName: string
+}): Promise<ItemPaymentDetail> {
+  /*
+   * The range's own Dates, not `utc()` — that helper builds a SQL fragment for
+   * the raw queries above, and this one goes through the Prisma client.
+   */
+  const { from, to } = params.range
+
+  /*
+   * Fail closed: an empty allow-list means this viewer sees nothing, never
+   * everything — the same rule `getSalesReport` applies above.
+   */
+  const orders = await prisma.order.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      status: { not: 'CANCELLED' },
+      placedAt: { gte: from, lte: to },
+      ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+      items: { some: { name: params.itemName, status: { not: 'CANCELLED' } } },
+    },
+    orderBy: { placedAt: 'desc' },
+    take: ITEM_DETAIL_CAP + 1,
+    select: {
+      id: true,
+      orderNumber: true,
+      placedAt: true,
+      status: true,
+      paymentStatus: true,
+      grandTotal: true,
+      paidTotal: true,
+      customerName: true,
+      branch: { select: { name: true } },
+      items: {
+        where: { name: params.itemName, status: { not: 'CANCELLED' } },
+        select: { quantity: true, lineTotal: true },
+      },
+      payments: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          method: true,
+          amount: true,
+          status: true,
+          paidAt: true,
+          reference: true,
+          receivedBy: { select: { name: true } },
+        },
+      },
+      refunds: { select: { amount: true } },
+    },
+  })
+
+  const truncated = orders.length > ITEM_DETAIL_CAP
+  const kept = truncated ? orders.slice(0, ITEM_DETAIL_CAP) : orders
+
+  const rows: ItemPaymentRow[] = kept.map((order) => ({
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    placedAt: order.placedAt,
+    branchName: order.branch?.name ?? null,
+    customerName: order.customerName || null,
+    quantity: order.items.reduce((sum, line) => sum + line.quantity, 0),
+    lineTotal: order.items.reduce((sum, line) => sum + line.lineTotal, 0),
+    orderTotal: order.grandTotal,
+    orderPaid: order.paidTotal,
+    orderStatus: order.status as string,
+    paymentStatus: order.paymentStatus as string,
+    payments: order.payments.map((payment) => ({
+      id: payment.id,
+      method: payment.method as string,
+      methodLabel: METHOD_LABELS[payment.method] ?? (payment.method as string),
+      amount: payment.amount,
+      status: payment.status as string,
+      paidAt: payment.paidAt,
+      receivedByName: payment.receivedBy?.name ?? null,
+      reference: payment.reference,
+    })),
+    refunded: order.refunds.reduce((sum, refund) => sum + refund.amount, 0),
+  }))
+
+  return {
+    itemName: params.itemName,
+    orders: rows.length,
+    quantity: rows.reduce((sum, row) => sum + row.quantity, 0),
+    lineRevenue: rows.reduce((sum, row) => sum + row.lineTotal, 0),
+    billTotal: rows.reduce((sum, row) => sum + row.orderTotal, 0),
+    // Only payments that actually settled; a failed attempt is not takings.
+    paid: rows.reduce(
+      (sum, row) =>
+        sum + row.payments.filter((p) => p.status === 'PAID').reduce((inner, p) => inner + p.amount, 0),
+      0,
+    ),
+    refunded: rows.reduce((sum, row) => sum + row.refunded, 0),
+    rows,
+    truncated,
+  }
+}

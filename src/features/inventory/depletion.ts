@@ -224,11 +224,43 @@ export async function pinRecipeVersions(
  *
  * The real number is already in the system. `resolveRecipe` explodes the pinned
  * recipe — sub-recipes, yields and wastage percentages included — and prices it
- * at the weighted average cost then in force. Writing that onto the line makes it
- * a snapshot: tomorrow's price rise cannot rewrite what today's plate cost.
+ * at the cost of the next stock off that branch's shelf. Writing that onto the
+ * line makes it a snapshot: tomorrow's price rise cannot rewrite what today's
+ * plate cost.
  *
  * Runs beside `pinRecipeVersions`, so the cost recorded belongs to the same
  * recipe version the stock was drawn against.
+ *
+ * ── This figure and the one in the books (FIFO.md) ──────────────────────────
+ *
+ * Two costs exist for one sale and it is worth being clear about which is
+ * which, because the obvious "fix" is to collapse them and that would be wrong:
+ *
+ *   · THIS one, pinned per LINE, priced at the first open layer's rate — the
+ *     spec's "current unit cost", the cost of the next stock to be consumed.
+ *     It is what per-dish margin and food-cost percentages are built on, and
+ *     it has to be per line because a dish is what an owner analyses.
+ *   · the one in the LEDGER, per ITEM, which is what the FIFO allocator
+ *     actually took off the layers when `reconcileOrderDepletion` ran a moment
+ *     later. That is the figure account 1200 and the journal's cost of sales
+ *     are posted from, so the balance sheet ties to the layers exactly.
+ *
+ * They agree whenever an order's draw sits inside the layer it starts in,
+ * which is nearly always — measured across the live ledger the two came to the
+ * same figure to the minor unit. They part company only when one order empties
+ * a layer and crosses into the next, and then this one is the low side.
+ *
+ * The snapshot is NOT recomputed from the allocation afterwards, for two
+ * reasons. Ordering: depletion aggregates per item across the whole order, so
+ * there is no line to attribute a crossing to — two identical dishes on one
+ * bill genuinely consumed different layers and pricing them differently would
+ * be indefensible on the report. And permanence: FIFO.md requires the sold
+ * cost to be snapshotted so later purchases cannot rewrite it, and a line
+ * re-priced after the fact on an edited order is exactly that rewrite.
+ *
+ * So the books take the allocation and the dish analysis takes the snapshot.
+ * `ledger-test` §3 pins the part that must never drift — that account 1200 IS
+ * the sum of the layers.
  */
 export async function snapshotLineCosts(
   tx: TxClient,
@@ -255,6 +287,15 @@ export async function snapshotLineCosts(
     select: { id: true, recipeId: true, foodId: true, options: true },
   })
   if (lines.length === 0) return 0
+
+  /*
+   * Which shelf these ingredients come off, so the recipe is priced at the
+   * layers that are about to be drawn rather than a restaurant-wide blend.
+   */
+  const order = await tx.order.findFirst({
+    where: { id: params.orderId, restaurantId: params.restaurantId },
+    select: { branchId: true },
+  })
 
   /*
    * Options cost money too (§29). A line's cost is its dish's recipe PLUS the
@@ -303,6 +344,14 @@ export async function snapshotLineCosts(
         restaurantId: params.restaurantId,
         recipeId,
         portions: 1,
+        /*
+         * Priced at the branch the order was taken at (FIFO.md), so the line
+         * is snapshotted at the cost of the stock it is about to consume
+         * rather than at a restaurant-wide weighted average. The snapshot
+         * itself is unchanged in every other way — written once, never
+         * rewritten, so a later delivery cannot re-price a sold plate.
+         */
+        branchId: order?.branchId ?? null,
       })
       costByRecipe.set(recipeId, resolved ? Math.round(resolved.totalCost) : 0)
     }

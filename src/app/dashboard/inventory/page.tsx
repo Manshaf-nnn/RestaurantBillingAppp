@@ -101,10 +101,44 @@ export default async function InventoryPage({
         )
       : item.quantity
 
+  /*
+   * The layers behind the figures above. One query for the screen: their sum
+   * is the stock value, and the first open layer per item is what the next
+   * unit out of it costs.
+   */
+  const layers = await prisma.stockBatch.findMany({
+    where: {
+      restaurantId: user.restaurantId,
+      remainingQty: { gt: 0 },
+      ...(branchId ? { branchId } : {}),
+    },
+    orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+    select: { itemId: true, remainingQty: true, remainingValue: true },
+  })
+  let stockValue = 0
+  const nextUnitCosts: Record<string, number> = {}
+  for (const layer of layers) {
+    stockValue += layer.remainingValue
+    if (nextUnitCosts[layer.itemId] === undefined && layer.remainingQty > 0) {
+      nextUnitCosts[layer.itemId] = Math.round(layer.remainingValue / layer.remainingQty)
+    }
+  }
+
   return (
     <>
       <AutoRefresh scope="catalog" intervalMs={10000} />
     <InventoryManager
+      /*
+       * Stock value and the cost column, from the layers (FIFO.md).
+       *
+       * The tile used to sum `quantity × costPerUnit` in the browser, and the
+       * cost column showed `costPerUnit` under the heading "average of what you
+       * have paid". Both are now the layers: the value is their integer sum,
+       * and the cost is what the NEXT unit out would cost, which is what the
+       * spec means by current unit cost.
+       */
+      stockValue={stockValue}
+      nextUnitCosts={nextUnitCosts}
       canManage={can(user, PERMISSIONS.INVENTORY_MANAGE)}
       branchName={branch?.name ?? null}
       currency={restaurant.currency}

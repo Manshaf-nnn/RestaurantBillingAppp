@@ -3,17 +3,17 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ExternalLink, ShieldAlert } from 'lucide-react'
+import { ExternalLink, ShieldAlert, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Alert } from '@/components/ui/feedback'
 import { LocalDateTime } from '@/components/local-time'
 import { formatMoney, type CurrencyCode } from '@/lib/money'
 import { callAction } from '@/lib/use-action'
+import { cn } from '@/lib/utils'
 import { decideApprovalAction } from '../actions'
 
 export interface ApprovalDetailView {
@@ -93,6 +93,17 @@ export function ApprovalDetail({
     if (!open) setNote('')
   }, [open])
 
+  // Escape closes, as it does on every other overlay in the app. The Dialog
+  // this replaced did it for free; a hand-built drawer has to say so.
+  React.useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   if (!request) return null
 
   const money = (value: number) => formatMoney(value, currency, locale)
@@ -119,31 +130,65 @@ export function ApprovalDetail({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (next ? null : onClose())}>
-      <DialogContent size="lg" className="max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex flex-wrap items-center gap-2">
-            {request.kindLabel}
-            <Badge
-              variant={
-                request.status === 'APPROVED'
-                  ? 'success'
-                  : request.status === 'PENDING'
-                    ? 'warning'
-                    : 'secondary'
-              }
-            >
-              {request.status.toLowerCase()}
-            </Badge>
-            {request.forcedAt ? (
-              // Marked for as long as the record exists, in the list and here.
-              <Badge variant="destructive">
-                <ShieldAlert /> overridden
+    <>
+      {/*
+        ── A right drawer, like the Transfers screen ──────────────────────────
+
+        The body below is unchanged: same fields, same lines, same history, same
+        override, same single Approve. Only the chrome moved, from a centred
+        modal to a panel anchored to the right edge — which is how a desk of
+        rows is read, one row at a time, without the list underneath jumping
+        out from behind a box in the middle of the screen.
+
+        It is still `role="dialog"` with `aria-modal`, so it is still a dialog
+        to a screen reader and to anything that goes looking for one.
+      */}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className={cn(
+          'fixed inset-0 z-40 bg-foreground/20 backdrop-blur-[1px] transition-opacity',
+          open ? 'opacity-100' : 'pointer-events-none opacity-0',
+        )}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${request.kindLabel} request`}
+        className={cn(
+          'fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col overflow-y-auto border-l bg-background p-5 shadow-xl transition-transform',
+          open ? 'translate-x-0' : 'pointer-events-none translate-x-full',
+        )}
+      >
+        <header className="mb-4 flex items-start justify-between gap-3 border-b pb-3">
+          <div className="min-w-0">
+            <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+              {request.kindLabel}
+              <Badge
+                variant={
+                  request.status === 'APPROVED'
+                    ? 'success'
+                    : request.status === 'PENDING'
+                      ? 'warning'
+                      : 'secondary'
+                }
+              >
+                {request.status.toLowerCase()}
               </Badge>
-            ) : null}
-          </DialogTitle>
-          <DialogDescription>{request.reason}</DialogDescription>
-        </DialogHeader>
+              {request.forcedAt ? (
+                // Marked for as long as the record exists, in the list and here.
+                <Badge variant="destructive">
+                  <ShieldAlert /> overridden
+                </Badge>
+              ) : null}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">{request.reason}</p>
+          </div>
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
+            <X />
+          </Button>
+        </header>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
           <Field label="Requested by" value={request.requestedByName} />
@@ -283,8 +328,8 @@ export function ApprovalDetail({
             )}
           </div>
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </aside>
+    </>
   )
 }
 
