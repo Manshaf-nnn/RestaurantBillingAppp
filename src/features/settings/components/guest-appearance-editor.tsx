@@ -6,8 +6,8 @@ import { CreditCard, Eye, LayoutTemplate, RotateCcw, Smartphone, UtensilsCrossed
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Input, Textarea } from '@/components/ui/input'
+import { Field, Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import {
@@ -190,7 +190,29 @@ export function GuestAppearanceEditor({
                   <Toggle checked={form.menuShowFeatured} onChange={(v) => set('menuShowFeatured', v)} title="Chef’s picks row" hint="A row of your recommended and popular dishes at the top." />
                   <Toggle checked={form.menuShowDietFilter} onChange={(v) => set('menuShowDietFilter', v)} title="Veg / Non-veg chips" hint="Lets a guest narrow the menu by diet." />
                   <Toggle checked={form.menuShowCallStaff} onChange={(v) => set('menuShowCallStaff', v)} title="Call a waiter" hint="The button in the menu header. Needs a table, so it never shows on a takeaway code." />
+                  <Toggle checked={form.menuShowOffers} onChange={(v) => set('menuShowOffers', v)} title="Offers panel" hint="Lists the discount codes a guest can actually use here. Shows nothing if you run none." />
                 </div>
+
+                {/*
+                  The codes themselves are listed automatically from Discounts,
+                  so they cannot promise a price the cart will not give. This is
+                  for what a coupon cannot say on its own.
+                */}
+                {form.menuShowOffers ? (
+                  <div className="mt-4">
+                    <Field
+                      label="Note under the offers"
+                      hint="Optional. Shown beneath the codes, in your own words."
+                    >
+                      <Textarea
+                        value={form.menuOfferNote}
+                        onChange={(event) => set('menuOfferNote', event.target.value.slice(0, 600))}
+                        rows={3}
+                        placeholder={'Students get 5% off on Mondays.\nFree delivery over 5,000.'}
+                      />
+                    </Field>
+                  </div>
+                ) : null}
               </SectionCard>
             </>
           ) : null}

@@ -49,6 +49,19 @@ export function OptionDialog({
   money,
   onCancel,
   onConfirm,
+  /**
+   * Re-open on a line that is already in the cart.
+   *
+   * Used by "split / note", where a cashier is changing one of several
+   * identical dishes — "two pizzas, one of them less spicy". The dialog opens
+   * on what that line already is, so the cashier edits rather than rebuilds.
+   */
+  initialOptionIds,
+  initialNotes,
+  initialQuantity,
+  /** What the confirm button says, when it is not simply adding. */
+  confirmLabel,
+  title,
 }: {
   item: PublicMenuItem
   currency: string
@@ -56,12 +69,29 @@ export function OptionDialog({
   money: (minor: number) => string
   onCancel: () => void
   onConfirm: (optionIds: string[], quantity: number, notes: string) => void
+  initialOptionIds?: string[]
+  initialNotes?: string
+  initialQuantity?: number
+  confirmLabel?: string
+  title?: string
 }) {
   const [selected, setSelected] = React.useState<Record<string, string[]>>(() =>
-    defaultSelection(item.groups),
+    /*
+     * An existing line's own choices win over the defaults. Opening "split"
+     * on a Large pizza and having it come back Regular would be the dialog
+     * silently changing the order it was opened to describe.
+     */
+    initialOptionIds && initialOptionIds.length > 0
+      ? Object.fromEntries(
+          item.groups.map((group) => [
+            group.id,
+            group.options.filter((o) => initialOptionIds.includes(o.id)).map((o) => o.id),
+          ]),
+        )
+      : defaultSelection(item.groups),
   )
-  const [quantity, setQuantity] = React.useState(1)
-  const [notes, setNotes] = React.useState('')
+  const [quantity, setQuantity] = React.useState(initialQuantity ?? 1)
+  const [notes, setNotes] = React.useState(initialNotes ?? '')
 
   const toggle = (group: PublicMenuGroup, optionId: string) => {
     setSelected((current) => {
@@ -99,7 +129,7 @@ export function OptionDialog({
     <Dialog open onOpenChange={(open) => (open ? null : onCancel())}>
       <DialogContent className="max-h-[90dvh] max-w-md overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{item.name}</DialogTitle>
+          <DialogTitle>{title ?? item.name}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -209,7 +239,9 @@ export function OptionDialog({
             disabled={Boolean(missing)}
             onClick={() => onConfirm(optionIds, quantity, notes.trim())}
           >
-            {missing ? `Choose ${missing.name}` : `Add · ${money(unit * quantity)}`}
+            {missing
+              ? `Choose ${missing.name}`
+              : `${confirmLabel ?? 'Add'} · ${money(unit * quantity)}`}
           </Button>
         </DialogFooter>
       </DialogContent>

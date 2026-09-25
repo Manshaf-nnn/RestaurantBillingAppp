@@ -54,6 +54,27 @@ export async function decideApprovalAction(
         // still be refused their own request, or the override stops being
         // visible.
         force: z.boolean().optional(),
+        /*
+         * A stock transfer approved for LESS than was asked for.
+         *
+         * "You can have 30 of the 50" is the ordinary answer in a store room,
+         * and without it the approver's only choices were to reserve stock
+         * that is not there or to reject the whole request and make the branch
+         * raise it again. Ignored for every other kind of request.
+         *
+         * Never more than was requested — the service refuses it and so does
+         * the database, because approving more than a branch asked for is not
+         * an approval, it is a different request.
+         */
+        approvedLines: z
+          .array(
+            z.object({
+              lineId: z.string().cuid(),
+              quantity: z.coerce.number().min(0).max(1_000_000),
+            }),
+          )
+          .max(200)
+          .optional(),
       })
       // A refusal has to carry its reason, and saying so on the FIELD gives
       // the person a message beside the box rather than a toast they have to
@@ -155,6 +176,7 @@ export async function decideApprovalAction(
                   restaurantId: user.restaurantId,
                   transferId: target.entityId!,
                   userId: user.id,
+                  approved: data.approvedLines,
                   tx,
                 })
               } else {
@@ -390,6 +412,32 @@ export async function approvalDetailAction(
       const selfByUnconfined = refusal?.code === 'APPROVAL_SELF' && unconfined
 
       const payload = (request.payload ?? {}) as Record<string, unknown>
+      /*
+       * What the sending location actually has free, per item.
+       *
+       * One read for the whole transfer rather than one per line. `available`
+       * less `reserved`, because stock already held for another approved
+       * transfer is spoken for and offering it here would let two approvals
+       * promise the same kilo.
+       */
+      const freeAtSource = new Map<string, number>()
+      if (transfer) {
+        const rows = await prisma.inventoryStock.findMany({
+          where: {
+            restaurantId: user.restaurantId,
+            branchId: transfer.fromBranchId,
+            itemId: { in: transfer.lines.map((line) => line.itemId) },
+          },
+          select: { itemId: true, available: true, reserved: true },
+        })
+        for (const row of rows) {
+          freeAtSource.set(
+            row.itemId,
+            (freeAtSource.get(row.itemId) ?? 0) + Math.max(0, row.available - row.reserved),
+          )
+        }
+      }
+
       const details = Object.entries(payload)
         .filter(([, value]) => value !== null && typeof value !== 'object')
         .map(([key, value]) => ({
@@ -436,9 +484,20 @@ export async function approvalDetailAction(
               fromBranchName: transfer.fromBranch.name,
               toBranchName: transfer.toBranch.name,
               lines: transfer.lines.map((line) => ({
+                id: line.id,
+                itemId: line.itemId,
                 name: line.item.name,
                 unit: line.item.unit,
                 quantity: line.requestedQty,
+                /*
+                 * Free stock at the source — the approver's actual question.
+                 * `available` less what is already reserved for another
+                 * approved transfer, which is spoken for.
+                 */
+                available: Math.max(
+                  0,
+                  freeAtSource.get(line.itemId) ?? 0,
+                ),
               })),
             }
           : null,

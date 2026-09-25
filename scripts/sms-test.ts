@@ -25,6 +25,7 @@ import { __testing as adapter } from '../src/features/sms/http-adapter'
 import { sealSecret, openSecret, credentialHint } from '../src/server/crypto/secret-box'
 import { assertSafeGatewayUrl, __testing as ssrf } from '../src/server/security/ssrf'
 import { mergeSmsConfig } from '../src/features/sms/config'
+import { parseGatewayUrl } from '../src/features/sms/parse-url'
 import { publicSmsConfig, DEFAULT_SMS_CONFIG } from '../src/features/sms/types'
 
 let passed = 0
@@ -321,6 +322,47 @@ async function main() {
 
     check('no credit is named, not lumped in', adapter.classify(200, 'insufficient credit').code === 'INSUFFICIENT_CREDIT')
     check('an unapproved mask is named', adapter.classify(200, 'invalid sender id').code === 'INVALID_SENDER_ID')
+  }
+
+  console.log('\n12. Reading a gateway\u2019s own sample URL')
+  {
+    /*
+     * The artefact every small gateway hands a new customer: a sample URL with
+     * angle brackets in it. Parsed into a config per TENANT — nothing about a
+     * particular supplier belongs in this codebase.
+     */
+    const sample =
+      'https://msg.example.com/send_sms.php?username=<user_name>&password=<password>' +
+      '&src=<Sender_id>&dst=<Phone_number>&msg=<message>&dr=1'
+    const parsed = parseGatewayUrl(sample)
+
+    check('it parses', parsed.ok)
+    if (parsed.ok) {
+      check('the endpoint is separated from the parameters', parsed.spec.url === 'https://msg.example.com/send_sms.php')
+      check('it is a GET gateway', parsed.spec.method === 'GET')
+      check('user name is recognised', parsed.spec.bodyTemplate.includes('username={username}'))
+      check('password is recognised', parsed.spec.bodyTemplate.includes('password={password}'))
+      check('src is recognised as the sender', parsed.spec.bodyTemplate.includes('src={sender}'))
+      check('dst is recognised as the recipient', parsed.spec.bodyTemplate.includes('dst={to}'))
+      check('msg is recognised as the message', parsed.spec.bodyTemplate.includes('msg={text}'))
+
+      /* dr=1 is a real value, not a blank. Dropping it changes what the
+       * gateway does, so it is carried through verbatim. */
+      check('a fixed switch is kept as written', parsed.spec.bodyTemplate.includes('dr=1'))
+      check('nothing required is missing', parsed.missing.length === 0)
+
+      /* Honest about what it cannot know: we have never seen this gateway's
+       * reply, so inventing a success rule would make the log lie. */
+      check('it does not invent a success rule', parsed.spec.success.kind === 'httpStatus')
+
+      const credentialsStayPlaceholders =
+        !parsed.spec.url.includes('password') && parsed.spec.bodyTemplate.includes('{password}')
+      check('the password stays a placeholder, never a stored literal', credentialsStayPlaceholders)
+    }
+
+    check('a URL with no parameters is refused', !parseGatewayUrl('https://example.com/send').ok)
+    check('nonsense is refused', !parseGatewayUrl('hello').ok)
+    check('an empty paste is refused', !parseGatewayUrl('   ').ok)
   }
 
   console.log(`\n${passed} passed, ${failed} failed\n`)

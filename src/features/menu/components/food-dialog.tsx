@@ -69,6 +69,7 @@ interface GroupRow {
 interface FormState {
   categoryId: string
   name: string
+  code: string
   description: string
   imageUrl: string
   price: string
@@ -118,6 +119,7 @@ export interface BranchOption {
 const EMPTY: FormState = {
   categoryId: '',
   name: '',
+  code: '',
   description: '',
   imageUrl: '',
   price: '',
@@ -239,6 +241,7 @@ export function FoodDialog({
         setForm({
           categoryId: data.categoryId,
           name: data.name,
+          code: data.code ?? '',
           description: data.description,
           imageUrl: data.imageUrl,
           price: String(data.price),
@@ -556,8 +559,26 @@ export function FoodDialog({
             {/* ── details ─────────────────────────────────────────── */}
             <TabsContent value="details" className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Name" required error={errors.name} className="sm:col-span-2">
+                <Field label="Name" required error={errors.name}>
                   <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Margherita Pizza" />
+                </Field>
+
+                {/*
+                  Optional, and the reason it sits beside the name: staff who
+                  know the menu by its printed numbers can type the number into
+                  the till or the waiter pad instead of spelling the dish.
+                */}
+                <Field
+                  label="Item code"
+                  error={errors.code}
+                  hint="Optional. Staff can search by this instead of the name."
+                >
+                  <Input
+                    value={form.code}
+                    onChange={(e) => set('code', e.target.value)}
+                    placeholder="B12"
+                    className="font-mono uppercase"
+                  />
                 </Field>
 
                 <Field label="Category" required error={errors.categoryId}>

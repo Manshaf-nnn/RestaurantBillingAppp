@@ -16,6 +16,7 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
+import { resolveLocationForOrder } from '@/features/qr/locations'
 import { tableAvailability } from './table-availability'
 import { addGuestOrderItems as addGuestOrderItemsService } from './guest-additions'
 import {
@@ -330,12 +331,28 @@ export async function placeGuestOrder(
         )
       }
 
+      /*
+       * Where it is going, validated against this restaurant and branch.
+       *
+       * Never trusted from the payload: the id arrives from a public client,
+       * so `resolveLocationForOrder` re-reads it scoped to the tenant and
+       * refuses one belonging to another restaurant or another branch's round.
+       * It returns the NAME as well, which is what gets snapshotted onto the
+       * order so a later rename cannot rewrite where this went.
+       */
+      const deliveryLocation = await resolveLocationForOrder({
+        restaurantId: restaurant.id,
+        branchId: branch?.id ?? null,
+        locationId: data.deliveryLocationId || null,
+      })
+
       const order = await placeOrderService({
         restaurantId: restaurant.id,
         branchId: branch?.id ?? null,
         tableId,
         type: tableId ? 'DINE_IN' : 'TAKEAWAY',
         channel: 'QR',
+        deliveryLocation,
         // A blank phone means no customer record at all — the name is
         // snapshotted on the order and nothing pools into a shared identity.
         customerName: data.customerName?.trim() || 'Guest',
@@ -1044,6 +1061,48 @@ export async function createStaffOrder(input: unknown): Promise<ActionResult<Sta
             'A discount this size needs a manager\u2019s sign-off. Place the order first, then apply the discount so it can be approved.',
             403,
             'APPROVAL_REQUIRED',
+          )
+        }
+      }
+
+      /*
+       * The waiter pad's own fence (see `enforceTableReady` on the schema).
+       *
+       * Checked here rather than trusted from the screen: the pad's table list
+       * is a snapshot, and a host can reserve the table or the guests can ask
+       * for the bill in the seconds between it rendering and the waiter
+       * tapping send. `disabled` cannot see that; this can.
+       *
+       * Reservation state is read through `tableStatesFor`, the same reader the
+       * floor plan and the guest cover use, so "reserved" means the same thing
+       * on every screen rather than being re-derived here from the column.
+       */
+      if (data.enforceTableReady && data.tableId) {
+        const { tableStates } = await import('@/features/floor/table-state-server')
+        const [states, billRequest] = await Promise.all([
+          tableStates({ restaurantId: user.restaurantId, tableIds: [data.tableId] }),
+          prisma.serviceRequest.findFirst({
+            where: {
+              restaurantId: user.restaurantId,
+              tableId: data.tableId,
+              type: 'BILL',
+              status: { in: ['OPEN', 'ACKNOWLEDGED'] },
+            },
+            select: { id: true },
+          }),
+        ])
+        if (states.get(data.tableId)?.state === 'RESERVED') {
+          throw new AppError(
+            'That table is held for a booking. Seat the party from the floor plan first.',
+            409,
+            'TABLE_RESERVED',
+          )
+        }
+        if (billRequest) {
+          throw new AppError(
+            'The bill for that table is being settled. Start a new sitting once it is paid.',
+            409,
+            'TABLE_BILLING',
           )
         }
       }

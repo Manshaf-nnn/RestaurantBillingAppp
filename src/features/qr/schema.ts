@@ -38,6 +38,11 @@ export const saveExperienceSchema = z.object({
   showSearch: z.coerce.boolean(),
   showPrices: z.coerce.boolean(),
   showOffers: z.coerce.boolean(),
+  /** Ask a delivery guest which of the owner's places it goes to. */
+  askLocation: z.coerce.boolean().default(false),
+  requireLocation: z.coerce.boolean().default(true),
+  /** The owner's own words in the offers panel, beside the live coupons. */
+  offerNote: z.string().trim().max(600).optional().or(z.literal('')),
   showLoyalty: z.coerce.boolean(),
   fields: z.array(fieldSchema).max(40).default([]),
 })

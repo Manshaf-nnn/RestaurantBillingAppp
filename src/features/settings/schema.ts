@@ -60,70 +60,19 @@ export type PaymentSettingsInput = z.infer<typeof paymentSettingsSchema>
  * and is live. Saving a map with a dangling code would leave a till refusing
  * payments with no way for the owner to see why.
  */
-export const paymentDestinationsSchema = z
-  .object({
-    destinations: z
-      .array(
-        z.object({
-          // Minted once from the name, then frozen: stamped payments hold it.
-          code: z
-            .string()
-            .trim()
-            .min(1)
-            .max(40)
-            .regex(/^[a-z0-9_]+$/, 'A destination code may only use a-z, 0-9 and _'),
-          name: z.string().trim().min(1, 'Give the account a name').max(60),
-          kind: z.enum(['BANK', 'CASH', 'WALLET', 'GATEWAY', 'OTHER']).default('OTHER'),
-          archived: z.coerce.boolean().default(false),
-          /* Every bank detail is optional — an owner who only knows the bank's
-           * name should be able to record that and get on with service. */
-          bankName: z.string().trim().max(80).optional().or(z.literal('')),
-          accountNumber: z.string().trim().max(40).optional().or(z.literal('')),
-          holderName: z.string().trim().max(80).optional().or(z.literal('')),
-          bankBranch: z.string().trim().max(80).optional().or(z.literal('')),
-        }),
-      )
-      .max(40, 'That is more accounts than anybody reconciles'),
-    /** METHOD → destination code. An empty string means "not booked anywhere". */
-    methodDestinations: z.record(z.string(), z.string().trim().max(40)),
-  })
-  .superRefine((value, ctx) => {
-    const seen = new Set<string>()
-    value.destinations.forEach((destination, index) => {
-      if (seen.has(destination.code)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['destinations', index, 'code'],
-          message: `Two accounts share the code "${destination.code}"`,
-        })
-      }
-      seen.add(destination.code)
-    })
-
-    // A live destination is one a payment may be settled into today.
-    const live = new Set(
-      value.destinations.filter((destination) => !destination.archived).map((d) => d.code),
-    )
-    for (const [method, code] of Object.entries(value.methodDestinations)) {
-      if (!code) continue
-      if (!live.has(code)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['methodDestinations', method],
-          message: `${method} points at an account that no longer exists or has been retired`,
-        })
-      }
-    }
-  })
-export type PaymentDestinationsInput = z.infer<typeof paymentDestinationsSchema>
-
-/**
- * Receipt and kitchen-ticket paper width, in millimetres.
- *
- * 58 mm and 80 mm are the two standard thermal roll sizes. The width decides the
- * page size and font scale of the printed document, so a receipt formatted for
- * 58 mm on an 80 mm printer wastes a third of the paper and prints small.
- */
+export const paymentDestinationsSchema = z.object({
+  /**
+   * METHOD → account code. An empty string means "not booked anywhere", which
+   * is how a method is switched off and what makes `capturePayment` refuse it.
+   *
+   * The accounts themselves are rows now (bank.md) and are created, edited and
+   * retired on Payment details — so this screen no longer sends them, and this
+   * schema no longer accepts them. It validates the one decision left: that
+   * every code a method points at belongs to a live account, which cannot be
+   * checked here because it needs the database. The action does it.
+   */
+  methodDestinations: z.record(z.string(), z.string().trim().max(40)),
+})
 export const printerSettingsSchema = z.object({
   receiptWidth: z.coerce.number().refine((v) => v === 58 || v === 80, 'Choose 58 mm or 80 mm'),
   kitchenWidth: z.coerce.number().refine((v) => v === 58 || v === 80, 'Choose 58 mm or 80 mm'),
@@ -284,6 +233,9 @@ export const guestAppearanceSchema = z.object({
   menuShowFeatured: z.coerce.boolean(),
   menuShowDietFilter: z.coerce.boolean(),
   menuShowCallStaff: z.coerce.boolean(),
+  /** The offers panel above the dishes, and the owner's own words under it. */
+  menuShowOffers: z.coerce.boolean(),
+  menuOfferNote: z.string().trim().max(600).optional().or(z.literal('')),
   menuLayout: z.enum(['LIST', 'GRID']),
 
   checkoutShowCoupon: z.coerce.boolean(),

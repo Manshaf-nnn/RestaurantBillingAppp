@@ -780,7 +780,7 @@ model Restaurant {
   /// Separate from `approvalPolicy` on purpose: that one answers "how much is
   /// worth a second pair of eyes", which is a different question from "how long
   /// is too long to wait for food".
-  liveBoardPolicy    Json?
+  liveBoardPolicy Json?
 
   /// [SmsConfig] — this shop's OWN SMS gateway.
   ///
@@ -797,10 +797,13 @@ model Restaurant {
   /// only which slots are filled and their last four characters.
   ///
   /// Null means SMS is off, which is what every existing tenant is.
-  smsConfig          Json?
+  smsConfig Json?
 
   customerCategories CustomerCategory[]
   qrExperiences      QrExperience[]
+  deliveryLocations  DeliveryLocation[]
+  paymentAccounts    PaymentAccount[]
+  accountEntries     PaymentAccountEntry[]
   smsMessages        SmsMessage[]
   phoneOtps          PhoneOtp[]
 
@@ -1071,6 +1074,9 @@ model User {
   /// Extra sites this person may work, beyond their home `branchId`
   /// (staff.A.md §4).
   branchAccess           UserBranch[]
+  /// Account movements this person recorded, and the accounts they may use.
+  accountEntries         PaymentAccountEntry[] @relation("AccountEntryBy")
+  accountAccess          PaymentAccountStaff[] @relation("AccountStaff")
 
   @@unique([email])
   @@unique([restaurantId, staffCode])
@@ -1361,6 +1367,18 @@ model Food {
 
   name        String
   slug        String
+  /// ── The owner's own code for this dish ──────────────────────────────────
+  ///
+  /// Optional, and theirs to invent: "B12", "CHK-01", a printed menu's number.
+  /// Staff who know the menu by its numbers can then type the number instead
+  /// of the name, which on a busy floor is the difference between two taps and
+  /// spelling "Kottu" into a search box.
+  ///
+  /// Unique per restaurant when set, because a code you look a dish up BY has
+  /// to name one dish. Null is the ordinary case and many dishes may be null —
+  /// Postgres treats NULLs as distinct in a unique index, which is exactly the
+  /// behaviour wanted here and the same shape `InventoryItem.sku` already uses.
+  code        String?
   description String?
   imageUrl    String?
 
@@ -1402,6 +1420,8 @@ model Food {
   branches      FoodBranch[]
 
   @@unique([restaurantId, slug])
+  /// A code identifies one dish, or it is not an identifier.
+  @@unique([restaurantId, code])
   @@index([restaurantId, categoryId])
   @@index([restaurantId, isAvailable])
   @@index([restaurantId, isPopular])
@@ -1741,9 +1761,11 @@ model CustomerCategory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  customers Customer[]
+  customers         Customer[]
   /// Extra questions a QR menu asks once this category is chosen (ar.md §7).
-  qrFields  QrExperienceField[]
+  qrFields          QrExperienceField[]
+  /// Locations offered only to guests who chose this category.
+  deliveryLocations DeliveryLocation[]
 
   @@unique([restaurantId, name])
   @@index([restaurantId, isActive, sortOrder])
@@ -1934,6 +1956,19 @@ model Order {
   /// produced; §18 says deactivate, never delete.
   qrExperienceId String?
   qrExperience   QrExperience? @relation(fields: [qrExperienceId], references: [id], onDelete: SetNull)
+
+  /// ── Where this one is going ─────────────────────────────────────────────
+  ///
+  /// The id for reporting — "how many went to the Girls Hostel this month" —
+  /// and the NAME because the id cannot answer it once a location is renamed
+  /// or removed. The same reasoning as `tableLabel` above: a past order is a
+  /// record of what happened, and what happened was that it went to a place
+  /// called that. SetNull so retiring a location never orphans its history.
+  deliveryLocationId   String?
+  deliveryLocation     DeliveryLocation? @relation(fields: [deliveryLocationId], references: [id], onDelete: SetNull)
+  /// Written at placement, never rewritten. Carries the location's own note
+  /// too, so the kitchen ticket says "Villa 2 — gate code 4417".
+  deliveryLocationName String?
 
   @@unique([restaurantId, orderNumber])
   @@unique([restaurantId, idempotencyKey])
@@ -2147,6 +2182,7 @@ model Payment {
   @@index([restaurantId, status, createdAt])
   @@index([orderId])
   @@index([restaurantId, status, paidAt])
+  @@index([restaurantId, destination])
   @@map("payments")
 }
 
@@ -2188,6 +2224,7 @@ model Refund {
   @@index([restaurantId, createdAt])
   @@index([orderId])
   @@index([paymentId])
+  @@index([restaurantId, destination])
   @@map("refunds")
 }
 
@@ -2801,7 +2838,7 @@ model StockMovement {
 
   batchNo    String?
   batchId    String?
-  batch      StockBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batch      StockBatch?        @relation(fields: [batchId], references: [id], onDelete: SetNull)
   /// Every layer this movement drew from, with what each slice was worth.
   /// `batchId` above names at most one; a draw can span several.
   lots       StockMovementLot[]
@@ -3507,47 +3544,48 @@ model Branch {
   deletedAt DateTime?
 
   /// People whose HOME site this is.
-  users            User[]
+  users             User[]
   /// People who may also work here without it being their home site
   /// (staff.A.md §4).
-  staffAccess      UserBranch[]
-  tables           RestaurantTable[]
-  orders           Order[]
-  inventoryItems   InventoryItem[]
-  cashDrawers      CashDrawerSession[]
-  shifts           StaffShift[]
-  auditLogs        AuditLog[]
-  stockMovements   StockMovement[]
-  storageLocations StorageLocation[]
-  stockCounts      StockCount[]
-  purchases        Purchase[]
-  stockBatches     StockBatch[]
-  wastageRecords   WastageRecord[]
-  stock            InventoryStock[]
-  transfersOut     StockTransfer[]     @relation("TransferFrom")
-  transfersIn      StockTransfer[]     @relation("TransferTo")
-  productionOrders ProductionOrder[]
-  approvalRequests ApprovalRequest[]
-  coupons          Coupon[]
-  qrExperiences    QrExperience[]
-  instructions     BranchInstruction[]
-  goodsReceipts    GoodsReceipt[]
-  menu             FoodBranch[]
-  kitchenStations  KitchenStation[]
-  shiftNotes       ShiftNote[]
-  notifications    Notification[]
-  purchaseReturns  PurchaseReturn[]
-  serviceRequests  ServiceRequest[]
-  staffRoles       StaffRole[]
-  accessLinks      Invite[]
-  cashRegisters    CashRegister[]
-  pettyCash        PettyCashRequest[]
-  cashHandovers    CashHandover[]
-  shiftHandovers   ShiftHandover[]
-  shiftTemplates   ShiftTemplate[]
-  shiftAssignments ShiftAssignment[]
-  reservations     Reservation[]
-  errorLogs        ErrorLog[]
+  staffAccess       UserBranch[]
+  tables            RestaurantTable[]
+  orders            Order[]
+  inventoryItems    InventoryItem[]
+  cashDrawers       CashDrawerSession[]
+  shifts            StaffShift[]
+  auditLogs         AuditLog[]
+  stockMovements    StockMovement[]
+  storageLocations  StorageLocation[]
+  stockCounts       StockCount[]
+  purchases         Purchase[]
+  stockBatches      StockBatch[]
+  wastageRecords    WastageRecord[]
+  stock             InventoryStock[]
+  transfersOut      StockTransfer[]     @relation("TransferFrom")
+  transfersIn       StockTransfer[]     @relation("TransferTo")
+  productionOrders  ProductionOrder[]
+  approvalRequests  ApprovalRequest[]
+  coupons           Coupon[]
+  qrExperiences     QrExperience[]
+  deliveryLocations DeliveryLocation[]
+  instructions      BranchInstruction[]
+  goodsReceipts     GoodsReceipt[]
+  menu              FoodBranch[]
+  kitchenStations   KitchenStation[]
+  shiftNotes        ShiftNote[]
+  notifications     Notification[]
+  purchaseReturns   PurchaseReturn[]
+  serviceRequests   ServiceRequest[]
+  staffRoles        StaffRole[]
+  accessLinks       Invite[]
+  cashRegisters     CashRegister[]
+  pettyCash         PettyCashRequest[]
+  cashHandovers     CashHandover[]
+  shiftHandovers    ShiftHandover[]
+  shiftTemplates    ShiftTemplate[]
+  shiftAssignments  ShiftAssignment[]
+  reservations      Reservation[]
+  errorLogs         ErrorLog[]
 
   outgoingPayments OutgoingPayment[]
 
@@ -4328,12 +4366,12 @@ model StockBatch {
   itemId       String
   item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  batchNo      String
-  expiryDate   DateTime?
+  batchNo        String
+  expiryDate     DateTime?
   /// Base units received into this batch.
-  receivedQty  Float
+  receivedQty    Float
   /// Base units left. Zero means the batch is used up, not that it never was.
-  remainingQty Float
+  remainingQty   Float
   /// ── What this layer cost, exactly (FIFO.md) ──────────────────────────────
   ///
   /// The layer carries VALUE, not a price. A price cannot be exact: minor
@@ -4350,12 +4388,12 @@ model StockBatch {
   ///
   /// Inventory value is `SUM(remainingValue)`: an integer sum, with no
   /// float multiplication anywhere in it.
-  receivedValue  Int @default(0)
-  remainingValue Int @default(0)
+  receivedValue  Int       @default(0)
+  remainingValue Int       @default(0)
   /// Cost per base unit, DERIVED from the value above for display and for
   /// ordering decisions. Never the basis of a calculation: `remainingValue`
   /// is. Kept because a great many screens read a per-unit cost.
-  unitCost     Int       @default(0)
+  unitCost       Int       @default(0)
 
   locationId String?
   location   StorageLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
@@ -4647,6 +4685,18 @@ model StockTransferLine {
 
   /// Asked for at request time, in base units.
   requestedQty   Float
+  /// ── What the approver allowed, in base units ────────────────────────────
+  ///
+  /// Null means "as requested", which is every line approved without an edit
+  /// and every line that predates this column.
+  ///
+  /// A separate column rather than an edit to `requestedQty`, for the same
+  /// reason `sentQty` and `receivedQty` are their own: the request is a record
+  /// of what the branch asked for, and overwriting it loses the one fact a
+  /// stock controller actually wants afterwards — "they asked for 50, we had
+  /// 30". The chain reads asked → allowed → sent → received, and each link is
+  /// written once by the person responsible for it.
+  approvedQty    Float?
   /// Actually sent. Set at dispatch and never changed afterwards.
   sentQty        Float?
   /// Actually accepted at the far end.
@@ -5328,6 +5378,28 @@ model QrExperience {
   showOffers  Boolean @default(true)
   showLoyalty Boolean @default(true)
 
+  /// ── Where it is going (delivery codes) ──────────────────────────────────
+  ///
+  /// A delivery leaflet has no table and no map. What it has is a place the
+  /// food is carried to, and on a campus those places have names everybody
+  /// already uses: "Boys Hostel", "Villa 2", "Library". So the owner writes
+  /// the list and the guest picks from it — no geocoding, no typed address to
+  /// misread at the door, and a rider who reads the same words every time.
+  ///
+  /// Off by default: a code that has not opted in behaves exactly as before.
+  askLocation     Boolean @default(false)
+  /// Required rather than optional once asked. A delivery with nowhere to go
+  /// is not an order, it is a phone call waiting to happen.
+  requireLocation Boolean @default(true)
+
+  /// ── What the offers panel says in the owner's own words ─────────────────
+  ///
+  /// The live coupons are computed and shown above this; this is for what the
+  /// engine cannot express — "students get 5% on Mondays, show your ID". Kept
+  /// beside `showOffers`, which gates both, so turning offers off turns the
+  /// whole panel off rather than leaving a note with no offers around it.
+  offerNote String?
+
   /// ── Usage (ar.md §18, §22) ─────────────────────────────────────────────
   ///
   /// "Opens", not "scans": nothing can tell a camera from a shared link, and
@@ -5348,6 +5420,60 @@ model QrExperience {
 
   @@index([restaurantId, branchId, isActive])
   @@map("qr_experiences")
+}
+
+/// Somewhere the food gets carried to, named by the owner.
+///
+/// ── Why this is a table and not a typed address ─────────────────────────────
+///
+/// This system has no map and no geocoder, and a delivery on a campus does not
+/// need one: there are perhaps twenty places food goes and everybody already
+/// calls them the same thing. A free-text address box would collect twenty
+/// spellings of "boys hostel" and hand the rider a different one each time.
+/// A list the owner wrote is exact, sorts itself, and can be reordered as the
+/// route changes.
+///
+/// ── Scoped by customer category, not by guest ───────────────────────────────
+///
+/// `categoryId` null means everyone sees it. Set, and only guests who picked
+/// that category do — so "Boys Hostel" and "Girls Hostel" can be offered to
+/// Campus Student and not to the public, from one list, without the owner
+/// maintaining a second one. It is a filter over what is shown, never a
+/// permission: the order still records what was chosen.
+model DeliveryLocation {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Null means every branch. Set pins it to one site's delivery round.
+  branchId     String?
+  branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name      String
+  /// An optional heading to group under — "Hostels", "Staff Quarters" — so a
+  /// long list reads as a few short ones rather than forty buttons.
+  groupName String?
+  /// Extra words for the rider that the guest does not choose: a gate number,
+  /// "ask at reception". Shown on the ticket, never on the picker.
+  note      String?
+
+  /// Only offered to guests who chose this customer category. Null = everyone.
+  categoryId String?
+  category   CustomerCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  sortOrder Int     @default(0)
+  /// Retired, never deleted: past orders point at it by name and by id.
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+
+  /// One name per branch. Two "Villa 1"s in one picker is a mis-delivery.
+  @@unique([restaurantId, branchId, name])
+  @@index([restaurantId, isActive, sortOrder])
+  @@index([categoryId])
+  @@map("delivery_locations")
 }
 
 /// One thing a guest is asked for (ar.md §5, §7, §9).
@@ -5403,23 +5529,17 @@ model QrExperienceField {
 
 /**
  * Every SMS this platform attempted, and what became of it.
- *
  * ── Why not the audit log ───────────────────────────────────────────────────
- *
  * `AuditLog` is append-only — a database trigger enforces it and
  * `scripts/no-audit-mutation.ts` fails the build on any writer that tries. A
  * delivery status is mutable by definition: QUEUED → SENT → DELIVERED arrives
  * over minutes, from a webhook, long after the row was written. The audit log
  * records that somebody CHANGED the SMS settings; this records what the
  * gateway DID.
- *
  * ── Why not the realtime outbox ─────────────────────────────────────────────
- *
  * `OutboxEvent` is a UI delivery log with no worker, no status column, no
  * retry and a seven-day trim. It cannot answer "did this guest get their code".
- *
  * ── The body rule ───────────────────────────────────────────────────────────
- *
  * `body` is NULL when `purpose = OTP`. Always, enforced in `sendSms()` rather
  * than by convention. A support engineer reading this table must not be able
  * to read somebody's live verification code, and a backup of this table must
@@ -5521,17 +5641,13 @@ enum SmsEncoding {
 
 /**
  * A code texted to a phone that belongs to no account.
- *
  * ── Why not VerificationToken ───────────────────────────────────────────────
- *
  * That model's `userId` is a required FK to `User`, and a diner scanning a QR
  * code has no user. Its `tokenHash` is `@unique`, which for a six-digit code
  * means the second tenant to mint `481920` this minute gets a constraint
  * violation instead of an OTP. And it has no attempt counter, so there is
  * nowhere to put the lockout a 10^6 keyspace requires.
- *
  * ── Why the hash is keyed ───────────────────────────────────────────────────
- *
  * `hashToken()` is a bare SHA-256 — right for a 48-byte token, useless here,
  * where a dump of this table is a million-entry rainbow table away from every
  * live code. `codeHash` is an HMAC under the application secret over
@@ -5559,7 +5675,7 @@ model PhoneOtp {
   /// outlive the code it protected, or a resend walks straight past it.
   lockedAt    DateTime?
 
-  smsMessageId String?
+  smsMessageId   String?
   /// Binds the code to the browser that asked for it.
   guestSessionId String?
   ipHash         String?
@@ -5576,4 +5692,159 @@ enum OtpPurpose {
   GUEST_ORDER
   RESERVATION
   STAFF_LOGIN
+}
+
+/// ── Internal money accounts (bank.md) ────────────────────────────────────────
+///
+/// One account the restaurant's money sits in: "BOC Main Account", "HNB".
+///
+/// TableFlow moves no real money — no bank API, no gateway — so this is an
+/// internal record of where the owner considers money to be. It is the same
+/// idea `Restaurant.paymentConfig.destinations` held as JSON, promoted to a
+/// table because a balance that has to be read under a lock, referenced by a
+/// ledger row, and assigned to named staff cannot live inside a blob that one
+/// settings form rewrites wholesale.
+///
+/// ── `code` is the identity, and it is inherited ──────────────────────────────
+///
+/// Minted once by `slugifyDestinationCode` and never edited. Every `Payment`
+/// and `Refund` already stamps this string in its `destination` column, so the
+/// migration copies the existing codes across rather than inventing ids — a
+/// year of settlements keeps resolving, and the deliberate NULL meaning "taken
+/// before any of this existed" still reads as Unassigned rather than being
+/// back-filled with a fact nobody recorded.
+///
+/// The NAME is editable, because correcting "HBN" to "HNB" should fix every
+/// label including historical ones. That is what an owner means by fixing a
+/// typo, and it is different from rewriting what happened.
+model PaymentAccount {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  /// Stable slug, inherited from the JSON destinations. Never edited.
+  code String
+  /// What the owner calls it — "BOC Main Account". Editable.
+  name String
+
+  /// The bank details bank.md §1 asks for. All optional: an owner who knows
+  /// "card goes to HNB" and not the account number should be able to say so
+  /// and move on, rather than abandon a form that demands one.
+  bankName      String?
+  accountNumber String?
+  holderName    String?
+
+  /// Retired, never deleted: money already landed here and the history has to
+  /// keep resolving. An account may only be retired once its balance is zero —
+  /// see `retireAccount`.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries PaymentAccountEntry[] @relation("AccountEntries")
+  /// Entries on the OTHER side of a transfer, so a card can say where money went.
+  facing  PaymentAccountEntry[] @relation("CounterpartyAccount")
+  staff   PaymentAccountStaff[]
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, isActive])
+  @@map("payment_accounts")
+}
+
+/// What kind of money movement one entry records.
+///
+/// Three members, and deliberately only three. There is no PAYMENT and no
+/// REFUND: a customer payment is ALREADY attributed to an account by
+/// `Payment.destination`, and mirroring it here would give the same rupees two
+/// rows that can disagree the first time a payment is refunded or voided —
+/// which is the reasoning `CashMovementType` already records for why it has no
+/// CASH_SALE member. The balance reads both sources instead.
+///
+/// bank.md §6 is the same rule from the owner's side: money enters by a deposit
+/// or by a customer payment, and moves between accounts only by a transfer.
+enum PaymentAccountEntryType {
+  /// Money the owner put in — including the opening balance.
+  DEPOSIT
+  /// The two halves of one transfer. Always written together, sharing a
+  /// `transferGroupId`, inside one transaction.
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+/// One deposit, or one half of one transfer. Append-only.
+///
+/// Customer payments and refunds are NOT written here — see the enum above.
+/// This table holds only the facts that have nowhere else to live, which is why
+/// an account's balance is a sum across this table AND the payments already
+/// stamped with its code, and why that sum can never drift from the history: it
+/// IS the history.
+model PaymentAccountEntry {
+  id           String         @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  accountId    String
+  account      PaymentAccount @relation("AccountEntries", fields: [accountId], references: [id], onDelete: Cascade)
+
+  type   PaymentAccountEntryType
+  /// Minor units, always POSITIVE. The type carries the direction, the same way
+  /// `CashMovementType` does — a caller that may pass a negative number is a
+  /// caller that can make a withdrawal look like a deposit.
+  amount Int
+
+  /// Why. Required on a transfer by the schema above the action; bank.md §1
+  /// asks for it on the transfer flow and it is the only thing that explains a
+  /// movement months later.
+  reason String?
+
+  /// The account at the other end of a transfer, and the id shared by its two
+  /// halves. Both null on a deposit.
+  counterpartyAccountId String?
+  counterpartyAccount   PaymentAccount? @relation("CounterpartyAccount", fields: [counterpartyAccountId], references: [id], onDelete: SetNull)
+  transferGroupId       String?
+
+  /// Who did it. Snapshotted name as well as the id, so a staff member who
+  /// leaves does not erase who moved the money.
+  userId    String?
+  user      User?   @relation("AccountEntryBy", fields: [userId], references: [id], onDelete: SetNull)
+  actorName String?
+
+  /// One key per attempt, so a double tap deposits once. Same shape as
+  /// `Payment.clientRequestId`; the two halves of a transfer suffix it.
+  clientRequestId String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([restaurantId, clientRequestId])
+  @@index([accountId, createdAt])
+  @@index([restaurantId, transferGroupId])
+  @@map("payment_account_entries")
+}
+
+/// Which staff may use one account (bank.md §2).
+///
+/// Structurally a copy of `KitchenStationStaff`: a join table rather than an id
+/// array, so a departing user drops out of every account by foreign key instead
+/// of lingering until somebody remembers to sweep.
+///
+/// The default is CLOSED, which is the opposite of the kitchen's. bank.md is
+/// explicit — "A staff member must NOT be able to transfer from an account
+/// unless explicitly authorized" — so an account with no rows is reachable by
+/// the owner and admins and by nobody else. `canTransfer` is a second, narrower
+/// grant on top: being able to see what an account holds is not permission to
+/// move it.
+model PaymentAccountStaff {
+  id        String         @id @default(cuid())
+  accountId String
+  account   PaymentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User           @relation("AccountStaff", fields: [userId], references: [id], onDelete: Cascade)
+
+  canTransfer Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, userId])
+  @@index([userId])
+  @@map("payment_account_staff")
 }

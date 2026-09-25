@@ -17,6 +17,7 @@ import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import { settleLoyalty } from '@/features/orders/service'
 import { readOptions } from '@/features/orders/queries'
+import { accountForMethod } from './accounts-ledger'
 
 import {
   DEFAULT_DESTINATIONS,
@@ -190,8 +191,21 @@ export async function capturePayment(params: {
    * settlements nobody can now remember — is far worse than a cashier being
    * told, once, to go and ask somebody.
    */
+  /*
+   * Resolved to a real ACCOUNT ROW now, not a JSON entry (bank.md).
+   *
+   * An account holds a balance and a staff list, so the mapping has to land on
+   * one that exists and is still in use. A method pointed at a code with no
+   * account behind it, or at a retired one, is refused here exactly as an
+   * unmapped method always was — which is also what stops an account being
+   * retired out from under a till mid-service.
+   */
   const paymentConfig = readPaymentConfig(restaurant.paymentConfig)
-  const destination = destinationForMethod(paymentConfig, params.method)
+  const destination = await accountForMethod(prisma, {
+    restaurantId: params.restaurantId,
+    method: params.method,
+    config: paymentConfig,
+  })
   if (!destination) {
     throw new AppError(
       `${METHOD_LABELS[params.method] ?? params.method} has no accounting destination set up. ` +

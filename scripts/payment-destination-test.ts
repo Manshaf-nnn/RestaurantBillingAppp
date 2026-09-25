@@ -15,6 +15,7 @@
  */
 import { capturePayment, refundPayment, readPaymentConfig, destinationName } from '../src/features/payments/service'
 import { placeOrder } from '../src/features/orders/service'
+import { seedDefaultAccounts } from '../src/features/payments/accounts'
 import { prisma } from '../src/server/db/prisma'
 
 let passed = 0
@@ -56,6 +57,27 @@ async function main() {
       paymentConfig: CONFIGURED,
     },
   })
+  /*
+   * DELIBERATE (bank.md): the accounts are ROWS now, not entries in the JSON.
+   *
+   * `paymentConfig.destinations` used to be the whole book of accounts, so this
+   * fixture defined them there and nothing else was needed. An account holds a
+   * balance and a staff list now, so `capturePayment` resolves a real row — and
+   * a fixture that only writes the JSON is a restaurant with a method pointed
+   * at an account that does not exist, which is exactly the state this file's
+   * first assertion says must be refused.
+   *
+   * `methodDestinations` stays in the JSON and still points BY CODE, so the
+   * codes below are the same ones `CONFIGURED` maps to.
+   */
+  await prisma.paymentAccount.createMany({
+    data: [
+      { restaurantId: restaurant.id, code: 'boc', name: 'BOC' },
+      { restaurantId: restaurant.id, code: 'hnb', name: 'HNB' },
+      { restaurantId: restaurant.id, code: 'ndb', name: 'NDB', isActive: false },
+    ],
+  })
+
   const branch = await prisma.branch.create({
     data: { restaurantId: restaurant.id, name: 'Main', code: 'MAIN', isDefault: true },
   })
@@ -179,6 +201,18 @@ async function main() {
         currency: 'LKR', taxRateBps: 0, serviceChargeBps: 0, taxInclusive: false,
       },
     })
+    /*
+     * DELIBERATE (bank.md): "never opened the setting" now means the DEFAULT
+     * accounts, as rows.
+     *
+     * Registration creates them with the restaurant — `seedDefaultAccounts`,
+     * in the same transaction as the main branch and for the same reason — so
+     * this fixture, which builds a restaurant by hand, does what registration
+     * would. The guarantee this section pins is unchanged: a restaurant nobody
+     * configured keeps trading, and CASH still lands in `cash`.
+     */
+    await seedDefaultAccounts(prisma, plain.id)
+
     const plainBranch = await prisma.branch.create({
       data: { restaurantId: plain.id, name: 'Main', code: 'MAIN', isDefault: true },
     })
@@ -242,47 +276,64 @@ async function main() {
         withLegacy.byDestination.reduce((sum, row) => sum + row.amount, 0) === withLegacy.total)
   }
 
-  console.log('\n── 8. The settings form cannot save a map the till would choke on ──')
+  console.log('\n── 8. The rules that keep the map sound ──')
   {
+    /*
+     * DELIBERATE (bank.md): these rules MOVED, they did not go away.
+     *
+     * The settings schema used to carry the whole book of accounts, so it could
+     * check a map against the list in the same payload. Accounts are rows now,
+     * so each rule lives where it can actually be enforced:
+     *
+     *   dangling / retired code  → the save action, against live account rows.
+     *                              A real lookup beats a check against the list
+     *                              the same form just sent: it also catches an
+     *                              account retired on another screen a moment
+     *                              ago. `accountForMethod` returning null is
+     *                              what makes the till refuse, and §2 above
+     *                              already pins that end of it.
+     *   duplicate code           → the database, @@unique([restaurantId, code]).
+     *   blank name               → `createAccount`.
+     */
     const { paymentDestinationsSchema } = await import('../src/features/settings/schema')
     const { slugifyDestinationCode } = await import('../src/features/payments/destinations')
+    const { createAccount } = await import('../src/features/payments/accounts')
+    const { accountForMethod } = await import('../src/features/payments/accounts-ledger')
 
     const good = paymentDestinationsSchema.safeParse({
-      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: false }],
       methodDestinations: { CASH: 'boc', CARD: '' },
     })
     check('a sound map saves — including a method deliberately left unbooked', good.success,
       JSON.stringify(good.success ? null : good.error.issues))
 
-    const dangling = paymentDestinationsSchema.safeParse({
-      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: false }],
-      methodDestinations: { CASH: 'hnb' },
+    const dangling = await accountForMethod(prisma, {
+      restaurantId: restaurant.id,
+      method: 'WALLET',
+      config: { methodDestinations: { WALLET: 'nosuchaccount' } },
     })
-    check('pointing a method at an account that does not exist is refused',
-      !dangling.success, 'it saved')
+    check('a method pointed at an account that does not exist resolves to nothing',
+      dangling === null)
 
-    const retired = paymentDestinationsSchema.safeParse({
-      destinations: [{ code: 'boc', name: 'BOC', kind: 'BANK', archived: true }],
-      methodDestinations: { CASH: 'boc' },
+    const retired = await accountForMethod(prisma, {
+      restaurantId: restaurant.id,
+      method: 'WALLET',
+      config: { methodDestinations: { WALLET: 'ndb' } },
     })
-    check('…and so is pointing one at an account that was just retired',
-      !retired.success, 'it saved')
+    check('…and so does one pointed at an account that was retired', retired === null)
 
-    const twins = paymentDestinationsSchema.safeParse({
-      destinations: [
-        { code: 'boc', name: 'BOC', kind: 'BANK', archived: false },
-        { code: 'boc', name: 'BOC savings', kind: 'BANK', archived: false },
-      ],
-      methodDestinations: {},
-    })
-    check('two accounts cannot share one code — that is what a payment stamps',
-      !twins.success, 'it saved')
+    let twinned = false
+    try {
+      await prisma.paymentAccount.create({
+        data: { restaurantId: restaurant.id, code: 'boc', name: 'BOC savings' },
+      })
+    } catch { twinned = true }
+    check('two accounts cannot share one code — that is what a payment stamps', twinned)
 
-    const blank = paymentDestinationsSchema.safeParse({
-      destinations: [{ code: 'boc', name: '   ', kind: 'BANK', archived: false }],
-      methodDestinations: {},
-    })
-    check('an account with no name is refused', !blank.success, 'it saved')
+    let blank = false
+    try {
+      await createAccount({ restaurantId: restaurant.id, input: { name: '   ' } })
+    } catch { blank = true }
+    check('an account with no name is refused', blank)
 
     check('a code is minted from the name, and never collides',
       slugifyDestinationCode('Bank of Ceylon — Current') === 'bank_of_ceylon_current' &&

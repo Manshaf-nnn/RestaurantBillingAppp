@@ -29,6 +29,12 @@ export default async function SettingsPage({
   const params = await searchParams
   const restaurant = await prisma.restaurant.findUniqueOrThrow({ where: { id: user.restaurantId } })
   const payment = readPaymentConfig(restaurant.paymentConfig)
+  // Only live accounts: a method may not be pointed at one that is retired.
+  const accounts = await prisma.paymentAccount.findMany({
+    where: { restaurantId: user.restaurantId, isActive: true },
+    orderBy: { name: 'asc' },
+    select: { code: true, name: true, bankName: true },
+  })
   const policy = await getApprovalPolicy(user.restaurantId)
   const livePolicy = await getLiveBoardPolicy(user.restaurantId)
   // Stored in minor units, shown and typed in major ones — the same boundary
@@ -76,7 +82,16 @@ export default async function SettingsPage({
           kitchenWidth: readPaperWidths(restaurant.printerConfig).kitchen,
         },
         receipt: readReceiptFields(restaurant.receiptConfig),
-        destinations: payment.destinations ?? [],
+        /*
+         * The real accounts, from the table (bank.md). The dropdown may only
+         * offer somewhere money can actually land, so this is the live rows
+         * rather than `paymentConfig.destinations`, which is now legacy.
+         */
+        destinations: accounts.map((account) => ({
+          code: account.code,
+          name: account.name,
+          bankName: account.bankName,
+        })),
         // `readPaymentConfig` drops empty codes, so a method missing from this
         // map is a method with nowhere to book — which is what the screen shows.
         methodDestinations: (payment.methodDestinations ?? {}) as Record<string, string>,

@@ -120,6 +120,20 @@ export default async function WaiterPage({
 
     const menu = await getPublicMenu(user.restaurantId, restaurant.timezone, branchId)
 
+    /*
+     * Tables whose guests have asked for the bill.
+     *
+     * An open `BILL` service request is the signal, because it is the guests'
+     * own statement that they are done — not a status somebody remembered to
+     * set. The pad refuses to add dishes to these, since the total has been
+     * asked for and a late dish either misses the bill or reopens a figure the
+     * guest has already been shown. Acknowledged still counts: a waiter having
+     * seen the request does not mean the bill is settled.
+     */
+    const billRequestedTableIds = new Set(
+      board.requests.filter((request) => request.type === 'BILL').map((request) => request.tableId),
+    )
+
     return (
       <OpsShell
         title="Take an order"
@@ -147,6 +161,7 @@ export default async function WaiterPage({
               orderNumber: order.orderNumber,
             })),
             seatedGuests: table.seatedGuests ?? null,
+            billRequested: billRequestedTableIds.has(table.id),
           }))}
         />
       </OpsShell>

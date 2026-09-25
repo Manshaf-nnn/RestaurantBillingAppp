@@ -395,7 +395,13 @@ export const FEATURES: Feature[] = [
       { key: 'edit', label: 'Apply discount', permission: PERMISSIONS.DISCOUNT_APPLY },
       { key: 'export', label: 'See invoices', permission: PERMISSIONS.INVOICE_VIEW },
     ],
-    routes: ['/cashier', '/cashier/pos', '/dashboard/payment-details', '/dashboard/invoices'],
+    /*
+     * `/dashboard/payment-details` moved to the `accounts` feature (bank.md).
+     * It must be listed on ONE feature only: `featureForRoute` keeps the
+     * longest prefix and breaks an exact tie by array order, so a route on two
+     * features resolves by accident.
+     */
+    routes: ['/cashier', '/cashier/pos', '/dashboard/invoices'],
   },
 
   // ── Menu ──────────────────────────────────────────────────────────────────
@@ -702,6 +708,28 @@ export const FEATURES: Feature[] = [
     description: 'Proving the stock ledger adds up.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_RECONCILIATION }],
     routes: ['/dashboard/reports/reconciliation'],
+  },
+  {
+    key: 'accounts',
+    label: 'Payment details',
+    group: 'Accounting',
+    description:
+      'The internal accounts money is held in — balances, deposits, and transfers between them. ' +
+      'Also where bank transfers guests declare are confirmed.',
+    actions: [
+      {
+        key: 'view',
+        permission: PERMISSIONS.ACCOUNT_VIEW,
+        hint: 'Which accounts a person actually sees is set on each account.',
+      },
+      {
+        key: 'edit',
+        label: 'Manage',
+        permission: PERMISSIONS.ACCOUNT_MANAGE,
+        hint: 'Create accounts, record deposits, and choose who may transfer from each one.',
+      },
+    ],
+    routes: ['/dashboard/payment-details'],
   },
   {
     key: 'accounting',

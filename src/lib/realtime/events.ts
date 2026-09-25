@@ -64,6 +64,12 @@ export interface OrderSummaryPayload {
   channel: string
   tableId: string | null
   tableNumber: string | null
+  /**
+   * Where a delivery is going, with the rider's note folded in. Null for
+   * anything eaten in — the kitchen ticket shows it so the person packing the
+   * bag can see the destination without opening the order.
+   */
+  deliveryLocationName: string | null
   customerName: string
   customerPhone: string
   itemCount: number

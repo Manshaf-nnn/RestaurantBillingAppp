@@ -261,6 +261,13 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
         categoryId: category.id,
         name: data.name,
         slug,
+        /*
+         * Null, never the empty string. The unique index is
+         * (restaurantId, code) and Postgres treats NULLs as distinct — so a
+         * hundred code-less dishes coexist, while a hundred dishes carrying
+         * '' would collide on the second one saved.
+         */
+        code: data.code ? data.code : null,
         description: data.description || null,
         imageUrl: data.imageUrl || null,
         price: data.price,
@@ -280,6 +287,30 @@ export async function saveFood(input: unknown): Promise<ActionResult<{ id: strin
         happyHourStartMin: data.happyHourStartMin ?? null,
         happyHourEndMin: data.happyHourEndMin ?? null,
         happyHourDays: data.happyHourDays,
+      }
+
+      /*
+       * A code names one dish, so say which one already has it.
+       *
+       * The unique index is the real guarantee — this read could go stale
+       * between here and the write, and a concurrent save would still be
+       * refused by the database. What this buys is the message: "B12 is
+       * already used by Margherita Pizza" instead of a constraint name the
+       * owner has no way to act on.
+       */
+      if (base.code) {
+        const clash = await prisma.food.findFirst({
+          where: {
+            restaurantId: user.restaurantId,
+            code: base.code,
+            deletedAt: null,
+            ...(data.id ? { NOT: { id: data.id } } : {}),
+          },
+          select: { name: true },
+        })
+        if (clash) {
+          throw new ConflictError(`Code ${base.code} is already used by ${clash.name}`)
+        }
       }
 
       const id = await prisma.$transaction(async (tx) => {

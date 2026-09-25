@@ -214,6 +214,19 @@ export function readPaymentConfig(value: unknown): PaymentConfig {
 }
 
 /** The destination a method is pointed at, or null when it has none live. */
+/**
+ * Which account CODE a method is pointed at — and nothing more.
+ *
+ * Split out of `destinationForMethod` when accounts became rows. The mapping
+ * is still a setting on the restaurant, so reading it stays pure and
+ * client-safe; resolving that code to a real account is a database read and
+ * lives in `accounts-ledger`. Keeping the two apart is what lets the Settings
+ * screen, which is a client component, go on using this module.
+ */
+export function destinationCodeForMethod(config: PaymentConfig, method: string): string | null {
+  return config.methodDestinations?.[method] ?? null
+}
+
 export function destinationForMethod(
   config: PaymentConfig,
   method: string,

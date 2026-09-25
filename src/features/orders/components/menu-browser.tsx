@@ -41,6 +41,8 @@ import { createServiceRequest } from '../actions'
 import { useCart } from '../cart-store'
 import { ItemSheet } from './item-sheet'
 import { callAction } from '@/lib/use-action'
+import { OffersPanel } from '@/features/qr/components/offers-panel'
+import type { OffersPanel as OffersPanelData } from '@/features/qr/offers'
 
 type DietFilter = 'ALL' | 'VEG' | 'NON_VEG'
 
@@ -70,6 +72,7 @@ export function MenuBrowser({
   showDietFilter = true,
   showCallStaff = true,
   branchName = null,
+  offers = null,
   taxLabel,
   addingTo = null,
 }: {
@@ -124,6 +127,14 @@ export function MenuBrowser({
   showCallStaff?: boolean
   /** Shown when the restaurant has more than one place to order from. */
   branchName?: string | null
+  /**
+   * The offers panel's contents, computed on the server.
+   *
+   * Passed in rather than fetched here because the real coupons are a database
+   * read and this is a client component — and because what a guest is offered
+   * depends on the CODE they scanned, which the page already knows.
+   */
+  offers?: OffersPanelData | null
   /** The guest's own open order these picks join (aO.md §3), from `?add=`. */
   addingTo?: { orderId: string; orderNumber: string } | null
 }) {
@@ -317,6 +328,17 @@ export function MenuBrowser({
       </header>
 
       <main className="flex-1">
+        {/*
+          Offers first, above the dishes. A guest deciding what to order wants
+          to know about "10% off over 2,000" BEFORE they build the basket, not
+          on the checkout screen where it reads as a missed opportunity.
+        */}
+        {offers?.hasAny ? (
+          <div className="mx-4 mt-4">
+            <OffersPanel data={offers} />
+          </div>
+        ) : null}
+
         {state.addingTo ? (
           <div className="guest-surface mx-4 mt-4 flex items-start gap-3 rounded-2xl border p-3" data-testid="adding-to-order">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-lg">➕</span>

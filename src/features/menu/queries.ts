@@ -27,6 +27,13 @@ export interface PublicMenuItem {
   id: string
   name: string
   slug: string
+  /**
+   * The owner's own code for this dish — "B12", a printed menu's number.
+   *
+   * Null for most dishes. Staff search by it, so it travels with the item
+   * rather than being fetched separately when somebody types into a box.
+   */
+  code: string | null
   description: string | null
   imageUrl: string | null
   price: number
@@ -117,6 +124,7 @@ export const getPublicMenu = cache(
         id: food.id,
         name: food.name,
         slug: food.slug,
+        code: food.code,
         description: food.description,
         imageUrl: food.imageUrl,
         price: pricing.price,

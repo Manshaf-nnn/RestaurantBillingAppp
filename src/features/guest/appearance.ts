@@ -83,6 +83,19 @@ export interface GuestAppearance {
    * for a short menu with good photography and worse for a long one.
    */
   menuLayout: MenuLayout
+  /**
+   * The offers panel above the dishes — the live coupons a guest can use here,
+   * and the owner's own note beneath them.
+   *
+   * The same panel a QR code shows through `QrExperience.showOffers`; this is
+   * the setting for the ORDINARY table flow, which has no experience row to
+   * carry one. On by default, because a restaurant running no coupons and
+   * writing no note sees nothing either way — the panel renders only when
+   * there is something in it.
+   */
+  menuShowOffers: boolean
+  /** The owner's own words in that panel, for what the coupon engine cannot say. */
+  menuOfferNote: string
 
   /* ── Checkout (ar.md §13) ─────────────────────────────────────────────── */
   /**
@@ -161,6 +174,8 @@ export const DEFAULT_APPEARANCE: GuestAppearance = {
   menuShowDietFilter: true,
   menuShowCallStaff: true,
   menuLayout: 'LIST',
+  menuShowOffers: true,
+  menuOfferNote: '',
 
   checkoutShowCoupon: true,
   checkoutShowName: true,
@@ -227,6 +242,8 @@ export function readAppearance(stored: unknown): GuestAppearance {
     menuShowDietFilter: flag('menuShowDietFilter'),
     menuShowCallStaff: flag('menuShowCallStaff'),
     menuLayout: raw.menuLayout === 'GRID' ? 'GRID' : 'LIST',
+    menuShowOffers: flag('menuShowOffers'),
+    menuOfferNote: text('menuOfferNote'),
 
     checkoutShowCoupon: flag('checkoutShowCoupon'),
     checkoutShowName: flag('checkoutShowName'),

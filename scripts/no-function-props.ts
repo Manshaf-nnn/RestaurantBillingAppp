@@ -91,6 +91,29 @@ for (const file of ALL) {
   if (clientNames.size === 0) continue
   serverFiles += 1
 
+  /*
+   * Functions this file declares itself — the candidates for being handed over
+   * by name. Imports are excluded on purpose: a Server Action is a function
+   * that MAY cross, and those are imported from a `'use server'` module.
+   */
+  const localFunctions = new Set<string>()
+  for (const re of [
+    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g,
+    /*
+     * `const f = (a) => …`, but NOT `const s = (() => …)()`.
+     *
+     * The lookahead is the whole point: an IIFE assigns a STRING (or whatever
+     * it returns), not a function, and this script would otherwise report
+     * every `const href = (() => { … })()` on a page that passes it to a
+     * client component — which is a correct, serialisable prop.
+     */
+    /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\((?!\s*\(|\s*async)[^)]*\)\s*(?::[^=]+)?=>/g,
+    /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?function\b/g,
+  ]) {
+    let d: RegExpExecArray | null
+    while ((d = re.exec(src))) localFunctions.add(d[1])
+  }
+
   for (const name of clientNames) {
     // Each JSX use of that client component, from `<Name` to its closing `>`.
     const open = new RegExp(`<${name}(\\s|\\n)`, 'g')
@@ -112,7 +135,27 @@ for (const file of ALL) {
       const arrow = /(\w+)\s*[:=]\s*\{?\s*(?:async\s+)?(?:\([^)]*\)|\w+)\s*=>/g
       const fn = /(\w+)\s*[:=]\s*\{?\s*(?:async\s+)?function\b/g
 
-      for (const re of [arrow, fn]) {
+      /*
+       * `prop={helper}` — a function passed BY NAME, not written inline.
+       *
+       * The two patterns above only see a function literal at the call site, so
+       * the commonest shape of this bug walked straight through: a page defines
+       * `const money = (v) => formatMoney(v, …)` for its own markup, then hands
+       * the same helper to a client component. It type-checks, it lints, and it
+       * fails at render with "Functions cannot be passed directly to Client
+       * Components" — which is precisely what this script exists to prevent.
+       * It reached a user's screen once; hence this third pattern.
+       *
+       * Only names DECLARED IN THIS FILE count. An imported symbol is usually a
+       * Server Action, which is the one kind of function that may legitimately
+       * cross, and those live in their own `'use server'` module.
+       */
+      const named = new RegExp(
+        `(\\w+)\\s*=\\s*\\{\\s*(${[...localFunctions].join('|')})\\s*\\}`,
+        'g',
+      )
+
+      for (const re of localFunctions.size > 0 ? [arrow, fn, named] : [arrow, fn]) {
         let p: RegExpExecArray | null
         while ((p = re.exec(props))) {
           const line = src.slice(0, m.index + p.index).split('\n').length

@@ -6,9 +6,9 @@ import { AutoRefresh } from '@/components/auto-refresh'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
-import { getDestinationTotals, getOnlinePayments } from '@/features/payments/queries'
-import { readPaymentConfig } from '@/features/payments/service'
-import { destinationDetailLine } from '@/features/payments/destinations'
+import { getOnlinePayments } from '@/features/payments/queries'
+import { AccountsPanel } from '@/features/payments/components/accounts-panel'
+import { accountStaffOptions, accountsForScreen } from '@/features/payments/accounts-queries'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
@@ -46,57 +46,38 @@ export default async function PaymentDetailsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const user = await requirePagePermission(PERMISSIONS.PAYMENT_COLLECT, '/dashboard/payment-details')
+  /*
+   * ACCOUNT_VIEW, not PAYMENT_COLLECT (bank.md).
+   *
+   * The door moved with the feature, and `ACCOUNT_VIEW` is split from
+   * `PAYMENT_COLLECT` so nobody who could open this yesterday is locked out
+   * today — a cashier still reaches the transfer-confirmation list below.
+   * Which ACCOUNTS they see is a separate, per-account question.
+   */
+  const user = await requirePagePermission(PERMISSIONS.ACCOUNT_VIEW, '/dashboard/payment-details')
   const { branchIds } = await selectedBranch(user, await searchParams)
-  const seesAccounts = can(user, PERMISSIONS.SETTINGS_VIEW)
 
   const restaurant = await requireRestaurant(user.restaurantId)
-  // This month, in the restaurant's clock — a running total of everything
-  // ever taken is a report, and lives under Reports with a date picker.
-  const range = resolveRange({ preset: 'THIS_MONTH', timeZone: restaurant.timezone })
-  const [rows, totals] = await Promise.all([
-    getOnlinePayments(user.restaurantId, branchIds),
-    seesAccounts ? getDestinationTotals(user.restaurantId, branchIds, range) : Promise.resolve([]),
-  ])
-
   const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
   const money = (v: number) => formatMoney(v, restaurant.currency, locale)
   const when = (value: string | null) =>
     value ? formatDateTime(value, { locale, timeZone: restaurant.timezone }) : '—'
 
-  const config = readPaymentConfig(restaurant.paymentConfig)
-
   /*
-   * Every account the owner defined, plus any code that money is already filed
-   * under. The second half matters: an account retired last month still holds
-   * last month's takings, and dropping it here would make that money vanish
-   * from the only screen that adds it up.
+   * The accounts are NOT branch-filtered, and the transfers below are.
+   *
+   * A balance is a fact about a bank account, not about a location: BOC holds
+   * what BOC holds, and narrowing it by the branch switcher would show a
+   * contribution under a label that says Balance — a number that could never
+   * match the real account. The confirmation list underneath is genuinely
+   * per-branch, so it keeps the filter.
    */
-  const banked = totals.map((row) => row.destination)
-  const accounts = [
-    ...(config.destinations ?? []).filter((destination) => !destination.archived),
-    ...(config.destinations ?? []).filter(
-      (destination) => destination.archived && banked.includes(destination.code),
-    ),
-  ]
-
-  const cards = accounts.map((destination) => {
-    const found = totals.find((row) => row.destination === destination.code)
-    return {
-      code: destination.code,
-      name: destination.name,
-      detail: destinationDetailLine(destination),
-      archived: Boolean(destination.archived),
-      collected: found?.collected ?? 0,
-      refunded: found?.refunded ?? 0,
-      count: found?.count ?? 0,
-      lastAt: found?.lastAt ?? null,
-    }
-  })
-
-  // Money taken before any of this existed. Shown only when it exists, because
-  // an "Unassigned" tile on a clean restaurant is a question with no answer.
-  const unassigned = totals.find((row) => row.destination === null)
+  const canManage = can(user, PERMISSIONS.ACCOUNT_MANAGE)
+  const [rows, accounts, people] = await Promise.all([
+    getOnlinePayments(user.restaurantId, branchIds),
+    accountsForScreen(user),
+    canManage ? accountStaffOptions(user) : Promise.resolve({ staff: [], access: [] }),
+  ])
 
   const pending = rows.filter((r) => r.orderPaymentStatus !== 'PAID')
   const confirmed = rows.filter((r) => r.status === 'PAID')
@@ -110,70 +91,17 @@ export default async function PaymentDetailsPage({
         description="Every account your money is filed under, and the bank transfers waiting to be confirmed."
       />
 
-      {seesAccounts ? (
-        <div className="mb-4">
-          <SectionCard
-            title="Your accounts this month"
-            description="Set up under Settings → Payments. A cashier taking cash files it here automatically — open one to see every payment inside it. Totals are this month's."
-          >
-            {cards.length === 0 && !unassigned ? (
-              <EmptyState
-                className="border-dashed py-10"
-                icon={<Landmark />}
-                title="No accounts yet"
-                description="Add one under Settings → Payments and point each payment method at it."
-              />
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {cards.map((card) => (
-                  <Link
-                    key={card.code}
-                    href={`/dashboard/payment-details/${card.code}`}
-                    className="rounded-lg border p-4 transition-colors hover:border-primary/60 hover:bg-muted/40"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="font-semibold">{card.name}</span>
-                      {card.archived ? <Badge variant="outline">Retired</Badge> : null}
-                    </div>
-                    {card.detail ? (
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{card.detail}</p>
-                    ) : null}
-
-                    <p className="mt-3 text-xl font-bold tabular-nums">
-                      {money(card.collected - card.refunded)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {card.count} payment{card.count === 1 ? '' : 's'}
-                      {card.refunded > 0 ? ` · ${money(card.refunded)} refunded` : ''}
-                    </p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      Last: {when(card.lastAt)}
-                    </p>
-                  </Link>
-                ))}
-
-                {unassigned ? (
-                  <Link
-                    href="/dashboard/payment-details/unassigned"
-                    className="rounded-lg border border-dashed p-4 transition-colors hover:border-primary/60 hover:bg-muted/40"
-                  >
-                    <span className="font-semibold">Unassigned</span>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Taken before accounts were set up
-                    </p>
-                    <p className="mt-3 text-xl font-bold tabular-nums">
-                      {money(unassigned.collected - unassigned.refunded)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {unassigned.count} payment{unassigned.count === 1 ? '' : 's'}
-                    </p>
-                  </Link>
-                ) : null}
-              </div>
-            )}
-          </SectionCard>
-        </div>
-      ) : null}
+      <div className="mb-4">
+        <AccountsPanel
+          accounts={accounts}
+          staff={people.staff}
+          access={people.access}
+          currency={restaurant.currency}
+          locale={locale}
+          canManage={canManage}
+          basePath="/dashboard/payment-details"
+        />
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Awaiting confirmation" value={pending.length} />

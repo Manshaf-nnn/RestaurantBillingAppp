@@ -232,10 +232,38 @@ export async function requestTransfer(params: {
  * It stops the same stock being promised to a second transfer before this one
  * leaves, which is the failure an approval step exists to prevent.
  */
+/**
+ * What a line is actually moving, in base units.
+ *
+ * `approvedQty` when the approver cut it, the requested amount otherwise —
+ * including for every line written before that column existed. One reader, so
+ * reserve, dispatch and cancel cannot come to different conclusions about the
+ * same line, which is how a reservation gets stranded.
+ */
+export function allowedQty(line: { requestedQty: number; approvedQty: number | null }): number {
+  return line.approvedQty ?? line.requestedQty
+}
+
 export async function approveTransfer(params: {
   restaurantId: string
   transferId: string
   userId?: string | null
+  /**
+   * What the approver will actually allow, per line, when it is less than was
+   * asked for.
+   *
+   * The case this exists for: a branch asks for 50 kg and the store has 30.
+   * Without it the approver could only reserve stock that is not there — and
+   * push the problem to whoever loads the van — or reject the whole request and
+   * make the branch raise it again. "You can have 30" is what actually happens
+   * in a store room.
+   *
+   * A line may be cut to zero, which allows the rest of the request while
+   * sending none of that item. It may never be raised: approving MORE than a
+   * branch asked for is not an approval, it is a different request, and the
+   * database refuses it too.
+   */
+  approved?: Array<{ lineId: string; quantity: number }>
   /**
    * A caller's own transaction to join (recorrection.md §1). The approvals
    * desk decides the request and reserves the stock as one unit of work, so
@@ -248,13 +276,42 @@ export async function approveTransfer(params: {
     const transfer = await load(tx, params.restaurantId, params.transferId)
     assertTransition(transfer.status, 'APPROVED')
 
+    const adjustments = new Map((params.approved ?? []).map((row) => [row.lineId, row.quantity]))
+
     for (const line of transfer.lines) {
+      const asked = line.requestedQty
+      const allow = adjustments.has(line.id) ? roundQty(adjustments.get(line.id)!) : asked
+
+      if (allow < 0) {
+        throw new AppError(`${line.item.name}: a quantity cannot be negative`, 400, 'TRANSFER_NEGATIVE')
+      }
+      if (allow > asked + 1e-6) {
+        throw new AppError(
+          `${line.item.name}: ${asked} was requested — approve that or less, or ask the branch to raise a new request`,
+          400,
+          'TRANSFER_OVER_APPROVE',
+        )
+      }
+
+      // Recorded even when it equals the request, so the line says plainly
+      // that somebody looked at it rather than leaving it ambiguous.
+      if (adjustments.has(line.id)) {
+        await tx.stockTransferLine.update({
+          where: { id: line.id },
+          data: { approvedQty: allow },
+        })
+        line.approvedQty = allow
+      }
+
+      // Nothing allowed on this line: nothing to check and nothing to hold.
+      if (allow <= 0) continue
+
       await assertSufficient(tx, {
         restaurantId: params.restaurantId,
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
         storageLocationId: transfer.fromStorageId,
-        quantity: line.requestedQty,
+        quantity: allow,
         itemName: line.item.name,
       })
       await applyLocationDelta(tx, {
@@ -262,7 +319,7 @@ export async function approveTransfer(params: {
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
         storageLocationId: transfer.fromStorageId,
-        reserved: line.requestedQty,
+        reserved: allow,
       })
     }
 
@@ -317,17 +374,20 @@ export async function dispatchTransfer(params: {
         itemId: line.itemId,
         branchId: transfer.fromBranchId,
         storageLocationId: transfer.fromStorageId,
-        reserved: -line.requestedQty,
+        // Exactly what approval held, or the reservation is stranded — see
+        // `allowedQty`.
+        reserved: -allowedQty(line),
       })
     }
 
     for (const line of transfer.lines) {
-      const sentQty = overrides.get(line.id) ?? line.requestedQty
+      const allow = allowedQty(line)
+      const sentQty = overrides.get(line.id) ?? allow
       // Nothing on this line. Its reservation is already back above.
       if (sentQty <= 0) continue
-      if (sentQty > line.requestedQty + 1e-6) {
+      if (sentQty > allow + 1e-6) {
         throw new AppError(
-          `${line.item.name}: cannot send more than the ${line.requestedQty} approved`,
+          `${line.item.name}: cannot send more than the ${allow} approved`,
           400,
           'TRANSFER_OVER_SEND',
         )
@@ -661,7 +721,7 @@ export async function closeTransfer(params: {
           itemId: line.itemId,
           branchId: transfer.fromBranchId,
           storageLocationId: transfer.fromStorageId,
-          reserved: -line.requestedQty,
+          reserved: -allowedQty(line),
         })
       }
     }

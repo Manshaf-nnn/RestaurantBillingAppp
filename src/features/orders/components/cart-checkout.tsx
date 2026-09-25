@@ -29,6 +29,8 @@ import { addGuestOrderItems, placeGuestOrder, quoteCart } from '../actions'
 import { lineTotal, useCart } from '../cart-store'
 import { pointsEarned, type OrderTotals } from '../pricing'
 import { callAction } from '@/lib/use-action'
+import { listGuestLocations, lookupGuestIdentity } from '@/features/qr/guest-actions'
+import type { GuestLocation } from '@/features/qr/locations'
 
 interface Props {
   currency: string
@@ -113,6 +115,74 @@ export function CartCheckout({
   const [couponError, setCouponError] = React.useState<string | null>(null)
   const [eta, setEta] = React.useState<number | null>(null)
   const [orderNotes, setOrderNotes] = React.useState('')
+
+  /* ── Where it is going, and who is ordering ─────────────────────────────── */
+
+  const [locations, setLocations] = React.useState<GuestLocation[]>([])
+  const [locationRequired, setLocationRequired] = React.useState(false)
+  const [locationId, setLocationId] = React.useState('')
+
+  /*
+   * The owner's list for THIS code and THIS guest's category.
+   *
+   * Fetched rather than rendered into the page because the category is chosen
+   * on the way in, after this page's props were decided. An empty list is the
+   * ordinary answer for a table code and costs one request.
+   */
+  React.useEffect(() => {
+    if (!qrCode) return
+    let live = true
+    void callAction(() =>
+      listGuestLocations({ code: qrCode, categoryId: state.customer.categoryId || '' }, slug),
+    ).then((result) => {
+      if (!live || !result.ok) return
+      setLocations(result.data.locations)
+      setLocationRequired(result.data.required)
+    })
+    return () => {
+      live = false
+    }
+  }, [qrCode, state.customer.categoryId, slug])
+
+  /*
+   * A returning guest types their number and gets their own name back.
+   *
+   * Debounced, and only fills a name box the guest has left EMPTY — somebody
+   * halfway through typing "Jon" must not have it replaced by "Jonathan" under
+   * their cursor. The same courtesy the till already extends at
+   * `cashier-board.tsx`, and the same shape: look up, never overwrite.
+   */
+  const knownPhone = React.useRef('')
+  /*
+   * The name as it stands right now, without making it a dependency.
+   *
+   * The check has to happen when the ANSWER arrives, not when the request was
+   * sent — a guest types their number, then starts typing their name, and the
+   * reply must not land on top of what they are in the middle of writing. A
+   * ref reads the latest value without re-running the effect on every
+   * keystroke in the name box, which would cancel the lookup each time.
+   */
+  const nameRef = React.useRef(state.customer.name)
+  nameRef.current = state.customer.name
+
+  React.useEffect(() => {
+    const phone = state.customer.phone.trim()
+    if (!qrCode || phone.length < 7 || phone === knownPhone.current) return
+    let live = true
+    const timer = setTimeout(() => {
+      void callAction(() => lookupGuestIdentity({ code: qrCode, phone }, slug)).then((result) => {
+        if (!live || !result.ok || !result.data.found) return
+        const name = result.data.name
+        knownPhone.current = phone
+        // Never over-write what the guest has already written.
+        if (name && !nameRef.current.trim()) setCustomer({ name })
+      })
+    }, 400)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [state.customer.phone, qrCode, slug, setCustomer])
   const [formError, setFormError] = React.useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const [placing, setPlacing] = React.useState(false)
@@ -241,6 +311,7 @@ export function CartCheckout({
       // Which printed code this basket was built under (ar.md §15, §24).
       qrCode: qrCode || '',
       notes: orderNotes,
+      deliveryLocationId: locationId,
       couponCode: state.couponCode || '',
       redeemPoints: 0,
       items: state.lines.map((line) => ({
@@ -442,6 +513,49 @@ export function CartCheckout({
         <section className="surface space-y-4 p-4">
           <h2 className="text-sm font-semibold">{detailsHeading}</h2>
 
+          {/*
+            Where it goes, first — before who is ordering.
+            
+            A delivery guest's first question about their own order is whether
+            this place can even reach them, and an empty list answers it before
+            they type a name. Grouped when the owner grouped them, because
+            forty flat buttons is not a picker.
+          */}
+          {locations.length > 0 ? (
+            <Field
+              label={locationRequired ? 'Deliver to' : 'Deliver to (optional)'}
+              htmlFor="deliveryLocation"
+              error={fieldErrors.deliveryLocationId}
+              hint="Choose the closest place to you."
+            >
+              <select
+                id="deliveryLocation"
+                className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                value={locationId}
+                onChange={(event) => setLocationId(event.target.value)}
+              >
+                <option value="">Select a place…</option>
+                {groupLocations(locations).map((group) =>
+                  group.name ? (
+                    <optgroup key={group.name} label={group.name}>
+                      {group.items.map((place) => (
+                        <option key={place.id} value={place.id}>
+                          {place.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : (
+                    group.items.map((place) => (
+                      <option key={place.id} value={place.id}>
+                        {place.name}
+                      </option>
+                    ))
+                  ),
+                )}
+              </select>
+            </Field>
+          ) : null}
+
           {showName ? (
           <Field label="Name (optional)" htmlFor="customerName" error={fieldErrors.customerName}>
             <Input
@@ -617,4 +731,26 @@ function Row({
       <span className={tone === 'success' ? 'font-medium text-success' : 'font-medium'}>{value}</span>
     </div>
   )
+}
+
+/**
+ * The owner's locations, under their headings.
+ *
+ * A campus list is naturally two or three groups — Hostels, Staff Quarters,
+ * Academic — and forty flat options in a `<select>` is a scroll nobody reads.
+ * Ungrouped entries keep their place in the owner's own order rather than
+ * being swept into an "Other" bucket at the bottom, because the owner sorted
+ * them deliberately and a picker that reorders their list is lying about it.
+ */
+function groupLocations(
+  locations: GuestLocation[],
+): Array<{ name: string | null; items: GuestLocation[] }> {
+  const out: Array<{ name: string | null; items: GuestLocation[] }> = []
+  for (const place of locations) {
+    const name = place.groupName?.trim() || null
+    const last = out[out.length - 1]
+    if (last && last.name === name) last.items.push(place)
+    else out.push({ name, items: [place] })
+  }
+  return out
 }

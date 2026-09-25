@@ -625,10 +625,13 @@ export async function getApprovalDetail(params: {
           select: {
             number: true,
             status: true,
+            fromBranchId: true,
             fromBranch: { select: { name: true } },
             toBranch: { select: { name: true } },
             lines: {
               select: {
+                id: true,
+                itemId: true,
                 requestedQty: true,
                 item: { select: { name: true, unit: true } },
               },

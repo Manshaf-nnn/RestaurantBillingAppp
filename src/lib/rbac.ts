@@ -148,6 +148,26 @@ export const PERMISSIONS = {
   SHIFT_TEMPLATE_MANAGE: 'shift.templates',
   RECIPE_VIEW: 'recipe.view',
   LOYALTY_VIEW: 'loyalty.view',
+  /* ── Internal money accounts (bank.md) ────────────────────────────────── */
+  /**
+   * Open Payment details and see the accounts you are assigned to.
+   *
+   * Seeing an account is gated TWICE: this permission opens the screen, and the
+   * per-account staff list decides which cards appear on it. A cashier holds
+   * this so they can go on confirming bank transfers, and sees no balances at
+   * all until an owner assigns them an account.
+   */
+  ACCOUNT_VIEW: 'account.view',
+  /**
+   * Create an account, correct its details, retire it, deposit into it, and
+   * choose who may use it.
+   *
+   * Transferring is deliberately NOT here. bank.md §2 asks which staff may move
+   * money out of a PARTICULAR account, and a permission cannot say "that one" —
+   * so that lives on the account's own staff row, and adding a third permission
+   * would be exactly the complexity §2 tells us not to build.
+   */
+  ACCOUNT_MANAGE: 'account.manage',
   QR_VIEW: 'qr.view',
   /*
    * Changing what a QR menu shows and asks (ar.md §1).
@@ -521,6 +541,18 @@ const SPLIT_FROM: Array<[child: Permission, parent: Permission]> = [
   [PERMISSIONS.RECIPE_VIEW, PERMISSIONS.MENU_VIEW],
   [PERMISSIONS.LOYALTY_VIEW, PERMISSIONS.SETTINGS_VIEW],
   [PERMISSIONS.QR_VIEW, PERMISSIONS.SETTINGS_VIEW],
+  /*
+   * bank.md — Payment details is not a new screen. A cashier can open it today
+   * to confirm bank transfers, so taking that away on deploy day would strand
+   * the job. Split from PAYMENT_COLLECT, which is what opens it now.
+   *
+   * Safe even though the page gained balances: the per-account staff list is
+   * the real gate, so a cashier assigned to nothing sees an empty accounts
+   * section and the transfers list they came for. ACCOUNT_MANAGE is NOT split —
+   * creating accounts and moving money are new powers, and they land on owners
+   * and admins through ALL.
+   */
+  [PERMISSIONS.ACCOUNT_VIEW, PERMISSIONS.PAYMENT_COLLECT],
   [PERMISSIONS.FEEDBACK_VIEW, PERMISSIONS.REVIEW_MANAGE],
   [PERMISSIONS.CUSTOMER_ANALYTICS, PERMISSIONS.CUSTOMER_VIEW],
   [PERMISSIONS.REPORT_SALES, PERMISSIONS.REPORT_VIEW],

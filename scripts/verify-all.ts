@@ -117,6 +117,17 @@ const SERVICE = [
   // leaves inventory is what the supplier credits. Drawing oldest-first booked
   // the price difference as a profit on sending goods back.
   'fifo-returns-test',
+  // Menu codes, the waiter's table rules, delivery locations and the offers
+  // panel: a code names one dish, a reserved or settling table refuses an
+  // order (an ordinary second round does not), a place belongs to one branch
+  // and one category, and the panel never advertises an offer the engine
+  // would refuse.
+  'waiter-qr-flow-test',
+  // bank.md — internal accounts. The balance is not stored, it is the history
+  // summed, so these pin that every way money can move lands there exactly
+  // once: a deposit, both halves of a transfer or neither, and a customer
+  // payment that moves the balance WITHOUT writing a second row for itself.
+  'payment-account-test',
   'negative-stock-test', 'reconciliation-test', 'production-ready-test',
   'stock-location-test',
   'branch-scope-test',

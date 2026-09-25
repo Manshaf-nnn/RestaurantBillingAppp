@@ -47,6 +47,22 @@ export const foodSchema = z
     id: z.string().cuid().optional(),
     categoryId: z.string().cuid('Choose a category'),
     name: z.string().trim().min(1, 'Name is required').max(80),
+    /*
+     * The owner's own code for the dish — optional, and theirs to invent.
+     *
+     * Upper-cased and space-stripped so "b 12" and "B12" are the same code:
+     * the point of it is that somebody can type it fast and land on one dish,
+     * and a code whose casing matters fails exactly the person it is for.
+     * Empty string means "no code" and is stored as null, so a hundred
+     * code-less dishes do not collide on the unique index.
+     */
+    code: z
+      .string()
+      .trim()
+      .max(16, 'Keep the code short — it is meant to be typed')
+      .transform((value) => value.replace(/\s+/g, '').toUpperCase())
+      .optional()
+      .or(z.literal('')),
     description: z.string().trim().max(600).optional().or(z.literal('')),
     imageUrl: imageUrlField(),
     price: money,

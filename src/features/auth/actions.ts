@@ -43,6 +43,7 @@ import {
   resetPasswordSchema,
   updateProfileSchema,
 } from './schema'
+import { seedDefaultAccounts } from '@/features/payments/accounts'
 import { secondFactorGate } from './mfa-gate'
 
 const MAX_FAILED_LOGINS = 8
@@ -282,6 +283,14 @@ export async function register(input: unknown): Promise<ActionResult<{ redirectT
           features: { reservations: true, loyalty: true, happyHour: false, inventory: true },
         },
       })
+
+      /*
+       * The book of accounts, up front — the same argument as the main branch
+       * below. A payment resolves a real account row, so a restaurant with none
+       * could not take money at all, and the owner renames these to their real
+       * banks the first time they open Payment details.
+       */
+      await seedDefaultAccounts(tx, restaurant.id)
 
       // The owner is W-0001 of their own restaurant.
       const created = await tx.user.create({

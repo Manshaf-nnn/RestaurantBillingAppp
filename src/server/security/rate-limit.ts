@@ -55,6 +55,19 @@ export const RATE_LIMITS = {
   loyaltyLookup: { limit: 8, windowSeconds: 600 },
   /** per venue IP — a dining room's worth of guests checking their points */
   loyaltyLookupBurst: { limit: 120, windowSeconds: 600 },
+  /*
+   * Recognising a returning guest at a delivery checkout: phone in, their own
+   * name back, so they do not retype what the restaurant already knows.
+   *
+   * Tighter than the loyalty lookup because it is the same shape of risk with
+   * none of the same excuse — it takes a number and returns a name, which is
+   * an enumeration oracle if it is cheap. A real guest types their own number
+   * once, maybe twice after a typo; 6 in ten minutes covers that and nothing
+   * like a harvest. The burst cap is per venue IP, for a hostel full of people
+   * ordering on one wifi.
+   */
+  guestIdentity: { limit: 6, windowSeconds: 600 },
+  guestIdentityBurst: { limit: 90, windowSeconds: 600 },
   /** per guest device */
   serviceRequest: { limit: 10, windowSeconds: 300 },
   /** per venue IP */

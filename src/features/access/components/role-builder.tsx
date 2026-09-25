@@ -316,7 +316,20 @@ function RoleDialog({
 }) {
   const [name, setName] = React.useState(role?.name ?? '')
   const [description, setDescription] = React.useState(role?.description ?? '')
-  const [preset, setPreset] = React.useState(role?.preset ?? presets[0]?.value ?? 'WAITER')
+  /*
+   * Empty for a NEW role — "start from scratch".
+   *
+   * It defaulted to the first preset in the list, which was Administrator, and
+   * choosing one did nothing at all: the toggles stayed at 0 of 58 whatever was
+   * picked. So the field looked like it seeded the role and did not, which is
+   * the worst of both — an owner ticked 58 switches by hand under a box that
+   * said the role was "based on Administrator".
+   *
+   * Now it is a real choice. Pick one and its permissions are filled in as a
+   * starting point; leave it blank and the role is yours to build. An existing
+   * role keeps whatever it was based on.
+   */
+  const [preset, setPreset] = React.useState(role?.preset ?? '')
   const [branchId, setBranchId] = React.useState(role?.branchId ?? '')
   const [granted, setGranted] = React.useState<Set<string>>(
     () => new Set(role?.permissions ?? []),
@@ -333,6 +346,27 @@ function RoleDialog({
   React.useEffect(() => {
     if (mustHaveBranch && !branchId && locations[0]) setBranchId(locations[0].id)
   }, [mustHaveBranch, branchId, locations])
+
+  /**
+   * Apply a preset's permissions as a starting point.
+   *
+   * Only ever on an explicit change of the dropdown, never in an effect: a
+   * `useEffect` on `preset` would re-seed — and so wipe — an owner's own edits
+   * every time anything else in the dialog re-rendered. Choosing is an action,
+   * so it is handled where the action happens.
+   *
+   * Narrowed to what this admin may actually grant. An owner cannot hand out a
+   * permission they do not hold themselves, and seeding one would build a role
+   * that fails to save with an error pointing at a switch they never touched.
+   *
+   * Clearing the dropdown clears the seeded set too, which is what "start from
+   * scratch" has to mean if it means anything.
+   */
+  function choosePreset(value: string) {
+    setPreset(value)
+    const chosen = presets.find((p) => p.value === value)
+    setGranted(new Set((chosen?.permissions ?? []).filter((p) => grantable.has(p))))
+  }
 
   function setPermission(permission: string, on: boolean) {
     setGranted((prev) => {
@@ -401,9 +435,10 @@ function RoleDialog({
               <select
                 id="role-preset"
                 value={preset}
-                onChange={(e) => setPreset(e.target.value)}
+                onChange={(e) => choosePreset(e.target.value)}
                 className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
               >
+                <option value="">Start from scratch</option>
                 {presets.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -411,8 +446,9 @@ function RoleDialog({
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                Decides where they land after signing in, and whether they are tied to one
-                location.
+                {preset
+                  ? 'Fills in what that role can normally do, and decides where they land after signing in. Change any switch below.'
+                  : 'Optional. Pick one to start from what that role can normally do — or leave it and switch on only what you need.'}
               </p>
             </div>
           </div>

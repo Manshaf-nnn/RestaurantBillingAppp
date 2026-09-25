@@ -186,7 +186,13 @@ export const SMS_PRESETS: Record<SmsProviderKey, SmsPreset> = {
   },
 }
 
-export const PRESET_ORDER: SmsProviderKey[] = ['notifylk', 'textlk', 'dialog', 'mobitel', 'custom']
+export const PRESET_ORDER: SmsProviderKey[] = [
+  'notifylk',
+  'textlk',
+  'dialog',
+  'mobitel',
+  'custom',
+]
 
 /**
  * The spec to send with: the preset's, or the owner's own.

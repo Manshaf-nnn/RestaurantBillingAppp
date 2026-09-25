@@ -152,7 +152,17 @@ export async function requestTransferAction(
 }
 
 /** Approve reserves stock at the source; dispatch is what actually sends it. */
-export async function approveTransferAction(transferId: string): Promise<ActionResult<{ id: string }>> {
+export async function approveTransferAction(
+  transferId: string,
+  /**
+   * What the approver will actually allow, per line, where it is less than was
+   * asked for — "you can have 30 of the 50".
+   *
+   * Optional, so every existing caller approves the request as submitted and
+   * nothing changes by being left alone.
+   */
+  approved?: Array<{ lineId: string; quantity: number }>,
+): Promise<ActionResult<{ id: string }>> {
   return runSafe(async () => {
     const user = await requirePermission(PERMISSIONS.TRANSFER_APPROVE)
     // Approval reserves stock at the sending location, so that is whose call it is.
@@ -181,7 +191,12 @@ export async function approveTransferAction(transferId: string): Promise<ActionR
       })
     }
 
-    const transfer = await approveTransfer({ restaurantId: user.restaurantId, transferId, userId: user.id })
+    const transfer = await approveTransfer({
+      restaurantId: user.restaurantId,
+      transferId,
+      userId: user.id,
+      approved,
+    })
     await audit({
       restaurantId: user.restaurantId, branchId: ends.fromBranchId, userId: user.id, actorName: user.name,
       action: AUDIT_ACTIONS.TRANSFER_APPROVED, entity: 'StockTransfer', entityId: transfer.id,

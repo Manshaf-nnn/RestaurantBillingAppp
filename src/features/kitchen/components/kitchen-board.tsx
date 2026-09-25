@@ -39,6 +39,8 @@ export interface KitchenTicket {
   /** So the kitchen can call a waiter to the table (abc.md §7). */
   tableId: string | null
   tableNumber: string | null
+  /** Where a delivery goes, with the rider's note. Null for dine-in. */
+  deliveryLocationName?: string | null
   customerName: string
   customerPhone: string
   notes: string | null
@@ -189,6 +191,7 @@ export function KitchenBoard({
     tableId: payload.tableId,
     tableNumber: payload.tableNumber,
     customerName: payload.customerName,
+    deliveryLocationName: payload.deliveryLocationName ?? null,
     customerPhone: payload.customerPhone,
     notes: payload.notes,
     placedAt: payload.placedAt,
@@ -701,6 +704,16 @@ function TicketCard({
               {ticket.customerName}
               {ticket.type === 'TAKEAWAY' ? ' · Pickup' : ''}
             </p>
+            {/*
+              Where it is going, on the ticket that packs it. A delivery with
+              no destination in front of the person bagging it is one somebody
+              has to walk over and ask about.
+            */}
+            {ticket.deliveryLocationName ? (
+              <p className="mt-0.5 truncate text-xs font-semibold text-primary">
+                → {ticket.deliveryLocationName}
+              </p>
+            ) : null}
           </div>
           <span
             className={cn(

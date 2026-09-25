@@ -36,7 +36,7 @@ import { GuestAppearanceEditor } from './guest-appearance-editor'
 import { SmsSettings } from './sms-settings'
 import type { PublicSmsConfig } from '@/features/sms/types'
 import type { GuestAppearance } from '@/features/guest/appearance'
-import type { PaymentDestination } from '@/features/payments/destinations'
+import type { DestinationAccount } from './payment-destinations'
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'LKR', 'AUD', 'CAD', 'JPY']
 const TIMEZONES = [
@@ -93,7 +93,8 @@ export interface SettingsData {
   /** Which rows a printed bill shows (bill.md §1). */
   receipt: ReceiptFields
   /** The book of accounts payments are allocated to (bill.md §2). */
-  destinations: PaymentDestination[]
+  /** The accounts money can be filed into — rows now, not JSON (bank.md). */
+  destinations: DestinationAccount[]
   /** METHOD → destination code. A method missing here is booked nowhere. */
   methodDestinations: Record<string, string>
   /** Thresholds in MAJOR units — what the owner would say out loud. */
@@ -426,7 +427,7 @@ export function SettingsView({
           ) : null}
 
           <PaymentDestinations
-            initialDestinations={initial.destinations}
+            accounts={initial.destinations}
             initialMethodDestinations={initial.methodDestinations}
             canManage={canManage}
           />

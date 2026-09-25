@@ -96,7 +96,23 @@ export interface InboxItem {
     fromBranchName: string
     toBranchId: string
     toBranchName: string
-    lines: Array<{ name: string; unit: string; quantity: number }>
+    lines: Array<{
+      /** Needed to send an adjusted quantity back for this exact line. */
+      id: string
+      itemId: string
+      name: string
+      unit: string
+      quantity: number
+      /**
+       * Free stock at the SOURCE right now, in base units.
+       *
+       * The approver's whole question is "can we actually send this", and it
+       * was not on the screen — they had to open Inventory in another tab and
+       * come back. Free, not total: stock already reserved for another
+       * approved transfer is spoken for.
+       */
+      available: number
+    }>
   } | null
 }
 
@@ -314,14 +330,48 @@ export async function getApprovalsInbox(
     ? await prisma.stockTransfer.findMany({
         where: { id: { in: transferIds }, restaurantId },
         select: {
-          id: true, number: true, toBranchId: true,
+          id: true, number: true, toBranchId: true, fromBranchId: true, fromStorageId: true,
           fromBranch: { select: { name: true } },
           toBranch: { select: { name: true } },
-          lines: { select: { requestedQty: true, item: { select: { name: true, unit: true } } } },
+          lines: {
+            select: {
+              id: true,
+              requestedQty: true,
+              itemId: true,
+              item: { select: { name: true, unit: true } },
+            },
+          },
         },
       })
     : []
   const transferById = new Map(transfers.map((t) => [t.id, t]))
+
+  /*
+   * What the source actually has, per item and location.
+   *
+   * One read for every line on every pending transfer, rather than one per
+   * line: the desk shows a page of requests and a query inside the map would
+   * be an N+1 on the screen somebody opens most often.
+   */
+  const stockKeys = transfers.flatMap((t) =>
+    t.lines.map((line) => ({ itemId: line.itemId, branchId: t.fromBranchId })),
+  )
+  const stockRows = stockKeys.length
+    ? await prisma.inventoryStock.findMany({
+        where: {
+          restaurantId,
+          itemId: { in: [...new Set(stockKeys.map((k) => k.itemId))] },
+          branchId: { in: [...new Set(stockKeys.map((k) => k.branchId))] },
+        },
+        select: { itemId: true, branchId: true, available: true, reserved: true },
+      })
+    : []
+  const freeStock = new Map<string, number>()
+  for (const row of stockRows) {
+    const key = `${row.branchId}:${row.itemId}`
+    // Already-reserved stock is spoken for by another approved transfer.
+    freeStock.set(key, (freeStock.get(key) ?? 0) + Math.max(0, row.available - row.reserved))
+  }
 
   const items: InboxItem[] = [
     ...outgoing.map((row) => ({
@@ -386,9 +436,12 @@ export async function getApprovalsInbox(
               toBranchId: transfer.toBranchId,
               toBranchName: transfer.toBranch.name,
               lines: transfer.lines.map((line) => ({
+                id: line.id,
+                itemId: line.itemId,
                 name: line.item.name,
                 unit: line.item.unit,
                 quantity: line.requestedQty,
+                available: freeStock.get(`${transfer.fromBranchId}:${line.itemId}`) ?? 0,
               })),
             }
           : null,

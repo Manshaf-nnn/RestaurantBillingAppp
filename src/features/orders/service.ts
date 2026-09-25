@@ -420,6 +420,16 @@ export interface PlaceOrderParams {
    * decides whether an offer scoped to that menu applies.
    */
   qrExperienceId?: string | null
+  /**
+   * Where a delivery is going, already validated by the caller.
+   *
+   * The id AND the name: the id answers "how many went to the Girls Hostel
+   * last month", the name answers it still once the location is renamed or
+   * retired. The same reasoning `tableNumber` carries two lines above — a past
+   * order records what happened, and what happened was that it went to a place
+   * called that.
+   */
+  deliveryLocation?: { id: string; name: string } | null
   createdById?: string | null
   servedById?: string | null
 }
@@ -700,6 +710,8 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               // Snapshotted, not derived. `tableId` is SetNull, so deleting a
               // table used to erase which table every past order had been at.
               tableNumber: table?.number ?? null,
+              deliveryLocationId: params.deliveryLocation?.id ?? null,
+              deliveryLocationName: params.deliveryLocation?.name ?? null,
               customerId: customer?.id ?? null,
               customerName: params.customerName,
               customerPhone: customerPhone,
@@ -1993,6 +2005,9 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
     channel: order.channel,
     tableId: order.tableId,
     tableNumber: order.table?.number ?? null,
+    // Where a delivery is going, so the kitchen ticket and the live board can
+    // say it. Null for anything eaten in.
+    deliveryLocationName: order.deliveryLocationName ?? null,
     customerName: order.customerName,
     customerPhone: order.customerPhone,
     /*

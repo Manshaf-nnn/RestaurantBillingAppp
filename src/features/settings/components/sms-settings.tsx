@@ -13,7 +13,10 @@ import { cn } from '@/lib/utils'
 import { countSegments, nonGsm7Characters } from '@/features/sms/encoding'
 import { LK, toE164, formatForGateway, E164_FAILURE_MESSAGE } from '@/features/sms/msisdn'
 import { PRESET_ORDER, SMS_PRESETS } from '@/features/sms/presets'
+import { parseGatewayUrl, TOKEN_LABELS } from '@/features/sms/parse-url'
 import type {
+  HttpGatewaySpec,
+  NumberFormat,
   PublicSmsConfig,
   SmsCredentialField,
   SmsProviderKey,
@@ -65,11 +68,47 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
   const [saving, setSaving] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
   const [testTo, setTestTo] = React.useState('')
-  const [result, setResult] = React.useState<{ ok: boolean; message: string } | null>(null)
+  const [result, setResult] = React.useState<{
+    ok: boolean
+    message: string
+    raw?: string | null
+  } | null>(null)
   const [preview, setPreview] = React.useState<SmsRequestPreview | null>(null)
 
   const preset = SMS_PRESETS[config.provider]
   const working = Boolean(config.verifiedAt)
+
+  /*
+   * A gateway nobody here has seen.
+   *
+   * Its whole configuration lives on THIS restaurant's row, never in our code.
+   * A gateway hardcoded into the product is one every other tenant has to look
+   * at, and one that needs a deploy to correct.
+   */
+  const needsOwnGateway = preset.requiresManualSpec
+  const [pastedUrl, setPastedUrl] = React.useState('')
+  const [successText, setSuccessText] = React.useState('')
+  const [numberFormat, setNumberFormat] = React.useState<NumberFormat>(
+    config.spec?.numberFormat ?? 'e164NoPlus',
+  )
+
+  const parsed = React.useMemo(
+    () => (pastedUrl.trim() ? parseGatewayUrl(pastedUrl, numberFormat) : null),
+    [pastedUrl, numberFormat],
+  )
+
+  /* What will actually be saved: the fresh paste, or what is already stored. */
+  const ownSpec: HttpGatewaySpec | null = React.useMemo(() => {
+    const base = parsed?.ok ? parsed.spec : config.spec
+    if (!base) return null
+    return {
+      ...base,
+      numberFormat,
+      success: successText.trim()
+        ? { kind: 'bodyContains', needle: successText.trim() }
+        : base.success,
+    }
+  }, [parsed, config.spec, numberFormat, successText])
 
   const TEST_MESSAGE = 'Test message from your restaurant. If you can read this, SMS is working.'
 
@@ -94,7 +133,27 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
         senderId: config.senderId,
         senderIdApproved: config.senderIdApproved,
         credentials,
-        spec: null,
+        /* Flattened for the form schema. Null for a gateway we already know. */
+        spec:
+          needsOwnGateway && ownSpec
+            ? {
+                method: ownSpec.method,
+                url: ownSpec.url,
+                headers: ownSpec.headers,
+                bodyEncoding: ownSpec.bodyEncoding,
+                bodyTemplate: ownSpec.bodyTemplate,
+                authMode: ownSpec.auth.mode,
+                authHeader: 'header' in ownSpec.auth ? ownSpec.auth.header : undefined,
+                successKind: ownSpec.success.kind,
+                successPath: 'path' in ownSpec.success ? ownSpec.success.path : undefined,
+                successEquals:
+                  'equals' in ownSpec.success ? ownSpec.success.equals.join(',') : undefined,
+                successNeedle:
+                  'needle' in ownSpec.success ? ownSpec.success.needle : undefined,
+                numberFormat: ownSpec.numberFormat,
+                encoding: ownSpec.encoding,
+              }
+            : null,
         caps: config.caps,
         cost: config.costMinor === null ? null : config.costMinor / 100,
         costCurrency: config.costCurrency ?? currency,
@@ -131,10 +190,15 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
       setResult({
         ok: true,
         message: `Sent to ${outcome.data.dialled}. Check that phone — it should arrive within a few seconds.`,
+        raw: outcome.data.rawResponse,
       })
       setConfig((prev) => ({ ...prev, verifiedAt: new Date().toISOString() }))
     } else {
-      setResult({ ok: false, message: outcome.data.error ?? 'Your gateway did not accept the message.' })
+      setResult({
+        ok: false,
+        message: outcome.data.error ?? 'Your gateway did not accept the message.',
+        raw: outcome.data.rawResponse,
+      })
       setConfig((prev) => ({ ...prev, verifiedAt: null }))
     }
   }
@@ -198,6 +262,100 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
           })}
         </div>
 
+        {/*
+          Every small gateway hands a new customer the same thing: a sample URL
+          with angle brackets in it. A restaurant owner can paste that. They
+          cannot fill in a body template and a dotted JSON path, and asking
+          them to is how this feature would go unused.
+        */}
+        {needsOwnGateway && (
+          <div className="mt-4 space-y-3 rounded-md border border-dashed p-3">
+            <Field
+              label="Paste the API link your gateway gave you"
+              hint="From their setup sheet or documentation. Include everything after the ? as well."
+            >
+              <Textarea
+                rows={3}
+                disabled={!canManage}
+                className="font-mono text-xs"
+                placeholder="https://msg.example.com/send_sms.php?username=<user_name>&password=<password>&src=<Sender_id>&dst=<Phone_number>&msg=<message>"
+                value={pastedUrl}
+                onChange={(event) => setPastedUrl(event.target.value)}
+              />
+            </Field>
+
+            {parsed && !parsed.ok && (
+              <p className="text-xs text-destructive">{parsed.reason}</p>
+            )}
+
+            {parsed?.ok && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium">We understood this:</p>
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {parsed.params.map((param) => (
+                    <li key={param.name} className="flex flex-wrap gap-1">
+                      <code className="font-medium">{param.name}</code>
+                      <span>&rarr;</span>
+                      <span>
+                        {param.token
+                          ? TOKEN_LABELS[param.token]
+                          : `always "${param.literal}"`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {parsed.missing.length > 0 && (
+                  <p className="text-xs text-amber-700">
+                    We could not find{' '}
+                    {parsed.missing
+                      .map((token) => TOKEN_LABELS[token] ?? token)
+                      .join(' or ')}{' '}
+                    in that link. Check you pasted the whole thing.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {config.spec?.url && !pastedUrl && (
+              <p className="text-xs text-muted-foreground">
+                Currently sending to <code className="font-medium">{config.spec.url}</code>. Paste a new
+                link above only if it has changed.
+              </p>
+            )}
+
+            <Field
+              label="How does your gateway want the phone number?"
+              hint="Ask them, or try one and see whether the test message arrives."
+            >
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ['e164NoPlus', '94771234567'],
+                    ['nationalLeadingZero', '0771234567'],
+                    ['e164Plus', '+94771234567'],
+                  ] as Array<[NumberFormat, string]>
+                ).map(([value, example]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={!canManage}
+                    onClick={() => setNumberFormat(value)}
+                    className={cn(
+                      'rounded-md border px-3 py-1.5 font-mono text-xs transition',
+                      numberFormat === value
+                        ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                        : 'border-border hover:border-primary/40',
+                      !canManage && 'cursor-not-allowed opacity-60',
+                    )}
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          </div>
+        )}
+
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {preset.credentialFields.map((field) => {
             const stored = config.credentialsPresent.includes(field.name)
@@ -209,13 +367,20 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
                   autoComplete="off"
                   disabled={!canManage}
                   placeholder={
-                    stored
-                      ? field.secret
-                        ? `Saved (••••${hint ?? ''}) — leave blank to keep it`
-                        : (hint ?? '')
+                    field.secret && stored
+                      ? `Saved (••••${hint ?? ''}) — leave blank to keep it`
                       : (field.example ?? '')
                   }
-                  value={credentials[field.name] ?? ''}
+                  /*
+                   * A secret shows blank once saved, and blank means "keep it".
+                   * A non-secret shows its real value, so the owner can see
+                   * which account is configured without digging out the
+                   * supplier's sheet to check.
+                   */
+                  value={
+                    credentials[field.name] ??
+                    (field.secret ? '' : stored ? (hint ?? '') : '')
+                  }
                   onChange={(event) =>
                     setCredentials((prev) => ({ ...prev, [field.name]: event.target.value }))
                   }
@@ -332,6 +497,35 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
             {result.ok ? '✓ ' : ''}
             {result.message}
           </p>
+        )}
+
+        {/*
+          What the gateway actually replied.
+          For a gateway nobody here has seen, this is the only way to learn what
+          "success" looks like on it — and the field below turns that reading
+          into the rule, instead of leaving it a guess.
+        */}
+        {result?.raw && (
+          <div className="mt-3">
+            <p className="text-xs font-medium">Your gateway replied:</p>
+            <pre className="mt-1 max-h-32 overflow-auto rounded-md bg-muted p-2 text-xs">
+              {result.raw}
+            </pre>
+            {needsOwnGateway && (
+              <Field
+                className="mt-2"
+                label="Which word in that reply means it worked?"
+                hint="Copy it from above — e.g. OK, or Success. Without it we cannot tell a delivered message from a refused one."
+              >
+                <Input
+                  disabled={!canManage}
+                  placeholder="OK"
+                  value={successText}
+                  onChange={(event) => setSuccessText(event.target.value)}
+                />
+              </Field>
+            )}
+          </div>
         )}
       </SectionCard>
 

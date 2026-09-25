@@ -21,7 +21,7 @@ import type { HttpGatewaySpec, SmsConfig } from '@/features/sms/types'
 import { assertSafeGatewayUrl } from '@/server/security/ssrf'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import { sendSms } from '@/server/sms/send'
-import { ValidationError } from '@/lib/errors'
+import { ConflictError, ValidationError } from '@/lib/errors'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
@@ -195,6 +195,16 @@ export async function updatePaymentSettings(input: unknown): Promise<ActionResul
  * account a payment is allocated to, so "who changed Card from HNB to BOC, and
  * when" is a question the books have to be able to answer (§4).
  */
+
+/**
+ * Which account each payment method is filed into (bank.md §4).
+ *
+ * The accounts themselves are rows now, created and retired on Payment details,
+ * so this saves the MAPPING and nothing else. The anti-orphan block that used
+ * to live here is gone deliberately: it existed because an account was an entry
+ * in an array that a save could delete, and a row that is retired rather than
+ * removed cannot be dropped by editing this map.
+ */
 export async function updatePaymentDestinations(
   input: unknown,
 ): Promise<ActionResult<{ id: string }>> {
@@ -212,41 +222,37 @@ export async function updatePaymentDestinations(
       )
 
       /*
-       * A code that a payment already carries can never be dropped, only
-       * retired. Deleting one would leave stamped payments pointing at nothing
-       * and every historical report reading the raw code instead of a name.
+       * Every method must point at an account that exists and is still in use.
+       *
+       * A real lookup rather than a check against the list the same form just
+       * sent, so a code cannot be saved against an account somebody retired on
+       * another screen a moment ago — which would leave a till refusing
+       * payments with no visible cause.
        */
-      const stamped = await prisma.payment.findMany({
-        where: { restaurantId: user.restaurantId, destination: { not: null } },
-        select: { destination: true },
-        distinct: ['destination'],
+      const live = await prisma.paymentAccount.findMany({
+        where: { restaurantId: user.restaurantId, isActive: true },
+        select: { code: true },
       })
-      const kept = data.destinations.map((destination) => destination.code)
-      const orphaned = stamped
-        .map((row) => row.destination)
-        .filter((code): code is string => code !== null && !kept.includes(code))
+      const liveCodes = new Set(live.map((row) => row.code))
 
-      const survivors = orphaned.map((code) => {
-        const previous = existing.destinations?.find((entry) => entry.code === code)
-        // Everything it had, retired — not a stub. Rebuilding it from a couple
-        // of fields would silently drop the bank details the owner recorded,
-        // which are exactly what a retired account is still consulted for when
-        // reconciling the month it was live.
-        return { ...previous, code, name: previous?.name ?? code, archived: true }
-      })
-
-      // Empty string means "not booked anywhere" — dropped, so the map holds
-      // only real decisions and `destinationForMethod` refuses the rest.
-      const methodDestinations = Object.fromEntries(
-        Object.entries(data.methodDestinations).filter(([, code]) => Boolean(code)),
-      )
+      const methodDestinations: Record<string, string> = {}
+      for (const [method, code] of Object.entries(data.methodDestinations)) {
+        // Empty means "not accepted" — dropped, so the map holds only real
+        // decisions and `accountForMethod` refuses the rest.
+        if (!code) continue
+        if (!liveCodes.has(code)) {
+          throw new ConflictError(
+            `That account is no longer available for ${method}. Choose another one.`,
+          )
+        }
+        methodDestinations[method] = code
+      }
 
       await prisma.restaurant.update({
         where: { id: user.restaurantId },
         data: {
           paymentConfig: {
             ...existing,
-            destinations: [...data.destinations, ...survivors],
             methodDestinations,
           } as unknown as Prisma.InputJsonValue,
         },
@@ -259,11 +265,8 @@ export async function updatePaymentDestinations(
         action: AUDIT_ACTIONS.SETTINGS_UPDATED,
         entity: 'Restaurant',
         entityId: user.restaurantId,
-        before: {
-          destinations: existing.destinations ?? [],
-          methodDestinations: existing.methodDestinations ?? {},
-        },
-        after: { destinations: data.destinations, methodDestinations },
+        before: { methodDestinations: existing.methodDestinations ?? {} },
+        after: { methodDestinations },
       })
 
       revalidatePath('/dashboard/settings')
@@ -656,6 +659,19 @@ export interface SmsTestOutcome {
   segments: number
   encoding: string
   providerMessageId: string | null
+  /**
+   * Exactly what the gateway wrote back, truncated.
+   *
+   * Shown to whoever pressed the button, because for a gateway nobody here has
+   * seen the reply is the only way to learn what "success" looks like on it.
+   * Guessing the success rule is how a delivery log ends up reporting failures
+   * as sent; one test send settles it from evidence instead.
+   *
+   * Safe to show: it is the gateway's own words, never our credentials, and it
+   * only reaches the SETTINGS_MANAGE holder who configured the endpoint.
+   */
+  rawResponse: string | null
+  httpStatus: number | null
   error?: string
   errorCode?: string
 }
@@ -694,7 +710,13 @@ export async function sendTestSms(input: unknown): Promise<ActionResult<SmsTestO
       const row = result.messageId
         ? await prisma.smsMessage.findUnique({
             where: { id: result.messageId },
-            select: { toE164: true, segments: true, encoding: true, providerMessageId: true },
+            select: {
+              toE164: true,
+              segments: true,
+              encoding: true,
+              providerMessageId: true,
+              rawResponse: true,
+            },
           })
         : null
 
@@ -730,6 +752,8 @@ export async function sendTestSms(input: unknown): Promise<ActionResult<SmsTestO
         segments: row?.segments ?? 1,
         encoding: row?.encoding ?? 'GSM7',
         providerMessageId: row?.providerMessageId ?? null,
+        rawResponse: row?.rawResponse ?? null,
+        httpStatus: null,
         error: result.error,
         errorCode: result.errorCode,
       }

@@ -30,6 +30,13 @@ import { accountForMethod, accountName, type AccountCode } from './accounts'
  *     the cash book therefore shows is TRADING cash: takings in, payouts
  *     out, banked out, and counted differences.
  *   • Transfers and production — inventory moving inside the business.
+ *   • `PaymentAccountEntry` — deposits into, and transfers between, the
+ *     owner's internal accounts (bank.md). Those accounts are a private record
+ *     of where money is considered to sit; this journal already books the same
+ *     money into 1000/1050 from the PAYMENT that earned it, so projecting the
+ *     account movement as well would count it twice. The two figures are also
+ *     not comparable: an internal account opens at zero and only counts what
+ *     has happened since, while 1000/1050 replay the whole history.
  *   • SALE / WASTAGE stock movements as VALUES — J4 and J10 carry those,
  *     priced by the recipe cost pinned at sale, which is the number the
  *     profit report uses.

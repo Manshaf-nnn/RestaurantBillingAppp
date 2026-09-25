@@ -23,6 +23,14 @@ export interface StationTicketItem {
   orderId: string
   orderNumber: string
   tableNumber: string | null
+  /**
+   * Where a delivery is going, with the rider's note folded in.
+   *
+   * The kitchen packs the bag and the rider carries it; an order with no table
+   * and no destination on the ticket is one somebody has to go and ask about.
+   * Null for anything eaten in.
+   */
+  deliveryLocationName: string | null
   /** Where the order came from, for a takeaway with no table. */
   orderType: string
   name: string
@@ -76,6 +84,7 @@ export async function getStationQueue(params: {
           orderNumber: true,
           tableNumber: true,
           tableId: true,
+          deliveryLocationName: true,
           type: true,
           priority: true,
           placedAt: true,
@@ -115,6 +124,7 @@ export async function getStationQueue(params: {
       orderId: item.orderId,
       orderNumber: item.order.orderNumber,
       tableNumber: item.order.tableNumber,
+      deliveryLocationName: item.order.deliveryLocationName,
       orderType: item.order.type as string,
       name: item.name,
       quantity: item.quantity,

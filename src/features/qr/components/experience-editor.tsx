@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
+import { Field } from '@/components/ui/label'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
@@ -66,6 +67,9 @@ export interface EditorExperience {
   showSearch: boolean
   showPrices: boolean
   showOffers: boolean
+  askLocation: boolean
+  requireLocation: boolean
+  offerNote: string | null
   showLoyalty: boolean
   fields: EditorField[]
 }
@@ -120,6 +124,9 @@ export function ExperienceEditor({
   const [showSearch, setShowSearch] = React.useState(experience.showSearch)
   const [showPrices, setShowPrices] = React.useState(experience.showPrices)
   const [showOffers, setShowOffers] = React.useState(experience.showOffers)
+  const [offerNote, setOfferNote] = React.useState(experience.offerNote ?? '')
+  const [askLocation, setAskLocation] = React.useState(experience.askLocation)
+  const [requireLocation, setRequireLocation] = React.useState(experience.requireLocation)
   const [showLoyalty, setShowLoyalty] = React.useState(experience.showLoyalty)
   const [fields, setFields] = React.useState<EditorField[]>(() =>
     experience.fields.length > 0
@@ -176,6 +183,9 @@ export function ExperienceEditor({
         showSearch,
         showPrices,
         showOffers,
+        offerNote,
+        askLocation,
+        requireLocation,
         showLoyalty,
         fields: fields
           .filter((field) => field.label.trim())
@@ -289,6 +299,37 @@ export function ExperienceEditor({
                   : 'Off — guests go straight to the menu and their orders come through as takeaway, filed against this location.'
               }
             />
+          </div>
+        ) : null}
+
+        {/*
+          Where it goes, for a code with no table.
+          
+          Only offered once "ask for a table number" is OFF, because the two
+          answer the same question: a guest sitting at table 6 does not need to
+          tell the kitchen which building to walk to. Offering both would let an
+          owner build a code that asks a seated guest for a delivery address.
+        */}
+        {type === 'ORDERING' && !askTable ? (
+          <div className="mt-3 space-y-3">
+            <Toggle
+              checked={askLocation}
+              onChange={setAskLocation}
+              title="Ask where to deliver"
+              hint="Guests pick from the places you have set up, so the rider reads the same words every time. Manage the list under Delivery locations."
+            />
+            {askLocation ? (
+              <Toggle
+                checked={requireLocation}
+                onChange={setRequireLocation}
+                title="A location is required"
+                hint={
+                  requireLocation
+                    ? 'On — the order cannot be placed without one. Right for delivery.'
+                    : 'Off — a guest may order without choosing, for a code that also does collection.'
+                }
+              />
+            ) : null}
           </div>
         ) : null}
       </SectionCard>
@@ -468,9 +509,31 @@ export function ExperienceEditor({
         <div className="grid gap-3 sm:grid-cols-2">
           <Toggle checked={showSearch} onChange={setShowSearch} title="Search the menu" hint="A search box above the dishes." />
           <Toggle checked={showPrices} onChange={setShowPrices} title="Show prices" hint="Turn off for a menu with no prices on it." />
-          <Toggle checked={showOffers} onChange={setShowOffers} title="Show offers" hint="Discounts this guest is eligible for." />
+          <Toggle checked={showOffers} onChange={setShowOffers} title="Show offers" hint="The live discount codes usable on this menu." />
           <Toggle checked={showLoyalty} onChange={setShowLoyalty} title="Show loyalty points" hint="Only if loyalty is switched on for the restaurant." />
         </div>
+
+        {/*
+          The live coupons are listed automatically; this is for what the
+          discount engine cannot express — "students get 5% on Mondays, show
+          your ID". Only offered when the panel is on, because a note nobody
+          can see is a setting that lies about having been saved.
+        */}
+        {showOffers ? (
+          <div className="mt-3">
+            <Field
+              label="Note under the offers"
+              hint="Optional. Anything the discount codes above cannot say by themselves."
+            >
+              <Textarea
+                value={offerNote}
+                onChange={(event) => setOfferNote(event.target.value.slice(0, 600))}
+                rows={3}
+                placeholder={'Students get 5% off on Mondays.\nShow your campus ID at pickup.'}
+              />
+            </Field>
+          </div>
+        ) : null}
         {type === 'MENU_ONLY' ? (
           <p className="mt-3 text-xs text-muted-foreground">
             This is a menu-only code, so ordering, the basket and order tracking are off whatever is ticked here.

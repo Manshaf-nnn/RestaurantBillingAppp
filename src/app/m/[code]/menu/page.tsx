@@ -10,7 +10,8 @@ import { getGuestAppearance } from '@/features/guest/queries'
 import { askedForPreview, qrAccess } from '@/features/qr/access'
 import { qrPath } from '@/features/qr/guest-path'
 import { experienceMenu, resolveExperience } from '@/features/qr/queries'
-import { localeForCurrency } from '@/lib/money'
+import { offersFor } from '@/features/qr/offers'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -70,10 +71,30 @@ export default async function QrMenuPage({
       ? { orderId: addTo.id, orderNumber: addTo.orderNumber }
       : null
 
-  const [menu, orderable, restaurantAppearance] = await Promise.all([
+  const guestLocale =
+    experience.restaurant.locale === 'en'
+      ? localeForCurrency(experience.restaurant.currency)
+      : experience.restaurant.locale
+
+  const [menu, orderable, restaurantAppearance, offers] = await Promise.all([
     experienceMenu(experience, experience.restaurant.timezone),
     orderableBranches(experience.restaurantId),
     getGuestAppearance(experience.restaurantId),
+    /*
+     * The real coupons this code can use, plus whatever the owner wrote.
+     *
+     * `showOffers` has been stored on the experience and read by nothing since
+     * QR codes were added — this is the panel it was always meant to gate.
+     */
+    offersFor({
+      restaurantId: experience.restaurantId,
+      branchId: experience.branchId,
+      experienceId: experience.id,
+      showOffers: experience.showOffers,
+      offerNote: experience.offerNote,
+      money: (minor) =>
+        formatMoney(minor, experience.restaurant.currency, guestLocale),
+    }),
   ])
   // The restaurant's setting, narrowed by this code's own switches.
   const appearance = narrowAppearance(restaurantAppearance, experience)
@@ -85,11 +106,7 @@ export default async function QrMenuPage({
         restaurantName={experience.restaurant.name}
         logoUrl={experience.restaurant.logoUrl}
         currency={experience.restaurant.currency}
-        locale={
-          experience.restaurant.locale === 'en'
-            ? localeForCurrency(experience.restaurant.currency)
-            : experience.restaurant.locale
-        }
+        locale={guestLocale}
         taxLabel={experience.restaurant.taxLabel}
         slug={experience.restaurant.slug}
         basePath={qrPath(experience.publicId)}
@@ -114,6 +131,7 @@ export default async function QrMenuPage({
         /* A code with no table has nobody to call — the button needs one. */
         showCallStaff={appearance.menuShowCallStaff && experience.askTable}
         addingTo={addingTo}
+        offers={offers}
         branchName={orderable.length > 1 ? branch.name : null}
       />
     </BrandTheme>

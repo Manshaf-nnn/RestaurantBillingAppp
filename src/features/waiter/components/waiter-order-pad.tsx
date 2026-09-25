@@ -15,6 +15,7 @@ import { createStaffOrder } from '@/features/orders/actions'
 import type { PublicMenu, PublicMenuItem } from '@/features/menu/queries'
 import { MenuPicker, StepButton } from '@/features/cashier/components/menu-picker'
 import { OptionDialog } from '@/features/cashier/components/option-dialog'
+import { splitLine } from '@/features/orders/split-line'
 import { cn } from '@/lib/utils'
 
 /**
@@ -70,6 +71,43 @@ export interface PadTable {
   openOrders: Array<{ id: string; orderNumber: string }>
   /** The party already seated, when there is a sitting. */
   seatedGuests: number | null
+  /**
+   * True once the guests have asked for the bill.
+   *
+   * Adding a dish to a bill somebody is already paying is how a guest gets
+   * charged for something they did not order, or walks out before it arrives.
+   */
+  billRequested: boolean
+}
+
+/**
+ * Whether a waiter may start an order here, and if not, why not.
+ *
+ * ── Two blocks, and the one deliberate non-block ────────────────────────────
+ *
+ * RESERVED is held for somebody else. Seating a walk-in there loses the
+ * booking, and the QR menu has refused to order at a reserved table since
+ * reservations were added — this makes the waiter's pad agree with the guest's
+ * phone instead of quietly allowing what the guest is refused.
+ *
+ * A bill being settled is blocked because the total has been quoted. A dish
+ * added after that either misses the bill the guest is paying or reopens a
+ * total they have already been shown.
+ *
+ * What is NOT blocked is an ordinary second round. Drinks, then starters, then
+ * mains are three orders on one sitting, and that is how the cashier's bill
+ * list is built — "what does table 4 owe tonight" is a question about the
+ * sitting, not about whichever order is newest. Blocking it would mean every
+ * course after the first had to be dictated to the till.
+ */
+export function orderBlock(table: PadTable): string | null {
+  if (table.status === 'RESERVED') {
+    return 'This table is held for a booking. Seat the party from the floor plan first.'
+  }
+  if (table.billRequested) {
+    return 'The bill for this table is being settled. Start a new sitting once it is paid.'
+  }
+  return null
 }
 
 export function WaiterOrderPad({
@@ -94,6 +132,11 @@ export function WaiterOrderPad({
   const [notes, setNotes] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [choosing, setChoosing] = React.useState<PublicMenuItem | null>(null)
+  /*
+   * A line being given its own requirement — "one of these two, less spicy".
+   * Distinct from `choosing`, which is a dish being added for the first time.
+   */
+  const [splitting, setSplitting] = React.useState<Line | null>(null)
 
   /*
    * One key per cart, so a double tap places one order.
@@ -110,6 +153,7 @@ export function WaiterOrderPad({
   const money = (minor: number) => formatMoney(minor, currency, locale)
   const table = tables.find((t) => t.id === tableId) ?? null
   const hasOpenOrder = (table?.openOrders.length ?? 0) > 0
+  const blocked = table ? orderBlock(table) : null
 
   /* ── The cart ───────────────────────────────────────────────────────────── */
 
@@ -143,6 +187,45 @@ export function WaiterOrderPad({
     })
   }
 
+  /**
+   * One of these is different (see `splitLine`).
+   *
+   * The dialog opens on what the line already is, so the waiter edits rather
+   * than rebuilds it, and the units they ask for move onto a line of their own
+   * carrying the new options and note.
+   */
+  const applySplit = (source: Line, optionIds: string[], quantity: number, itemNotes: string) => {
+    const chosen = source.item.groups.flatMap((group) =>
+      group.options
+        .filter((option) => optionIds.includes(option.id))
+        .map((option) => ({
+          id: option.id,
+          name: option.name,
+          groupName: group.name,
+          priceDelta: option.priceDelta,
+        })),
+    )
+    const nextKey = lineKey(source.item.id, optionIds, itemNotes)
+    setLines((current) =>
+      splitLine(current, {
+        sourceKey: source.key,
+        quantity,
+        nextKey,
+        create: (moved) => ({
+          key: nextKey,
+          item: source.item,
+          quantity: moved,
+          options: chosen,
+          notes: itemNotes,
+        }),
+        merge: (existing, moved) => ({
+          ...existing,
+          quantity: Math.min(50, existing.quantity + moved),
+        }),
+      }),
+    )
+  }
+
   const setQty = (key: string, quantity: number) => {
     setLines((current) =>
       quantity <= 0
@@ -170,6 +253,19 @@ export function WaiterOrderPad({
       toast.error('The order is empty')
       return
     }
+    /*
+     * Checked again here, not only on the button's `disabled`.
+     *
+     * The table list is a snapshot: a host can reserve the table, or the
+     * guests can ask for the bill, in the seconds between this screen
+     * rendering and the waiter tapping send. `disabled` cannot see that and
+     * this can — and the server is the real fence, which `createStaffOrder`
+     * enforces for the same two reasons.
+     */
+    if (blocked) {
+      toast.error(blocked)
+      return
+    }
 
     setBusy(true)
     const result = await callAction(() =>
@@ -184,6 +280,12 @@ export function WaiterOrderPad({
         type: 'DINE_IN',
         branchId: branchId ?? '',
         tableId,
+        /*
+         * The waiter's own rule, enforced on the server too. The till does not
+         * send this — a cashier overriding a booking or adding to a bill being
+         * settled is ordinary work. See `enforceTableReady` on the schema.
+         */
+        enforceTableReady: true,
         /*
          * Only on a new sitting. `placeOrder` reads `guestCount` when it OPENS
          * a table session and silently ignores it on a later round, so
@@ -221,10 +323,10 @@ export function WaiterOrderPad({
   /* ── Screen ─────────────────────────────────────────────────────────────── */
 
   return (
-    <div className="grid gap-4 p-4 lg:grid-cols-[1fr_22rem]">
+    <div className="grid gap-3 p-3 sm:p-4 lg:grid-cols-[1fr_21rem]">
       <div className="space-y-4">
         {/* ── Which table ─────────────────────────────────────────────── */}
-        <section className="rounded-xl border bg-card p-4 shadow-soft">
+        <section className="rounded-xl border bg-card p-3 shadow-soft sm:p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">Which table?</h2>
             <Button asChild variant="ghost" size="sm">
@@ -239,35 +341,61 @@ export function WaiterOrderPad({
               There are no tables on this floor yet. A manager adds them from the Tables screen.
             </p>
           ) : (
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6">
+            <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-6 xl:grid-cols-8">
               {tables.map((t) => {
                 const busyTable = t.openOrders.length > 0
+                /*
+                 * A blocked table is shown, dimmed and unpickable, rather than
+                 * hidden. A waiter looking for table 7 must find table 7 and
+                 * be told why not — a gap in the grid reads as "the system has
+                 * lost my table" and ends in a call to the manager.
+                 */
+                const stop = orderBlock(t)
                 return (
                   <button
                     key={t.id}
                     type="button"
+                    disabled={Boolean(stop)}
+                    title={stop ?? undefined}
                     onClick={() => setTableId(t.id)}
                     className={cn(
-                      'rounded-xl border p-2 text-center transition active:scale-95',
-                      tableId === t.id
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-border bg-background hover:bg-muted',
+                      'min-h-14 rounded-lg border p-1.5 text-center transition active:scale-95',
+                      stop
+                        ? 'cursor-not-allowed border-dashed border-border bg-muted/40 opacity-60'
+                        : tableId === t.id
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-background hover:bg-muted',
                     )}
                   >
-                    <span className="block text-lg font-bold leading-tight">{t.number}</span>
+                    <span className="block text-base font-bold leading-tight">{t.number}</span>
                     <span
                       className={cn(
-                        'block text-[10px]',
-                        tableId === t.id ? 'text-primary-foreground/80' : 'text-muted-foreground',
+                        'block text-[10px] leading-tight',
+                        tableId === t.id && !stop
+                          ? 'text-primary-foreground/80'
+                          : 'text-muted-foreground',
                       )}
                     >
-                      {busyTable ? 'Seated' : `${t.capacity} seats`}
+                      {t.status === 'RESERVED'
+                        ? 'Reserved'
+                        : t.billRequested
+                          ? 'Billing'
+                          : busyTable
+                            ? 'Seated'
+                            : `${t.capacity} seats`}
                     </span>
                   </button>
                 )
               })}
             </div>
           )}
+
+          {/* Why this table cannot be ordered on, in words, once it is picked. */}
+          {blocked ? (
+            <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
+              {blocked}
+            </p>
+          ) : null}
 
           {/*
             Said out loud, because the alternative is a waiter thinking they
@@ -310,8 +438,19 @@ export function WaiterOrderPad({
         </section>
 
         {/* ── The menu ────────────────────────────────────────────────── */}
-        <section className="rounded-xl border bg-card p-4 shadow-soft">
-          <MenuPicker menu={menu} quantityOf={quantityOf} onAdd={add} money={money} />
+        {/*
+          Rows, not photographs, and only once a table is chosen. A waiter
+          knows the dishes; what they need is many of them on one phone screen
+          and a target they can hit while holding a tray. See `MenuPicker`.
+        */}
+        <section className="rounded-xl border bg-card p-3 shadow-soft sm:p-4">
+          <MenuPicker
+            menu={menu}
+            quantityOf={quantityOf}
+            onAdd={add}
+            money={money}
+            layout="list"
+          />
         </section>
       </div>
 
@@ -346,7 +485,18 @@ export function WaiterOrderPad({
             <ul className="max-h-[50vh] divide-y overflow-y-auto">
               {lines.map((line) => (
                 <li key={line.key} className="flex items-start gap-2 px-4 py-3">
-                  <div className="min-w-0 flex-1">
+                  {/*
+                    The line itself opens its own requirements. A guest saying
+                    "one of those without onions" is the ordinary case, and the
+                    waiter should be able to say so on the line in front of
+                    them rather than deleting it and starting again.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => setSplitting(line)}
+                    className="min-w-0 flex-1 text-left"
+                    aria-label={`Change or split ${line.item.name}`}
+                  >
                     <p className="truncate text-sm font-medium">{line.item.name}</p>
                     {line.options.length > 0 ? (
                       <p className="truncate text-xs text-muted-foreground">
@@ -358,8 +508,9 @@ export function WaiterOrderPad({
                     ) : null}
                     <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                       {money(unitOf(line))} each
+                      {line.quantity > 1 ? ' · tap to split' : ' · tap to change'}
                     </p>
-                  </div>
+                  </button>
                   <div className="flex shrink-0 items-center gap-1.5">
                     <StepButton
                       label={`One less ${line.item.name}`}
@@ -406,7 +557,7 @@ export function WaiterOrderPad({
               className="w-full"
               size="lg"
               loading={busy}
-              disabled={busy || lines.length === 0 || !tableId}
+              disabled={busy || lines.length === 0 || !tableId || Boolean(blocked)}
               onClick={send}
             >
               <Send /> Send to kitchen
@@ -417,6 +568,31 @@ export function WaiterOrderPad({
           </div>
         </div>
       </aside>
+
+      {splitting ? (
+        <OptionDialog
+          item={splitting.item}
+          currency={currency}
+          locale={locale}
+          money={money}
+          title={
+            splitting.quantity > 1
+              ? `One of these ${splitting.item.name}`
+              : splitting.item.name
+          }
+          confirmLabel={splitting.quantity > 1 ? 'Split off' : 'Update'}
+          initialOptionIds={splitting.options.map((option) => option.id)}
+          initialNotes={splitting.notes}
+          // One unit by default when there are several: the guest said one of
+          // them is different, not all of them.
+          initialQuantity={splitting.quantity > 1 ? 1 : splitting.quantity}
+          onCancel={() => setSplitting(null)}
+          onConfirm={(optionIds, quantity, itemNotes) => {
+            applySplit(splitting, optionIds, quantity, itemNotes)
+            setSplitting(null)
+          }}
+        />
+      ) : null}
 
       {choosing ? (
         <OptionDialog

@@ -29,6 +29,7 @@ export async function fetchFoodForEdit(foodId: string) {
       id: food.id,
       categoryId: food.categoryId,
       name: food.name,
+      code: food.code,
       description: food.description ?? '',
       imageUrl: food.imageUrl ?? '',
       price: toMajor(food.price),

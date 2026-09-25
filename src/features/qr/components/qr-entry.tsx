@@ -194,6 +194,15 @@ export function QrEntry({
         } else if (answers.name) {
           setCustomer({ name: answers.name })
         }
+        /*
+         * Which category they said they are, carried on the cart.
+         *
+         * The checkout is two navigations away and needs it to narrow the
+         * delivery locations — "Boys Hostel" for a Campus Student, not for the
+         * public. The CANONICAL one the server settled, not the raw choice: a
+         * returning guest already filed under a category keeps it.
+         */
+        setCustomer({ categoryId: entered.data.categoryId ?? '' })
       }
 
       router.push(preview ? `${menuHref}?preview=1` : menuHref)

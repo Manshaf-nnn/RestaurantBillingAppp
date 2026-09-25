@@ -8,8 +8,9 @@ import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { MenuBrowser } from '@/features/orders/components/menu-browser'
 import { getGuestAppearance } from '@/features/guest/queries'
 import { guestPath } from '@/features/orders/guest-path'
+import { offersFor } from '@/features/qr/offers'
 import { resolvePublicTenant } from '@/server/db/tenant'
-import { localeForCurrency } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,12 +60,32 @@ export default async function BranchMenuPage({
       ? { orderId: addTo.id, orderNumber: addTo.orderNumber }
       : null
 
+  const guestLocale =
+    restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
+
   const [menu, orderable, appearance] = await Promise.all([
     getPublicMenu(restaurant.id, restaurant.timezone, branch.id),
     orderableBranches(restaurant.id),
     // The same setting the QR menus read (ar.md §13).
     getGuestAppearance(restaurant.id),
   ])
+
+  /*
+   * The same offers panel a QR code shows, for the ordinary table flow.
+   *
+   * There is no `QrExperience` here, so the switch and the note come from the
+   * restaurant's guest settings instead. `experienceId: null` narrows the
+   * coupons to the ones not tied to a printed code — an offer meant for the
+   * Student leaflet must not be advertised on every table.
+   */
+  const offers = await offersFor({
+    restaurantId: restaurant.id,
+    branchId: branch.id,
+    experienceId: null,
+    showOffers: appearance.menuShowOffers,
+    offerNote: appearance.menuOfferNote,
+    money: (minor) => formatMoney(minor, restaurant.currency, guestLocale),
+  })
 
   return (
     <BrandTheme logoUrl={restaurant.logoUrl} coverUrl={restaurant.coverUrl}>
@@ -73,7 +94,7 @@ export default async function BranchMenuPage({
         restaurantName={restaurant.name}
         logoUrl={restaurant.logoUrl}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+        locale={guestLocale}
         taxLabel={restaurant.taxLabel}
         slug={slug}
         basePath={guestPath(slug, branch.code)}
@@ -85,6 +106,7 @@ export default async function BranchMenuPage({
         showDietFilter={appearance.menuShowDietFilter}
         showCallStaff={appearance.menuShowCallStaff}
         addingTo={addingTo}
+        offers={offers}
         // Named on the menu too — it never was, so a guest browsing the wrong
         // branch's prices had nothing on screen to tell them.
         branchName={orderable.length > 1 ? branch.name : null}

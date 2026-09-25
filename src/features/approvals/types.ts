@@ -35,6 +35,15 @@ export interface ApprovalDetailPayload {
     status: string
     fromBranchName: string
     toBranchName: string
-    lines: Array<{ name: string; unit: string; quantity: number }>
+    lines: Array<{
+      /** Needed to send an adjusted quantity back for this exact line. */
+      id: string
+      itemId: string
+      name: string
+      unit: string
+      quantity: number
+      /** Free stock at the source right now, in base units. */
+      available: number
+    }>
   } | null
 }

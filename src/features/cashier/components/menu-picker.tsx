@@ -32,7 +32,19 @@ import { priceRange } from '@/features/menu/variant-pricing'
  * customer fields, not the submit — a full page and a modal want different
  * framing around the same picker, and folding their layouts in here would make
  * it serve neither well.
+ *
+ * ── Two layouts, because two people are using it ────────────────────────────
+ *
+ * `grid` is photographs, for a cashier who may not know every dish and is
+ * aiming at a card across a counter. `list` is dense rows, for a WAITER on a
+ * phone: they already know the menu, they are standing at a table, and what
+ * they need is many dishes on one screen and a thumb-sized target — not four
+ * large photographs and a scroll. The photo grid on a 390px phone showed two
+ * dishes at a time, which is a scroll for every course.
  */
+
+/** How the dishes are laid out. See the note above. */
+export type MenuPickerLayout = 'grid' | 'list'
 
 export function MenuPicker({
   menu,
@@ -41,12 +53,14 @@ export function MenuPicker({
   money,
   /** Tighter grid and a scroll cap, for use inside a dialog. */
   compact = false,
+  layout = 'grid',
 }: {
   menu: PublicMenu
   quantityOf: (foodId: string) => number
   onAdd: (item: PublicMenuItem) => void
   money: (minor: number) => string
   compact?: boolean
+  layout?: MenuPickerLayout
 }) {
   const [categoryId, setCategoryId] = React.useState<string | null>(null)
   const [search, setSearch] = React.useState('')
@@ -57,12 +71,37 @@ export function MenuPicker({
       if (!item.isAvailable) return false
       if (categoryId && item.categoryId !== categoryId) return false
       if (!term) return true
+      /*
+       * Name, code, then description — in that order of intent.
+       *
+       * The code match is deliberately a PREFIX, not a substring. Codes are
+       * short and numeric-ish, so `includes` on "12" would surface B12, C120
+       * and every dish whose description mentions 12 — which is the opposite
+       * of what typing a code is for. Somebody entering a code wants that one
+       * dish, and wants it first.
+       */
+      const code = item.code?.toLowerCase()
       return (
         item.name.toLowerCase().includes(term) ||
+        (code ? code.startsWith(term) : false) ||
         (item.description?.toLowerCase().includes(term) ?? false)
       )
     })
   }, [menu.items, categoryId, search])
+
+  /*
+   * An exact code match jumps to the front. A waiter who types the number off
+   * the printed menu should not then have to find it among the dishes whose
+   * names happen to contain those characters.
+   */
+  const ordered = React.useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return visible
+    const exact = visible.filter((item) => item.code?.toLowerCase() === term)
+    if (exact.length === 0) return visible
+    const rest = visible.filter((item) => item.code?.toLowerCase() !== term)
+    return [...exact, ...rest]
+  }, [visible, search])
 
   return (
     <div className="space-y-3">
@@ -70,7 +109,7 @@ export function MenuPicker({
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           className="pl-9"
-          placeholder="Search the menu"
+          placeholder="Search by name or code"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -91,9 +130,26 @@ export function MenuPicker({
         ))}
       </div>
 
-      {visible.length === 0 ? (
+      {ordered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
           Nothing matches that.
+        </div>
+      ) : layout === 'list' ? (
+        /*
+         * One column on a phone, two on a tablet, three on a wide screen. The
+         * rows are short enough that a phone shows eight or nine dishes at
+         * once where the photo grid showed two.
+         */
+        <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+          {ordered.map((item) => (
+            <FoodRow
+              key={item.id}
+              item={item}
+              quantity={quantityOf(item.id)}
+              money={money}
+              onAdd={() => onAdd(item)}
+            />
+          ))}
         </div>
       ) : (
         <div
@@ -103,7 +159,7 @@ export function MenuPicker({
               : 'grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
           }
         >
-          {visible.map((item) => (
+          {ordered.map((item) => (
             <FoodCard
               key={item.id}
               item={item}
@@ -115,6 +171,60 @@ export function MenuPicker({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * One dish as a row — the waiter's layout.
+ *
+ * No photograph. A waiter knows what the food looks like; what they need is
+ * the name, the code they may have been told, the price, and a target big
+ * enough to hit while holding a tray. The whole row is the button, for the
+ * same reason the whole card is in the grid.
+ *
+ * `min-h-11` keeps every row at least 44px tall, which is the smallest thing
+ * a thumb reliably hits — the reason this is not simply a table of text.
+ */
+function FoodRow({
+  item,
+  quantity,
+  money,
+  onAdd,
+}: {
+  item: PublicMenuItem
+  quantity: number
+  money: (minor: number) => string
+  onAdd: () => void
+}) {
+  const range = priceRange(item.price, item.groups)
+
+  return (
+    <button
+      type="button"
+      onClick={onAdd}
+      aria-label={`Add ${item.name}, ${money(item.price)}`}
+      className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-2 text-left transition hover:border-primary/50 hover:bg-muted active:scale-[0.99]"
+    >
+      {item.code ? (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] font-semibold text-muted-foreground">
+          {item.code}
+        </span>
+      ) : null}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium leading-tight">{item.name}</span>
+        {range.sizeCount > 0 ? (
+          <span className="block text-[11px] text-muted-foreground">{range.sizeCount} sizes</span>
+        ) : null}
+      </span>
+      <span className="shrink-0 text-sm font-semibold tabular-nums text-primary">
+        {range.sizeCount > 0 ? `from ${money(range.from)}` : money(item.price)}
+      </span>
+      {quantity > 0 ? (
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+          {quantity}
+        </span>
+      ) : null}
+    </button>
   )
 }
 
@@ -167,6 +277,11 @@ function FoodCard({
         )}
       </div>
       <div className="p-2.5">
+        {item.code ? (
+          <p className="mb-0.5 font-mono text-[11px] font-semibold text-muted-foreground">
+            {item.code}
+          </p>
+        ) : null}
         <p className="line-clamp-2 text-sm font-medium leading-snug">{item.name}</p>
         {/*
           A cashier needs the same warning a guest does: this dish is going to

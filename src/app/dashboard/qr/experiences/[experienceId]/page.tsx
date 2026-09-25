@@ -98,6 +98,9 @@ export default async function QrExperiencePage({
           showSearch: experience.showSearch,
           showPrices: experience.showPrices,
           showOffers: experience.showOffers,
+          askLocation: experience.askLocation,
+          requireLocation: experience.requireLocation,
+          offerNote: experience.offerNote,
           showLoyalty: experience.showLoyalty,
           fields: experience.fields.map((field) => ({
             key: field.key,

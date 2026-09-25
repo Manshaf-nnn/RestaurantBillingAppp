@@ -45,7 +45,18 @@ const branchIdField = z.string().trim().max(40).optional().nullable()
 export const createRoleSchema = z.object({
   name: nameField,
   description: z.string().trim().max(160).optional().or(z.literal('')),
-  preset: z.enum(ROLE_PRESETS),
+  /*
+   * Blank means "start from scratch": no permissions seeded, and the LANDING
+   * role resolved on the server to the most limited preset this admin can
+   * assign.
+   *
+   * It cannot simply be null. The preset is not cosmetic — it decides where the
+   * person lands after signing in, what the edge middleware lets through, and
+   * whether `visibleBranchIds` confines them — so every role needs one. What an
+   * owner does not need is to be forced to declare which built-in role their
+   * custom one resembles before they have decided what it does.
+   */
+  preset: z.enum(ROLE_PRESETS).or(z.literal('')).optional(),
   branchId: branchIdField,
   permissions: permissionsField,
 })

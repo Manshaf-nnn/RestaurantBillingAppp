@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { ConflictError, ForbiddenError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, assignableRoles, canActOnRole } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, ROLE_PERMISSIONS, assignableRoles, canActOnRole } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission, assertRecordBranch, assertBranchAccess } from '@/server/auth/guard'
@@ -53,18 +53,46 @@ function refresh() {
  * need the same four, and three copies is how one of them ends up missing a
  * check that the other two have.
  */
+/**
+ * "Start from scratch" still has to land somewhere.
+ *
+ * The preset decides the landing page, what the edge middleware lets through
+ * and whether the member is confined to one site — so a role without one could
+ * not sign in. When the owner declines to base their role on anything, the
+ * safest preset is the one that grants the least, and it is COMPUTED rather
+ * than hardcoded: a new built-in role, or a change to an existing one, must not
+ * silently make the fallback more powerful than it was.
+ *
+ * Narrowed to what this admin may assign, so the fallback can never hand out a
+ * landing page they could not have chosen themselves.
+ */
+function leastPrivilegedPreset(admin: Awaited<ReturnType<typeof requirePermission>>): UserRole {
+  const options = assignableRoles(admin.role)
+  if (options.length === 0) {
+    throw new ForbiddenError('You cannot create roles')
+  }
+  return [...options].sort(
+    (a, b) => (ROLE_PERMISSIONS[a]?.length ?? 0) - (ROLE_PERMISSIONS[b]?.length ?? 0),
+  )[0]
+}
+
 async function vet(
   admin: Awaited<ReturnType<typeof requirePermission>>,
-  input: { preset: UserRole; branchId?: string | null; permissions: string[] },
+  input: { preset?: UserRole | '' | null; branchId?: string | null; permissions: string[] },
 ) {
-  if (!assignableRoles(admin.role).includes(input.preset)) {
+  const preset = input.preset || leastPrivilegedPreset(admin)
+
+  if (!assignableRoles(admin.role).includes(preset)) {
     throw new ForbiddenError(
-      `You cannot create a role based on ${ROLE_LABELS[input.preset]}`,
+      `You cannot create a role based on ${ROLE_LABELS[preset]}`,
     )
   }
-  assertPresetScopeAllowed(admin, input.preset)
+  assertPresetScopeAllowed(admin, preset)
   assertNoEscalation(admin, input.permissions)
-  return resolveRoleBranch(admin, input.branchId, input.preset)
+  const branchId = await resolveRoleBranch(admin, input.branchId, preset)
+  // The caller writes the row, so it needs the preset that was settled here —
+  // not the blank it sent.
+  return { branchId, preset }
 }
 
 /** A name is unique per restaurant, and the error should say so plainly. */
@@ -87,7 +115,7 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
     input,
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-      const branchId = await vet(admin, data)
+      const { branchId, preset } = await vet(admin, data)
       await assertNameFree(admin.restaurantId, data.name)
 
       const role = await prisma.staffRole.create({
@@ -95,7 +123,7 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
           restaurantId: admin.restaurantId,
           name: data.name,
           description: data.description || null,
-          preset: data.preset,
+          preset,
           branchId,
           permissions: data.permissions,
           createdById: admin.id,
@@ -155,7 +183,7 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
        */
       assertNoEscalation(admin, [...existing.permissions, ...data.permissions])
 
-      const branchId = await vet(admin, data)
+      const { branchId, preset } = await vet(admin, data)
       await assertNameFree(admin.restaurantId, data.name, data.id)
 
       const role = await prisma.staffRole.update({
@@ -163,7 +191,7 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
         data: {
           name: data.name,
           description: data.description || null,
-          preset: data.preset,
+          preset,
           branchId,
           permissions: data.permissions,
           isActive: data.isActive,
@@ -248,7 +276,7 @@ export async function duplicateRole(input: unknown): Promise<ActionResult<{ id: 
           name: data.name,
           description,
           preset,
-          branchId: resolved,
+          branchId: resolved.branchId,
           permissions,
           createdById: admin.id,
         },
@@ -256,7 +284,7 @@ export async function duplicateRole(input: unknown): Promise<ActionResult<{ id: 
 
       await audit({
         restaurantId: admin.restaurantId,
-        branchId: resolved,
+        branchId: resolved.branchId,
         userId: admin.id,
         actorName: admin.name,
         action: AUDIT_ACTIONS.ROLE_CREATED,

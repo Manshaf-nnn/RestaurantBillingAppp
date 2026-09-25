@@ -116,6 +116,17 @@ export const placeOrderSchema = z.object({
    * nothing rather than attributing an order across a tenant boundary.
    */
   qrCode: z.string().trim().max(32).optional().or(z.literal('')),
+  /*
+   * Where a delivery is going, chosen from the owner's own list.
+   *
+   * An id rather than typed text, because this system has no map: the owner
+   * writes the places food goes — "Boys Hostel", "Villa 2" — and the guest
+   * picks one, so the rider reads the same words every time instead of twenty
+   * spellings of the same building. Validated against the restaurant and the
+   * branch on the server; the NAME is snapshotted onto the order beside the
+   * id, so a renamed or retired location does not rewrite past deliveries.
+   */
+  deliveryLocationId: z.string().cuid().optional().or(z.literal('')),
 })
 export type PlaceOrderInput = z.infer<typeof placeOrderSchema>
 
@@ -152,6 +163,22 @@ export const staffOrderSchema = placeOrderSchema.extend({
   customerPhone: z.string().trim().max(20).optional().or(z.literal('')),
   /// Whose table it is, when a cashier rings up on a waiter's behalf.
   servedById: z.string().min(1).optional().or(z.literal('')),
+  /**
+   * Refuse this order if the table is held for a booking or its bill is being
+   * settled. Sent by the WAITER's pad; the till never sets it.
+   *
+   * The two screens genuinely differ. A waiter stands at the table and should
+   * not seat a party where a booking is held, nor add a dish to a bill the
+   * guests have already asked for — both end in an argument at the table. A
+   * cashier does exactly those things on purpose: overriding a reservation for
+   * a walk-in is a manager's call, and adding a forgotten dessert to a bill
+   * being settled is the till's ordinary work.
+   *
+   * Opt-in rather than opt-out so no existing caller changes behaviour by
+   * being left alone, and so the exemption is something a screen has to ask
+   * for rather than something it inherits.
+   */
+  enforceTableReady: z.coerce.boolean().default(false),
   /*
    * The counter this till is standing at.
    *

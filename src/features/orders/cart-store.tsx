@@ -56,7 +56,24 @@ interface CartState {
   lines: CartLine[]
   table: TableSession | null
   couponCode: string
-  customer: { name: string; phone: string; email: string }
+  customer: {
+    name: string
+    phone: string
+    email: string
+    /**
+     * The customer category the guest chose on the way in, when the QR code
+     * asked (ar.md §6).
+     *
+     * Kept on the cart rather than passed down from the page because the page
+     * is rendered before the guest picks — and because the checkout is two
+     * navigations later, by which time the only thing that still remembers is
+     * the cart itself.
+     *
+     * Used to narrow the delivery locations: "Boys Hostel" is offered to a
+     * Campus Student and not to the public, out of one list.
+     */
+    categoryId: string
+  }
   /**
    * "Add to order" mode (aO.md §3): the basket is NEW dishes joining the
    * order the guest already has, not a new order. Set from the tracker's
@@ -69,7 +86,7 @@ const EMPTY: CartState = {
   lines: [],
   table: null,
   couponCode: '',
-  customer: { name: '', phone: '', email: '' },
+  customer: { name: '', phone: '', email: '', categoryId: '' },
   addingTo: null,
 }
 

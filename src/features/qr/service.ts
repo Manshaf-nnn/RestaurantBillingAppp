@@ -45,6 +45,9 @@ export interface SaveExperienceInput {
   showSearch: boolean
   showPrices: boolean
   showOffers: boolean
+  askLocation?: boolean
+  requireLocation?: boolean
+  offerNote?: string | null
   showLoyalty: boolean
   fields: FieldInput[]
 }
@@ -131,6 +134,9 @@ export async function saveExperience(params: {
         showSearch: input.showSearch,
         showPrices: input.showPrices,
         showOffers: input.showOffers,
+        askLocation: input.askLocation ?? false,
+        requireLocation: input.requireLocation ?? true,
+        offerNote: input.offerNote?.trim() || null,
         showLoyalty: input.showLoyalty,
       },
     })

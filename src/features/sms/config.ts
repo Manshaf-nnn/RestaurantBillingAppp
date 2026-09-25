@@ -85,6 +85,21 @@ export function mergeCredentials(
   const hints = { ...existing.credentialHints }
   const changed: SmsCredentialField[] = []
 
+  /*
+   * A user name is not a password.
+   *
+   * Every slot is encrypted at rest regardless — they travel together to the
+   * gateway and there is no reason to treat the store differently. What DOES
+   * differ is what the owner may see afterwards: masking a User ID or an
+   * Account SID means nobody can ever check which account is configured
+   * without retyping it from the supplier's sheet. So a non-secret field keeps
+   * its full value in `credentialHints`, which is the field already understood
+   * to be safe for a browser.
+   */
+  const secretByField = new Map(
+    credentialFieldsFor(existing.provider).map((field) => [field.name, field.secret]),
+  )
+
   for (const [field, raw] of Object.entries(incoming) as [SmsCredentialField, string | undefined][]) {
     if (raw === undefined) continue
 
@@ -93,7 +108,7 @@ export function mergeCredentials(
     if (!value) continue
 
     credentials[field] = sealSecret(value, SMS_SECRET_NAMESPACE)
-    hints[field] = credentialHint(value)
+    hints[field] = secretByField.get(field) === false ? value : credentialHint(value)
     changed.push(field)
   }
 

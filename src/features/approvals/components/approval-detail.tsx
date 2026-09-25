@@ -47,7 +47,15 @@ export interface ApprovalDetailView {
     status: string
     fromBranchName: string
     toBranchName: string
-    lines: Array<{ name: string; unit: string; quantity: number }>
+    lines: Array<{
+      id: string
+      itemId: string
+      name: string
+      unit: string
+      quantity: number
+      /** Free stock at the source right now, in base units. */
+      available: number
+    }>
   } | null
 }
 
@@ -107,6 +115,17 @@ export function ApprovalDetail({
   if (!request) return null
 
   const money = (value: number) => formatMoney(value, currency, locale)
+  /*
+   * What the approver will actually allow, per line.
+   *
+   * Starts at what was asked for, so approving without touching anything
+   * behaves exactly as it did. Keyed by line id rather than index because the
+   * table is re-rendered from a refreshed request after every decision.
+   */
+  const [allow, setAllow] = React.useState<Record<string, string>>(() =>
+    Object.fromEntries((request.transfer?.lines ?? []).map((line) => [line.id, String(line.quantity)])),
+  )
+
   const pending = request.status === 'PENDING'
   const blocked = request.blockedReason !== null
 
@@ -117,7 +136,24 @@ export function ApprovalDetail({
     }
     setBusy(true)
     const result = await callAction(() =>
-      decideApprovalAction({ approvalId: request.id, approve, note: note.trim(), force }),
+      decideApprovalAction({
+        approvalId: request.id,
+        approve,
+        note: note.trim(),
+        force,
+        /*
+         * Only for a transfer, and only on an approval: a rejection sends
+         * nothing anywhere, and a quantity on any other kind of request is
+         * ignored by the action anyway.
+         */
+        approvedLines:
+          approve && request.transfer
+            ? request.transfer.lines.map((line) => ({
+                lineId: line.id,
+                quantity: Number(allow[line.id] ?? line.quantity),
+              }))
+            : undefined,
+      }),
     )
     setBusy(false)
     if (!result.ok) {
@@ -226,17 +262,70 @@ export function ApprovalDetail({
               {request.transfer.number} · {request.transfer.fromBranchName} → {request.transfer.toBranchName}
             </h3>
             <table className="w-full rounded-lg border text-sm">
+              <thead>
+                <tr className="text-xs uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3 py-1.5 text-left font-medium">Item</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Asked</th>
+                  <th className="px-3 py-1.5 text-right font-medium">In hand</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Approve</th>
+                </tr>
+              </thead>
               <tbody className="divide-y">
-                {request.transfer.lines.map((line, index) => (
-                  <tr key={`${line.name}-${index}`}>
-                    <td className="px-3 py-1.5">{line.name}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">
-                      {line.quantity} {line.unit.toLowerCase()}
-                    </td>
-                  </tr>
-                ))}
+                {request.transfer.lines.map((line) => {
+                  const wanted = Number(allow[line.id] ?? line.quantity)
+                  // Said plainly rather than blocked: the store may know stock
+                  // is arriving, and an approver who means it can still send.
+                  const short = wanted > line.available + 1e-6
+                  return (
+                    <tr key={line.id}>
+                      <td className="px-3 py-1.5">{line.name}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {line.quantity} {line.unit.toLowerCase()}
+                      </td>
+                      <td
+                        className={cn(
+                          'px-3 py-1.5 text-right tabular-nums',
+                          short ? 'font-semibold text-destructive' : 'text-muted-foreground',
+                        )}
+                      >
+                        {line.available}
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        {pending && !blocked ? (
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            max={line.quantity}
+                            step="any"
+                            value={allow[line.id] ?? String(line.quantity)}
+                            onChange={(event) =>
+                              setAllow((current) => ({ ...current, [line.id]: event.target.value }))
+                            }
+                            aria-label={`Quantity to approve for ${line.name}`}
+                            className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-sm tabular-nums"
+                          />
+                        ) : (
+                          <span className="tabular-nums">
+                            {line.quantity} {line.unit.toLowerCase()}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
+            {/*
+              Said once under the table rather than per row. The approver's
+              real question is "can we send this", and the answer is a
+              comparison they should be able to make at a glance.
+            */}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Approve less than was asked for where the shelf cannot cover it — the branch gets
+              what you allow, and the request keeps a record of what they asked for. Zero sends
+              none of that item.
+            </p>
           </section>
         ) : null}
 

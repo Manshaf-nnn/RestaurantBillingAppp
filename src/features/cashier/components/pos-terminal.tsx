@@ -32,6 +32,7 @@ import {
   StepButton,
   type OrderType,
 } from './menu-picker'
+import { splitLine } from '@/features/orders/split-line'
 import { OptionDialog } from './option-dialog'
 
 /**
@@ -182,6 +183,11 @@ export function PosTerminal({
   const [bill, setBill] = React.useState<StaffOrderBill | null>(null)
   /** The dish whose sizes are being chosen, if any. */
   const [choosing, setChoosing] = React.useState<PublicMenuItem | null>(null)
+  /*
+   * A line being given its own requirement — "one of these two, less spicy".
+   * Distinct from `choosing`, which is a dish being added for the first time.
+   */
+  const [splitting, setSplitting] = React.useState<Line | null>(null)
 
   /*
    * One key per cart, so a double tap places one order.
@@ -248,6 +254,49 @@ export function PosTerminal({
         l.key === key ? { ...l, quantity: Math.min(50, l.quantity + quantity) } : l,
       )
     })
+  }
+
+  /**
+   * One of these is different (see `splitLine`).
+   *
+   * The dialog opens on what the line already is, and the units the cashier
+   * asks for move onto a line of their own carrying the new options and note.
+   * Any line discount stays on the ORIGINAL line: it was given on the dish the
+   * cashier was looking at, and silently copying it onto a split would hand out
+   * money nobody approved.
+   */
+  const applySplit = (source: Line, optionIds: string[], quantity: number, itemNotes: string) => {
+    const chosen = source.item.groups.flatMap((group) =>
+      group.options
+        .filter((option) => optionIds.includes(option.id))
+        .map((option) => ({
+          id: option.id,
+          name: option.name,
+          groupName: group.name,
+          priceDelta: option.priceDelta,
+        })),
+    )
+    const nextKey = lineKey(source.item.id, optionIds, itemNotes)
+    setLines((current) =>
+      splitLine(current, {
+        sourceKey: source.key,
+        quantity,
+        nextKey,
+        create: (moved) => ({
+          key: nextKey,
+          item: source.item,
+          quantity: moved,
+          options: chosen,
+          notes: itemNotes,
+          discount: 0,
+          discountReason: '',
+        }),
+        merge: (existing, moved) => ({
+          ...existing,
+          quantity: Math.min(50, existing.quantity + moved),
+        }),
+      }),
+    )
   }
 
   const setQty = (key: string, quantity: number) => {
@@ -532,6 +581,23 @@ export function PosTerminal({
                   {lines.map((line) => (
                     <li key={line.key} className="flex items-center gap-3 px-4 py-3">
                       <div className="min-w-0 flex-1">
+                        {/*
+                          The dish, its choices and its price open that line's
+                          own requirements — "one of those without onions" — so
+                          a cashier can say it on the line in front of them
+                          instead of deleting and re-ringing.
+
+                          Only this part is the button. The discount control
+                          below is its own, and a button inside a button is
+                          invalid markup that browsers resolve by dropping one
+                          of them.
+                        */}
+                        <button
+                          type="button"
+                          onClick={() => setSplitting(line)}
+                          className="block w-full text-left"
+                          aria-label={`Change or split ${line.item.name}`}
+                        >
                         <p className="truncate text-sm font-medium">{line.item.name}</p>
                         {/*
                           The chosen size, named. Without it two lines of the
@@ -542,10 +608,14 @@ export function PosTerminal({
                             {line.options.map((option) => option.name).join(' · ')}
                           </p>
                         ) : null}
-                        <p className="text-xs text-muted-foreground">{money(unitOf(line))} each</p>
+                        <p className="text-xs text-muted-foreground">
+                          {money(unitOf(line))} each
+                          {line.quantity > 1 ? ' · tap to split' : ' · tap to change'}
+                        </p>
                         {line.notes ? (
                           <p className="truncate text-xs text-muted-foreground">{line.notes}</p>
                         ) : null}
+                        </button>
                         {/*
                           A discount on THIS dish (pro.A.md §10). "The burger
                           was cold, take 100 off it" is a fact about the
@@ -719,6 +789,29 @@ export function PosTerminal({
           )}
         </div>
       </aside>
+
+      {splitting ? (
+        <OptionDialog
+          item={splitting.item}
+          currency={currency}
+          locale={restaurant.locale}
+          money={money}
+          title={
+            splitting.quantity > 1 ? `One of these ${splitting.item.name}` : splitting.item.name
+          }
+          confirmLabel={splitting.quantity > 1 ? 'Split off' : 'Update'}
+          initialOptionIds={splitting.options.map((option) => option.id)}
+          initialNotes={splitting.notes}
+          // One unit by default when there are several: the guest said one of
+          // them is different, not all of them.
+          initialQuantity={splitting.quantity > 1 ? 1 : splitting.quantity}
+          onCancel={() => setSplitting(null)}
+          onConfirm={(optionIds, quantity, itemNotes) => {
+            applySplit(splitting, optionIds, quantity, itemNotes)
+            setSplitting(null)
+          }}
+        />
+      ) : null}
 
       {choosing ? (
         <OptionDialog

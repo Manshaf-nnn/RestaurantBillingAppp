@@ -246,6 +246,12 @@ export const AUDIT_ACTIONS = {
   PO_UPDATED: 'purchase.updated',
   PO_RETURNED: 'purchase.returned',
   SUPPLIER_UPDATED: 'supplier.updated',
+  /* ── Internal money accounts (bank.md §3) ─────────────────────────────── */
+  ACCOUNT_CREATED: 'account.created',
+  ACCOUNT_UPDATED: 'account.updated',
+  ACCOUNT_DEPOSIT: 'account.deposit',
+  ACCOUNT_TRANSFER: 'account.transfer',
+  ACCOUNT_STAFF_SET: 'account.staff_set',
   SUPPLIER_PAID: 'supplier.paid',
   SUPPLIER_PAYMENT_REMOVED: 'supplier.payment_removed',
 

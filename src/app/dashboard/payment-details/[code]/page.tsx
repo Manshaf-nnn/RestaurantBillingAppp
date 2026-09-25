@@ -5,9 +5,11 @@ import { notFound, redirect } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
-import { getDestinationPayments } from '@/features/payments/queries'
 import { readPaymentConfig, METHOD_LABELS } from '@/features/payments/service'
-import { destinationDetailLine } from '@/features/payments/destinations'
+import { accountTransactions } from '@/features/payments/accounts-queries'
+import { assertCanUseAccount } from '@/features/payments/accounts'
+import { accountBalances } from '@/features/payments/accounts-ledger'
+import { prisma } from '@/server/db/prisma'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
@@ -54,35 +56,61 @@ export default async function PaymentAccountPage({
 }) {
   const { code } = await params
   const user = await requirePagePermission(
-    PERMISSIONS.PAYMENT_VIEW,
+    PERMISSIONS.ACCOUNT_VIEW,
     `/dashboard/payment-details/${code}`,
   )
-  if (!can(user, PERMISSIONS.SETTINGS_VIEW)) redirect('/forbidden')
-  const { branchIds } = await selectedBranch(user, await searchParams)
+  /*
+   * Read for the header only. The account switcher is not what narrows this
+   * page: a balance and its history are facts about the account, not about a
+   * location, so both are restaurant-wide. Called because every dashboard page
+   * resolves a branch, and because the branch cookie is what the rest of the
+   * shell reads.
+   */
+  await selectedBranch(user, await searchParams)
   const restaurant = await requireRestaurant(user.restaurantId)
-
   const config = readPaymentConfig(restaurant.paymentConfig)
-  const account = (config.destinations ?? []).find((entry) => entry.code === code) ?? null
+
+  const account =
+    code === UNASSIGNED
+      ? null
+      : await prisma.paymentAccount.findFirst({
+          where: { restaurantId: user.restaurantId, code },
+        })
   if (!account && code !== UNASSIGNED) notFound()
 
-  const rows = await getDestinationPayments(
-    user.restaurantId,
-    code === UNASSIGNED ? null : code,
-    branchIds,
-  )
+  /*
+   * Whose account this is (bank.md §2), checked on the server.
+   *
+   * `ACCOUNT_VIEW` opens the screen; this decides whether THIS account is one
+   * of theirs. A code typed into the address bar by somebody it was never
+   * assigned to is refused here, not merely hidden on the card list.
+   */
+  if (account) {
+    await assertCanUseAccount({ user, accountId: account.id, need: 'view' })
+  }
+
+  const [rows, balances] = await Promise.all([
+    accountTransactions({ restaurantId: user.restaurantId, code, limit: 200 }),
+    accountBalances(prisma, user.restaurantId),
+  ])
 
   const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
   const money = (v: number) => formatMoney(v, restaurant.currency, locale)
 
-  const collected = rows.reduce((sum, row) => sum + row.amount, 0)
-  const refunded = rows.reduce((sum, row) => sum + row.refunded, 0)
+  const balance = balances.find((row) => row.code === code)?.balance ?? 0
+  const collected = rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0)
+  const refunded = rows.filter((row) => row.amount < 0).reduce((sum, row) => sum - row.amount, 0)
 
   // Which methods currently point here — "this is where card money goes".
   const feeders = Object.entries(config.methodDestinations ?? {})
     .filter(([, pointsAt]) => pointsAt === code)
     .map(([method]) => METHOD_LABELS[method] ?? method)
 
-  const detail = account ? destinationDetailLine(account) : ''
+  const detail = account
+    ? [account.bankName, account.accountNumber ? `A/C ${account.accountNumber}` : null, account.holderName]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
 
   return (
     <>
@@ -102,76 +130,77 @@ export default async function PaymentAccountPage({
         >
           ← All accounts
         </Link>
-        {account?.archived ? <Badge variant="outline">Retired</Badge> : null}
+        {account && !account.isActive ? <Badge variant="outline">Retired</Badge> : null}
         {feeders.length > 0 ? (
           <span className="text-xs text-muted-foreground">
             Fed by {feeders.join(', ')}
           </span>
-        ) : account && !account.archived ? (
+        ) : account?.isActive ? (
           <span className="text-xs text-muted-foreground">
             No payment method points here yet
           </span>
         ) : null}
       </div>
 
+      {/*
+        The balance first, because it is the question. The two beside it are
+        what it is made of, so the number can be explained rather than trusted.
+      */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Collected" value={money(collected)} />
-        <StatCard label="Refunded" value={money(refunded)} />
-        <StatCard label="Net" value={money(collected - refunded)} />
+        <StatCard label="Balance" value={money(balance)} />
+        <StatCard label="In" value={money(collected)} />
+        <StatCard label="Out" value={money(refunded)} />
       </div>
 
       <div className="mt-4">
         <SectionCard
-          title={`Payments filed here (${rows.length})`}
-          description="Newest first. Every one of these was recorded the moment a cashier settled the bill."
+          title={`Transactions (${rows.length})`}
+          description="Every movement, newest first — deposits, transfers, and the payments filed here automatically."
         >
           {rows.length === 0 ? (
             <EmptyState
               className="border-dashed py-10"
-              title="Nothing filed here yet"
-              description="Payments appear the moment a cashier settles a bill on a method pointing at this account."
+              title="Nothing here yet"
+              description="Deposits, transfers and settled payments all appear here."
             />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
+              <table className="w-full min-w-[760px] text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                     <th className="py-2 pr-3 font-semibold">When</th>
-                    <th className="py-2 pr-3 font-semibold">Order</th>
-                    <th className="py-2 pr-3 font-semibold">Invoice</th>
-                    <th className="py-2 pr-3 font-semibold">Branch</th>
-                    <th className="py-2 pr-3 font-semibold">Method</th>
+                    <th className="py-2 pr-3 font-semibold">Type</th>
+                    <th className="py-2 pr-3 font-semibold">From / to</th>
+                    <th className="py-2 pr-3 font-semibold">Reason</th>
+                    <th className="py-2 pr-3 font-semibold">Staff</th>
                     <th className="py-2 pr-3 text-right font-semibold">Amount</th>
-                    <th className="py-2 pl-3 text-right font-semibold">Refunded</th>
+                    <th className="py-2 pl-3 text-right font-semibold">Balance</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {rows.map((row) => (
                     <tr key={row.id} className="align-middle">
                       <td className="py-2.5 pr-3 text-muted-foreground">
-                        {row.paidAt
-                          ? formatDateTime(row.paidAt, { locale, timeZone: restaurant.timezone })
-                          : '—'}
+                        {formatDateTime(row.at, { locale, timeZone: restaurant.timezone })}
                       </td>
-                      <td className="py-2.5 pr-3 font-medium">
-                        <Link
-                          href={`/dashboard/orders/${row.orderId}`}
-                          className="hover:text-primary hover:underline"
-                        >
-                          #{row.orderNumber}
-                        </Link>
-                      </td>
+                      <td className="py-2.5 pr-3 font-medium">{row.type}</td>
+                      <td className="py-2.5 pr-3 text-muted-foreground">{row.counterparty ?? '—'}</td>
                       <td className="py-2.5 pr-3 text-muted-foreground">
-                        {row.invoiceNumber ?? '—'}
+                        {row.reason ? (METHOD_LABELS[row.reason] ?? row.reason) : '—'}
                       </td>
-                      <td className="py-2.5 pr-3 text-muted-foreground">{row.branchName ?? '—'}</td>
-                      <td className="py-2.5 pr-3">{METHOD_LABELS[row.method] ?? row.method}</td>
-                      <td className="py-2.5 pr-3 text-right font-semibold tabular-nums">
-                        {money(row.amount)}
+                      <td className="py-2.5 pr-3 text-muted-foreground">{row.actorName ?? '—'}</td>
+                      {/*
+                        Signed, so money in and money out are told apart at a
+                        glance rather than by reading the type column.
+                      */}
+                      <td
+                        className={`py-2.5 pr-3 text-right font-semibold tabular-nums ${
+                          row.amount < 0 ? 'text-destructive' : 'text-success'
+                        }`}
+                      >
+                        {row.amount < 0 ? '−' : '+'} {money(Math.abs(row.amount))}
                       </td>
-                      <td className="py-2.5 pl-3 text-right tabular-nums text-muted-foreground">
-                        {row.refunded > 0 ? `− ${money(row.refunded)}` : '—'}
-                      </td>
+                      <td className="py-2.5 pl-3 text-right tabular-nums">{money(row.balanceAfter)}</td>
                     </tr>
                   ))}
                 </tbody>
