@@ -50,6 +50,8 @@ export interface CustomerRow {
   notes: string | null
   loyaltyPoints: number
   totalSpent: number
+  /** Still owed on their own unpaid bills, minor units. */
+  due: number
   totalOrders: number
   lastOrderAt: string | null
   isBlocked: boolean
@@ -147,6 +149,8 @@ export function CustomersManager({
                 <TableHead>Customer</TableHead>
                 <TableHead className="hidden sm:table-cell">Orders</TableHead>
                 <TableHead className="hidden md:table-cell">Total spent</TableHead>
+                {/* What they still owe — the column an owner acts on. */}
+                <TableHead>Due</TableHead>
                 <TableHead>Points</TableHead>
                 <TableHead className="hidden lg:table-cell">Last order</TableHead>
                 <TableHead className="w-32" />
@@ -185,6 +189,16 @@ export function CustomersManager({
                   <TableCell className="hidden sm:table-cell">{customer.totalOrders}</TableCell>
                   <TableCell className="hidden font-medium md:table-cell">
                     {formatMoney(customer.totalSpent, currency, locale)}
+                  </TableCell>
+                  {/*
+                    Nothing owed reads as a dash rather than a zero: a column
+                    of "0.00" is noise, and the eye should land only on the
+                    people who owe something.
+                  */}
+                  <TableCell
+                    className={customer.due > 0 ? 'font-semibold tabular-nums text-destructive' : 'tabular-nums text-muted-foreground'}
+                  >
+                    {customer.due > 0 ? formatMoney(customer.due, currency, locale) : '—'}
                   </TableCell>
                   <TableCell>
                     <Badge variant="warning">{customer.loyaltyPoints} pts</Badge>

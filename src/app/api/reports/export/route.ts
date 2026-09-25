@@ -315,6 +315,7 @@ export async function GET(request: NextRequest) {
           { header: 'Item', key: 'item' },
           { header: 'Unit', key: 'unit' },
           { header: 'Requested qty', key: 'requestedQty' },
+          { header: 'Approved qty', key: 'approvedQty' },
           { header: 'Sent qty', key: 'sentQty' },
           { header: 'Received qty', key: 'receivedQty' },
           { header: 'Variance', key: 'variance' },
@@ -322,6 +323,9 @@ export async function GET(request: NextRequest) {
           { header: 'Variance note', key: 'varianceNote' },
           { header: 'Unit cost', key: 'unitCost' },
           { header: 'Line value', key: 'lineValue' },
+          // What the shortfall was worth. The quantity is two columns left;
+          // this is the figure somebody reconciles against.
+          { header: 'Lost value', key: 'lostValue' },
           { header: 'Requested by', key: 'requestedBy' },
           { header: 'Requested at', key: 'requestedAt' },
           { header: 'Approved by', key: 'approvedBy' },
@@ -341,6 +345,8 @@ export async function GET(request: NextRequest) {
           item: l.itemName,
           unit: l.unit,
           requestedQty: l.requestedQty,
+          // Null means the approver allowed it as requested.
+          approvedQty: l.approvedQty ?? l.requestedQty,
           // Blank, not zero: nothing has been sent yet is not "nil sent".
           sentQty: l.sentQty ?? '',
           receivedQty: l.receivedQty ?? '',
@@ -349,6 +355,9 @@ export async function GET(request: NextRequest) {
           varianceNote: l.varianceNote ?? '',
           unitCost: money(l.unitCost),
           lineValue: money(l.lineValue),
+          // Blank rather than a zero on a line that lost nothing, so a filter
+          // on this column finds only the losses.
+          lostValue: l.lostValue > 0 ? money(l.lostValue) : '',
           requestedBy: l.requestedByName ?? '',
           requestedAt: when(l.requestedAt),
           approvedBy: l.approvedByName ?? '',

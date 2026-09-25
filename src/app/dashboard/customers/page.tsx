@@ -5,6 +5,7 @@ import { can, PERMISSIONS } from '@/lib/rbac'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { prisma } from '@/server/db/prisma'
 import { listCustomerCategories } from '@/features/customers/service'
 import { listSegment, type CustomerSegment } from '@/features/customers/segments'
 import { localeForCurrency } from '@/lib/money'
@@ -76,6 +77,36 @@ export default async function CustomersPage({
   ])
   const customers = listed.rows
 
+  /*
+   * What each of these people still owes.
+   *
+   * Their own unpaid bills — grandTotal less paidTotal on anything not
+   * settled and not cancelled. One grouped query for the page rather than one
+   * per row, because this list renders fifty at a time.
+   *
+   * Deliberately NOT `Customer.totalSpent`, which is lifetime takings and
+   * therefore the opposite question. A customer can have spent a fortune and
+   * owe nothing, and the column an owner chases is the second one.
+   */
+  const owing = customers.length
+    ? await prisma.order.groupBy({
+        by: ['customerId'],
+        where: {
+          restaurantId: user.restaurantId,
+          customerId: { in: customers.map((customer) => customer.id) },
+          status: { not: 'CANCELLED' },
+          paymentStatus: { in: ['UNPAID', 'PARTIAL'] },
+        },
+        _sum: { grandTotal: true, paidTotal: true },
+      })
+    : []
+  const dueByCustomer = new Map(
+    owing.map((row) => [
+      row.customerId,
+      Math.max(0, (row._sum.grandTotal ?? 0) - (row._sum.paidTotal ?? 0)),
+    ]),
+  )
+
   return (
     <CustomersManager
       canManage={can(user, PERMISSIONS.CUSTOMER_MANAGE)}
@@ -89,6 +120,7 @@ export default async function CustomersPage({
         notes: customer.notes,
         loyaltyPoints: customer.loyaltyPoints,
         totalSpent: customer.totalSpent,
+        due: dueByCustomer.get(customer.id) ?? 0,
         totalOrders: customer.totalOrders,
         lastOrderAt: customer.lastOrderAt?.toISOString() ?? null,
         isBlocked: customer.isBlocked,

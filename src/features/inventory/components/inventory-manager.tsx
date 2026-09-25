@@ -210,8 +210,21 @@ export function InventoryManager({
         if (days === null || days > 7) return false
       }
       if (!query) return true
+      /*
+       * Name, code, category.
+       *
+       * The code was displayed and not searchable, which is the one thing a
+       * code is for: somebody holding a delivery note with "RCE-01" on it
+       * could read it off the screen but not type it in. Matched as a PREFIX
+       * because a code is short — `includes` on "01" would surface every item
+       * whose name or category happens to contain those characters, which is
+       * the opposite of what typing a code means.
+       */
+      const code = item.sku?.toLowerCase()
       return (
-        item.name.toLowerCase().includes(query) || Boolean(item.category?.toLowerCase().includes(query))
+        item.name.toLowerCase().includes(query) ||
+        (code ? code.startsWith(query) : false) ||
+        Boolean(item.category?.toLowerCase().includes(query))
       )
     })
   }, [items, search, view, isLow, daysToExpiry])
@@ -279,7 +292,7 @@ export function InventoryManager({
         <Input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search items…"
+          placeholder="Search by name or code…"
           startIcon={<Search />}
           className="max-w-sm"
         />
@@ -349,6 +362,9 @@ export function InventoryManager({
             <TableHeader>
               <TableRow>
                 <TableHead>Item</TableHead>
+                {/* Its own column, not a subtitle: a code is what somebody
+                    matches against a delivery note, line by line. */}
+                <TableHead className="hidden sm:table-cell">Code</TableHead>
                 <TableHead>In stock</TableHead>
                 <TableHead className="hidden md:table-cell">Alert below</TableHead>
                 <TableHead className="hidden lg:table-cell">Next cost / unit</TableHead>
@@ -378,8 +394,15 @@ export function InventoryManager({
                         {item.name}
                       </Link>
                       <p className="text-xs text-muted-foreground">
-                        {[item.sku, item.category].filter(Boolean).join(' · ') || '\u00a0'}
+                        {item.category || '\u00a0'}
                       </p>
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
+                      {item.sku ? (
+                        <span className="font-mono text-xs text-muted-foreground">{item.sku}</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <span

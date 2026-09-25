@@ -420,6 +420,67 @@ async function main() {
     check('it cannot move more units than the line has', clamped[0].quantity === 2)
   }
 
+  console.log('\n── 6. An item code is searchable, not just printed ──')
+  {
+    /*
+     * The inventory list has always DISPLAYED `sku`, merged into a subtitle
+     * with the category, and matched only name and category when you typed.
+     * So somebody holding a delivery note could read the code off the screen
+     * and not type it in — which is the one thing a code is for.
+     *
+     * The filter is a pure function of the row, so it is exercised here the
+     * same way the picker's is: prefix on the code, substring on the name.
+     */
+    const matches = (
+      item: { name: string; sku: string | null; category: string | null },
+      query: string,
+    ) => {
+      const q = query.trim().toLowerCase()
+      if (!q) return true
+      const code = item.sku?.toLowerCase()
+      return (
+        item.name.toLowerCase().includes(q) ||
+        (code ? code.startsWith(q) : false) ||
+        Boolean(item.category?.toLowerCase().includes(q))
+      )
+    }
+
+    const rice = { name: 'Basmati Rice', sku: 'RCE-01', category: 'Dry goods' }
+    const oil = { name: 'Sunflower Oil', sku: 'OIL-01', category: 'Dry goods' }
+
+    check('typing the code finds the item', matches(rice, 'RCE-01'))
+    check('…and so does the start of it', matches(rice, 'rce'))
+    check('the name still works', matches(rice, 'basmati'))
+    check('the category still works', matches(oil, 'dry'))
+    check('a code is matched from the START, not anywhere inside',
+      !matches(rice, '01'), 'a bare "01" matched every code ending in 01')
+    check('one item’s code does not find another', !matches(oil, 'rce'))
+    check('an item with no code is not broken by a code search',
+      !matches({ name: 'Salt', sku: null, category: null }, 'rce'))
+  }
+
+  console.log('\n── 7. A transfer report prices what went missing ──')
+  {
+    /*
+     * The report showed a shortfall as a QUANTITY — two litres gone — and
+     * never what two litres were worth, which is the figure an owner acts on.
+     * Priced at the same snapshotted unit cost as the rest of the line, so it
+     * adds up with everything else on the screen.
+     */
+    const lost = (variance: number | null, unitCost: number) =>
+      variance !== null && variance < -1e-6 ? Math.round(Math.abs(variance) * unitCost) : 0
+
+    check('a shortfall is priced at the cost it was sent at', lost(-2, 60_000) === 120_000)
+    check('a line that arrived whole lost nothing', lost(0, 60_000) === 0)
+    check('…and so did one that has not arrived yet', lost(null, 60_000) === 0)
+    /*
+     * A positive variance is MORE arriving than left — a counting error, not
+     * money found. Folding it in as a negative loss would net two unrelated
+     * mistakes into one smaller-looking number.
+     */
+    check('an overage is not a negative loss', lost(3, 60_000) === 0)
+  }
+
   /* ── Clean up ────────────────────────────────────────────────────────────── */
   await prisma.coupon.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.qrExperience.deleteMany({ where: { restaurantId: restaurant.id } })

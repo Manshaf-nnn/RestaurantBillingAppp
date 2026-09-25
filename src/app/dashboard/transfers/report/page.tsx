@@ -201,6 +201,17 @@ export default async function TransferReportPage({
             hint="Short, damaged or refused"
             tone={report.totals.varianceLines > 0 ? 'destructive' : 'muted'}
           />
+          {/*
+            What the losses actually cost. The line above counts HOW MANY went
+            wrong; this is the only figure that says what going wrong was worth,
+            which is the one an owner acts on.
+          */}
+          <Figure
+            label="Lost in transit"
+            value={money(report.totals.lostValue)}
+            hint="Short or damaged, at cost"
+            tone={report.totals.lostValue > 0 ? 'destructive' : 'muted'}
+          />
         </div>
 
         <TransferReportToolbar branches={branches} items={items} />
@@ -265,11 +276,17 @@ export default async function TransferReportPage({
                       <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                         <th className="px-4 py-2 font-medium">Item</th>
                         <th className="px-4 py-2 text-right font-medium">Requested</th>
+                        {/* What the approver allowed, when they cut it — the
+                            link between what was asked for and what left. */}
+                        <th className="px-4 py-2 text-right font-medium">Approved</th>
                         <th className="px-4 py-2 text-right font-medium">Sent</th>
                         <th className="px-4 py-2 text-right font-medium">Received</th>
                         <th className="px-4 py-2 text-right font-medium">Variance</th>
                         <th className="px-4 py-2 font-medium">Reason</th>
                         <th className="px-4 py-2 text-right font-medium">Value</th>
+                        {/* The shortfall in money. A quantity says two litres
+                            are gone; this says what two litres were worth. */}
+                        <th className="px-4 py-2 text-right font-medium">Lost</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
@@ -282,6 +299,24 @@ export default async function TransferReportPage({
                               <span className="ml-1 text-xs text-muted-foreground">({line.unit})</span>
                             </td>
                             <td className="px-4 py-2 text-right tabular-nums">{roundQty(line.requestedQty)}</td>
+                            {/* Null means "as requested" — shown as the request
+                                itself rather than a dash, because the approver
+                                did allow that much. */}
+                            <td className="px-4 py-2 text-right tabular-nums">
+                              {line.approvedQty === null ? (
+                                roundQty(line.requestedQty)
+                              ) : (
+                                <span
+                                  className={
+                                    line.approvedQty < line.requestedQty - 1e-6
+                                      ? 'font-medium text-warning'
+                                      : undefined
+                                  }
+                                >
+                                  {roundQty(line.approvedQty)}
+                                </span>
+                              )}
+                            </td>
                             {/* An em dash, not a zero: not yet sent is not "nil sent". */}
                             <td className="px-4 py-2 text-right tabular-nums">
                               {line.sentQty === null ? '—' : roundQty(line.sentQty)}
@@ -300,6 +335,11 @@ export default async function TransferReportPage({
                                 : '—'}
                             </td>
                             <td className="px-4 py-2 text-right tabular-nums">{money(line.lineValue)}</td>
+                            <td
+                              className={`px-4 py-2 text-right tabular-nums ${line.lostValue > 0 ? 'font-medium text-destructive' : 'text-muted-foreground'}`}
+                            >
+                              {line.lostValue > 0 ? money(line.lostValue) : '—'}
+                            </td>
                           </tr>
                         )
                       })}

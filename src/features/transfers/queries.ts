@@ -476,6 +476,8 @@ export interface TransferLineRow {
   itemName: string
   unit: string
   requestedQty: number
+  /** What the approver allowed, when they cut it. Null means "as requested". */
+  approvedQty: number | null
   sentQty: number | null
   receivedQty: number | null
   variance: number | null
@@ -485,6 +487,15 @@ export interface TransferLineRow {
   unitCost: number
   /** Cents. What actually arrived, at the cost it was sent at. */
   lineValue: number
+  /**
+   * Cents. What went missing on the way, at the cost it was sent at.
+   *
+   * The report already showed the shortfall as a QUANTITY, which tells an
+   * owner two litres are gone and not what two litres were worth. A loss is a
+   * money question; this is the same variance priced at the same snapshotted
+   * cost the rest of the line uses, so it adds up with everything else.
+   */
+  lostValue: number
 }
 
 export interface TransferReportTotals {
@@ -496,6 +507,8 @@ export interface TransferReportTotals {
   /** Cents. */
   value: number
   varianceLines: number
+  /** Cents. The total of everything that went missing in transit. */
+  lostValue: number
 }
 
 /**
@@ -549,6 +562,7 @@ export async function listTransferLines(params: {
     receivedQty: 0,
     value: 0,
     varianceLines: 0,
+    lostValue: 0,
   }
 
   for (const t of kept) {
@@ -558,6 +572,16 @@ export async function listTransferLines(params: {
       const valuedQty = l.receivedQty ?? l.sentQty ?? l.requestedQty
       const lineValue = Math.round(valuedQty * l.unitCost)
       const hasVariance = l.variance !== null && Math.abs(l.variance) > 1e-6
+      /*
+       * Only a SHORTFALL is a loss. A positive variance means more arrived
+       * than left, which is a counting error rather than money gone, and
+       * folding it in as a negative loss would net two unrelated mistakes into
+       * one smaller-looking number.
+       */
+      const lostValue =
+        l.variance !== null && l.variance < -1e-6
+          ? Math.round(Math.abs(l.variance) * l.unitCost)
+          : 0
 
       rows.push({
         transferId: t.id,
@@ -580,6 +604,7 @@ export async function listTransferLines(params: {
         itemName: l.item.name,
         unit: (l.unit ?? l.item.unit) as string,
         requestedQty: l.requestedQty,
+        approvedQty: l.approvedQty,
         sentQty: l.sentQty,
         receivedQty: l.receivedQty,
         variance: l.variance,
@@ -587,6 +612,7 @@ export async function listTransferLines(params: {
         varianceNote: l.varianceNote,
         unitCost: l.unitCost,
         lineValue,
+        lostValue,
       })
 
       totals.lines += 1
@@ -594,6 +620,7 @@ export async function listTransferLines(params: {
       totals.sentQty += l.sentQty ?? 0
       totals.receivedQty += l.receivedQty ?? 0
       totals.value += lineValue
+      totals.lostValue += lostValue
       if (hasVariance) totals.varianceLines += 1
     }
   }
