@@ -5,17 +5,25 @@ import { ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
- * The frame every inventory drill-down wears.
+ * The frame every report drill-down wears.
  *
  * A server component with no state of its own: breadcrumb, title, the filter
- * bar the page passes in, one table, and a footer. Four screens share it so
+ * bar the page passes in, one table, and a footer. Several screens share it so
  * the columns are the only thing that differs between them — which is the
  * point of a drill-down, and the reason they cannot drift apart in spacing,
  * heading weight or empty-state wording.
+ *
+ * `parent` is the report the breadcrumb goes back to. It used to be the
+ * inventory report, written into the markup, which was right while inventory
+ * was the only report with drill-downs and wrong the moment purchasing got
+ * some: every one of its tables offered to take the reader back to a screen
+ * they had not come from. It defaults to inventory so the four screens that
+ * were here first did not have to change.
  */
 export function DrillDown({
   title,
   description,
+  parent = { href: '/dashboard/reports/inventory', label: 'Inventory Reports' },
   filters,
   actions,
   footer,
@@ -23,6 +31,7 @@ export function DrillDown({
 }: {
   title: string
   description: string
+  parent?: { href: string; label: string }
   /** The date-range and location controls, built by the page (server reads). */
   filters?: React.ReactNode
   actions?: React.ReactNode
@@ -33,11 +42,11 @@ export function DrillDown({
     <>
       <nav className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground">
         <Link
-          href="/dashboard/reports/inventory"
+          href={parent.href}
           className="inline-flex items-center gap-1.5 hover:text-foreground"
         >
           <ArrowLeft className="size-4" />
-          Inventory Reports
+          {parent.label}
         </Link>
       </nav>
 

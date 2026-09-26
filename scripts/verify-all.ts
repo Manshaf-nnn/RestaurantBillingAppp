@@ -113,6 +113,11 @@ const SERVICE = [
   // a division that can lose money. Pins that every bill's shares add back to
   // that bill's discount, and each column back to the tile above it.
   'sales-detail-test',
+  // Purchasing. A purchase REQUEST is not a purchase — a rejected request is
+  // not cancelled spending and a draft is not committed money — and the
+  // "variance" tile is committed against ACTUAL, since this system has no
+  // budget: what the order said, against what the delivery was invoiced at.
+  'purchasing-report-test',
   // FIFO.md — the books tie to the layers after purchase, sale, wastage,
   // adjustment, transfer and reversal: layer quantity equals what the branch
   // holds, layer value equals the item's value, and every movement's trace
