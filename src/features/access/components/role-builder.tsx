@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Check, ChevronDown, Copy, Link as LinkIcon, Plus, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { Check, ChevronDown, Copy, Link as LinkIcon, Plus, ShieldCheck, Trash2, Users, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,8 +9,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { EmptyState } from '@/components/ui/feedback'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/primitives'
+import { Checkbox, Switch } from '@/components/ui/primitives'
 import { callAction } from '@/lib/use-action'
+import { requiresOwnBranch } from '@/lib/rbac'
+import type { UserRole } from '@prisma/client'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
@@ -21,6 +23,17 @@ import {
   primaryAction,
   type Feature,
 } from '../features'
+import {
+  SIDEBAR_MODULES,
+  accessTwin,
+  closeSelection,
+  edgeAllows,
+  inferPreset,
+  modulesShownBy,
+  permissionsForSelection,
+  requiredBy,
+  type SidebarModule,
+} from '../sidebar-access'
 import { createRole, deleteRole, duplicateRole, setRoleActive, updateRole } from '../actions'
 import { roleSignInLink } from '../link-actions'
 import { CopyLink } from '@/features/staff/components/copy-link'
@@ -49,17 +62,32 @@ export interface PresetOption {
   needsBranch: boolean
 }
 
+/** Somebody who can be put on a role as it is created. */
+export interface StaffOption {
+  id: string
+  name: string
+  /** Their custom role's name, or the built-in's label. */
+  roleLabel: string
+  branchId: string | null
+  branchName: string | null
+}
+
 /**
  * Creating and editing roles.
  *
- * ── The grid is the point ───────────────────────────────────────────────────
+ * ── Two dialogs, on purpose ─────────────────────────────────────────────────
  *
- * Rolelogic asks that the owner *see all available system features* while
- * building a role, then switch each one, and each action within it, on or off.
- * So the grid renders the whole registry — every feature, always — rather than
- * only what the role currently has. A list that showed only what was already
- * granted would make it impossible to discover what else exists, which is the
- * one thing this screen is for.
+ * Create is the simple one: a name, something to start from, the sidebar
+ * tabs the job gets, and optionally who is on it and where. Every tab is
+ * always listed — the sidebar is the source of truth, and "Based on" only
+ * decides which boxes start ticked — and a tab that needs another ticks it
+ * for you and keeps it ticked (`sidebar-access.ts`).
+ *
+ * Edit keeps the detailed grid: every feature and every action within it,
+ * because a role that exists is tuned one switch at a time. The grid renders
+ * the whole registry for the same reason the create dialog lists every tab —
+ * a list that showed only what was already granted would make it impossible
+ * to discover what else exists.
  *
  * ── Turning a feature off turns its actions off ─────────────────────────────
  *
@@ -74,12 +102,14 @@ export function RoleBuilder({
   roles,
   presets,
   locations,
+  staff,
   canAssignAllLocations,
   grantable,
 }: {
   roles: RoleRow[]
   presets: PresetOption[]
   locations: Array<{ id: string; name: string }>
+  staff: StaffOption[]
   canAssignAllLocations: boolean
   /**
    * What the signed-in person may hand out.
@@ -92,7 +122,7 @@ export function RoleBuilder({
 }) {
   const [editing, setEditing] = React.useState<RoleRow | null>(null)
   const [creating, setCreating] = React.useState(false)
-  const [copying, setCopying] = React.useState<RoleRow | 'preset' | null>(null)
+  const [copying, setCopying] = React.useState<RoleRow | null>(null)
   const [busy, setBusy] = React.useState<string | null>(null)
   const router = useRouter()
 
@@ -144,9 +174,6 @@ export function RoleBuilder({
         <Button onClick={() => setCreating(true)}>
           <Plus /> Create role
         </Button>
-        <Button variant="outline" onClick={() => setCopying('preset')}>
-          <Copy /> Start from a template
-        </Button>
       </div>
 
       {roles.length === 0 ? (
@@ -155,8 +182,8 @@ export function RoleBuilder({
           title="No custom roles yet"
           description="Everyone is on their built-in role. Create one to give somebody a workspace with only the features their job needs."
           action={
-            <Button onClick={() => setCopying('preset')}>
-              <Copy /> Start from a template
+            <Button onClick={() => setCreating(true)}>
+              <Plus /> Create role
             </Button>
           }
         />
@@ -265,27 +292,30 @@ export function RoleBuilder({
         </ul>
       )}
 
-      {creating || editing ? (
+      {creating ? (
+        <CreateRoleDialog
+          roles={roles}
+          presets={presets}
+          locations={locations}
+          staff={staff}
+          canAssignAllLocations={canAssignAllLocations}
+          grantable={grantableSet}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
+
+      {editing ? (
         <RoleDialog
           role={editing}
           presets={presets}
           locations={locations}
           canAssignAllLocations={canAssignAllLocations}
           grantable={grantableSet}
-          onClose={() => {
-            setCreating(false)
-            setEditing(null)
-          }}
+          onClose={() => setEditing(null)}
         />
       ) : null}
 
-      {copying ? (
-        <DuplicateDialog
-          source={copying}
-          presets={presets}
-          onClose={() => setCopying(null)}
-        />
-      ) : null}
+      {copying ? <DuplicateDialog source={copying} onClose={() => setCopying(null)} /> : null}
     </>
   )
 }
@@ -299,6 +329,433 @@ function countFeatures(permissions: string[]): number {
   }).length
 }
 
+const SCRATCH = ''
+const SELECT_CLASS = 'h-10 w-full rounded-lg border border-input bg-background px-3 text-sm'
+
+/**
+ * The simple Create Role dialog.
+ *
+ * ── How a set of ticked boxes becomes a permission list ─────────────────────
+ *
+ * `explicit` is what the owner ticked (seeded from "Based on"). Closing it
+ * over each tab's requirements gives `selected`; `permissionsForSelection`
+ * turns that into the list, keeping whatever the template gave that no tab
+ * stands for as long as its feature is still on. What the boxes DISPLAY is
+ * derived back from that list with the sidebar's own rule, so a box is
+ * ticked if and only if the tab would appear — three tabs on one permission
+ * light up together, a required tab is ticked and locked, and a tab the base
+ * role's edge gate refuses stays off however hard it is clicked.
+ *
+ * The preset for "start from scratch" is inferred from the same list with
+ * the same function the server uses, so the location field can insist on a
+ * site exactly when the server would.
+ */
+function CreateRoleDialog({
+  roles,
+  presets,
+  locations,
+  staff,
+  canAssignAllLocations,
+  grantable,
+  onClose,
+}: {
+  roles: RoleRow[]
+  presets: PresetOption[]
+  locations: Array<{ id: string; name: string }>
+  staff: StaffOption[]
+  canAssignAllLocations: boolean
+  grantable: Set<string>
+  onClose: () => void
+}) {
+  const [name, setName] = React.useState('')
+  const [baseKey, setBaseKey] = React.useState(SCRATCH)
+  const [basePreset, setBasePreset] = React.useState('')
+  const [base, setBase] = React.useState<string[]>([])
+  const [explicit, setExplicit] = React.useState<Set<string>>(() => new Set())
+  const [branchId, setBranchId] = React.useState('')
+  const [assignments, setAssignments] = React.useState<Array<{ userId: string; branchId: string }>>([])
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const activeRoles = React.useMemo(() => roles.filter((role) => role.isActive), [roles])
+  const candidates = React.useMemo(() => presets.map((p) => p.value as UserRole), [presets])
+
+  /*
+   * Resolved in one pass, because the parts lean on each other: the preset
+   * decides which tabs the edge lets through, and which tabs are on decides
+   * the preset. A first closure without the edge settles the preset; the
+   * second, with it, settles the list.
+   */
+  const view = React.useMemo(() => {
+    const first = permissionsForSelection(closeSelection(explicit, basePreset || null), base, basePreset || null)
+    const inferred = basePreset
+      ? { preset: basePreset as UserRole, blockedBy: [] as SidebarModule[] }
+      : inferPreset(first, candidates, branchId || null)
+    const preset = inferred.preset
+    const selected = closeSelection(explicit, preset)
+    const permissions = permissionsForSelection(selected, base, preset).filter((p) => grantable.has(p))
+    const held = new Set(permissions)
+    const shown = modulesShownBy(held, preset)
+    return { preset, blockedBy: inferred.blockedBy, permissions, held, shown }
+  }, [explicit, base, basePreset, branchId, candidates, grantable])
+
+  const shownHrefs = React.useMemo(() => new Set(view.shown.map((m) => m.href)), [view.shown])
+  const presetLabel = presets.find((p) => p.value === view.preset)?.label ?? null
+  const mustHaveBranch = view.preset ? requiresOwnBranch(view.preset) : false
+
+  // A preset that cannot use "all locations" gets pinned to one the moment it
+  // is settled, rather than failing on submit about a field nobody looked at.
+  React.useEffect(() => {
+    if (mustHaveBranch && !branchId && locations[0]) setBranchId(locations[0].id)
+  }, [mustHaveBranch, branchId, locations])
+
+  /**
+   * Apply a starting point. Only ever on an explicit change of the dropdown,
+   * never in an effect — an effect would re-seed, and so wipe, the owner's
+   * own ticks every time anything else re-rendered.
+   */
+  function chooseBase(key: string) {
+    setBaseKey(key)
+    let permissions: string[] = []
+    let preset = ''
+    if (key.startsWith('preset:')) {
+      const chosen = presets.find((p) => `preset:${p.value}` === key)
+      permissions = chosen?.permissions ?? []
+      preset = chosen?.value ?? ''
+    } else if (key.startsWith('role:')) {
+      const chosen = activeRoles.find((r) => `role:${r.id}` === key)
+      permissions = chosen?.permissions ?? []
+      preset = chosen?.preset ?? ''
+      if (chosen?.branchId) setBranchId(chosen.branchId)
+    }
+    const seed = permissions.filter((p) => grantable.has(p))
+    setBase(seed)
+    setBasePreset(preset)
+    setExplicit(new Set(modulesShownBy(new Set(seed), preset || null).map((m) => m.href)))
+  }
+
+  function toggle(entry: SidebarModule, on: boolean) {
+    setExplicit((prev) => {
+      const next = new Set(prev)
+      if (on) {
+        next.add(entry.href)
+        return next
+      }
+      // Tabs on one permission come off together — there is nothing to keep.
+      const shared = new Set(entry.grants)
+      for (const other of SIDEBAR_MODULES) {
+        if (other.grants.some((p) => shared.has(p))) next.delete(other.href)
+      }
+      return next
+    })
+  }
+
+  const unassigned = staff.filter((member) => !assignments.some((row) => row.userId === member.id))
+  const roleBranchName = branchId ? locations.find((l) => l.id === branchId)?.name ?? null : null
+
+  /** A person a site-scoped role would blind: no home site anywhere. */
+  function needsLocation(row: { userId: string; branchId: string }): boolean {
+    if (!mustHaveBranch || branchId) return false
+    const member = staff.find((m) => m.id === row.userId)
+    return !row.branchId && !member?.branchId
+  }
+  const blockedByLocation = assignments.some(needsLocation)
+
+  async function save() {
+    setBusy(true)
+    setError(null)
+    const result = await callAction(() =>
+      createRole({
+        name,
+        description: '',
+        preset: basePreset,
+        branchId: branchId || null,
+        permissions: view.permissions,
+        assignments: assignments.map((row) => ({ userId: row.userId, branchId: row.branchId || null })),
+      }),
+    )
+    setBusy(false)
+    if (result.ok) onClose()
+    else setError(result.error)
+  }
+
+  const sections = React.useMemo(() => {
+    const out: Array<{ title: string; modules: SidebarModule[] }> = []
+    for (const entry of SIDEBAR_MODULES) {
+      const last = out[out.length - 1]
+      if (last && last.title === entry.section) last.modules.push(entry)
+      else out.push({ title: entry.section, modules: [entry] })
+    }
+    return out
+  }, [])
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent className="max-h-[90dvh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Create a role</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-role-name">Role name</Label>
+              <Input
+                id="new-role-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Stock Controller"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-role-base">Based on</Label>
+              <select
+                id="new-role-base"
+                value={baseKey}
+                onChange={(e) => chooseBase(e.target.value)}
+                className={SELECT_CLASS}
+              >
+                <option value={SCRATCH}>Start from scratch</option>
+                <optgroup label="Built-in roles">
+                  {presets.map((p) => (
+                    <option key={p.value} value={`preset:${p.value}`}>
+                      {p.label}
+                    </option>
+                  ))}
+                </optgroup>
+                {activeRoles.length > 0 ? (
+                  <optgroup label="Your roles">
+                    {activeRoles.map((r) => (
+                      <option key={r.id} value={`role:${r.id}`}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {baseKey === SCRATCH
+                  ? presetLabel
+                    ? `A starting point only. They will sign in as a ${presetLabel.toLowerCase()}.`
+                    : 'A starting point only. Tick the tabs below.'
+                  : 'A starting point only. Every tab stays available below.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">Sidebar access</p>
+                <p className="text-xs text-muted-foreground">
+                  {view.shown.length} of {SIDEBAR_MODULES.length} tabs
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y">
+              {sections.map((section) => (
+                <div key={section.title} className="px-4 py-3">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {section.title}
+                  </p>
+                  <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                    {section.modules.map((entry) => {
+                      const checked = shownHrefs.has(entry.href)
+                      const holders = checked ? requiredBy(entry.href, view.shown) : []
+                      /*
+                       * Shown on somebody else's account: the entry's own
+                       * permission is off, but one of `anyOf` is held by a
+                       * ticked tab — the POS shell, whose drawer tab is the
+                       * Cash drawer's. It cannot be unticked while that is so,
+                       * and the box says which tab keeps it there.
+                       */
+                      const carriers =
+                        checked && !view.held.has(entry.permission)
+                          ? view.shown.filter(
+                              (other) => other.href !== entry.href && other.grants.some((p) => entry.anyOf.includes(p)),
+                            )
+                          : []
+                      const canGrant = grantable.has(entry.permission)
+                      const reachable = edgeAllows(entry, view.preset)
+                      const twin = accessTwin(entry.href)
+                      const disabled = !canGrant || !reachable || holders.length > 0 || carriers.length > 0
+                      const note = !canGrant
+                        ? 'You do not have this yourself'
+                        : !reachable && presetLabel
+                          ? `Not open to roles based on ${presetLabel}`
+                          : holders.length > 0
+                            ? `Required by ${holders.map((h) => h.label).join(', ')}`
+                            : carriers.length > 0
+                              ? `Shown with ${carriers.map((c) => c.label).join(', ')}`
+                              : twin
+                                ? `Same access as ${twin.label}`
+                                : null
+                      const id = `tab-${entry.href.replace(/[^a-z0-9]+/gi, '-')}`
+                      return (
+                        <li key={entry.href} className="flex items-start gap-2.5 py-1">
+                          <Checkbox
+                            id={id}
+                            checked={checked}
+                            disabled={disabled}
+                            onCheckedChange={(next) => toggle(entry, next === true)}
+                            className="mt-0.5"
+                          />
+                          <label htmlFor={id} className="min-w-0 cursor-pointer select-none">
+                            <span className="block truncate text-sm">{entry.label}</span>
+                            {note ? (
+                              <span className="block truncate text-xs text-muted-foreground">{note}</span>
+                            ) : null}
+                          </label>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {view.blockedBy.length > 0 ? (
+            <p className="text-sm text-destructive">
+              Nothing you can assign opens {view.blockedBy.map((m) => m.label).join(' and ')} together.
+              Untick one of them.
+            </p>
+          ) : null}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-role-branch">Location</Label>
+              <select
+                id="new-role-branch"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                className={SELECT_CLASS}
+              >
+                {canAssignAllLocations && !mustHaveBranch ? (
+                  <option value="">All locations</option>
+                ) : null}
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {mustHaveBranch
+                  ? 'This kind of role works one site — without a location their screens would be empty.'
+                  : 'Where people on this role can operate. Optional: leave it and each person keeps their own.'}
+              </p>
+            </div>
+          </div>
+
+          {staff.length > 0 ? (
+            <div className="space-y-2">
+              <Label htmlFor="new-role-staff">Assign staff</Label>
+              {assignments.length > 0 ? (
+                <ul className="divide-y rounded-lg border border-border">
+                  {assignments.map((row) => {
+                    const member = staff.find((m) => m.id === row.userId)
+                    if (!member) return null
+                    const missing = needsLocation(row)
+                    return (
+                      <li key={row.userId} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm">{member.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            Currently {member.roleLabel}
+                            {member.branchName ? ` · ${member.branchName}` : ''}
+                          </p>
+                        </div>
+                        {roleBranchName ? (
+                          <span className="text-xs text-muted-foreground">{roleBranchName}</span>
+                        ) : (
+                          <select
+                            aria-label={`Location for ${member.name}`}
+                            value={row.branchId}
+                            onChange={(e) =>
+                              setAssignments((prev) =>
+                                prev.map((r) =>
+                                  r.userId === row.userId ? { ...r, branchId: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            className={`h-9 rounded-lg border bg-background px-2 text-sm ${
+                              missing ? 'border-destructive' : 'border-input'
+                            }`}
+                          >
+                            <option value="">
+                              {member.branchName ? `${member.branchName} (current)` : 'Choose a location'}
+                            </option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Remove ${member.name}`}
+                          onClick={() =>
+                            setAssignments((prev) => prev.filter((r) => r.userId !== row.userId))
+                          }
+                        >
+                          <X />
+                        </Button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              ) : null}
+              {unassigned.length > 0 ? (
+                <select
+                  id="new-role-staff"
+                  value=""
+                  onChange={(e) => {
+                    if (!e.target.value) return
+                    setAssignments((prev) => [...prev, { userId: e.target.value, branchId: '' }])
+                  }}
+                  className={SELECT_CLASS}
+                >
+                  <option value="">Add a person…</option>
+                  {unassigned.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name} · {member.roleLabel}
+                      {member.branchName ? ` · ${member.branchName}` : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {blockedByLocation
+                  ? 'Choose a location for everyone marked — this role works one site.'
+                  : 'Optional. Everyone on the role shares its access; the location is where they work.'}
+              </p>
+            </div>
+          ) : null}
+
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            onClick={save}
+            disabled={busy || name.trim().length < 2 || view.blockedBy.length > 0 || blockedByLocation}
+          >
+            {busy ? 'Creating…' : 'Create role'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function RoleDialog({
   role,
   presets,
@@ -307,33 +764,18 @@ function RoleDialog({
   grantable,
   onClose,
 }: {
-  role: RoleRow | null
+  role: RoleRow
   presets: PresetOption[]
   locations: Array<{ id: string; name: string }>
   canAssignAllLocations: boolean
   grantable: Set<string>
   onClose: () => void
 }) {
-  const [name, setName] = React.useState(role?.name ?? '')
-  const [description, setDescription] = React.useState(role?.description ?? '')
-  /*
-   * Empty for a NEW role — "start from scratch".
-   *
-   * It defaulted to the first preset in the list, which was Administrator, and
-   * choosing one did nothing at all: the toggles stayed at 0 of 58 whatever was
-   * picked. So the field looked like it seeded the role and did not, which is
-   * the worst of both — an owner ticked 58 switches by hand under a box that
-   * said the role was "based on Administrator".
-   *
-   * Now it is a real choice. Pick one and its permissions are filled in as a
-   * starting point; leave it blank and the role is yours to build. An existing
-   * role keeps whatever it was based on.
-   */
-  const [preset, setPreset] = React.useState(role?.preset ?? '')
-  const [branchId, setBranchId] = React.useState(role?.branchId ?? '')
-  const [granted, setGranted] = React.useState<Set<string>>(
-    () => new Set(role?.permissions ?? []),
-  )
+  const [name, setName] = React.useState(role.name)
+  const [description, setDescription] = React.useState(role.description ?? '')
+  const [preset, setPreset] = React.useState(role.preset)
+  const [branchId, setBranchId] = React.useState(role.branchId ?? '')
+  const [granted, setGranted] = React.useState<Set<string>>(() => new Set(role.permissions))
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -358,9 +800,6 @@ function RoleDialog({
    * Narrowed to what this admin may actually grant. An owner cannot hand out a
    * permission they do not hold themselves, and seeding one would build a role
    * that fails to save with an error pointing at a switch they never touched.
-   *
-   * Clearing the dropdown clears the seeded set too, which is what "start from
-   * scratch" has to mean if it means anything.
    */
   function choosePreset(value: string) {
     setPreset(value)
@@ -394,16 +833,17 @@ function RoleDialog({
   async function save() {
     setBusy(true)
     setError(null)
-    const payload = {
-      name,
-      description,
-      preset,
-      branchId: branchId || null,
-      permissions: [...granted],
-    }
-    const result = role
-      ? await callAction(() => updateRole({ ...payload, id: role.id, isActive: role.isActive }))
-      : await callAction(() => createRole(payload))
+    const result = await callAction(() =>
+      updateRole({
+        name,
+        description,
+        preset,
+        branchId: branchId || null,
+        permissions: [...granted],
+        id: role.id,
+        isActive: role.isActive,
+      }),
+    )
     setBusy(false)
     if (result.ok) onClose()
     else setError(result.error)
@@ -415,7 +855,7 @@ function RoleDialog({
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
       <DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{role ? `Edit ${role.name}` : 'Create a role'}</DialogTitle>
+          <DialogTitle>Edit {role.name}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -436,9 +876,8 @@ function RoleDialog({
                 id="role-preset"
                 value={preset}
                 onChange={(e) => choosePreset(e.target.value)}
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                className={SELECT_CLASS}
               >
-                <option value="">Start from scratch</option>
                 {presets.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -446,9 +885,8 @@ function RoleDialog({
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                {preset
-                  ? 'Fills in what that role can normally do, and decides where they land after signing in. Change any switch below.'
-                  : 'Optional. Pick one to start from what that role can normally do — or leave it and switch on only what you need.'}
+                Fills in what that role can normally do, and decides where they land after signing
+                in. Change any switch below.
               </p>
             </div>
           </div>
@@ -460,7 +898,7 @@ function RoleDialog({
                 id="role-branch"
                 value={branchId}
                 onChange={(e) => setBranchId(e.target.value)}
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                className={SELECT_CLASS}
               >
                 {canAssignAllLocations && !mustHaveBranch ? (
                   <option value="">All locations</option>
@@ -534,7 +972,7 @@ function RoleDialog({
             Cancel
           </Button>
           <Button onClick={save} disabled={busy || name.trim().length < 2}>
-            {busy ? 'Saving…' : role ? 'Save changes' : 'Create role'}
+            {busy ? 'Saving…' : 'Save changes'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -631,29 +1069,16 @@ function FeatureRow({
   )
 }
 
-function DuplicateDialog({
-  source,
-  presets,
-  onClose,
-}: {
-  source: RoleRow | 'preset'
-  presets: PresetOption[]
-  onClose: () => void
-}) {
-  const fromRole = source !== 'preset'
-  const [name, setName] = React.useState(fromRole ? `${source.name} copy` : '')
-  const [sourcePreset, setSourcePreset] = React.useState(presets[0]?.value ?? 'WAITER')
+/** An exact copy of an existing role under a new name. Templates live in Create. */
+function DuplicateDialog({ source, onClose }: { source: RoleRow; onClose: () => void }) {
+  const [name, setName] = React.useState(`${source.name} copy`)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
   async function go() {
     setBusy(true)
     setError(null)
-    const result = await callAction(() =>
-      duplicateRole(
-        fromRole ? { sourceRoleId: source.id, name } : { sourcePreset, name },
-      ),
-    )
+    const result = await callAction(() => duplicateRole({ sourceRoleId: source.id, name }))
     setBusy(false)
     if (result.ok) onClose()
     else setError(result.error)
@@ -663,32 +1088,10 @@ function DuplicateDialog({
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{fromRole ? `Duplicate ${source.name}` : 'Start from a template'}</DialogTitle>
+          <DialogTitle>Duplicate {source.name}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          {!fromRole ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="dup-preset">Template</Label>
-              <select
-                id="dup-preset"
-                value={sourcePreset}
-                onChange={(e) => setSourcePreset(e.target.value)}
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
-              >
-                {presets.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label} — {countFeatures(p.permissions)} features
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-muted-foreground">
-                A starting point you can edit. Anything the template holds that you do not is
-                left out.
-              </p>
-            </div>
-          ) : null}
-
           <div className="space-y-1.5">
             <Label htmlFor="dup-name">New role name</Label>
             <Input

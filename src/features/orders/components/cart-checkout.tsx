@@ -77,6 +77,12 @@ interface Props {
   phoneHint?: string
   /** The branch that code belongs to, since no table can settle it. */
   branchCode?: string | null
+  /**
+   * Where a placed order's tracker lives, e.g. `/m/<code>/track`. A QR guest
+   * must stay under `/m/<code>`, where no cookie is needed; the default is the
+   * ordinary tree's tracker.
+   */
+  trackBase?: string
 }
 
 export function CartCheckout({
@@ -91,6 +97,7 @@ export function CartCheckout({
   qrCode = null,
   requiresTable = true,
   branchCode = null,
+  trackBase = '/order/track',
   showCoupon = true,
   showName = true,
   showPhone = true,
@@ -293,7 +300,7 @@ export function CartCheckout({
       clearLines()
       stopAdding()
       toast.success(`Added to order ${addition.data.orderNumber}`)
-      router.push(`/order/track/${addition.data.orderId}`)
+      router.push(`${trackBase}/${addition.data.orderId}`)
       return
     }
     /*
@@ -355,7 +362,7 @@ export function CartCheckout({
 
     clearLines()
     toast.success(`Order ${result.data.orderNumber} sent to the kitchen`)
-    router.push(`/order/track/${result.data.orderId}`)
+    router.push(`${trackBase}/${result.data.orderId}`)
   }
 
   if (!hydrated) {

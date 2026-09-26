@@ -377,6 +377,10 @@ const SERVICE = [
 
 const RUNTIME = [
   'page-render-test', 'action-e2e-test', 'qr-to-kitchen-test',
+  // A delivery guest's whole journey over HTTP: scan, order, then the tracker
+  // and the bill under /m/<code>, with no tenant cookie anywhere. Pins the 404
+  // that shipped twice because nothing walked past the checkout.
+  'qr-delivery-journey-test',
   // abc.md §8 — /cashier redirects into the POS; tabs by permission.
   'pos-shell-test',
   // bugfix.md — the staff-codes page per branch, the pulse stream confined,

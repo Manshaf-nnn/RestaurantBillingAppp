@@ -125,6 +125,7 @@ export function OrderTracker({
   showSteps = true,
   showItems = true,
   showBill = true,
+  links,
   allowAdding = true,
   showEdit = true,
 }: {
@@ -139,12 +140,28 @@ export function OrderTracker({
   showSteps?: boolean
   showItems?: boolean
   showBill?: boolean
+  /**
+   * Where "back to the menu", "add more" and "view bill" go. Plain strings,
+   * never functions — they cross from a server page into this client
+   * component. Absent means the ordinary `/order/<slug>/<branch>` tree.
+   */
+  links?: { menu: string; bill: string }
   allowAdding?: boolean
   showEdit?: boolean
 }) {
   const router = useRouter()
-  // Every link out of here keeps the branch (a bare /order/menu lost it).
-  const menuHref = initial.branchCode ? guestPath(initial.slug, initial.branchCode, 'menu') : '/order/menu'
+  /*
+   * Every link out of here keeps the branch (a bare /order/menu lost it) —
+   * and keeps the FLOW. A guest who scanned a QR code lives under
+   * `/m/<code>/…`, where the code in the path identifies the restaurant and
+   * no cookie is needed; sending them to `/order/…` from here dropped them
+   * into a tree that resolves the restaurant from a cookie they never had.
+   * The page that mounts this says which tree it is in.
+   */
+  const menuHref =
+    links?.menu ??
+    (initial.branchCode ? guestPath(initial.slug, initial.branchCode, 'menu') : '/order/menu')
+  const billHref = links?.bill ?? `/order/bill/${initial.id}`
   const [status, setStatus] = React.useState<OrderStatus>(initial.status)
   const [cancelReason, setCancelReason] = React.useState<string | null>(initial.cancelReason)
   React.useEffect(() => setCancelReason(initial.cancelReason), [initial.cancelReason])
@@ -486,7 +503,7 @@ export function OrderTracker({
         <div className={cn('grid gap-3', showBill && allowAdding ? 'grid-cols-2' : 'grid-cols-1')}>
           {showBill ? (
           <Button variant="outline" asChild>
-            <Link href={`/order/bill/${initial.id}`}>
+            <Link href={billHref}>
               <Receipt /> View bill
             </Link>
           </Button>

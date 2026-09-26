@@ -525,6 +525,20 @@ export function ExperienceEditor({
           <Toggle checked={showOffers} onChange={setShowOffers} title="Show offers" hint="The live discount codes usable on this menu." />
           <Toggle checked={showLoyalty} onChange={setShowLoyalty} title="Show loyalty points" hint="Only if loyalty is switched on for the restaurant." />
         </div>
+        {/*
+          Not a switch, on purpose. A placed order has to land somewhere, so
+          tracking can never be turned off — and a toggle that cannot be
+          turned off is a setting that does not exist. But its absence from
+          this list read as "QR guests get no tracking page", so it is named.
+        */}
+        {type === 'ORDERING' ? (
+          <p className="mt-3 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Order tracking is always on.</span> After
+            ordering, a guest lands on a live tracker — received, accepted, preparing, ready, then
+            {' '}{askTable ? 'served' : 'delivered or collected'} — with their bill, and can add to or
+            edit the order while it is still open.
+          </p>
+        ) : null}
 
         {/*
           The live coupons are listed automatically; this is for what the

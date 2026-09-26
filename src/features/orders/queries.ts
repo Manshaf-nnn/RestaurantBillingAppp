@@ -69,40 +69,6 @@ export async function getOrderForGuest(restaurantId: string, orderId: string) {
   })
 }
 
-/**
- * The same, from the order id alone.
- *
- * ── Why this exists ─────────────────────────────────────────────────────────
- *
- * The tracker page resolved the restaurant from the tenant cookie, and a guest
- * who came in through a QR code never has one: `/m/[code]` identifies the
- * restaurant from the code in the path and — by design, documented in its
- * layout — reads and sets no cookie. So they placed an order and were sent to
- * a page that could not tell whose order it was, and got a 404 for their
- * trouble. Every delivery guest hit it.
- *
- * The order id is the identity. The guest session on the cookie is still the
- * AUTHORISATION — you see only orders this device placed — and the restaurant
- * comes back with the row rather than being guessed from the request.
- */
-export async function getOrderForGuestById(orderId: string) {
-  const guestSessionId = await getGuestSessionId()
-  if (!guestSessionId) return null
-
-  return prisma.order.findFirst({
-    where: { id: orderId, guestSessionId },
-    include: {
-      ...ORDER_DETAIL_INCLUDE,
-      restaurant: {
-        select: {
-          id: true, name: true, slug: true, currency: true, locale: true,
-          logoUrl: true, coverUrl: true, loyaltyEnabled: true,
-        },
-      },
-    },
-  })
-}
-
 /** Every open order this guest has on the current table. */
 export async function getGuestOrders(restaurantId: string, tableId?: string) {
   const guestSessionId = await getGuestSessionId()

@@ -4,20 +4,24 @@ import { revalidatePath } from 'next/cache'
 
 import { ConflictError, ForbiddenError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, ROLE_PERMISSIONS, assignableRoles, canActOnRole } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
-import { requirePermission, assertRecordBranch, assertBranchAccess } from '@/server/auth/guard'
+import { requirePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 
 import {
   assertNoEscalation,
   assertPresetScopeAllowed,
+  commitAssignment,
   mintRoleLink,
+  planAssignment,
   requireRole,
   resolveRoleBranch,
   templateFor,
+  type AssignmentPlan,
 } from './service'
+import { inferPreset, withRequiredPermissions } from './sidebar-access'
 import {
   assignRoleSchema,
   createRoleSchema,
@@ -40,47 +44,59 @@ function refresh() {
 }
 
 /**
- * Every guard a role change has to pass, in one place.
- *
- * Four separate questions, and getting any of them wrong is an escalation:
- *
- *   rank      may this person hand out this preset at all (`assignableRoles`)
- *   reach     does the preset see more locations than they do
- *   location  is the branch one they may write to
- *   power     is every permission one they themselves hold
- *
- * They were written as one helper because create, update and duplicate all
- * need the same four, and three copies is how one of them ends up missing a
- * check that the other two have.
- */
-/**
  * "Start from scratch" still has to land somewhere.
  *
  * The preset decides the landing page, what the edge middleware lets through
  * and whether the member is confined to one site — so a role without one could
- * not sign in. When the owner declines to base their role on anything, the
- * safest preset is the one that grants the least, and it is COMPUTED rather
- * than hardcoded: a new built-in role, or a change to an existing one, must not
- * silently make the fallback more powerful than it was.
+ * not sign in. It used to be "the built-in with the fewest permissions", which
+ * was Kitchen for everyone, and a Kitchen-based role with POS ticked was a tab
+ * the edge refused on every click. Now it is inferred from what was ticked
+ * (`inferPreset`): a preset the edge lets into every gated tab that is on,
+ * confined by the location when one was chosen, landing on one of its own tabs
+ * where it can.
  *
- * Narrowed to what this admin may assign, so the fallback can never hand out a
- * landing page they could not have chosen themselves.
+ * Narrowed to what this admin may assign, so the inference can never hand out
+ * a landing page they could not have chosen themselves.
  */
-function leastPrivilegedPreset(admin: Awaited<ReturnType<typeof requirePermission>>): UserRole {
+function presetFor(
+  admin: Awaited<ReturnType<typeof requirePermission>>,
+  permissions: string[],
+  branchId: string | null | undefined,
+): UserRole {
   const options = assignableRoles(admin.role)
-  if (options.length === 0) {
-    throw new ForbiddenError('You cannot create roles')
-  }
-  return [...options].sort(
-    (a, b) => (ROLE_PERMISSIONS[a]?.length ?? 0) - (ROLE_PERMISSIONS[b]?.length ?? 0),
-  )[0]
+  if (options.length === 0) throw new ForbiddenError('You cannot create roles')
+
+  const { preset, blockedBy } = inferPreset(permissions, options, branchId)
+  if (preset) return preset
+  throw new ForbiddenError(
+    `Nothing you can assign opens ${blockedBy.map((m) => m.label).join(' and ')} together — untick one of them.`,
+  )
 }
 
+/**
+ * Every guard a role change has to pass, in one place.
+ *
+ * Five separate questions, and getting any of them wrong is an escalation or
+ * a role that cannot do its job:
+ *
+ *   rank      may this person hand out this preset at all (`assignableRoles`)
+ *   reach     does the preset see more locations than they do
+ *   needs     does the list carry what its own tabs require — POS without
+ *             Payment details is closed over here, whatever the client sent
+ *   power     is every permission one they themselves hold
+ *   location  is the branch one they may write to
+ *
+ * They were written as one helper because create, update and duplicate all
+ * need the same five, and three copies is how one of them ends up missing a
+ * check that the other two have. The closure runs BEFORE the power check, so
+ * a dependency the admin cannot grant refuses the role rather than being
+ * quietly left out of it.
+ */
 async function vet(
   admin: Awaited<ReturnType<typeof requirePermission>>,
   input: { preset?: UserRole | '' | null; branchId?: string | null; permissions: string[] },
 ) {
-  const preset = input.preset || leastPrivilegedPreset(admin)
+  const preset = input.preset || presetFor(admin, input.permissions, input.branchId)
 
   if (!assignableRoles(admin.role).includes(preset)) {
     throw new ForbiddenError(
@@ -88,11 +104,12 @@ async function vet(
     )
   }
   assertPresetScopeAllowed(admin, preset)
-  assertNoEscalation(admin, input.permissions)
+  const permissions = withRequiredPermissions(input.permissions, preset)
+  assertNoEscalation(admin, permissions)
   const branchId = await resolveRoleBranch(admin, input.branchId, preset)
-  // The caller writes the row, so it needs the preset that was settled here —
-  // not the blank it sent.
-  return { branchId, preset }
+  // The caller writes the row, so it needs what was settled here — the preset
+  // rather than the blank it sent, and the list with its dependencies in it.
+  return { branchId, preset, permissions }
 }
 
 /** A name is unique per restaurant, and the error should say so plainly. */
@@ -109,14 +126,34 @@ async function assertNameFree(restaurantId: string, name: string, exceptId?: str
   if (clash) throw new ConflictError(`You already have a role called “${name}”`)
 }
 
-export async function createRole(input: unknown): Promise<ActionResult<{ id: string }>> {
+export async function createRole(
+  input: unknown,
+): Promise<ActionResult<{ id: string; assigned: number }>> {
   return runAction(
     createRoleSchema,
     input,
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-      const { branchId, preset } = await vet(admin, data)
+      const { branchId, preset, permissions } = await vet(admin, data)
       await assertNameFree(admin.restaurantId, data.name)
+
+      /*
+       * Every person is vetted BEFORE the role exists — tenant, location,
+       * rank, status, and a home site for a preset that needs one — so a
+       * refused name leaves nothing behind. Role = what they can access;
+       * location = where they can operate; both are settled here.
+       */
+      const shape = { preset, branchId, isActive: true, permissions }
+      const plans: AssignmentPlan[] = []
+      for (const row of data.assignments ?? []) {
+        plans.push(
+          await planAssignment(
+            admin,
+            { userId: row.userId, branchId: row.branchId, requireActive: true },
+            shape,
+          ),
+        )
+      }
 
       const role = await prisma.staffRole.create({
         data: {
@@ -125,7 +162,7 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
           description: data.description || null,
           preset,
           branchId,
-          permissions: data.permissions,
+          permissions,
           createdById: admin.id,
         },
       })
@@ -140,6 +177,9 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
         entityId: role.id,
         after: { name: role.name, preset: role.preset, permissions: role.permissions },
       })
+
+      // Connected straight away: the role is theirs on their next request.
+      for (const plan of plans) await commitAssignment(admin, plan, role.id)
 
       /*
        * A role comes WITH its sign-in link (sidebar.md — role links).
@@ -158,7 +198,7 @@ export async function createRole(input: unknown): Promise<ActionResult<{ id: str
       await mintRoleLink(admin, role.id).catch(() => undefined)
 
       refresh()
-      return { id: role.id }
+      return { id: role.id, assigned: plans.length }
     },
     'Role created.',
   )
@@ -183,7 +223,7 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
        */
       assertNoEscalation(admin, [...existing.permissions, ...data.permissions])
 
-      const { branchId, preset } = await vet(admin, data)
+      const { branchId, preset, permissions } = await vet(admin, data)
       await assertNameFree(admin.restaurantId, data.name, data.id)
 
       const role = await prisma.staffRole.update({
@@ -193,7 +233,7 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
           description: data.description || null,
           preset,
           branchId,
-          permissions: data.permissions,
+          permissions,
           isActive: data.isActive,
         },
       })
@@ -277,7 +317,7 @@ export async function duplicateRole(input: unknown): Promise<ActionResult<{ id: 
           description,
           preset,
           branchId: resolved.branchId,
-          permissions,
+          permissions: resolved.permissions,
           createdById: admin.id,
         },
       })
@@ -377,105 +417,25 @@ export async function deleteRole(input: unknown): Promise<ActionResult<{ demoted
   )
 }
 
-/** Put somebody in a role, or take them out of one. */
+/**
+ * Put somebody in a role, or take them out of one.
+ *
+ * The guards and the write live in `planAssignment` / `commitAssignment`, so
+ * that Create Role — which puts several people on a role that does not exist
+ * yet — runs exactly the same checks rather than a second copy of them.
+ */
 export async function assignRole(input: unknown): Promise<ActionResult<{ userId: string }>> {
   return runAction(
     assignRoleSchema,
     input,
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
-
-      const target = await prisma.user.findFirst({
-        where: { id: data.userId, restaurantId: admin.restaurantId, deletedAt: null },
-        select: { id: true, role: true, staffRoleId: true, name: true, branchId: true },
-      })
-      if (!target) throw new ForbiddenError('No such member of staff')
-      // Rank and power were checked; location was not. `updateStaff` and
-      // `credentialTarget` both assert this, for the bug their comment names —
-      // a branch manager re-scoping another site's cashier by id alone.
-      await assertRecordBranch(admin, target, 'member of staff')
-
-      // The same rank rule as editing them any other way: an owner's account
-      // is not somebody a manager may re-scope.
-      if (target.role === 'OWNER' || !canActOnRole(admin.role, target.role)) {
-        throw new ForbiddenError('You cannot change that person’s access')
-      }
-
-      /*
-       * ── The preset is applied, not just recorded ─────────────────────────
-       *
-       * This used to write `staffRoleId` alone, and that one omission was
-       * behind most of what people reported as broken.
-       *
-       * A person has two roles: `User.role`, which decides where they land,
-       * what the edge middleware lets through and which branches they can see;
-       * and the custom role, which decides their permissions. `StaffRole.preset`
-       * exists to keep those in step — its own schema comment says it "decides
-       * branch semantics, where the person lands after signing in, and what the
-       * edge gate lets through" — and nothing applied it.
-       *
-       * So a role built on Cashier could be given to a Waiter's account. Their
-       * permissions became a cashier's; their landing page stayed /waiter; the
-       * middleware still saw WAITER. Giving somebody the right permissions and
-       * leaving them unable to reach the screens is worse than not granting
-       * them, because it looks done.
-       */
-      let nextRole: UserRole | null = null
-      let nextBranchId: string | null | undefined
-
-      if (data.staffRoleId) {
-        const role = await requireRole(admin.restaurantId, data.staffRoleId)
-        if (!role.isActive) throw new ConflictError('That role is switched off')
-        // Assigning is granting, so it passes the same power check as building.
-        assertNoEscalation(admin, role.permissions)
-
-        // The preset is a role being handed out, so it obeys the same rank rule
-        // as every other way of handing one out.
-        if (!assignableRoles(admin.role).includes(role.preset)) {
-          throw new ForbiddenError('That role outranks what you can assign')
-        }
-        nextRole = role.preset
-        // Only when the role pins a location. A role that does not pin one
-        // leaves the person where they already work — and the location it
-        // pins has to be one the admin reaches.
-        if (role.branchId) {
-          await assertBranchAccess(admin, role.branchId)
-          nextBranchId = role.branchId
-        }
-      }
-
-      await prisma.user.update({
-        where: { id: data.userId },
-        data: {
-          staffRoleId: data.staffRoleId ?? null,
-          /*
-           * Clearing a custom role deliberately leaves the base role alone.
-           * Taking somebody's extra permissions away must not also re-rank
-           * them — that would demote a manager to whatever they were hired as
-           * the moment an owner tidied up a role list.
-           */
-          ...(nextRole ? { role: nextRole } : {}),
-          ...(nextBranchId ? { branchId: nextBranchId } : {}),
-        },
-      })
-
-      await audit({
-        restaurantId: admin.restaurantId,
-        userId: admin.id,
-        actorName: admin.name,
-        action: AUDIT_ACTIONS.ROLE_ASSIGNED,
-        entity: 'User',
-        entityId: target.id,
-        before: { staffRoleId: target.staffRoleId, role: target.role },
-        after: {
-          staffRoleId: data.staffRoleId ?? null,
-          role: nextRole ?? target.role,
-          staff: target.name,
-        },
-      })
+      const role = data.staffRoleId ? await requireRole(admin.restaurantId, data.staffRoleId) : null
+      const plan = await planAssignment(admin, { userId: data.userId, branchId: data.branchId }, role)
+      await commitAssignment(admin, plan, data.staffRoleId ?? null)
 
       refresh()
-      return { userId: target.id }
+      return { userId: plan.target.id }
     },
     'Access updated.',
   )

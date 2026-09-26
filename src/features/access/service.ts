@@ -2,10 +2,11 @@ import 'server-only'
 
 import type { UserRole } from '@prisma/client'
 
-import { ForbiddenError, NotFoundError } from '@/lib/errors'
+import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import {
   ROLE_LABELS,
   assignableRoles,
+  canActOnRole,
   ROLE_PERMISSIONS,
   permissionsFor,
   requiresOwnBranch,
@@ -13,7 +14,8 @@ import {
   visibleBranchIds,
   type Permission,
 } from '@/lib/rbac'
-import type { TenantUser } from '@/server/auth/guard'
+import { AUDIT_ACTIONS, audit } from '@/server/audit'
+import { assertBranchAccess, assertRecordBranch, type TenantUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { generateToken } from '@/server/auth/password'
 import { tenantOrigin } from '@/lib/tenant-url'
@@ -200,6 +202,151 @@ export async function listRoles(
     createdAt: role.createdAt.toISOString(),
     signInUrl: role.invites[0] ? joinUrl(role.invites[0].token, origin) : null,
   }))
+}
+
+/** What an assignment needs to know about the role — a saved row, or one about to be saved. */
+export interface RoleShape {
+  preset: UserRole
+  branchId: string | null
+  isActive: boolean
+  permissions: string[]
+}
+
+export interface AssignmentPlan {
+  target: { id: string; name: string; role: UserRole; staffRoleId: string | null; branchId: string | null }
+  /** The base role the person becomes, when a role is being given. */
+  nextRole: UserRole | null
+  /** The home location they move to, when one was decided. */
+  nextBranchId: string | null
+}
+
+/**
+ * Everything that has to be true before somebody is put on a role.
+ *
+ * Split from the write so Create Role can vet every person BEFORE the role
+ * row exists: a refused third name must not leave a role behind with two
+ * people already on it and an error about the third. `assignRole` runs the
+ * same plan and commits it at once.
+ *
+ * ── The guards, all of them reused ──────────────────────────────────────────
+ *
+ *   tenant     the person is looked up under the admin's own restaurant, so a
+ *              guessed id from another tenant resolves to nothing
+ *   location   their CURRENT site is one the admin reaches (`assertRecordBranch`
+ *              — a branch manager cannot re-scope another site's cashier by
+ *              id), and any site they are moved TO is one the admin reaches
+ *   rank       the owner is untouchable and nobody acts above their own rank
+ *   power      the role's permissions are ones the admin holds — assigning is
+ *              granting — and its preset is one they may hand out
+ *   status     a switched-off role is not somebody to put people on; and, when
+ *              asked, neither is a switched-off person
+ *   blindness  a preset that needs a home site gets one, from the role, the
+ *              form or the person's own record — otherwise every screen they
+ *              open is empty and nothing says why
+ *
+ * ── The preset is applied, not just recorded ───────────────────────────────
+ *
+ * A person has two roles: `User.role`, which decides where they land, what
+ * the edge middleware lets through and which branches they can see; and the
+ * custom role, which decides their permissions. `StaffRole.preset` exists to
+ * keep those in step, and writing `staffRoleId` alone was behind most of what
+ * people reported as broken — a role built on Cashier given to a Waiter's
+ * account had a cashier's permissions, landed on /waiter, and was refused by
+ * the edge as WAITER. So `nextRole` is the preset, and the write applies it.
+ */
+export async function planAssignment(
+  admin: TenantUser,
+  input: { userId: string; branchId?: string | null; requireActive?: boolean },
+  role: RoleShape | null,
+): Promise<AssignmentPlan> {
+  const target = await prisma.user.findFirst({
+    where: { id: input.userId, restaurantId: admin.restaurantId, deletedAt: null },
+    select: { id: true, role: true, staffRoleId: true, name: true, branchId: true, isActive: true },
+  })
+  if (!target) throw new ForbiddenError('No such member of staff')
+  await assertRecordBranch(admin, target, 'member of staff')
+
+  if (target.role === 'OWNER' || !canActOnRole(admin.role, target.role)) {
+    throw new ForbiddenError(`You cannot change ${target.name}’s access`)
+  }
+  if (input.requireActive && !target.isActive) {
+    throw new ConflictError(`${target.name} is switched off — switch them on before giving them a role`)
+  }
+
+  let nextRole: UserRole | null = null
+  let nextBranchId: string | null = null
+
+  if (role) {
+    if (!role.isActive) throw new ConflictError('That role is switched off')
+    assertNoEscalation(admin, role.permissions)
+    if (!assignableRoles(admin.role).includes(role.preset)) {
+      throw new ForbiddenError('That role outranks what you can assign')
+    }
+    nextRole = role.preset
+  }
+
+  /*
+   * A role that pins a location wins over the form, for the same reason its
+   * preset does: the role says where its people work. Otherwise the form may
+   * say, and either way the site has to be one the admin reaches and one this
+   * restaurant owns.
+   */
+  const wanted = role?.branchId ?? input.branchId ?? null
+  if (wanted) {
+    await assertBranchAccess(admin, wanted)
+    const branch = await prisma.branch.findFirst({
+      where: { id: wanted, restaurantId: admin.restaurantId, deletedAt: null },
+      select: { id: true },
+    })
+    if (!branch) throw new NotFoundError('Location')
+    nextBranchId = branch.id
+  }
+
+  if (role && requiresOwnBranch(role.preset) && !(nextBranchId ?? target.branchId)) {
+    throw new ForbiddenError(
+      `${target.name} needs a location for a role based on ${ROLE_LABELS[role.preset]} — without one their screens show nothing at all.`,
+    )
+  }
+
+  return { target, nextRole, nextBranchId }
+}
+
+/** Write a vetted assignment. `staffRoleId` null takes the person off their custom role. */
+export async function commitAssignment(
+  admin: TenantUser,
+  plan: AssignmentPlan,
+  staffRoleId: string | null,
+): Promise<void> {
+  await prisma.user.update({
+    where: { id: plan.target.id },
+    data: {
+      staffRoleId,
+      /*
+       * Clearing a custom role deliberately leaves the base role alone.
+       * Taking somebody's extra permissions away must not also re-rank them —
+       * that would demote a manager to whatever they were hired as the moment
+       * an owner tidied up a role list.
+       */
+      ...(plan.nextRole ? { role: plan.nextRole } : {}),
+      ...(plan.nextBranchId ? { branchId: plan.nextBranchId } : {}),
+    },
+  })
+
+  await audit({
+    restaurantId: admin.restaurantId,
+    userId: admin.id,
+    actorName: admin.name,
+    action: AUDIT_ACTIONS.ROLE_ASSIGNED,
+    entity: 'User',
+    entityId: plan.target.id,
+    before: { staffRoleId: plan.target.staffRoleId, role: plan.target.role, branchId: plan.target.branchId },
+    after: {
+      staffRoleId,
+      role: plan.nextRole ?? plan.target.role,
+      branchId: plan.nextBranchId ?? plan.target.branchId,
+      staff: plan.target.name,
+    },
+  })
 }
 
 /**

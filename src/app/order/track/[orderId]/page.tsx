@@ -5,7 +5,8 @@ import type { Metadata } from 'next'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { OrderTracker } from '@/features/orders/components/order-tracker'
-import { getOrderForGuestById, readOptions } from '@/features/orders/queries'
+import { getOrderForGuest, readOptions } from '@/features/orders/queries'
+import { resolvePublicTenant } from '@/server/db/tenant'
 import { getGuestAppearance } from '@/features/guest/queries'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { GuestLoyalty } from '@/features/loyalty/components/guest-loyalty'
@@ -21,20 +22,18 @@ export default async function TrackOrderPage({
   params: Promise<{ orderId: string }>
 }) {
   const { orderId } = await params
-
   /*
-   * The order first, the restaurant from it.
-   *
-   * This page used to resolve the restaurant from the tenant cookie and only
-   * then look the order up. A guest who came in through a QR code has no such
-   * cookie — `/m/[code]` reads and sets none, by design — so every delivery
-   * guest was sent here after ordering and shown a 404. The order id names the
-   * restaurant; the guest session on the cookie still decides whose it is.
+   * This tree resolves the restaurant from the request, and its layout has
+   * already refused if it could not. A guest who came in through a QR code
+   * never reaches here: they are sent to `/m/<code>/track`, which resolves
+   * the restaurant from the code in the path instead.
    */
-  const order = await getOrderForGuestById(orderId)
-  const restaurant = order?.restaurant ?? null
+  const restaurant = await resolvePublicTenant()
+  if (!restaurant) notFound()
 
-  if (!order || !restaurant) {
+  const order = await getOrderForGuest(restaurant.id, orderId)
+
+  if (!order) {
     return (
       <div className="flex min-h-dvh items-center p-6">
         <EmptyState

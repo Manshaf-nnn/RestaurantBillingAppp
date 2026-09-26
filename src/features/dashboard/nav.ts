@@ -77,6 +77,31 @@ export interface NavItem {
    */
   roles?: string[]
   exact?: boolean
+  /**
+   * Other sidebar entries this one cannot work without, by href.
+   *
+   * The role builder ticks them for you and will not let them be unticked
+   * while this entry is on; the server closes a saved permission list over
+   * the same declarations (`withRequiredPermissions`), so a role that shows
+   * POS and hides Payment details cannot be stored however the request was
+   * made. Declared here, on the entry, because the sidebar is the one list
+   * of modules an owner is choosing from — a second list of "what needs
+   * what" kept anywhere else would drift from it.
+   *
+   * Only for a dependency the CODE has: a screen this one sends people to,
+   * or an action it calls, that is guarded by the other entry's permission.
+   * "These usually go together" is a template's job, not this field's.
+   */
+  requires?: string[]
+  /**
+   * What ticking this entry in the role builder switches on, when opening
+   * the screen is not the same as being able to use it. Defaults to
+   * `[permission]`, which is right for every plain page. The POS is the
+   * exception: it is a shell whose tabs are gated one by one, so a role that
+   * holds only `order.create` gets a till that can take an order and not the
+   * money for it.
+   */
+  grants?: Permission[]
 }
 
 export interface NavSection {
@@ -185,7 +210,17 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: FileText,
         permission: PERMISSIONS.RESERVATION_MANAGE,
       },
-      { href: '/kitchen', label: 'Kitchen display', icon: ChefHat, permission: PERMISSIONS.KITCHEN_VIEW },
+      {
+        href: '/kitchen',
+        label: 'Kitchen display',
+        icon: ChefHat,
+        permission: PERMISSIONS.KITCHEN_VIEW,
+        // A literal mirror of ROLE_ALLOWED['/kitchen'] in `src/middleware.ts`.
+        // POS carried its mirror and this did not, so a role built on POS and
+        // handed `kitchen.view` saw a Kitchen display entry that bounced to
+        // /forbidden — the exact shape `NavItem.roles` exists to prevent.
+        roles: ['OWNER', 'MANAGER', 'ADMIN', 'KITCHEN'],
+      },
       /*
        * Beside the kitchen display, because that is what it configures.
        *
@@ -200,7 +235,14 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Utensils,
         permission: PERMISSIONS.KITCHEN_STATION_VIEW,
       },
-      { href: '/waiter', label: 'Waiter station', icon: HandPlatter, permission: PERMISSIONS.WAITER_VIEW },
+      {
+        href: '/waiter',
+        label: 'Waiter station',
+        icon: HandPlatter,
+        permission: PERMISSIONS.WAITER_VIEW,
+        // A literal mirror of ROLE_ALLOWED['/waiter'] in `src/middleware.ts`.
+        roles: ['OWNER', 'MANAGER', 'ADMIN', 'WAITER'],
+      },
       /*
        * One entry, because there was only ever one screen.
        *
@@ -243,6 +285,28 @@ export const NAV_SECTIONS: NavSection[] = [
          * door and the only one they need.
          */
         roles: ['OWNER', 'MANAGER', 'ADMIN', 'POS', 'CASHIER'],
+        /*
+         * A till needs Payment details (bank.md). Guests declare bank
+         * transfers and somebody at the till confirms them on that screen —
+         * it "answers to PAYMENT_COLLECT, which a cashier holds, because
+         * confirming transfers is a till job", and `account.view` was split
+         * from `payment.collect` for exactly that reason. A POS role without
+         * it can take a transfer and never mark it received.
+         */
+        requires: ['/dashboard/payment-details'],
+        /*
+         * The till as a working till: orders in, money taken, online orders
+         * answered. Not the drawer — that is its own entry below, because an
+         * owner may want a person who serves without ever holding a float —
+         * and not discounts or refunds, which stay a deliberate grant.
+         */
+        grants: [
+          PERMISSIONS.ORDER_CREATE,
+          PERMISSIONS.ORDER_UPDATE_STATUS,
+          PERMISSIONS.PAYMENT_VIEW,
+          PERMISSIONS.PAYMENT_COLLECT,
+          PERMISSIONS.ORDER_ACCEPT,
+        ],
       },
       {
         href: '/dashboard/payment-details',
@@ -269,6 +333,9 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Add your menu',
         icon: Sparkles,
         permission: PERMISSIONS.MENU_MANAGE,
+        // It writes into the menu list and returns you to it, and that list
+        // opens on `menu.view`.
+        requires: ['/dashboard/menu'],
       },
       { href: '/dashboard/loyalty', label: 'Loyalty', icon: Sparkles, permission: PERMISSIONS.LOYALTY_VIEW },
       { href: '/dashboard/coupons', label: 'Coupons', icon: Ticket, permission: PERMISSIONS.COUPON_MANAGE },
@@ -339,6 +406,9 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Goods received',
         icon: PackageCheck,
         permission: PERMISSIONS.PURCHASE_RECEIVE,
+        // Every delivery on it opens its purchase order, and the order page
+        // is guarded by `purchase.view`.
+        requires: ['/dashboard/purchases'],
       },
     ],
   },
@@ -351,7 +421,14 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: UsersRound,
         permission: PERMISSIONS.CUSTOMER_VIEW,
       },
-      { href: '/dashboard/customers/analytics', label: 'Customer insights', icon: UserSearch, permission: PERMISSIONS.CUSTOMER_ANALYTICS },
+      {
+        href: '/dashboard/customers/analytics',
+        label: 'Customer insights',
+        icon: UserSearch,
+        permission: PERMISSIONS.CUSTOMER_ANALYTICS,
+        // Each row opens the guest's own page, which is `customer.view`.
+        requires: ['/dashboard/customers'],
+      },
       { href: '/dashboard/staff', label: 'Staff', icon: ShieldCheck, permission: PERMISSIONS.STAFF_VIEW },
       {
         // The rota: who works which shift, where (shifthandover.md §1–2).
@@ -368,8 +445,24 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Roles & access',
         icon: KeyRound,
         permission: PERMISSIONS.STAFF_MANAGE,
+        // Its second tab IS the Staff screen, and assigning a role means
+        // choosing from the staff list — both `staff.view`.
+        requires: ['/dashboard/staff'],
       },
-      { href: '/dashboard/staff/codes', label: 'Staff codes', icon: BadgeCheck, permission: PERMISSIONS.STAFF_VIEW },
+      {
+        href: '/dashboard/staff/codes',
+        label: 'Staff codes',
+        icon: BadgeCheck,
+        /*
+         * `staff.manage`, because that is what the page asks for: "reading a
+         * credential is the same power as issuing it". This entry said
+         * `staff.view`, so a role with Staff on and Manage off was offered a
+         * link that ended at /forbidden — and, in the role builder, a tab that
+         * could be ticked and never opened.
+         */
+        permission: PERMISSIONS.STAFF_MANAGE,
+        requires: ['/dashboard/staff'],
+      },
       { href: '/dashboard/reviews', label: 'Reviews', icon: Star, permission: PERMISSIONS.REVIEW_MANAGE },
       { href: '/dashboard/feedback', label: 'Feedback', icon: Smile, permission: PERMISSIONS.FEEDBACK_VIEW },
     ],
@@ -466,7 +559,14 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: PERMISSIONS.SETTINGS_VIEW },
 
-      { href: '/dashboard/links', label: 'Share links', icon: UsersRound, permission: PERMISSIONS.STAFF_MANAGE },
+      {
+        href: '/dashboard/links',
+        label: 'Share links',
+        icon: UsersRound,
+        permission: PERMISSIONS.STAFF_MANAGE,
+        // A personal link is made for a member of staff picked from the list.
+        requires: ['/dashboard/staff'],
+      },
     ],
   },
 ]

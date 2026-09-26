@@ -87,7 +87,14 @@ export function GuestBill({
    * rather than an empty one.
    */
   fields = DEFAULT_RECEIPT_FIELDS,
+  links,
 }: {
+  /**
+   * Where "track" and "back to the menu" go. Plain strings, never functions —
+   * they cross from a server page into this client component. Absent means
+   * the ordinary `/order` tree; a QR guest's page points them at `/m/<code>`.
+   */
+  links?: { track: string; menu: string }
   bill: BillView
   restaurantName: string
   restaurantAddress: string | null
@@ -213,7 +220,7 @@ export function GuestBill({
       <AutoRefresh intervalMs={4000} scope={`order:${bill.id}`} />
       <header className="no-print sticky top-0 z-30 flex items-center gap-2 border-b bg-background/90 px-4 py-3 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" asChild aria-label="Back">
-          <Link href={`/order/track/${bill.id}`}>
+          <Link href={links?.track ?? `/order/track/${bill.id}`}>
             <ArrowLeft />
           </Link>
         </Button>
@@ -575,7 +582,7 @@ export function GuestBill({
           </Button>
 
           <Button variant="ghost" className="w-full" asChild>
-            <Link href="/order/menu">
+            <Link href={links?.menu ?? '/order/menu'}>
               <Receipt /> Back to the menu
             </Link>
           </Button>

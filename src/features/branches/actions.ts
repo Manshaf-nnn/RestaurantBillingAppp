@@ -23,6 +23,7 @@ import {
   assertPresetScopeAllowed,
   resolveRoleBranch,
 } from '@/features/access/service'
+import { withRequiredPermissions } from '@/features/access/sidebar-access'
 import { assignRole } from '@/features/access/actions'
 import {
   createLocationWithManager,
@@ -531,8 +532,11 @@ export async function setLocationFeaturesAction(
 
       const branch = await requireBranch(user.restaurantId, data.branchId)
 
+      // A tab carries what it requires, here as on the roles screen — this is
+      // the other place a role's permission list is written.
+      const permissions = withRequiredPermissions(data.permissions, 'MANAGER')
       // Handing a permission out is granting it.
-      assertNoEscalation(user, data.permissions)
+      assertNoEscalation(user, permissions)
       assertPresetScopeAllowed(user, 'MANAGER')
       // Re-resolves the branch through the same helper the role builder uses,
       // so a pin this person may not set is refused here too.
@@ -560,7 +564,7 @@ export async function setLocationFeaturesAction(
       const role = existing
         ? await prisma.staffRole.update({
             where: { id: existing.id },
-            data: { permissions: data.permissions, isActive: true },
+            data: { permissions, isActive: true },
           })
         : await prisma.staffRole.create({
             data: {
@@ -571,7 +575,7 @@ export async function setLocationFeaturesAction(
               description: `What the manager of ${branch.name} can do.`,
               preset: 'MANAGER',
               branchId,
-              permissions: data.permissions,
+              permissions,
               createdById: user.id,
             },
           })
@@ -598,7 +602,7 @@ export async function setLocationFeaturesAction(
         after: {
           location: branch.name,
           role: role.name,
-          permissions: data.permissions.length,
+          permissions: permissions.length,
           assignedTo: assigned ? branch.managerId : null,
         },
       })

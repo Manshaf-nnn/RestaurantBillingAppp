@@ -16,6 +16,7 @@ import {
   requiresOwnBranch,
 } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Roles' }
@@ -40,9 +41,36 @@ export default async function RolesPage({
   const selection = await selectedBranch(user, await searchParams)
   const reach = selection.branchIds
 
-  const [roles, locations] = await Promise.all([
+  const [roles, locations, staff] = await Promise.all([
     listRoles(user.restaurantId, reach),
     listLocations(user.restaurantId, reach),
+    /*
+     * Who can be put on a new role as it is created — the same list the
+     * links screen offers, for the same reason: only people this person may
+     * act on, only within their reach, only switched on. `planAssignment`
+     * re-checks every one of those on submit; this stops the picker offering
+     * a name the server would refuse.
+     */
+    prisma.user.findMany({
+      where: {
+        restaurantId: user.restaurantId,
+        deletedAt: null,
+        isActive: true,
+        role: { in: assignableRoles(user.role) },
+        ...(reach ? { branchId: { in: reach } } : {}),
+        // The synthetic accounts behind shared-screen links are not people.
+        email: { not: { contains: '@invites.local' } },
+      },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        branchId: true,
+        branch: { select: { name: true } },
+        staffRole: { select: { name: true } },
+      },
+      orderBy: { name: 'asc' },
+    }),
   ])
 
   /*
@@ -72,6 +100,13 @@ export default async function RolesPage({
         roles={roles}
         presets={presets}
         locations={locations}
+        staff={staff.map((member) => ({
+          id: member.id,
+          name: member.name,
+          roleLabel: member.staffRole?.name ?? ROLE_LABELS[member.role],
+          branchId: member.branchId,
+          branchName: member.branch?.name ?? null,
+        }))}
         // "All locations" is only somebody's to grant if they have all of them.
         canAssignAllLocations={reach === null}
         grantable={grantable}

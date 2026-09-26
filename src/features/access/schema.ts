@@ -42,13 +42,14 @@ const nameField = z
  */
 const branchIdField = z.string().trim().max(40).optional().nullable()
 
-export const createRoleSchema = z.object({
+const roleFields = z.object({
   name: nameField,
   description: z.string().trim().max(160).optional().or(z.literal('')),
   /*
    * Blank means "start from scratch": no permissions seeded, and the LANDING
-   * role resolved on the server to the most limited preset this admin can
-   * assign.
+   * role inferred on the server from what was ticked (`inferPreset`) — one
+   * the edge lets into every gated tab that is on, confined by the location
+   * when one was chosen.
    *
    * It cannot simply be null. The preset is not cosmetic — it decides where the
    * person lands after signing in, what the edge middleware lets through, and
@@ -60,9 +61,35 @@ export const createRoleSchema = z.object({
   branchId: branchIdField,
   permissions: permissionsField,
 })
+
+/**
+ * People put on the role as it is created, each with an optional location.
+ *
+ * Optional, and deduplicated by person: the same user listed twice is one
+ * assignment, not an error to explain. Capped because two hundred people on
+ * one role from one form is a bulk import, and this is not that screen.
+ */
+const assignmentsField = z
+  .array(
+    z.object({
+      userId: z.string().cuid(),
+      /** Where this person works. Null leaves them where they are. */
+      branchId: branchIdField,
+    }),
+  )
+  .max(200)
+  .transform((rows) => {
+    const seen = new Set<string>()
+    return rows.filter((row) => (seen.has(row.userId) ? false : (seen.add(row.userId), true)))
+  })
+  .optional()
+
+export const createRoleSchema = roleFields.extend({
+  assignments: assignmentsField,
+})
 export type CreateRoleInput = z.infer<typeof createRoleSchema>
 
-export const updateRoleSchema = createRoleSchema.extend({
+export const updateRoleSchema = roleFields.extend({
   id: z.string().cuid(),
   isActive: z.coerce.boolean().default(true),
 })
@@ -84,6 +111,12 @@ export const assignRoleSchema = z.object({
   userId: z.string().cuid(),
   /** Null removes the custom role and returns them to their preset defaults. */
   staffRoleId: z.string().cuid().optional().nullable(),
+  /**
+   * Where this person works, when the role does not pin a location itself.
+   * Role = what they can access; location = where they can operate. Absent
+   * leaves their current location alone.
+   */
+  branchId: branchIdField,
 })
 
 export const setRoleActiveSchema = z.object({

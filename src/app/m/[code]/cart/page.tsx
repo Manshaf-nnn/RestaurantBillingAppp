@@ -64,6 +64,7 @@ export default async function QrCartPage({
       slug={experience.restaurant.slug}
       basePath={qrPath(experience.publicId)}
       qrCode={experience.publicId}
+      trackBase={qrPath(experience.publicId, 'track')}
       requiresTable={experience.askTable}
       branchCode={branch.code}
       showCoupon={appearance.checkoutShowCoupon}
