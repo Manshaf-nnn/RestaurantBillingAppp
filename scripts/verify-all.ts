@@ -108,6 +108,11 @@ const SERVICE = [
   // reports the BILLS it was on — a payment settles a bill, and nothing
   // divides one across its lines.
   'sales-views-test',
+  // The sales screen's tiles and drill-downs. A discount belongs to a BILL, so
+  // showing one per item or per hour divides it — and a division that rounds is
+  // a division that can lose money. Pins that every bill's shares add back to
+  // that bill's discount, and each column back to the tile above it.
+  'sales-detail-test',
   // FIFO.md — the books tie to the layers after purchase, sale, wastage,
   // adjustment, transfer and reversal: layer quantity equals what the branch
   // holds, layer value equals the item's value, and every movement's trace

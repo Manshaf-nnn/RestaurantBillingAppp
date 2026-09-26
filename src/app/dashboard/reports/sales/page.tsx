@@ -10,8 +10,10 @@ import { ReportTable } from '@/features/reports/components/report-table'
 import { ReportViewPicker } from '@/features/reports/components/report-view-picker'
 import { resolveRange } from '@/features/reports/range'
 import { getSalesReport, getPaymentsReport, getItemPaymentDetail } from '@/features/reports/sales'
+import { getSalesBreakdowns, getSalesDeltas } from '@/features/reports/sales-detail'
+import { SalesDashboard } from '@/features/reports/components/sales-dashboard'
 import { listLocations } from '@/features/transfers/queries'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { PERMISSIONS } from '@/lib/rbac'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
@@ -105,6 +107,52 @@ export default async function SalesReportPage({
   ])
   const t = sales.totals
 
+  /*
+   * The tiles' arrows and the three drill-down tables.
+   *
+   * Both are loaded only where they are read: the arrows belong to the summary,
+   * and each table to its own view, so opening "by employee" pays for neither.
+   * The comparison takes this period's totals rather than fetching them again.
+   */
+  const wantsBreakdown = view === 'summary' || view === 'item' || view === 'hour' || view === 'payment'
+  const [deltas, breakdowns] = await Promise.all([
+    view === 'summary' && !drillItem
+      ? getSalesDeltas({
+          restaurantId: user.restaurantId,
+          range,
+          branchIds,
+          current: {
+            grossSales: t.grossSales,
+            orders: t.orders,
+            averageOrderValue: t.averageOrderValue,
+            itemsSold: t.itemsSold,
+            discounts: t.discounts,
+            netSales: t.netSales,
+          },
+        })
+      : Promise.resolve(null),
+    wantsBreakdown && !drillItem
+      ? getSalesBreakdowns({
+          restaurantId: user.restaurantId,
+          range,
+          branchIds,
+          timeZone: restaurant.timezone,
+          netSales: t.netSales,
+        })
+      : Promise.resolve(null),
+  ])
+
+  /** A link to this same screen on another view, keeping period and location. */
+  const viewHref = (next: string) => {
+    const q = new URLSearchParams()
+    for (const key of ['preset', 'from', 'to', 'branch']) {
+      const value = str(key)
+      if (value) q.set(key, value)
+    }
+    q.set('view', next)
+    return `/dashboard/reports/sales?${q.toString()}`
+  }
+
   /** The link an item row opens: this same screen, with that item drilled in. */
   const itemHref = (() => {
     const next = new URLSearchParams()
@@ -176,39 +224,70 @@ export default async function SalesReportPage({
         <>
           <ReportViewPicker views={[...VIEWS]} active={view} />
 
-          {view === 'summary' ? (
-            <div className="space-y-5">
-              <ReportTable
-                currency={restaurant.currency}
-                title="By payment method"
-                description="How the money came in over this period."
-                columns={[
-                  { key: 'label', label: 'Method' },
-                  { key: 'count', label: 'Payments', align: 'right' },
-                  { key: 'amount', label: 'Amount', align: 'right', format: 'money' },
-                  { key: 'share', label: 'Share', align: 'right', format: 'percent' },
-                ]}
-                rows={(payments?.byMethod ?? []) as unknown as Array<Record<string, unknown>>}
-                filename={`payments-${stamp}`}
-              />
-              <p className="text-sm text-muted-foreground">
-                Pick a breakdown above for what sold, when it sold, and who sold it.
-              </p>
-            </div>
+          {view === 'summary' && deltas && breakdowns ? (
+            <SalesDashboard
+              totals={{
+                grossSales: t.grossSales,
+                orders: t.orders,
+                averageOrderValue: t.averageOrderValue,
+                itemsSold: t.itemsSold,
+                discounts: t.discounts,
+                netSales: t.netSales,
+              }}
+              deltas={deltas}
+              trend={sales.byDay.map((b) => ({ label: b.label, revenue: b.sales, orders: b.orders }))}
+              hours={sales.byHour.map((b) => ({ label: b.label, revenue: b.sales, orders: b.orders }))}
+              categories={sales.byCategory.map((b) => ({ name: b.label, revenue: b.sales }))}
+              payments={breakdowns.byPayment.map((r) => ({
+                label: r.label,
+                amount: r.gross,
+                share: r.share,
+              }))}
+              branches={sales.byBranch.map((b) => ({
+                label: b.label,
+                amount: b.sales,
+                share: t.grossSales > 0 ? Math.round((b.sales / t.grossSales) * 1000) / 10 : 0,
+              }))}
+              /*
+               * From the breakdown rather than `sales.byItem`, because this is
+               * the list that carries the dish's picture — and both are keyed on
+               * the same snapshotted name and ordered by the same revenue, so
+               * the five shown here are the five at the top of the table behind
+               * "View all".
+               */
+              topItems={breakdowns.byItem.slice(0, 5).map((b) => ({
+                key: b.key,
+                label: b.label,
+                quantity: b.itemsSold,
+                sales: b.gross,
+                imageUrl: b.imageUrl,
+              }))}
+              links={{
+                item: viewHref('item'),
+                time: viewHref('hour'),
+                payment: viewHref('payment'),
+                category: viewHref('category'),
+                branch: viewHref('location'),
+              }}
+              currency={restaurant.currency}
+              locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+            />
           ) : null}
 
-          {view === 'item' ? (
+          {view === 'item' && breakdowns ? (
             <ReportTable
               currency={restaurant.currency}
-              title="By item"
-              description="Top 50 by revenue. Open one to see the bills it was on and what was paid."
+              title="Sales by Item"
+              description="Detailed breakdown of sales for each item. Open one to see the bills it was on and what was paid."
               columns={[
                 { key: 'label', label: 'Item' },
-                { key: 'quantity', label: 'Sold', align: 'right' },
-                { key: 'orders', label: 'Lines', align: 'right' },
-                { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
+                { key: 'sub', label: 'Category', fallback: 'Uncategorised' },
+                { key: 'itemsSold', label: 'Qty Sold', align: 'right' },
+                { key: 'gross', label: 'Gross Sales', align: 'right', format: 'money' },
+                { key: 'discount', label: 'Discount', align: 'right', format: 'money' },
+                { key: 'net', label: 'Net Sales', align: 'right', format: 'money' },
               ]}
-              rows={sales.byItem as unknown as Array<Record<string, unknown>>}
+              rows={breakdowns.byItem as unknown as Array<Record<string, unknown>>}
               filename={`sales-by-item-${stamp}`}
               hrefTemplate={itemHref}
             />
@@ -243,35 +322,41 @@ export default async function SalesReportPage({
             />
           ) : null}
 
-          {view === 'hour' ? (
+          {view === 'hour' && breakdowns ? (
             <ReportTable
               currency={restaurant.currency}
-              title="By time of day"
+              title="Sales by Time"
               // Said plainly: this is every 7pm in the period added together,
               // not 7pm on one date. Reading it as the latter would make a
               // week look like a very busy evening.
-              description="Hour of the day, added up across the whole period — useful for rostering."
+              description="Detailed sales breakdown by hour, added up across the whole period — useful for rostering."
               columns={[
-                { key: 'label', label: 'Hour' },
+                { key: 'label', label: 'Time' },
                 { key: 'orders', label: 'Orders', align: 'right' },
-                { key: 'sales', label: 'Revenue', align: 'right', format: 'money' },
+                { key: 'itemsSold', label: 'Items Sold', align: 'right' },
+                { key: 'gross', label: 'Gross Sales', align: 'right', format: 'money' },
+                { key: 'discount', label: 'Discount', align: 'right', format: 'money' },
+                { key: 'net', label: 'Net Sales', align: 'right', format: 'money' },
               ]}
-              rows={sales.byHour as unknown as Array<Record<string, unknown>>}
+              rows={breakdowns.byTime as unknown as Array<Record<string, unknown>>}
               filename={`sales-by-hour-${stamp}`}
             />
           ) : null}
 
-          {view === 'payment' ? (
+          {view === 'payment' && breakdowns ? (
             <ReportTable
               currency={restaurant.currency}
-              title="By payment method"
+              title="Sales by Payment Method"
+              description="Detailed breakdown of sales by payment method."
               columns={[
-                { key: 'label', label: 'Method' },
-                { key: 'count', label: 'Payments', align: 'right' },
-                { key: 'amount', label: 'Amount', align: 'right', format: 'money' },
-                { key: 'share', label: 'Share', align: 'right', format: 'percent' },
+                { key: 'label', label: 'Payment Method' },
+                { key: 'orders', label: 'Orders', align: 'right' },
+                { key: 'gross', label: 'Gross Sales', align: 'right', format: 'money' },
+                { key: 'discount', label: 'Discount', align: 'right', format: 'money' },
+                { key: 'net', label: 'Net Sales', align: 'right', format: 'money' },
+                { key: 'share', label: '% of Total', align: 'right', format: 'percent' },
               ]}
-              rows={(payments?.byMethod ?? []) as unknown as Array<Record<string, unknown>>}
+              rows={breakdowns.byPayment as unknown as Array<Record<string, unknown>>}
               filename={`payments-${stamp}`}
             />
           ) : null}

@@ -39,6 +39,13 @@ export interface SalesTotals {
   orders: number
   guests: number
   averageOrderValue: number
+  /**
+   * Units sold, not lines sold — two coffees on one line count as two.
+   *
+   * Counted over `order_items` rather than derived from the order totals,
+   * because nothing on an order says how many things were on it.
+   */
+  itemsSold: number
 }
 
 export interface Bucket {
@@ -118,7 +125,7 @@ export async function getSalesReport(params: {
   type Row = { key: string | null; label: string | null; sales: bigint | null; orders: bigint | null }
   const num = (value: bigint | number | null | undefined) => Number(value ?? 0)
 
-  const [totalsRow, refunded, hourRows, dayRows, typeRows, branchRows, employeeRows, categoryRows, itemRows] =
+  const [totalsRow, soldRow, refunded, hourRows, dayRows, typeRows, branchRows, employeeRows, categoryRows, itemRows] =
     await Promise.all([
       prisma.$queryRaw<Array<{
         gross: bigint | null; discounts: bigint | null; tax: bigint | null
@@ -136,6 +143,19 @@ export async function getSalesReport(params: {
           COALESCE(SUM(o."guestCount"), 0)::bigint                              AS guests,
           COUNT(*)::bigint                                                      AS orders
         FROM orders o WHERE ${ORDER_SCOPE}
+      `,
+
+      /*
+       * How many things were sold. Its own aggregate because it is the one
+       * headline figure that lives on the LINES rather than on the bill, and
+       * joining lines into the totals query above would multiply every bill's
+       * subtotal by the number of lines on it.
+       */
+      prisma.$queryRaw<Array<{ sold: bigint | null }>>`
+        SELECT COALESCE(SUM(oi.quantity), 0)::bigint AS sold
+        FROM order_items oi
+        JOIN orders o ON o.id = oi."orderId"
+        WHERE ${ORDER_SCOPE} AND oi.status <> 'CANCELLED'
       `,
 
       /*
@@ -284,6 +304,7 @@ export async function getSalesReport(params: {
       orders: orderCount,
       guests,
       averageOrderValue: orderCount > 0 ? Math.round(netSales / orderCount) : 0,
+      itemsSold: num(soldRow[0]?.sold),
     },
     // Hours and days read chronologically; everything else biggest first.
     byHour: toBuckets(hourRows)
