@@ -195,6 +195,12 @@ const SERVICE = [
   // ordered is refused, and each delivery is its own FIFO layer valued at what
   // was paid — with the price variance recorded, not written onto the PO.
   'po-workflow-test',
+  // The approvals desk: four tabs by what is being asked for, and a request
+  // is in Pending until it is decided and in Record from the moment it is —
+  // never both, never neither. Also that a submitted PO is on the desk ONCE,
+  // now that submitting raises an approval request as well as setting the
+  // order's status.
+  'approvals-desk-test',
   'supplier-ledger-test',
   'search-test',
   'locations-test',

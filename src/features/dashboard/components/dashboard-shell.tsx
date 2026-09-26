@@ -69,6 +69,7 @@ import {
   type NavItem,
 } from '../nav'
 import { SidebarNav } from './sidebar-nav'
+import { UiStyleClass } from './ui-style-class'
 import { writeSidebarCookie } from '../sidebar-preference'
 import { useRecentPages } from '../use-recent-pages'
 import { callAction } from '@/lib/use-action'
@@ -404,6 +405,9 @@ export function DashboardShell({
         answers, and until now only /waiter ever showed it.
       */}
       <StaffAlerts branchIds={branchIds} canAnswerCalls />
+      {/* So the skin reaches dialogs and popovers, which Radix portals to
+          <body> — outside this element. See `ui-style-class.tsx`. */}
+      <UiStyleClass style={uiStyle} />
       {/* ── desktop sidebar ─────────────────────────────────────── */}
       <aside
         className={cn(

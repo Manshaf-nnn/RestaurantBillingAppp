@@ -2,14 +2,20 @@ import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { ExportMenu } from '@/features/reports/components/export-menu'
-import { ApprovalsBoard, type ApprovalRow } from '@/features/approvals/components/approvals-board'
-import { ApprovalQueue, type ApprovalRow as DecidedRow } from '@/features/approvals/components/approval-queue'
-import { getApprovalsInbox } from '@/features/accounting/inbox'
 import {
-  RESTAURANT_WIDE,
-  getApprovalPolicy,
-  listApprovals,
-} from '@/features/approvals/service'
+  ApprovalsDesk,
+  type PendingRow,
+  type RecordRow,
+} from '@/features/approvals/components/approvals-desk'
+import {
+  REQUEST_TYPES,
+  REQUEST_TYPE_HINTS,
+  getApprovalsInbox,
+  getApprovalsRecord,
+  getPendingCountsByType,
+  type RequestType,
+} from '@/features/accounting/inbox'
+import { RESTAURANT_WIDE, getApprovalPolicy } from '@/features/approvals/service'
 import { decidabilityFor } from '@/features/approvals/decidability'
 import { ApprovalFilters } from '@/features/approvals/components/approval-filters'
 import { ApprovalAccess } from '@/features/approvals/components/approval-access'
@@ -33,10 +39,22 @@ export const metadata: Metadata = { title: 'Approvals' }
  * inventory, refunds and discounts here. Each queue knew about itself and
  * nobody could answer "what is waiting on me?" without visiting five pages.
  *
- * This page asks that question once. It decides nothing itself — every row
- * routes to the guarded action that already owns its queue — so permissions,
+ * This page asks that question once, in two steps: what KIND of request —
+ * stock transfer, money, purchase order, other — and then whether it is
+ * still waiting or already settled. It decides nothing itself; every row
+ * routes to the guarded action that already owns its queue, so permissions,
  * branch guards and audit stay where they are.
+ *
+ * Only the chosen tab's queues are read. The transfers tab costs two queries
+ * where the old single list cost six, and the counts on the other three tabs
+ * are counts, not lists.
  */
+
+function parseType(value: unknown): RequestType | null {
+  return typeof value === 'string' && (REQUEST_TYPES as readonly string[]).includes(value)
+    ? (value as RequestType)
+    : null
+}
 
 export default async function ApprovalsPage({
   searchParams,
@@ -53,12 +71,12 @@ export default async function ApprovalsPage({
   const str = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '')
 
   const manages = can(user, PERMISSIONS.APPROVALS_MANAGE)
+  const tab: 'pending' | 'record' = str('tab') === 'record' ? 'record' : 'pending'
 
   /*
-   * One set of filters, both lists (recorrection.md §1). The first cut passed
-   * them to the history table only, so choosing "Waiting" emptied the history
-   * and changed the pending desk not at all. Every one is validated or ignored
-   * by the service; an unknown status or kind simply does not narrow anything.
+   * One set of filters, both lists (recorrection.md §1). Every one is
+   * validated or ignored by the service; an unknown status or kind simply
+   * does not narrow anything.
    */
   // A date from the URL is a calendar day; the window is its whole day.
   const day = (key: string, end: boolean): Date | undefined => {
@@ -67,7 +85,7 @@ export default async function ApprovalsPage({
     const date = new Date(`${value}T${end ? '23:59:59.999' : '00:00:00.000'}Z`)
     return Number.isNaN(date.getTime()) ? undefined : date
   }
-  const filters = {
+  const baseFilters = {
     status: str('status') || undefined,
     kind: str('kind') || undefined,
     requestedById: str('requestedBy') || undefined,
@@ -76,23 +94,25 @@ export default async function ApprovalsPage({
     from: day('from', false),
     to: day('to', true),
   }
-  const filtered = Object.values(filters).some(Boolean)
+  const filtered = Object.values(baseFilters).some(Boolean)
+
+  /*
+   * Which tab. The one the URL asks for, else the first that has anything
+   * waiting — landing somebody on an empty Stock transfers tab while three
+   * purchase orders sit unread is a desk that hides its own work.
+   */
+  const counts = await getPendingCountsByType(user.restaurantId, selection.branchIds)
+  const type =
+    parseType(params.type) ?? REQUEST_TYPES.find((value) => counts[value] > 0) ?? 'TRANSFER'
+  const filters = { ...baseFilters, type }
 
   const [waiting, decided, branchName, locations, policy, staff] = await Promise.all([
-    getApprovalsInbox(user.restaurantId, selection.branchIds, filters),
-    listApprovals({
-      restaurantId: user.restaurantId,
-      branchIds: selection.branchIds,
-      limit: 40,
-      status: filters.status as never,
-      // The wastage queue is not an ApprovalKind; the history has none of it.
-      kind: (filters.kind === 'STOCK_WRITEOFF' ? '__none__' : filters.kind) as never,
-      requestedById: filters.requestedById,
-      fromBranchId: filters.fromBranchId,
-      toBranchId: filters.toBranchId,
-      from: filters.from,
-      to: filters.to,
-    }),
+    tab === 'pending'
+      ? getApprovalsInbox(user.restaurantId, selection.branchIds, filters)
+      : Promise.resolve([]),
+    tab === 'record'
+      ? getApprovalsRecord(user.restaurantId, selection.branchIds, filters)
+      : Promise.resolve([]),
     branchNameFor(user.restaurantId, selection.branchId),
     listSwitchableLocations(user.restaurantId, visibleBranchIds(user)),
     manages ? getApprovalPolicy(user.restaurantId) : Promise.resolve(null),
@@ -115,18 +135,17 @@ export default async function ApprovalsPage({
     }),
   ])
 
-  const rows: ApprovalRow[] = waiting.map((item) => {
+  const pending: PendingRow[] = waiting.map((item) => {
     /*
      * Whether YOU may decide this depends on who is asking, and services do not
      * read permissions — so it is computed here rather than in the query. The
      * rule itself lives in `features/approvals/decidability`, which is pure and
-     * has its own tests; it used to be written out inline right here, where the
-     * only way to exercise it was to render this page in a browser.
+     * has its own tests.
      */
     const verdict = decidabilityFor(user, item)
 
     return {
-      category: item.category,
+      type: item.type,
       queue: item.queue,
       kind: item.kind,
       id: item.id,
@@ -154,27 +173,24 @@ export default async function ApprovalsPage({
     }
   })
 
-  /*
-   * The decided list stays the generic table: it is a history of requests that
-   * were ruled on, and the six queues do not share a history the way they
-   * share a waiting room.
-   */
-  const history: DecidedRow[] = decided
-    .filter((row) => row.status !== 'PENDING')
-    .map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      status: row.status,
-      entity: row.entity,
-      amount: row.amount,
-      reason: row.reason,
-      requestedByName: row.requestedBy?.name ?? null,
-      decidedByName: row.decidedBy?.name ?? null,
-      branchName: row.branch?.name ?? null,
-      requestedAt: row.requestedAt.toISOString(),
-      decisionNote: row.decisionNote,
-      forcedAt: row.forcedAt?.toISOString() ?? null,
-    }))
+  const record: RecordRow[] = decided.map((row) => ({
+    type: row.type,
+    queue: row.queue,
+    id: row.id,
+    title: row.title,
+    reason: row.reason,
+    amount: row.amount,
+    branchName: row.branchName,
+    requestedByName: row.requestedByName,
+    requestedAt: row.requestedAt.toISOString(),
+    decidedByName: row.decidedByName,
+    decidedAt: row.decidedAt?.toISOString() ?? null,
+    outcome: row.outcome,
+    decisionNote: row.decisionNote,
+    forced: row.forced,
+    reference: row.reference,
+    href: row.href,
+  }))
 
   const locale =
     restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
@@ -207,8 +223,7 @@ export default async function ApprovalsPage({
   /*
    * A branch manager sets their own branch's list and sees only that
    * (recorrection.md §1). The restaurant-wide row is for somebody who works
-   * across every location; the action refuses everyone else, so offering it
-   * would be offering a form that cannot be saved.
+   * across every location; the action refuses everyone else.
    */
   const unconfined = visibleBranchIds(user) === null
   const accessRows = policy
@@ -249,29 +264,28 @@ export default async function ApprovalsPage({
         actions={can(user, PERMISSIONS.REPORT_EXPORT) ? <ExportMenu type="approvals" /> : null}
       />
       <div className="space-y-5">
-        {/*
-          Same five-part shape as the Transfers screen: figures, filter bar,
-          one table, one right drawer. The filter bar is passed in rather than
-          built inside the board, because it needs the location and staff
-          lists — both server reads — and an element serializes across the
-          boundary where a handler would not.
-        */}
-        <ApprovalsBoard
-          rows={rows}
+        <ApprovalsDesk
+          type={type}
+          tab={tab}
+          pending={pending}
+          record={record}
+          counts={counts}
           currency={restaurant.currency as CurrencyCode}
           timeZone={restaurant.timezone}
           locale={locale}
+          hint={REQUEST_TYPE_HINTS[type]}
           filtered={filtered}
           filters={
             <ApprovalFilters
               locations={locations.map((l) => ({ id: l.id, name: l.name }))}
               staff={staff.map(person)}
-              // Only kinds that something actually raises. Stock adjustments,
-              // purchase orders and price overrides have their own queues and
-              // never create a request of this table's kind; a filter for them
-              // matched nothing and looked broken.
+              // Only kinds that something actually raises. Stock adjustments
+              // and price overrides have their own queues and never create a
+              // request of this table's kind; a filter for them matched
+              // nothing and looked broken.
               kinds={[
                 { value: 'STOCK_TRANSFER', label: 'Stock transfer' },
+                { value: 'PURCHASE_ORDER', label: 'Purchase order' },
                 { value: 'REFUND', label: 'Refund' },
                 { value: 'DISCOUNT', label: 'Discount' },
                 { value: 'STOCK_WRITEOFF', label: 'Stock write-off' },
@@ -289,10 +303,6 @@ export default async function ApprovalsPage({
         {manages && accessRows.length > 0 ? (
           <ApprovalAccess rows={accessRows} staff={canApproveHere.map(person)} />
         ) : null}
-
-        {filters.status === 'PENDING' ? null : (
-          <ApprovalQueue rows={history} currency={restaurant.currency} locale={locale} />
-        )}
       </div>
     </>
   )

@@ -105,7 +105,19 @@ async function main() {
 
   console.log('\n── The owner’s desk (recorrection-ui-test §5) ──')
   const ownerHtml = await page(owner.id)
-  check('grouped under Stock transfers (1)', /Stock transfers \(1\)/.test(ownerHtml))
+  /*
+   * DELIBERATE behaviour change 2026-09-26 (the approvals desk rebuild).
+   *
+   * This read `/Stock transfers \(1\)/` — the heading of the old grouped
+   * list, where all seven categories sat in one table. The desk is four tabs
+   * now, so the grouping moved into the tab strip: the tab is "Stock
+   * transfer" and its count is a badge beside it, not a number in the
+   * heading. The thing being asserted is unchanged — a waiting transfer is
+   * filed as a stock transfer and counted once — so the pin follows the
+   * markup rather than being dropped.
+   */
+  check('filed under the Stock transfer tab', /Stock transfer/.test(ownerHtml))
+  check('which opens because that is where the work is', /TRF-\d+/.test(ownerHtml))
   check('the row carries the transfer number', /TRF-\d+/.test(ownerHtml), (ownerHtml.match(/TRF-\d+/) ?? ['none'])[0])
   check('both ends by name', /Kandy\s*→\s*Jaffna/.test(ownerHtml))
   check('and the lines', ownerHtml.includes(`${chicken.name} · 3 kg`), `looking for "${chicken.name} · 3 kg"`)
@@ -115,7 +127,10 @@ async function main() {
 
   console.log('\n── Jaffna, who raised it (recorrection-ui-test §1) ──')
   const jayHtml = await page(jay.id)
-  check("the request Jaffna raised is on Jaffna's desk", /Stock transfers \(1\)/.test(jayHtml))
+  // Same DELIBERATE change as above: the tab, not the old grouped heading.
+  // What matters is that the destination sees the request at all — the
+  // assertions below are the ones that prove it is the right request.
+  check("the request Jaffna raised is on Jaffna's desk", /TRF-\d+/.test(jayHtml))
   check('told what it is waiting for', jayHtml.includes('Waiting for Kandy to approve'))
   check('the lines are on the row', jayHtml.includes(`${chicken.name} · 3 kg`))
   check(

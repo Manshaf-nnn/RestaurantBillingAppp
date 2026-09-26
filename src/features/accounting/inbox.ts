@@ -38,6 +38,48 @@ export const INBOX_CATEGORIES = [
 ] as const
 export type InboxCategory = (typeof INBOX_CATEGORIES)[number]
 
+/**
+ * What KIND of thing is being asked for, in the four words an owner uses.
+ *
+ * ── Why a second axis on top of `category` ─────────────────────────────────
+ *
+ * `category` is a reading order inside one long list — seven headings on one
+ * page. That was too fine to navigate: somebody who came to clear the money
+ * had to scroll past transfers and write-offs to find it, and somebody
+ * looking for what happened to a request yesterday had nowhere to look at
+ * all. These four are the tabs of the desk, and every queue lands in exactly
+ * one of them.
+ *
+ * Deliberately four and not six: "money" is one job whether it is a payment
+ * out, petty cash, a refund or a discount — the question is always whether
+ * the business is right to part with it — and `category` still separates
+ * them within the tab.
+ */
+export const REQUEST_TYPES = ['TRANSFER', 'MONEY', 'PURCHASE', 'OTHER'] as const
+export type RequestType = (typeof REQUEST_TYPES)[number]
+
+export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
+  TRANSFER: 'Stock transfer requests',
+  MONEY: 'Money requests',
+  PURCHASE: 'PO requests',
+  OTHER: 'Other requests',
+}
+
+export const REQUEST_TYPE_HINTS: Record<RequestType, string> = {
+  TRANSFER: 'Stock moving between locations. The source approves; approving reserves it, dispatch moves it.',
+  MONEY: 'Payments out, petty cash, refunds and discounts. Whoever asked cannot approve it.',
+  PURCHASE: 'Buying from a supplier. Approving turns the request into the order goods can be received against.',
+  OTHER: 'Stock counts, corrections and write-offs — anything that changes what the books say is on the shelf.',
+}
+
+/** Which tab a generic `ApprovalKind` belongs to. */
+export function typeForApprovalKind(kind: string): RequestType {
+  if (kind === 'STOCK_TRANSFER') return 'TRANSFER'
+  if (kind === 'PURCHASE_ORDER') return 'PURCHASE'
+  if (kind === 'REFUND' || kind === 'DISCOUNT' || kind === 'PRICE_OVERRIDE') return 'MONEY'
+  return 'OTHER'
+}
+
 export type InboxKind =
   | 'APPROVAL_REQUEST'
   | 'OUTGOING_PAYMENT'
@@ -55,6 +97,8 @@ export interface ApprovalsInboxCount {
 }
 
 export interface InboxItem {
+  /** Which tab of the desk this belongs to. */
+  type: RequestType
   category: InboxCategory
   queue: string
   /** Which queue this row belongs to, so a decision can be routed to it. */
@@ -121,6 +165,8 @@ export interface InboxItem {
  * list takes, so one set of controls governs both.
  */
 export interface InboxFilters {
+  /** Only this tab's queues are read. Unset reads them all. */
+  type?: RequestType
   /** Anything other than PENDING (or unset) empties the pending desk by definition. */
   status?: string
   /** An `ApprovalKind`, or `STOCK_WRITEOFF` for the wastage queue. */
@@ -193,8 +239,14 @@ export async function getApprovalsInbox(
    * wastage queue; unset keeps everything.
    */
   const kindFilter = filters.kind || null
-  const wantGeneric = !kindFilter || kindFilter !== 'STOCK_WRITEOFF'
-  const wantWastage = !kindFilter || kindFilter === 'STOCK_WRITEOFF'
+  /*
+   * The tab narrows which queues are read at all — four of the six vanish on
+   * the transfers tab, so the desk costs two queries instead of six. `inType`
+   * is asked before every one of them.
+   */
+  const inType = (type: RequestType) => !filters.type || filters.type === type
+  const wantGeneric = (!kindFilter || kindFilter !== 'STOCK_WRITEOFF')
+  const wantWastage = (!kindFilter || kindFilter === 'STOCK_WRITEOFF') && inType('OTHER')
   const wantOthers = !kindFilter
   const genericKind = kindFilter && kindFilter !== 'STOCK_WRITEOFF' ? { kind: kindFilter as never } : {}
 
@@ -210,12 +262,22 @@ export async function getApprovalsInbox(
     ? { kind: 'STOCK_TRANSFER', payload: { path: ['toBranchId'], equals: filters.toBranchId } }
     : {}
 
+  /** The generic queue's kinds that belong to the chosen tab. */
+  const typeKinds: Record<RequestType, string[]> = {
+    TRANSFER: ['STOCK_TRANSFER'],
+    MONEY: ['REFUND', 'DISCOUNT', 'PRICE_OVERRIDE'],
+    PURCHASE: ['PURCHASE_ORDER'],
+    OTHER: ['STOCK_ADJUSTMENT'],
+  }
+  const genericTypeKinds = filters.type ? { kind: { in: typeKinds[filters.type] as never[] } } : {}
+
   const [generic, outgoing, petty, counts, purchases, wastage] = await Promise.all([
     wantGeneric
       ? prisma.approvalRequest.findMany({
           where: {
             restaurantId,
             status: 'PENDING',
+            ...genericTypeKinds,
             ...genericKind,
             ...byRequester,
             ...raised('createdAt'),
@@ -232,7 +294,7 @@ export async function getApprovalsInbox(
           take: 100,
         })
       : Promise.resolve([]),
-    wantOthers && !filters.toBranchId
+    wantOthers && !filters.toBranchId && inType('MONEY')
       ? prisma.outgoingPayment.findMany({
           where: {
             restaurantId, status: 'SUBMITTED', ...atBranch, ...fromBranch, ...raised('createdAt'),
@@ -247,7 +309,7 @@ export async function getApprovalsInbox(
           take: 100,
         })
       : Promise.resolve([]),
-    wantOthers && !filters.toBranchId
+    wantOthers && !filters.toBranchId && inType('MONEY')
       ? prisma.pettyCashRequest.findMany({
           where: { restaurantId, status: 'PENDING', ...atBranch, ...fromBranch, ...byRequester, ...raised('requestedAt') },
           select: {
@@ -259,7 +321,7 @@ export async function getApprovalsInbox(
           take: 100,
         })
       : Promise.resolve([]),
-    wantOthers && !filters.toBranchId
+    wantOthers && !filters.toBranchId && inType('OTHER')
       ? prisma.stockCount.findMany({
           where: {
             restaurantId, status: 'AWAITING_APPROVAL', ...atBranch, ...fromBranch, ...raised('createdAt'),
@@ -274,11 +336,34 @@ export async function getApprovalsInbox(
           take: 100,
         })
       : Promise.resolve([]),
-    wantOthers && !filters.toBranchId
+    /*
+     * Purchase orders waiting with NO approval request of their own.
+     *
+     * Submitting a request now raises an `ApprovalRequest` of kind
+     * PURCHASE_ORDER as well as setting the order's status, so an order that
+     * went through that path is already in `generic` above — and listing it
+     * here too put it on the desk twice, with two sets of buttons for one
+     * decision. The `none` clause keeps this query for what it is now for:
+     * orders submitted before that existed, which have a status and no
+     * request, and would otherwise be stranded off the desk entirely.
+     */
+    wantOthers && !filters.toBranchId && inType('PURCHASE')
       ? prisma.purchase.findMany({
           where: {
             restaurantId, status: 'PENDING_APPROVAL', ...atBranch, ...fromBranch, ...raised('createdAt'),
             ...(filters.requestedById ? { createdById: filters.requestedById } : {}),
+            NOT: {
+              id: {
+                in: (
+                  await prisma.approvalRequest.findMany({
+                    where: { restaurantId, kind: 'PURCHASE_ORDER', status: 'PENDING', entity: 'Purchase' },
+                    select: { entityId: true },
+                  })
+                )
+                  .map((row) => row.entityId)
+                  .filter((id): id is string => Boolean(id)),
+              },
+            },
           },
           select: {
             id: true, number: true, total: true, createdAt: true,
@@ -375,6 +460,7 @@ export async function getApprovalsInbox(
 
   const items: InboxItem[] = [
     ...outgoing.map((row) => ({
+      type: 'MONEY' as const,
       category: 'Money out' as const,
       queue: 'Payment out',
       kind: 'OUTGOING_PAYMENT' as const,
@@ -398,6 +484,7 @@ export async function getApprovalsInbox(
       const transfer = row.entityId ? transferById.get(row.entityId) : undefined
       const fromName = transfer?.fromBranch.name ?? row.branch?.name ?? 'the source'
       return {
+        type: typeForApprovalKind(row.kind),
         category: categoryFor(row.kind),
         queue: KIND_TITLES[row.kind] ?? 'Approval',
         id: row.id,
@@ -448,6 +535,7 @@ export async function getApprovalsInbox(
       }
     }),
     ...petty.map((row) => ({
+      type: 'MONEY' as const,
       category: 'Money out' as const,
       queue: 'Petty cash',
       id: row.id,
@@ -468,6 +556,7 @@ export async function getApprovalsInbox(
       transfer: null,
     })),
     ...wastage.map((row) => ({
+      type: 'OTHER' as const,
       category: 'Stock write-offs' as const,
       queue: 'Write-off',
       id: row.id,
@@ -489,6 +578,7 @@ export async function getApprovalsInbox(
       transfer: null,
     })),
     ...purchases.map((row) => ({
+      type: 'PURCHASE' as const,
       category: 'Other' as const,
       queue: 'Purchase order',
       id: row.id,
@@ -511,6 +601,7 @@ export async function getApprovalsInbox(
       transfer: null,
     })),
     ...counts.map((row) => ({
+      type: 'OTHER' as const,
       category: 'Stock adjustments' as const,
       queue: 'Stock count',
       id: row.id,
@@ -593,5 +684,391 @@ export async function getApprovalsInboxCount(
       (outgoing._sum.amount ?? 0) +
       (petty._sum.amount ?? 0),
     byQueue,
+  }
+}
+
+/**
+ * What was already decided — the Record half of each tab.
+ *
+ * ── Why this exists beside `listApprovals` ─────────────────────────────────
+ *
+ * The desk's history used to read `ApprovalRequest` and nothing else, so it
+ * answered for refunds, discounts and transfers and was silent about the four
+ * queues that keep their decision on the record itself: a paid-out petty cash
+ * request, an approved write-off, a posted stock count, a payment released.
+ * Somebody asking "what happened to the money I asked for on Tuesday" was
+ * told nothing, on a screen whose whole job is to answer that.
+ *
+ * So this reads the same six queues the pending desk reads, in their decided
+ * states, and returns one shape. It is the counterpart of `getApprovalsInbox`
+ * and deliberately has the same narrowing: the tab decides which queues are
+ * touched at all.
+ *
+ * Read-only by construction — there is nothing to decide about a decision.
+ */
+export interface RecordItem {
+  type: RequestType
+  queue: string
+  id: string
+  title: string
+  reason: string | null
+  amount: number | null
+  branchName: string | null
+  requestedByName: string
+  requestedAt: Date
+  decidedByName: string | null
+  decidedAt: Date | null
+  /** APPROVED, REJECTED, RETURNED, CANCELLED or WITHDRAWN. */
+  outcome: string
+  decisionNote: string | null
+  /** The two-person rule was overridden to decide it (correctionA.md §9). */
+  forced: boolean
+  reference: string | null
+  href: string
+}
+
+export async function getApprovalsRecord(
+  restaurantId: string,
+  branchIds?: string[] | null,
+  filters: InboxFilters = {},
+): Promise<RecordItem[]> {
+  const reach = branchIds ?? null
+  const atBranch = reach ? { branchId: { in: reach } } : {}
+  const atBranchOrGlobal: Prisma.ApprovalRequestWhereInput = reach
+    ? { OR: [{ branchId: { in: reach } }, { branchId: null }] }
+    : {}
+  const inType = (type: RequestType) => !filters.type || filters.type === type
+  const byRequester = filters.requestedById ? { requestedById: filters.requestedById } : {}
+  const decidedIn = (field: string) =>
+    filters.from || filters.to
+      ? { [field]: { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lte: filters.to } : {}) } }
+      : {}
+
+  const typeKinds: Record<RequestType, string[]> = {
+    TRANSFER: ['STOCK_TRANSFER'],
+    MONEY: ['REFUND', 'DISCOUNT', 'PRICE_OVERRIDE'],
+    PURCHASE: ['PURCHASE_ORDER'],
+    OTHER: ['STOCK_ADJUSTMENT'],
+  }
+  const genericKinds = filters.type
+    ? { kind: { in: typeKinds[filters.type] as never[] } }
+    : filters.kind && filters.kind !== 'STOCK_WRITEOFF'
+      ? { kind: filters.kind as never }
+      : {}
+  // A status filter narrows the outcome; unset means every decided state.
+  const outcomes = filters.status && filters.status !== 'PENDING' ? [filters.status] : ['APPROVED', 'REJECTED', 'WITHDRAWN']
+  const wantGeneric = filters.kind !== 'STOCK_WRITEOFF'
+  const wantOthers = !filters.kind
+
+  /* Purchases decided through the desk already have a request row above. */
+  const viaDesk = inType('PURCHASE')
+    ? (
+        await prisma.approvalRequest.findMany({
+          where: { restaurantId, kind: 'PURCHASE_ORDER', entity: 'Purchase' },
+          select: { entityId: true },
+        })
+      )
+        .map((row) => row.entityId)
+        .filter((id): id is string => Boolean(id))
+    : []
+
+  const [generic, outgoing, petty, wastage, counts, purchases] = await Promise.all([
+    wantGeneric
+      ? prisma.approvalRequest.findMany({
+          where: {
+            restaurantId,
+            status: { in: outcomes as never[] },
+            ...genericKinds,
+            ...byRequester,
+            ...decidedIn('decidedAt'),
+            AND: [atBranchOrGlobal],
+          },
+          select: {
+            id: true, kind: true, amount: true, reason: true, requestedAt: true, status: true,
+            entity: true, entityId: true, decidedAt: true, decisionNote: true, forcedAt: true,
+            branch: { select: { name: true } },
+            requestedBy: { select: { name: true } },
+            decidedBy: { select: { name: true } },
+          },
+          orderBy: { decidedAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+    wantOthers && inType('MONEY')
+      ? prisma.outgoingPayment.findMany({
+          where: {
+            restaurantId, status: { in: ['APPROVED', 'REJECTED', 'PAID', 'REVERSED'] },
+            ...atBranch, ...decidedIn('decidedAt'),
+          },
+          select: {
+            id: true, number: true, amount: true, description: true, status: true,
+            createdByName: true, submittedAt: true, createdAt: true, decidedAt: true,
+            decisionNote: true, branch: { select: { name: true } },
+            decidedBy: { select: { name: true } },
+          },
+          orderBy: { decidedAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+    wantOthers && inType('MONEY')
+      ? prisma.pettyCashRequest.findMany({
+          where: {
+            restaurantId, status: { in: ['APPROVED', 'PAID', 'REJECTED'] },
+            ...atBranch, ...byRequester, ...decidedIn('decidedAt'),
+          },
+          select: {
+            id: true, amount: true, description: true, status: true, requestedAt: true,
+            decidedAt: true, decisionNote: true, branch: { select: { name: true } },
+            requestedBy: { select: { name: true } }, decidedBy: { select: { name: true } },
+          },
+          orderBy: { decidedAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+    wantOthers && inType('OTHER')
+      ? prisma.wastageRecord.findMany({
+          where: {
+            restaurantId, status: { in: ['APPROVED', 'REJECTED'] },
+            ...atBranch, ...decidedIn('approvedAt'),
+          },
+          select: {
+            id: true, quantity: true, enteredUnit: true, costValue: true, status: true,
+            reason: true, reasonNote: true, createdAt: true, approvedAt: true,
+            branch: { select: { name: true } }, createdBy: { select: { name: true } },
+            approvedBy: { select: { name: true } }, item: { select: { name: true, unit: true } },
+          },
+          orderBy: { approvedAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+    wantOthers && inType('OTHER')
+      ? prisma.stockCount.findMany({
+          where: {
+            restaurantId, status: { in: ['APPROVED', 'CANCELLED'] },
+            ...atBranch, ...decidedIn('approvedAt'),
+          },
+          select: {
+            id: true, reference: true, status: true, createdAt: true, approvedAt: true,
+            branch: { select: { name: true } }, countedBy: { select: { name: true } },
+            approvedBy: { select: { name: true } },
+          },
+          orderBy: { approvedAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+    wantOthers && inType('PURCHASE')
+      ? prisma.purchase.findMany({
+          where: {
+            restaurantId,
+            status: { in: ['APPROVED', 'REJECTED', 'RETURNED', 'ORDERED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED', 'CANCELLED'] },
+            ...atBranch, ...decidedIn('approvedAt'),
+            ...(viaDesk.length ? { NOT: { id: { in: viaDesk } } } : {}),
+          },
+          select: {
+            id: true, number: true, total: true, status: true, createdAt: true,
+            approvedAt: true, decisionNote: true, cancelReason: true,
+            branch: { select: { name: true } }, createdBy: { select: { name: true } },
+            approvedBy: { select: { name: true } }, supplier: { select: { name: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 60,
+        })
+      : Promise.resolve([]),
+  ])
+
+  const items: RecordItem[] = [
+    ...generic.map((row) => ({
+      type: typeForApprovalKind(row.kind),
+      queue: KIND_TITLES[row.kind] ?? 'Approval',
+      id: row.id,
+      title: KIND_TITLES[row.kind] ?? 'Approval',
+      reason: row.reason,
+      amount: row.amount,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.requestedBy?.name ?? 'Someone',
+      requestedAt: row.requestedAt,
+      decidedByName: row.decidedBy?.name ?? null,
+      decidedAt: row.decidedAt,
+      outcome: row.status as string,
+      decisionNote: row.decisionNote,
+      forced: row.forcedAt !== null,
+      reference: row.entityId ? `${row.entity} ${row.entityId.slice(0, 8)}` : row.entity,
+      href:
+        row.kind === 'STOCK_TRANSFER' && row.entityId
+          ? `/dashboard/transfers/${row.entityId}`
+          : row.kind === 'PURCHASE_ORDER' && row.entityId
+            ? `/dashboard/purchases/${row.entityId}`
+            : '/dashboard/approvals',
+    })),
+    ...outgoing.map((row) => ({
+      type: 'MONEY' as const,
+      queue: 'Payment out',
+      id: row.id,
+      title: row.description,
+      reason: null,
+      amount: row.amount,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.createdByName,
+      requestedAt: row.submittedAt ?? row.createdAt,
+      decidedByName: row.decidedBy?.name ?? null,
+      decidedAt: row.decidedAt,
+      outcome: row.status as string,
+      decisionNote: row.decisionNote,
+      forced: false,
+      reference: row.number,
+      href: '/dashboard/accounting/payments',
+    })),
+    ...petty.map((row) => ({
+      type: 'MONEY' as const,
+      queue: 'Petty cash',
+      id: row.id,
+      title: row.description,
+      reason: null,
+      amount: row.amount,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.requestedBy?.name ?? 'Someone',
+      requestedAt: row.requestedAt,
+      decidedByName: row.decidedBy?.name ?? null,
+      decidedAt: row.decidedAt,
+      outcome: row.status as string,
+      decisionNote: row.decisionNote,
+      forced: false,
+      reference: null,
+      href: '/dashboard/petty-cash',
+    })),
+    ...wastage.map((row) => ({
+      type: 'OTHER' as const,
+      queue: 'Write-off',
+      id: row.id,
+      title: `${row.item.name} · ${row.quantity} ${(row.enteredUnit ?? row.item.unit).toLowerCase()}`,
+      reason: row.reasonNote ?? row.reason.replace(/_/g, ' ').toLowerCase(),
+      amount: row.costValue,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.createdBy?.name ?? 'Someone',
+      requestedAt: row.createdAt,
+      decidedByName: row.approvedBy?.name ?? null,
+      decidedAt: row.approvedAt,
+      outcome: row.status as string,
+      decisionNote: null,
+      forced: false,
+      reference: null,
+      href: '/dashboard/inventory/wastage',
+    })),
+    ...counts.map((row) => ({
+      type: 'OTHER' as const,
+      queue: 'Stock count',
+      id: row.id,
+      title: `Stock count ${row.reference}`,
+      reason: null,
+      amount: null,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.countedBy?.name ?? 'Someone',
+      requestedAt: row.createdAt,
+      decidedByName: row.approvedBy?.name ?? null,
+      decidedAt: row.approvedAt,
+      outcome: row.status as string,
+      decisionNote: null,
+      forced: false,
+      reference: row.reference,
+      href: `/dashboard/inventory/counts/${row.id}`,
+    })),
+    ...purchases.map((row) => ({
+      type: 'PURCHASE' as const,
+      queue: 'Purchase order',
+      id: row.id,
+      title: `Order from ${row.supplier?.name ?? 'a supplier'}`,
+      reason: null,
+      amount: row.total,
+      branchName: row.branch?.name ?? null,
+      requestedByName: row.createdBy?.name ?? 'Purchasing',
+      requestedAt: row.createdAt,
+      decidedByName: row.approvedBy?.name ?? null,
+      decidedAt: row.approvedAt,
+      outcome: row.status as string,
+      decisionNote: row.decisionNote ?? row.cancelReason,
+      forced: false,
+      reference: row.number,
+      href: `/dashboard/purchases/${row.id}`,
+    })),
+  ]
+
+  // Newest decision first; a row with no decision stamp falls back to when it
+  // was raised, so nothing sinks to the bottom for want of a timestamp.
+  return items.sort(
+    (a, b) =>
+      (b.decidedAt ?? b.requestedAt).getTime() - (a.decidedAt ?? a.requestedAt).getTime(),
+  )
+}
+
+/**
+ * How many are waiting in each tab, for the badges on the tab strip.
+ *
+ * Counts rather than rows: the desk shows one tab's rows and four tabs'
+ * numbers, and fetching four lists to display three numbers is how a screen
+ * that opens on every page load gets slow. Same predicates as the inbox
+ * above, so a badge and its tab can never disagree.
+ */
+export async function getPendingCountsByType(
+  restaurantId: string,
+  branchIds?: string[] | null,
+): Promise<Record<RequestType, number>> {
+  const reach = branchIds ?? null
+  const atBranch = reach ? { branchId: { in: reach } } : {}
+  const atBranchOrGlobal: Prisma.ApprovalRequestWhereInput = reach
+    ? {
+        OR: [
+          { branchId: { in: reach } },
+          { branchId: null },
+          ...reach.map((id) => ({
+            kind: 'STOCK_TRANSFER' as const,
+            payload: { path: ['toBranchId'], equals: id },
+          })),
+        ],
+      }
+    : {}
+
+  const generic = (kinds: string[]) =>
+    prisma.approvalRequest.count({
+      where: { restaurantId, status: 'PENDING', kind: { in: kinds as never[] }, AND: [atBranchOrGlobal] },
+    })
+
+  const [transfers, money, poRequests, adjustments, outgoing, petty, counts, wastage, orphanPos] =
+    await Promise.all([
+      generic(['STOCK_TRANSFER']),
+      generic(['REFUND', 'DISCOUNT', 'PRICE_OVERRIDE']),
+      generic(['PURCHASE_ORDER']),
+      generic(['STOCK_ADJUSTMENT']),
+      prisma.outgoingPayment.count({ where: { restaurantId, status: 'SUBMITTED', ...atBranch } }),
+      prisma.pettyCashRequest.count({ where: { restaurantId, status: 'PENDING', ...atBranch } }),
+      prisma.stockCount.count({ where: { restaurantId, status: 'AWAITING_APPROVAL', ...atBranch } }),
+      prisma.wastageRecord.count({ where: { restaurantId, status: 'RECORDED', ...atBranch } }),
+      // Orders submitted before they raised a request of their own; the same
+      // exclusion the inbox applies, so nothing is counted twice.
+      prisma.purchase.count({
+        where: {
+          restaurantId,
+          status: 'PENDING_APPROVAL',
+          ...atBranch,
+          NOT: {
+            id: {
+              in: (
+                await prisma.approvalRequest.findMany({
+                  where: { restaurantId, kind: 'PURCHASE_ORDER', status: 'PENDING', entity: 'Purchase' },
+                  select: { entityId: true },
+                })
+              )
+                .map((row) => row.entityId)
+                .filter((id): id is string => Boolean(id)),
+            },
+          },
+        },
+      }),
+    ])
+
+  return {
+    TRANSFER: transfers,
+    MONEY: money + outgoing + petty,
+    PURCHASE: poRequests + orphanPos,
+    OTHER: adjustments + counts + wastage,
   }
 }

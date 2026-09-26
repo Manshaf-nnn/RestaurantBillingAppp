@@ -404,32 +404,51 @@
 
 /* ── Interface style: Modern ──────────────────────────────────────────────────
  *
- * The second skin (Settings → Interface style). One class on the dashboard
- * shell's root, and everything under it re-reads the same tokens every
- * component already uses — so no screen had to change to take part, and a
- * screen written tomorrow takes part by default.
+ * The second skin (Settings → Interface style): Soft UI over frosted glass.
+ * One class, and everything under it re-reads the same tokens every component
+ * already uses — so no screen had to change to take part, and a screen written
+ * tomorrow takes part by default.
  *
- * Three moves: a blue accent in place of the warm one; flat, opaque white
- * cards with a hairline border in place of the frosted glass; and a dark navy
- * rail, done by re-scoping the ink tokens on the <aside> alone so the nav's
- * own classes (text-muted-foreground, bg-primary/10) come out light-on-dark
- * without knowing anything happened.
+ * ── What makes it "soft" rather than merely flat ────────────────────────────
+ *
+ * A soft surface is defined by its EDGE, not its fill. So the cards here have
+ * no border at all: they are lifted off the page by three stacked shadows —
+ * a tight contact shadow, a wide diffuse one, and an inset highlight along the
+ * top edge that reads as light falling on a raised surface. That last one is
+ * the neumorphic part, and it is kept to a hairline: the full extruded look
+ * costs contrast, and contrast is what a table of numbers is made of.
+ *
+ * Glass is kept for what floats — dialogs, popovers, the side panels, the top
+ * bar — because those sit OVER content and the blur is what says so. Cards do
+ * not float over anything, so frosting them (which is what the classic skin
+ * does) only makes the text behind them show through.
+ *
+ * ── Why the class lands in two places ───────────────────────────────────────
+ *
+ * The dashboard layout puts it on the shell, from a cookie, so the first
+ * painted frame is already right. Radix portals its overlays to <body>, far
+ * outside that element, so the shell also mirrors the class onto <html> once
+ * mounted — see `ui-style-class.tsx`. No flash: an overlay cannot be open
+ * before hydration.
  */
 .ui-modern {
+  --radius: 1rem;
+
   --primary: 221 83% 53%;
   --primary-foreground: 0 0% 100%;
   --ring: 221 83% 53%;
   --accent: 221 83% 96%;
   --accent-foreground: 221 83% 40%;
-  --background: 220 33% 98%;
+  --background: 222 40% 97%;
   --card: 0 0% 100%;
   --popover: 0 0% 100%;
-  --border: 220 14% 90%;
-  --input: 220 14% 88%;
-  --muted: 220 20% 96%;
-  --muted-foreground: 220 9% 46%;
+  --border: 220 20% 92%;
+  --input: 220 20% 92%;
+  --muted: 220 30% 96%;
+  --muted-foreground: 220 10% 46%;
+  --secondary: 220 30% 96%;
+  --secondary-foreground: 222 30% 20%;
   --chart-1: 221 83% 53%;
-  background: hsl(var(--background));
 }
 .dark .ui-modern {
   --primary: 217 91% 60%;
@@ -437,45 +456,116 @@
   --ring: 217 91% 60%;
   --accent: 217 60% 18%;
   --accent-foreground: 217 91% 75%;
-  --background: 222 30% 8%;
-  --card: 222 24% 11%;
-  --popover: 222 24% 11%;
-  --border: 222 18% 19%;
-  --input: 222 18% 22%;
-  --muted: 222 18% 15%;
+  --background: 222 28% 9%;
+  --card: 222 24% 12%;
+  --popover: 222 24% 12%;
+  --border: 222 16% 20%;
+  --input: 222 16% 22%;
+  --muted: 222 18% 16%;
   --muted-foreground: 218 11% 64%;
+  --secondary: 222 18% 16%;
+  --secondary-foreground: 210 30% 92%;
 }
-/* Flat cards: opaque, hairline border, soft shadow. Beats the glass rules
-   above on specificity, and the dark variant below beats `.dark [bg-card]`. */
+
+/* The page itself: a quiet wash, not the warm mesh the classic skin paints. */
+div.ui-modern {
+  background: hsl(var(--background));
+}
+html.ui-modern body,
+.dark html.ui-modern body {
+  background: hsl(var(--background));
+}
+
+/*
+ * Soft cards. Borderless by design — the shadow is the edge. `!important`
+ * because the classic glass rules above claim the same selector.
+ */
 .ui-modern [class~='bg-card'] {
   background-color: hsl(var(--card)) !important;
   background-image: none !important;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 10px 28px -12px rgba(16, 24, 40, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 .ui-modern [class~='bg-card'][class~='border'],
 .ui-modern [class~='bg-card'][class~='border-b'],
 .ui-modern [class~='bg-card'][class~='border-t'] {
-  border-color: hsl(var(--border)) !important;
+  border-color: transparent !important;
+}
+/* The rules INSIDE a card — table heads, section dividers — stay visible. */
+.ui-modern [class~='bg-card'] [class*='border'] {
+  border-color: hsl(var(--border));
 }
 .dark .ui-modern [class~='bg-card'] {
   background-color: hsl(var(--card)) !important;
   background-image: none !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 10px 28px -12px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
-/* The top bar: solid, in the card colour. */
+
+/* Inputs and selects: soft, seated in the surface rather than boxed on it. */
+.ui-modern input,
+.ui-modern select,
+.ui-modern textarea {
+  border-color: hsl(var(--input));
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+.dark .ui-modern input,
+.dark .ui-modern select,
+.dark .ui-modern textarea {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* The one raised control: the primary button. */
+.ui-modern [class*='bg-primary']:not([class*='bg-primary/']) {
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.08),
+    0 8px 18px -8px hsl(var(--primary) / 0.55);
+}
+
+/* ── Glass, for what floats ────────────────────────────────────────────────
+ * Dialogs, popovers, sheets and the side panels. These are portalled, which
+ * is why the class is mirrored onto <html>.
+ */
+.ui-modern [role='dialog'],
+.ui-modern [data-radix-popper-content-wrapper] > * {
+  background-color: hsl(var(--popover) / 0.82) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  border-color: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 24px 60px -24px rgba(16, 24, 40, 0.35);
+}
+.dark .ui-modern [role='dialog'],
+.dark .ui-modern [data-radix-popper-content-wrapper] > * {
+  background-color: hsl(var(--popover) / 0.78) !important;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+}
+
+/* The top bar floats over the page, so it frosts too. */
 .ui-modern header.glass-chrome {
-  background: hsl(var(--card)) !important;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  background: hsl(var(--card) / 0.78) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
   border-color: hsl(var(--border)) !important;
 }
-/* The rail: dark navy, light ink. Tokens re-scoped, so the nav recolours itself. */
+
+/*
+ * The rail: dark navy, light ink. The tokens are re-scoped on the element
+ * itself, so the nav's own classes — `text-muted-foreground`, `bg-primary/10`,
+ * `hover:bg-muted` — come out light-on-dark without knowing anything happened.
+ */
 .ui-modern aside.glass-chrome {
   --background: 222 47% 11%;
   --foreground: 210 40% 98%;
   --card: 222 47% 11%;
   --muted: 217 33% 18%;
-  --muted-foreground: 215 20% 70%;
+  --muted-foreground: 215 20% 72%;
   --border: 217 33% 20%;
   --input: 217 33% 22%;
   --primary: 217 91% 66%;
@@ -489,11 +579,15 @@
 }
 .ui-modern aside.glass-chrome [class~='bg-card'] {
   background-color: hsl(var(--card)) !important;
+  box-shadow: none;
+}
+.ui-modern aside.glass-chrome input {
+  box-shadow: none;
+  background-color: hsl(217 33% 16%);
 }
 .ui-modern aside.glass-chrome ::-webkit-scrollbar-thumb {
   background: hsl(217 33% 28%);
 }
-
 /* ── Guest ordering: liquid glass in both themes ───────────────────────────────
  *
  * The guest flow (landing → menu → cart → tracking → bill) sits on top of the
