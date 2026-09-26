@@ -5,6 +5,8 @@ import { getProfitReport } from '../src/features/reports/profit'
 import { resolveRange } from '../src/features/reports/range'
 import { getDashboardStats } from '../src/features/analytics/queries'
 import { listStockAlerts, getInventorySummary } from '../src/features/inventory/alerts'
+import { accountBalances } from '../src/features/payments/accounts-ledger'
+import { seedDefaultAccounts } from '../src/features/payments/accounts'
 
 const S = Date.now().toString(36)
 const shops: string[] = []
@@ -73,8 +75,16 @@ async function main() {
     })),
   })
 
-  // 20,000 orders with 60,000 lines. Enough that an unindexed scan hurts.
-  const ORDERS = 20_000
+  /*
+   * 20,000 orders with 60,000 lines by default — enough that an unindexed scan
+   * hurts, and small enough to stay in the gate's budget.
+   *
+   * `PERF_ORDERS` raises it for a deliberate capacity run: `PERF_ORDERS=100000`
+   * is the "twenty restaurants, a hundred thousand records each" question,
+   * asked of the tenant that has them, because a query that discriminates by
+   * restaurant is only tested by a big table it has to discriminate against.
+   */
+  const ORDERS = Number(process.env.PERF_ORDERS ?? 20_000)
   const BATCH = 2000
   for (let b = 0; b < ORDERS / BATCH; b++) {
     await prisma.order.createMany({
@@ -110,15 +120,51 @@ async function main() {
     })
   }
 
+  /*
+   * A payment per order, spread over the accounts, because an internal
+   * account's balance is DERIVED from these rows (bank.md: there is no balance
+   * column) — so "what does BOC hold" is an aggregate over the payments table,
+   * and it is only measured by a payments table with something in it.
+   */
+  // Created straight through Prisma rather than by registering, so it has none.
+  await seedDefaultAccounts(prisma, shop.id)
+  const accounts = await prisma.paymentAccount.findMany({
+    where: { restaurantId: shop.id },
+    select: { code: true },
+    orderBy: { code: 'asc' },
+  })
+  if (accounts.length > 0) {
+    for (let b = 0; b < orderIds.length; b += BATCH) {
+      const slice = orderIds.slice(b, b + BATCH)
+      await prisma.payment.createMany({
+        data: slice.map((o, k) => {
+          const i = b + k
+          return {
+            restaurantId: shop.id,
+            orderId: o.id,
+            method: (i % 3 === 0 ? 'CARD' : 'CASH') as 'CARD' | 'CASH',
+            status: 'PAID' as const,
+            amount: 2_150_00,
+            destination: accounts[i % accounts.length].code,
+            paidAt: new Date(Date.now() - (i % 60) * 86_400_000),
+          }
+        }),
+      })
+    }
+  }
+
   const counts = {
     orders: await prisma.order.count({ where: { restaurantId: shop.id } }),
     lines: await prisma.orderItem.count({ where: { order: { restaurantId: shop.id } } }),
     movements: await prisma.stockMovement.count({ where: { restaurantId: shop.id } }),
+    payments: await prisma.payment.count({ where: { restaurantId: shop.id } }),
+    accounts: accounts.length,
     foods: foods.length,
     items: items.length,
   }
   console.log(`  seeded in ${Math.round((Date.now() - t0) / 1000)}s:`,
     `${counts.orders} orders, ${counts.lines} lines, ${counts.movements} movements,`,
+    `${counts.payments} payments over ${counts.accounts} accounts,`,
     `${counts.foods} dishes, ${counts.items} ingredients, ${branches.length} locations`)
 
   console.log('\n── Query timings (⚠ = over 1.5s) ────────────────────────')
@@ -144,10 +190,38 @@ async function main() {
     prisma.stockMovement.findMany({ where: { restaurantId: shop.id, branchId: branches[0].id },
       orderBy: { createdAt: 'desc' }, take: 100 })))
 
+  /*
+   * The derived-balance question. Every internal account's balance is five
+   * aggregates over the payments, refunds and entries tables (bank.md: no
+   * balance column, so nothing can drift), which means the Payment Details
+   * screen's cost grows with the payments table. This is the number that says
+   * whether that matters — and it says it does not: 42ms at 100,000 payments.
+   *
+   * Measured because a cache was once put here on the assumption that it was
+   * slow. It was not, and the cache made an account's balance disagree with its
+   * own history for fifteen seconds after every sale.
+   */
+  timings.push(await timed('account balances — all accounts', () =>
+    accountBalances(prisma, shop.id)))
+
+  /*
+   * The customers tab, which shows what each customer owes — a per-row sum
+   * over their unpaid orders. The column the owner asked for, at volume.
+   */
+  timings.push(await timed('customer list with amount owed', () =>
+    prisma.customer.findMany({ where: { restaurantId: shop.id }, take: 50,
+      orderBy: { createdAt: 'desc' } })))
+  timings.push(await timed('payments list page 1', () =>
+    prisma.payment.findMany({ where: { restaurantId: shop.id }, orderBy: { createdAt: 'desc' },
+      take: 25 })))
+
   const slow = timings.filter((t) => t > 1500).length
   console.log(`\n  slowest ${Math.max(...timings)}ms · ${slow} over 1.5s`)
 
   console.log('\n── Cleanup ──────────────────────────────────────────────')
+  await prisma.payment.deleteMany({ where: { restaurantId: shop.id } })
+  await prisma.paymentAccountEntry.deleteMany({ where: { restaurantId: shop.id } })
+  await prisma.paymentAccount.deleteMany({ where: { restaurantId: shop.id } })
   await prisma.orderItem.deleteMany({ where: { order: { restaurantId: shop.id } } })
   await prisma.order.deleteMany({ where: { restaurantId: shop.id } })
   await prisma.stockMovement.deleteMany({ where: { restaurantId: shop.id } })

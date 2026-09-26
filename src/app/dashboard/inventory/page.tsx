@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { Prisma } from '@prisma/client'
 
 import { InventoryManager } from '@/features/inventory/components/inventory-manager'
 import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
@@ -102,24 +103,51 @@ export default async function InventoryPage({
       : item.quantity
 
   /*
-   * The layers behind the figures above. One query for the screen: their sum
-   * is the stock value, and the first open layer per item is what the next
-   * unit out of it costs.
+   * The layers behind the figures above: the stock value is their sum, and the
+   * first open layer per item is what the next unit out of it costs.
+   *
+   * ── Asked of the database, not of Node ──────────────────────────────────────
+   *
+   * This used to `findMany` every open layer in the restaurant and add them up
+   * in a loop. A layer is one delivery of one ingredient, so a kitchen taking
+   * daily deliveries of four hundred ingredients opens a hundred thousand of
+   * them in a year — and every load of this page shipped all of them over the
+   * wire to compute two numbers, one of which only ever needed the FIRST row
+   * per item.
+   *
+   * Both are aggregates, so both are now the database's job: a SUM that returns
+   * one row, and a DISTINCT ON that returns one row per item. The page's cost
+   * stops growing with the restaurant's history and starts scaling with the
+   * number of ingredients it actually stocks.
+   *
+   * DISTINCT ON is Postgres-specific and has no Prisma equivalent — `groupBy`
+   * can take a MIN of a column but cannot hand back the row that held it, and
+   * "the oldest open layer's unit cost" is a value ON that row.
    */
-  const layers = await prisma.stockBatch.findMany({
-    where: {
-      restaurantId: user.restaurantId,
-      remainingQty: { gt: 0 },
-      ...(branchId ? { branchId } : {}),
-    },
-    orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
-    select: { itemId: true, remainingQty: true, remainingValue: true },
-  })
-  let stockValue = 0
+  const branchFilter = branchId ? Prisma.sql`AND "branchId" = ${branchId}` : Prisma.empty
+
+  const [valueRows, firstLayers] = await Promise.all([
+    prisma.$queryRaw<Array<{ total: bigint | null }>>`
+      SELECT SUM("remainingValue")::bigint AS total
+        FROM "stock_batches"
+       WHERE "restaurantId" = ${user.restaurantId}
+         AND "remainingQty" > 0
+         ${branchFilter}
+    `,
+    prisma.$queryRaw<Array<{ itemId: string; remainingQty: number; remainingValue: number }>>`
+      SELECT DISTINCT ON ("itemId") "itemId", "remainingQty", "remainingValue"
+        FROM "stock_batches"
+       WHERE "restaurantId" = ${user.restaurantId}
+         AND "remainingQty" > 0
+         ${branchFilter}
+       ORDER BY "itemId", "receivedAt" ASC, "createdAt" ASC
+    `,
+  ])
+
+  const stockValue = Number(valueRows[0]?.total ?? 0)
   const nextUnitCosts: Record<string, number> = {}
-  for (const layer of layers) {
-    stockValue += layer.remainingValue
-    if (nextUnitCosts[layer.itemId] === undefined && layer.remainingQty > 0) {
+  for (const layer of firstLayers) {
+    if (layer.remainingQty > 0) {
       nextUnitCosts[layer.itemId] = Math.round(layer.remainingValue / layer.remainingQty)
     }
   }
