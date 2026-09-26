@@ -83,6 +83,11 @@ const STATIC = [
   // through the sidebar's own permission filter, so revoking a permission
   // removes the shortcut and no second permission system exists to drift.
   'sidebar-nav-test',
+  // Create Role offers exactly the sidebar's entries; a tab carries what it
+  // requires (POS → Payment details) on the client and on the server alike;
+  // every template round-trips through the boxes unchanged; and "start from
+  // scratch" is based on something the edge lets into every tab that is on.
+  'sidebar-access-test',
 ]
 
 const SERVICE = [
@@ -399,6 +404,11 @@ const RUNTIME = [
   // AUDIT.md C1/H10/H11 — a guest edit must hit kitchen, bill and stock alike.
   'guest-edit-test',
   'role-url-refusal-test', 'join-flow-test', 'cashier-gate-test',
+  // Create Role over HTTP: the sent list is closed over its dependencies, the
+  // staff named are connected (role = access, location = where), refusals
+  // (inactive, other tenant, other site, impossible pair) leave no role
+  // behind, and a person it connected is served the tabs and refused the rest.
+  'role-create-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
   // The approvals desk and the transfers board still SAY what the browser test
