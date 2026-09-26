@@ -106,23 +106,32 @@ export default async function InventoryPage({
    * The layers behind the figures above: the stock value is their sum, and the
    * first open layer per item is what the next unit out of it costs.
    *
-   * ── Asked of the database, not of Node ──────────────────────────────────────
+   * ── Asked of the database, not of Node — for memory, NOT for speed ──────────
    *
    * This used to `findMany` every open layer in the restaurant and add them up
    * in a loop. A layer is one delivery of one ingredient, so a kitchen taking
    * daily deliveries of four hundred ingredients opens a hundred thousand of
-   * them in a year — and every load of this page shipped all of them over the
-   * wire to compute two numbers, one of which only ever needed the FIRST row
-   * per item.
+   * them in a year, and every load of this page built all hundred thousand as
+   * objects to compute two numbers — one of which only ever needed the FIRST
+   * row per item.
    *
-   * Both are aggregates, so both are now the database's job: a SUM that returns
-   * one row, and a DISTINCT ON that returns one row per item. The page's cost
-   * stops growing with the restaurant's history and starts scaling with the
-   * number of ingredients it actually stocks.
+   * Be honest about what changing it bought: at a hundred thousand open layers,
+   * the loop took 261ms and this takes 243ms. Essentially nothing. The old query
+   * selected three scalar columns, so there was no nested-object hydration to
+   * avoid — the trap that makes the profit report expensive is absent here, and
+   * a narrow 100k-row stream is something Postgres and Node both do quickly.
+   *
+   * It is kept for the allocation, not the latency: 401 rows instead of 100,000
+   * means this page stops putting ~10MB of transient garbage through the heap on
+   * every load, which is what would show under several people opening it at once
+   * rather than in a single-request timing. That is a smaller and narrower claim
+   * than the one this comment first made.
    *
    * DISTINCT ON is Postgres-specific and has no Prisma equivalent — `groupBy`
    * can take a MIN of a column but cannot hand back the row that held it, and
-   * "the oldest open layer's unit cost" is a value ON that row.
+   * "the oldest open layer's unit cost" is a value ON that row. Verified against
+   * the loop it replaced: identical stock value, and an identical next-unit cost
+   * for all 400 items.
    */
   const branchFilter = branchId ? Prisma.sql`AND "branchId" = ${branchId}` : Prisma.empty
 
