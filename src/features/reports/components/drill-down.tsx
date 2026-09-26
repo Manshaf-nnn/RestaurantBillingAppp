@@ -116,11 +116,26 @@ export function DrillTable({
  * Server-rendered hrefs rather than a click handler: the page is already a
  * server component reading `?page=`, so a link is the whole mechanism and
  * the result is shareable, bookmarkable and works before hydration.
+ *
+ * ── The contract, which was implicit and is now written down ────────────────
+ *
+ * THE CALLER SLICES. This renders the links and the "1–10 of 240" line from
+ * the numbers it is given; it never sees the rows and cannot narrow them.
+ * Hand the table every row while handing this a `total` and a `page` and the
+ * result is quietly wrong in the worst way — the footer says "1–10 of 240",
+ * the links all work, and the table above shows all 240 with no sign that
+ * anything is amiss.
+ *
+ * `paginate()` in `features/reports/inventory-drill` returns the slice and
+ * these numbers together, which is the way to be sure they agree. The second
+ * caller of this component noticed the contract was unstated; that is exactly
+ * the moment to state it rather than the moment after somebody gets it wrong.
  */
 export function Pager({
   page,
   pageCount,
   hrefFor,
+  /** The rows in the WHOLE report, not in the slice on screen. */
   total,
   perPage,
 }: {

@@ -29,6 +29,21 @@
  *   value       → SUM(stockBatch.remainingValue) where remainingQty > 0
  *   unit cost   → currentUnitCost / currentUnitCostMany from features/inventory/fifo
  *
+ * ── What this rule is NOT about ─────────────────────────────────────────────
+ *
+ * An average of what was PAID is fine and this rule never fires on it: the
+ * purchasing report divides purchase value by purchase quantity to answer
+ * "what has this item been costing us lately", and the price history on the
+ * PO screen does the same. Those are facts about past invoices, already
+ * settled, and averaging them is the question being asked.
+ *
+ * The rule is about what stock is worth RIGHT NOW. The difference is which
+ * direction the multiplication runs: dividing a recorded value by a recorded
+ * quantity reports something that happened, while multiplying a held quantity
+ * by a rate invents a valuation the layers do not support. If the figure
+ * would change when a new delivery arrives at a different price, it is a
+ * valuation and it must come from the layers.
+ *
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/no-average-cost-valuation.ts
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
