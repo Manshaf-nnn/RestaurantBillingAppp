@@ -10,7 +10,6 @@ import {
   LayoutDashboard,
   ListOrdered,
   Package,
-  MapPin,
   QrCode,
   ScanLine,
   ScrollText,
@@ -453,13 +452,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/dashboard/reports/cash-drawer', label: 'Cash drawer report', icon: Wallet, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/reports/petty-cash', label: 'Petty cash report', icon: Coins, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.QR_VIEW },
-      // Beside the codes, because the toggle that turns it on lives on a code.
-      {
-        href: '/dashboard/qr/locations',
-        label: 'Delivery locations',
-        icon: MapPin,
-        permission: PERMISSIONS.QR_MANAGE,
-      },
     /*
      * ar.md §1 — what guests meet when they scan, as opposed to the printed
      * codes above. Its own row because an owner looking for "what does the

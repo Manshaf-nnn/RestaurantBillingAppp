@@ -5449,8 +5449,19 @@ model DeliveryLocation {
   branch       Branch?    @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   name      String
-  /// An optional heading to group under — "Hostels", "Staff Quarters" — so a
-  /// long list reads as a few short ones rather than forty buttons.
+  /// ── A place under a place ───────────────────────────────────────────────
+  ///
+  /// The owner's mental model is two levels: a MAIN place ("University") and
+  /// the places inside it ("Boys Hostel", "Girls Hostel", "Villa 2"). A row
+  /// with no parent is a main place — a heading, never itself chosen; a row
+  /// with one is what the guest actually picks. Two levels only, on purpose:
+  /// a campus has buildings, and nobody delivers to a corridor.
+  ///
+  /// `groupName` below is what this replaced — a free-text heading with no row
+  /// behind it. Kept because a column cannot be dropped, no longer written.
+  parentId  String?
+  parent    DeliveryLocation?  @relation("LocationChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children  DeliveryLocation[] @relation("LocationChildren")
   groupName String?
   /// Extra words for the rider that the guest does not choose: a gate number,
   /// "ask at reception". Shown on the ticket, never on the picker.
@@ -5472,6 +5483,7 @@ model DeliveryLocation {
   /// One name per branch. Two "Villa 1"s in one picker is a mis-delivery.
   @@unique([restaurantId, branchId, name])
   @@index([restaurantId, isActive, sortOrder])
+  @@index([parentId])
   @@index([categoryId])
   @@map("delivery_locations")
 }

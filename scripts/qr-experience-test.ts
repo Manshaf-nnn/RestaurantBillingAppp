@@ -590,7 +590,14 @@ async function main() {
     const schema = readFileSync('src/features/orders/schema.ts', 'utf8')
     check('the public schema allows a tableless order', schema.includes("tableId: z.string().cuid('Select a table').optional()"))
     const actions = readFileSync('src/features/orders/actions.ts', 'utf8')
-    check('and the guest action makes it a takeaway', actions.includes("type: tableId ? 'DINE_IN' : 'TAKEAWAY'"))
+    /*
+     * DELIBERATE: the expression grew a middle case. A tableless order is still
+     * a TAKEAWAY — the runtime check above proves it — unless the guest chose
+     * somewhere to deliver to, in which case it is a DELIVERY and the tracker
+     * can say "delivered" rather than telling a hostel guest to collect.
+     */
+    check('and the guest action makes it a takeaway — or a delivery, when a place was chosen',
+      actions.includes("type: tableId ? 'DINE_IN' : deliveryLocation ? 'DELIVERY' : 'TAKEAWAY'"))
     check('refusing when nothing names a branch either', actions.includes("'BRANCH_REQUIRED'"))
   }
 

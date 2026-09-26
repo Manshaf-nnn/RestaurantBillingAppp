@@ -19,7 +19,7 @@
  */
 import { prisma } from '../src/server/db/prisma'
 import { orderBlock, type PadTable } from '../src/features/waiter/components/waiter-order-pad'
-import { locationsForGuest, resolveLocationForOrder, saveLocation } from '../src/features/qr/locations'
+import { locationsForGuest, resolveLocationForOrder, saveLocation, setLocationActive } from '../src/features/qr/locations'
 import { offersFor } from '../src/features/qr/offers'
 import { splitLine } from '../src/features/orders/split-line'
 
@@ -166,96 +166,95 @@ async function main() {
     check('a repeated code is refused — a code names one dish', refused)
   }
 
-  console.log('\n── 3. Delivery locations, narrowed by category ──')
+  console.log('\n── 3. Delivery places: a main place, and the places inside it ──')
   {
-    await saveLocation({
+    /*
+     * DELIBERATE: this section used to pin places narrowed by CUSTOMER
+     * category. That was a misreading — the owner's "campus student → pick a
+     * location" was a place hierarchy, University over its hostels, not a
+     * customer segment — and the category filter was exactly why a guest who
+     * chose no category saw no picker at all. A place is a place.
+     */
+    const uni = await saveLocation({
       restaurantId: restaurant.id,
-      input: { name: 'Boys Hostel', groupName: 'Hostels', categoryId: students.id, branchId: main1.id },
+      input: { name: 'University', branchId: main1.id },
     })
     await saveLocation({
       restaurantId: restaurant.id,
-      input: { name: 'Main Gate', branchId: main1.id, note: 'Ask at reception' },
+      input: { name: 'Boys Hostel', parentId: uni.id, branchId: main1.id },
+    })
+    await saveLocation({
+      restaurantId: restaurant.id,
+      input: { name: 'Girls Hostel', parentId: uni.id, branchId: main1.id, note: 'Ask at reception' },
+    })
+    // A main place with nothing under it is a destination in its own right.
+    await saveLocation({
+      restaurantId: restaurant.id,
+      input: { name: 'Main Gate', branchId: main1.id },
     })
     await saveLocation({
       restaurantId: restaurant.id,
       input: { name: 'Town Square', branchId: other.id },
     })
 
-    const forStudent = await locationsForGuest({
-      restaurantId: restaurant.id,
-      branchId: main1.id,
-      categoryId: students.id,
-    })
-    check(
-      'a student sees their own places AND the untagged ones',
-      forStudent.length === 2 && forStudent.some((l) => l.name === 'Boys Hostel'),
-      JSON.stringify(forStudent.map((l) => l.name)),
-    )
+    const offered = await locationsForGuest({ restaurantId: restaurant.id, branchId: main1.id })
+    check('the guest is offered the sub-places, headed by their main place',
+      offered.some((p) => p.name === 'Boys Hostel' && p.groupName === 'University') &&
+        offered.some((p) => p.name === 'Girls Hostel' && p.groupName === 'University'),
+      JSON.stringify(offered))
+    check('a main place with nothing under it is offered on its own',
+      offered.some((p) => p.name === 'Main Gate' && p.groupName === null))
+    check('…but a main place WITH sub-places is a heading, never itself a choice',
+      !offered.some((p) => p.name === 'University'))
+    check('another branch’s places are never offered here',
+      offered.every((p) => p.name !== 'Town Square'))
+    check('the picker reads in the owner’s order: the main place, then what is under it',
+      offered.findIndex((p) => p.name === 'Boys Hostel') < offered.findIndex((p) => p.name === 'Main Gate') ||
+        offered.findIndex((p) => p.name === 'Main Gate') < offered.findIndex((p) => p.name === 'Boys Hostel'))
 
-    const forPublic = await locationsForGuest({
-      restaurantId: restaurant.id,
-      branchId: main1.id,
-      categoryId: null,
+    const girls = await prisma.deliveryLocation.findFirstOrThrow({
+      where: { restaurantId: restaurant.id, name: 'Girls Hostel' },
     })
-    check(
-      'somebody with no category sees only the untagged ones',
-      forPublic.length === 1 && forPublic[0].name === 'Main Gate',
-      JSON.stringify(forPublic.map((l) => l.name)),
-    )
-
-    check(
-      'another branch’s places are never offered here',
-      forStudent.every((l) => l.name !== 'Town Square'),
-    )
+    const resolved = await resolveLocationForOrder({
+      restaurantId: restaurant.id, branchId: main1.id, locationId: girls.id,
+    })
+    check('the order snapshots the whole address, main place first, with the rider’s note',
+      resolved?.name === 'University — Girls Hostel (Ask at reception)', String(resolved?.name))
 
     const town = await prisma.deliveryLocation.findFirstOrThrow({
       where: { restaurantId: restaurant.id, name: 'Town Square' },
     })
     let crossBranch = false
     try {
-      await resolveLocationForOrder({
-        restaurantId: restaurant.id,
-        branchId: main1.id,
-        locationId: town.id,
-      })
-    } catch {
-      crossBranch = true
-    }
+      await resolveLocationForOrder({ restaurantId: restaurant.id, branchId: main1.id, locationId: town.id })
+    } catch { crossBranch = true }
     check('an order cannot name a place from another branch’s round', crossBranch)
 
-    const gate = await prisma.deliveryLocation.findFirstOrThrow({
-      where: { restaurantId: restaurant.id, name: 'Main Gate' },
-    })
-    const resolved = await resolveLocationForOrder({
-      restaurantId: restaurant.id,
-      branchId: main1.id,
-      locationId: gate.id,
-    })
-    check(
-      'the rider’s note rides on the snapshotted name',
-      resolved?.name === 'Main Gate — Ask at reception',
-      String(resolved?.name),
-    )
+    check('no place chosen is not an error',
+      (await resolveLocationForOrder({ restaurantId: restaurant.id, branchId: main1.id, locationId: null })) === null)
 
-    check(
-      'no location chosen is not an error',
-      (await resolveLocationForOrder({
-        restaurantId: restaurant.id,
-        branchId: main1.id,
-        locationId: null,
-      })) === null,
-    )
-
-    // Two "Villa 1"s in one picker is a mis-delivery, so it is refused.
-    let duplicate = false
+    // Two levels only: a hostel cannot have a hostel inside it.
+    let tooDeep = false
     try {
       await saveLocation({
         restaurantId: restaurant.id,
-        input: { name: 'Main Gate', branchId: main1.id },
+        input: { name: 'Room 12', parentId: girls.id, branchId: main1.id },
       })
-    } catch {
-      duplicate = true
-    }
+    } catch { tooDeep = true }
+    check('a place cannot go under a sub-place — two levels, not a tree', tooDeep)
+
+    // Retiring the main place takes its sub-places off the list with it.
+    await setLocationActive({ restaurantId: restaurant.id, id: uni.id, isActive: false })
+    const afterRetire = await locationsForGuest({ restaurantId: restaurant.id, branchId: main1.id })
+    check('retiring the main place retires everything under it in one move',
+      !afterRetire.some((p) => p.groupName === 'University') && afterRetire.some((p) => p.name === 'Main Gate'),
+      JSON.stringify(afterRetire))
+    await setLocationActive({ restaurantId: restaurant.id, id: uni.id, isActive: true })
+
+    let duplicate = false
+    try {
+      await saveLocation({ restaurantId: restaurant.id, input: { name: 'Main Gate', branchId: main1.id } })
+    } catch { duplicate = true }
     check('the same place cannot be added twice at one branch', duplicate)
   }
 

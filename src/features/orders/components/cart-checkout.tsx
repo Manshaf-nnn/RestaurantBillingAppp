@@ -132,9 +132,7 @@ export function CartCheckout({
   React.useEffect(() => {
     if (!qrCode) return
     let live = true
-    void callAction(() =>
-      listGuestLocations({ code: qrCode, categoryId: state.customer.categoryId || '' }, slug),
-    ).then((result) => {
+    void callAction(() => listGuestLocations({ code: qrCode }, slug)).then((result) => {
       if (!live || !result.ok) return
       setLocations(result.data.locations)
       setLocationRequired(result.data.required)
@@ -142,7 +140,7 @@ export function CartCheckout({
     return () => {
       live = false
     }
-  }, [qrCode, state.customer.categoryId, slug])
+  }, [qrCode, slug])
 
   /*
    * A returning guest types their number and gets their own name back.
@@ -296,6 +294,17 @@ export function CartCheckout({
       stopAdding()
       toast.success(`Added to order ${addition.data.orderNumber}`)
       router.push(`/order/track/${addition.data.orderId}`)
+      return
+    }
+    /*
+     * Said before the request rather than discovered after it. The server
+     * refuses too (`LOCATION_REQUIRED`) — this is so the guest is told next to
+     * the field they missed, not by a toast after a round trip.
+     */
+    if (locationRequired && !locationId) {
+      setPlacing(false)
+      setFieldErrors((current) => ({ ...current, deliveryLocationId: 'Choose where to deliver' }))
+      document.getElementById('deliveryLocation')?.focus()
       return
     }
     const result = await callAction(() => placeGuestOrder({

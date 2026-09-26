@@ -6,98 +6,77 @@ import { MapPin, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/feedback'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/label'
-import { SectionCard } from '@/features/dashboard/components/page-header'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { saveDeliveryLocation, setDeliveryLocationActive } from '../location-actions'
 import type { LocationRow } from '../locations'
 
 /**
- * The places deliveries go, in the owner's own words.
+ * The places a delivery goes, two levels deep, edited where the code that
+ * asks for them is edited.
  *
- * ── Why an editable list and not a map ──────────────────────────────────────
+ * ── The owner's model, and why the screen mirrors it ────────────────────────
  *
- * On a campus there are perhaps twenty places food is carried to and everybody
- * already calls them the same thing. A typed address box collects twenty
- * spellings of "boys hostel", none of which a rider can sort a bag by; a map
- * needs a geocoder this system does not have and would still land the pin on
- * the wrong side of a building. A list the owner wrote is exact, reads the same
- * on every ticket, and can be reordered as the round changes.
+ * "First create a main location — University — and under it the sub-locations:
+ * hostels, villas." So the screen is a list of main places, each with its own
+ * places under it and an "add a place under University" right there. Not a
+ * flat list with a heading typed on every row, which is what this replaced and
+ * which asked the owner to spell "University" the same way fourteen times.
  *
- * ── The three columns that are not obvious ──────────────────────────────────
+ * ── No branch picker ────────────────────────────────────────────────────────
  *
- * GROUP is a heading in the guest's picker — "Hostels", "Staff Quarters" — so
- * forty options read as three short lists. Optional, and locations with no
- * group keep their place in the owner's own order rather than being swept to
- * the bottom.
- *
- * FOR is the customer category this place is offered to. Empty means everyone.
- * Set, and only guests who picked that category see it, which is how "Girls
- * Hostel" is shown to Campus Student and not to the public out of one list.
- *
- * RIDER NOTE rides on the ticket and never appears in the picker: a gate code
- * or "ask at reception" is for the person carrying the bag, not for the guest
- * choosing from a dropdown.
+ * A place belongs to the code it is edited under, and a code belongs to one
+ * branch. Asking which branch a hostel is in, on the screen for the University
+ * code, is a question with one answer, so it is not asked.
  */
-
-export interface LocationCategory {
-  id: string
-  name: string
-}
-
-export interface LocationBranch {
-  id: string
-  name: string
-}
 
 export function LocationsManager({
   rows,
-  categories,
-  branches,
+  branchId,
 }: {
   rows: LocationRow[]
-  categories: LocationCategory[]
-  branches: LocationBranch[]
+  /** The code's own branch — every place made here lands on it. */
+  branchId: string
 }) {
   const router = useRouter()
   const [busy, setBusy] = React.useState(false)
-  const [draft, setDraft] = React.useState<null | Partial<LocationRow>>(null)
+  /** Which form is open: a new main place, a new sub-place under X, or an edit. */
+  const [form, setForm] = React.useState<
+    | { kind: 'main' }
+    | { kind: 'sub'; parentId: string; parentName: string }
+    | { kind: 'edit'; row: LocationRow }
+    | null
+  >(null)
 
-  const save = async (row: Partial<LocationRow>) => {
-    if (!row.name?.trim()) {
-      toast.error('Give the place a name')
-      return
-    }
+  const mains = rows.filter((row) => row.parentId === null)
+  const under = (parentId: string) => rows.filter((row) => row.parentId === parentId)
+
+  const save = async (values: { name: string; note: string }) => {
+    if (!values.name.trim()) return toast.error('Give the place a name')
     setBusy(true)
     const result = await callAction(() =>
       saveDeliveryLocation({
-        id: row.id ?? '',
-        name: row.name ?? '',
-        groupName: row.groupName ?? '',
-        note: row.note ?? '',
-        categoryId: row.categoryId ?? '',
-        branchId: row.branchId ?? '',
-        sortOrder: row.sortOrder ?? rows.length,
-        isActive: row.isActive ?? true,
+        id: form?.kind === 'edit' ? form.row.id : '',
+        name: values.name,
+        note: values.note,
+        parentId:
+          form?.kind === 'sub' ? form.parentId : form?.kind === 'edit' ? (form.row.parentId ?? '') : '',
+        branchId,
+        sortOrder:
+          form?.kind === 'edit'
+            ? form.row.sortOrder
+            : form?.kind === 'sub'
+              ? under(form.parentId).length
+              : mains.length,
+        isActive: form?.kind === 'edit' ? form.row.isActive : true,
       }),
     )
     setBusy(false)
-    if (!result.ok) {
-      toast.error(result.error)
-      return
-    }
-    toast.success(row.id ? 'Location updated' : 'Location added')
-    setDraft(null)
+    if (!result.ok) return toast.error(result.error)
+    toast.success(form?.kind === 'edit' ? 'Place updated' : 'Place added')
+    setForm(null)
     router.refresh()
   }
 
@@ -107,182 +86,209 @@ export function LocationsManager({
       setDeliveryLocationActive({ id: row.id, isActive: !row.isActive }),
     )
     setBusy(false)
-    if (!result.ok) {
-      toast.error(result.error)
-      return
-    }
+    if (!result.ok) return toast.error(result.error)
     toast.success(row.isActive ? `${row.name} retired` : `${row.name} is back`)
     router.refresh()
   }
 
   return (
-    <SectionCard
-      title="Delivery locations"
-      description="The places a delivery goes. Guests pick from this list instead of typing an address, so every ticket reads the same."
-      actions={
-        <Button size="sm" onClick={() => setDraft({ isActive: true, sortOrder: rows.length })}>
-          <Plus /> Add a place
+    <div className="space-y-3 rounded-xl border p-3 sm:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold">Delivery places</p>
+          <p className="text-xs text-muted-foreground">
+            A main place, then the places inside it. Guests pick one at checkout.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setForm({ kind: 'main' })} disabled={busy}>
+          <Plus /> Add a main place
         </Button>
-      }
-    >
-      {draft ? (
-        <LocationForm
-          draft={draft}
-          categories={categories}
-          branches={branches}
+      </div>
+
+      {form?.kind === 'main' ? (
+        <PlaceForm
+          title="New main place"
+          hint="Somewhere with places inside it — a campus, an estate, a town."
+          placeholder="University"
           busy={busy}
-          onChange={setDraft}
-          onCancel={() => setDraft(null)}
-          onSave={() => save(draft)}
+          onCancel={() => setForm(null)}
+          onSave={save}
         />
       ) : null}
 
-      {rows.length === 0 && !draft ? (
-        <EmptyState
-          icon={<MapPin className="size-8" />}
-          title="No places yet"
-          description="Add the buildings, hostels or blocks you deliver to. Guests will choose from them at checkout."
-        />
-      ) : (
-        <ul className="divide-y">
-          {rows.map((row) => (
-            <li
-              key={row.id}
-              className={cn(
-                'flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5',
-                !row.isActive && 'opacity-55',
-              )}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">
-                  {row.name}
-                  {row.isActive ? null : (
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">retired</span>
-                  )}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {[
-                    row.groupName,
-                    row.categoryName ? `for ${row.categoryName}` : null,
-                    row.note,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ') || 'Shown to everyone'}
-                </span>
-              </span>
+      {mains.length === 0 && form === null ? (
+        <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+          <MapPin className="size-4" /> No places yet. Start with the main one.
+        </p>
+      ) : null}
 
-              <Button size="sm" variant="ghost" onClick={() => setDraft(row)} disabled={busy}>
-                Edit
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => toggle(row)}
-                disabled={busy}
-                aria-label={row.isActive ? `Retire ${row.name}` : `Restore ${row.name}`}
-              >
-                {row.isActive ? <Trash2 /> : <RotateCcw />}
-              </Button>
+      <ul className="space-y-2">
+        {mains.map((main) => {
+          const subs = under(main.id)
+          return (
+            <li
+              key={main.id}
+              className={cn('rounded-lg border bg-card', !main.isActive && 'opacity-55')}
+            >
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold">
+                    {main.name}
+                    {main.isActive ? null : (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">retired</span>
+                    )}
+                  </span>
+                  {main.note ? (
+                    <span className="block truncate text-xs text-muted-foreground">{main.note}</span>
+                  ) : null}
+                </span>
+                {main.isActive ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => setForm({ kind: 'sub', parentId: main.id, parentName: main.name })}
+                  >
+                    <Plus /> Add under {main.name}
+                  </Button>
+                ) : null}
+                <RowActions row={main} busy={busy} onEdit={() => setForm({ kind: 'edit', row: main })} onToggle={() => toggle(main)} />
+              </div>
+
+              {form?.kind === 'sub' && form.parentId === main.id ? (
+                <div className="border-t px-3 py-2">
+                  <PlaceForm
+                    title={`New place under ${main.name}`}
+                    hint="What the guest picks. A gate code or landmark for the rider goes in the note."
+                    placeholder="Boys Hostel"
+                    busy={busy}
+                    onCancel={() => setForm(null)}
+                    onSave={save}
+                  />
+                </div>
+              ) : null}
+
+              {subs.length > 0 ? (
+                <ul className="divide-y border-t">
+                  {subs.map((sub) => (
+                    <li
+                      key={sub.id}
+                      className={cn('flex flex-wrap items-center gap-2 py-1.5 pl-7 pr-3', !sub.isActive && 'opacity-55')}
+                    >
+                      {form?.kind === 'edit' && form.row.id === sub.id ? (
+                        <div className="w-full">
+                          <PlaceForm
+                            title={`Edit ${sub.name}`}
+                            initial={{ name: sub.name, note: sub.note ?? '' }}
+                            placeholder="Boys Hostel"
+                            busy={busy}
+                            onCancel={() => setForm(null)}
+                            onSave={save}
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm">
+                              {sub.name}
+                              {sub.isActive ? null : (
+                                <span className="ml-2 text-xs text-muted-foreground">retired</span>
+                              )}
+                            </span>
+                            {sub.note ? (
+                              <span className="block truncate text-xs text-muted-foreground">{sub.note}</span>
+                            ) : null}
+                          </span>
+                          <RowActions row={sub} busy={busy} onEdit={() => setForm({ kind: 'edit', row: sub })} onToggle={() => toggle(sub)} />
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {form?.kind === 'edit' && form.row.id === main.id ? (
+                <div className="border-t px-3 py-2">
+                  <PlaceForm
+                    title={`Edit ${main.name}`}
+                    initial={{ name: main.name, note: main.note ?? '' }}
+                    placeholder="University"
+                    busy={busy}
+                    onCancel={() => setForm(null)}
+                    onSave={save}
+                  />
+                </div>
+              ) : null}
             </li>
-          ))}
-        </ul>
-      )}
-    </SectionCard>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
-function LocationForm({
-  draft,
-  categories,
-  branches,
+function RowActions({
+  row,
   busy,
-  onChange,
+  onEdit,
+  onToggle,
+}: {
+  row: LocationRow
+  busy: boolean
+  onEdit: () => void
+  onToggle: () => void
+}) {
+  return (
+    <span className="flex shrink-0 items-center">
+      <Button size="sm" variant="ghost" onClick={onEdit} disabled={busy}>
+        Edit
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onToggle}
+        disabled={busy}
+        aria-label={row.isActive ? `Retire ${row.name}` : `Restore ${row.name}`}
+      >
+        {row.isActive ? <Trash2 /> : <RotateCcw />}
+      </Button>
+    </span>
+  )
+}
+
+function PlaceForm({
+  title,
+  hint,
+  placeholder,
+  initial,
+  busy,
   onCancel,
   onSave,
 }: {
-  draft: Partial<LocationRow>
-  categories: LocationCategory[]
-  branches: LocationBranch[]
+  title: string
+  hint?: string
+  placeholder: string
+  initial?: { name: string; note: string }
   busy: boolean
-  onChange: (next: Partial<LocationRow>) => void
   onCancel: () => void
-  onSave: () => void
+  onSave: (values: { name: string; note: string }) => void
 }) {
-  const set = <K extends keyof LocationRow>(key: K, value: LocationRow[K]) =>
-    onChange({ ...draft, [key]: value })
+  const [name, setName] = React.useState(initial?.name ?? '')
+  const [note, setNote] = React.useState(initial?.note ?? '')
 
   return (
-    <div className="mb-4 rounded-xl border border-dashed p-3 sm:p-4">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Name" required>
-          <Input
-            value={draft.name ?? ''}
-            onChange={(event) => set('name', event.target.value)}
-            placeholder="Boys Hostel"
-          />
+    <div className="rounded-lg border border-dashed p-3">
+      <p className="mb-2 text-xs font-semibold">{title}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Field label="Name" required hint={hint}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholder} autoFocus />
         </Field>
-
-        <Field label="Group" hint="Optional heading in the guest's list.">
-          <Input
-            value={draft.groupName ?? ''}
-            onChange={(event) => set('groupName', event.target.value)}
-            placeholder="Hostels"
-          />
-        </Field>
-
-        <Field label="For" hint="Empty shows it to everyone.">
-          <Select
-            value={draft.categoryId ?? '__all__'}
-            onValueChange={(value: string) => set('categoryId', value === '__all__' ? null : value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Everyone" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Everyone</SelectItem>
-              {categories.map((category) => (
-                <SelectItem key={category.id} value={category.id}>
-                  {category.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field label="Location" hint="Empty means every location delivers here.">
-          <Select
-            value={draft.branchId ?? '__all__'}
-            onValueChange={(value: string) => set('branchId', value === '__all__' ? null : value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Every location" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Every location</SelectItem>
-              {branches.map((branch) => (
-                <SelectItem key={branch.id} value={branch.id}>
-                  {branch.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field
-          label="Note for the rider"
-          className="sm:col-span-2"
-          hint="On the ticket only — the guest never sees this."
-        >
-          <Input
-            value={draft.note ?? ''}
-            onChange={(event) => set('note', event.target.value)}
-            placeholder="Gate code 4417, ask at reception"
-          />
+        <Field label="Note for the rider" hint="Never shown to the guest.">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Gate code 4417" />
         </Field>
       </div>
-
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" onClick={onSave} loading={busy} disabled={busy}>
+      <div className="mt-2 flex gap-2">
+        <Button size="sm" onClick={() => onSave({ name, note })} loading={busy} disabled={busy}>
           Save
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>

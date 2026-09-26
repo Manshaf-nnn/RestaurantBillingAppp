@@ -5,9 +5,8 @@ import type { Metadata } from 'next'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { OrderTracker } from '@/features/orders/components/order-tracker'
-import { getOrderForGuest, readOptions } from '@/features/orders/queries'
+import { getOrderForGuestById, readOptions } from '@/features/orders/queries'
 import { getGuestAppearance } from '@/features/guest/queries'
-import { resolvePublicTenant } from '@/server/db/tenant'
 import { BrandTheme } from '@/features/orders/components/brand-theme'
 import { GuestLoyalty } from '@/features/loyalty/components/guest-loyalty'
 import { localeForCurrency } from '@/lib/money'
@@ -22,12 +21,20 @@ export default async function TrackOrderPage({
   params: Promise<{ orderId: string }>
 }) {
   const { orderId } = await params
-  const restaurant = await resolvePublicTenant()
-  if (!restaurant) notFound()
 
-  const order = await getOrderForGuest(restaurant.id, orderId)
+  /*
+   * The order first, the restaurant from it.
+   *
+   * This page used to resolve the restaurant from the tenant cookie and only
+   * then look the order up. A guest who came in through a QR code has no such
+   * cookie — `/m/[code]` reads and sets none, by design — so every delivery
+   * guest was sent here after ordering and shown a 404. The order id names the
+   * restaurant; the guest session on the cookie still decides whose it is.
+   */
+  const order = await getOrderForGuestById(orderId)
+  const restaurant = order?.restaurant ?? null
 
-  if (!order) {
+  if (!order || !restaurant) {
     return (
       <div className="flex min-h-dvh items-center p-6">
         <EmptyState
@@ -66,6 +73,8 @@ export default async function TrackOrderPage({
           branchCode: order.branch?.code ?? null,
           slug: restaurant.slug,
           tableNumber: order.tableNumber ?? order.table?.number ?? null,
+          type: order.type,
+          deliveryLocationName: order.deliveryLocationName,
           customerName: order.customerName,
           grandTotal: order.grandTotal,
           estimatedMinutes: order.estimatedMinutes,

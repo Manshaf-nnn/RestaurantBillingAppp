@@ -16,7 +16,8 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
-import { resolveLocationForOrder } from '@/features/qr/locations'
+import { locationsForGuest, resolveLocationForOrder } from '@/features/qr/locations'
+import { readPublicId } from '@/features/qr/public-id'
 import { tableAvailability } from './table-availability'
 import { addGuestOrderItems as addGuestOrderItemsService } from './guest-additions'
 import {
@@ -346,11 +347,45 @@ export async function placeGuestOrder(
         locationId: data.deliveryLocationId || null,
       })
 
+      /*
+       * A code that requires a place gets one, or no order.
+       *
+       * Decided here, not only by the screen's submit button: the screen can be
+       * an old tab, a scripted request, or a checkout rendered before the owner
+       * turned the requirement on. A delivery with nowhere to go is not an
+       * order, it is a phone call waiting to happen.
+       *
+       * Only when there is something to require — a code set to demand a place
+       * whose list the owner has not filled in yet must not become a checkout
+       * nobody can complete.
+       */
+      if (!deliveryLocation && data.qrCode) {
+        const publicId = readPublicId(data.qrCode)
+        const code = publicId
+          ? await prisma.qrExperience.findFirst({
+              where: { publicId, restaurantId: restaurant.id, isActive: true },
+              select: { askLocation: true, requireLocation: true, branchId: true },
+            })
+          : null
+        if (code?.askLocation && code.requireLocation) {
+          const offered = await locationsForGuest({ restaurantId: restaurant.id, branchId: code.branchId })
+          if (offered.length > 0) {
+            throw new AppError('Choose where to deliver before placing the order', 400, 'LOCATION_REQUIRED')
+          }
+        }
+      }
+
       const order = await placeOrderService({
         restaurantId: restaurant.id,
         branchId: branch?.id ?? null,
         tableId,
-        type: tableId ? 'DINE_IN' : 'TAKEAWAY',
+        /*
+         * A guest who chose somewhere to deliver to has placed a DELIVERY,
+         * and the order says so. It used to come through as TAKEAWAY like any
+         * other tableless order, so the tracker told a guest waiting at the
+         * hostel that their food was "ready" for collection.
+         */
+        type: tableId ? 'DINE_IN' : deliveryLocation ? 'DELIVERY' : 'TAKEAWAY',
         channel: 'QR',
         deliveryLocation,
         // A blank phone means no customer record at all — the name is

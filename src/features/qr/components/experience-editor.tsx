@@ -19,6 +19,8 @@ import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { regenerateQrCode, saveQrExperience, setQrExperienceActive } from '../actions'
 import type { ExperienceStats } from '../queries'
+import type { LocationRow } from '../locations'
+import { LocationsManager } from './locations-manager'
 
 /**
  * Everything an owner can decide about one QR menu (ar.md §4–§20).
@@ -87,6 +89,7 @@ const SELECT = 'h-9 w-full rounded-lg border border-input bg-background px-2 tex
 export function ExperienceEditor({
   experience,
   branches,
+  deliveryPlaces,
   customerCategories,
   menuCategories,
   link,
@@ -98,6 +101,8 @@ export function ExperienceEditor({
 }: {
   experience: EditorExperience
   branches: Array<{ id: string; name: string }>
+  /** The delivery places at this code's branch, main places and their sub-places. */
+  deliveryPlaces: LocationRow[]
   customerCategories: Array<{ id: string; name: string }>
   menuCategories: Array<{ id: string; name: string; items: Array<{ id: string; name: string }> }>
   link: string
@@ -316,7 +321,7 @@ export function ExperienceEditor({
               checked={askLocation}
               onChange={setAskLocation}
               title="Ask where to deliver"
-              hint="Guests pick from the places you have set up, so the rider reads the same words every time. Manage the list under Delivery locations."
+              hint="Guests pick from the places you set up below, so the rider reads the same words every time."
             />
             {askLocation ? (
               <Toggle
@@ -330,6 +335,14 @@ export function ExperienceEditor({
                 }
               />
             ) : null}
+            {/*
+              The places themselves, right here under the switch that asks for
+              them. They had a screen of their own, which meant turning the
+              question on in one place and answering it in another — and an
+              owner who did the first and not the second shipped a code that
+              asked guests to choose from nothing.
+            */}
+            {askLocation ? <LocationsManager rows={deliveryPlaces} branchId={experience.branchId} /> : null}
           </div>
         ) : null}
       </SectionCard>

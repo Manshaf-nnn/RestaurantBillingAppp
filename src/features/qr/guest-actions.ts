@@ -105,9 +105,9 @@ export async function lookupGuestIdentity(
 /**
  * Where this guest may have it delivered.
  *
- * Asked at the checkout rather than baked into the page, because the answer
- * depends on the customer CATEGORY the guest chose on the way in — which the
- * page was rendered before they picked.
+ * Asked at the checkout rather than baked into the page so the list is live:
+ * a place the owner added a minute ago is offered without a redeploy or a
+ * re-scan.
  *
  * Not secret: these are the names of buildings, printed on the leaflet the
  * code came from. No rate limit beyond the platform's, and an unknown code
@@ -116,7 +116,6 @@ export async function lookupGuestIdentity(
  */
 const locationsSchema = z.object({
   code: z.string().trim().min(1).max(40),
-  categoryId: z.string().cuid().optional().or(z.literal('')),
 })
 
 export async function listGuestLocations(
@@ -143,7 +142,6 @@ export async function listGuestLocations(
       const locations = await locationsForGuest({
         restaurantId: restaurant.id,
         branchId: experience.branchId,
-        categoryId: data.categoryId || null,
       })
 
       /*

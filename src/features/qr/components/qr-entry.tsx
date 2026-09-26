@@ -17,6 +17,7 @@ import {
 import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { enterQrExperience } from '../actions'
+import { lookupGuestIdentity } from '../guest-actions'
 import { qrPath } from '../guest-path'
 
 /**
@@ -122,6 +123,38 @@ export function QrEntry({
   const [ownOrder, setOwnOrder] = React.useState<{ id: string; orderNumber: string; editable: boolean } | null>(null)
 
   const menuHref = qrPath(code, 'menu')
+
+  /*
+   * A returning guest types their number and their name fills in.
+   *
+   * This is the FIRST screen — the one the owner calls the login — and it is
+   * where "it doesn't remember me" is felt, because the checkout that already
+   * did this is two screens later. Debounced, and only ever fills a name box
+   * the guest has left empty: somebody halfway through typing "Jon" must not
+   * have it replaced by "Jonathan" under their cursor.
+   */
+  const nameRef = React.useRef('')
+  nameRef.current = answers.name ?? ''
+  const knownPhone = React.useRef('')
+  React.useEffect(() => {
+    const phone = (answers.phone ?? '').trim()
+    if (!identify || phone.length < 7 || phone === knownPhone.current) return
+    let live = true
+    const timer = setTimeout(() => {
+      void callAction(() => lookupGuestIdentity({ code, phone }, slug)).then((result) => {
+        if (!live || !result.ok || !result.data.found) return
+        knownPhone.current = phone
+        const name = result.data.name
+        if (name && !nameRef.current.trim()) {
+          setAnswers((current) => ({ ...current, name }))
+        }
+      })
+    }, 400)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [answers.phone, identify, code, slug])
 
   /*
    * Which questions are on screen right now (ar.md §7).

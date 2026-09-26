@@ -11,6 +11,7 @@ import { getManagedMenu } from '@/features/menu/queries'
 import { toQrDataUrl } from '@/features/payments/service'
 import { ExperienceEditor } from '@/features/qr/components/experience-editor'
 import { qrPath } from '@/features/qr/guest-path'
+import { listLocations } from '@/features/qr/locations'
 import { experienceStats, getExperience, readIdList } from '@/features/qr/queries'
 import { localeForCurrency } from '@/lib/money'
 import { PERMISSIONS, canAccessBranch, visibleBranchIds } from '@/lib/rbac'
@@ -50,12 +51,15 @@ export default async function QrExperiencePage({
   // read, id in the address bar or not.
   if (!canAccessBranch(user, experience.branchId)) notFound()
 
-  const [restaurant, branches, categories, menu, stats] = await Promise.all([
+  const [restaurant, branches, categories, menu, stats, deliveryPlaces] = await Promise.all([
     requireRestaurant(user.restaurantId),
     orderableBranches(user.restaurantId),
     listCustomerCategories({ restaurantId: user.restaurantId }),
     getManagedMenu(user.restaurantId, undefined, experience.branchId),
     experienceStats({ restaurantId: user.restaurantId, experienceId }),
+    // The places this code's guests may pick — edited on this screen, under
+    // the switch that asks for them.
+    listLocations({ restaurantId: user.restaurantId, branchIds: [experience.branchId] }),
   ])
 
   const allowed = visibleBranchIds(user)
@@ -80,6 +84,7 @@ export default async function QrExperiencePage({
       />
 
       <ExperienceEditor
+        deliveryPlaces={deliveryPlaces}
         experience={{
           id: experience.id,
           publicId: experience.publicId,

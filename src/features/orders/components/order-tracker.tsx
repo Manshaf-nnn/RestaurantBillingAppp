@@ -41,18 +41,40 @@ const STATUS_MESSAGES: Partial<Record<OrderStatus, string>> = {
   ACCEPTED: 'The kitchen accepted your order',
   PREPARING: 'Your food is being prepared',
   READY: 'Your order is ready',
-  SERVED: 'Your food has been served — enjoy!',
+  SERVED: 'Your food is with you — enjoy!',
   COMPLETED: 'Thanks for dining with us',
   CANCELLED: 'Your order was cancelled',
 }
 
-const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
-  { status: 'PENDING', label: 'Order received', description: 'Waiting to be confirmed', icon: Check },
-  { status: 'ACCEPTED', label: 'Accepted', description: 'Confirmed and sent to the kitchen', icon: Hand },
-  { status: 'PREPARING', label: 'Preparing', description: 'Your food is being cooked', icon: ChefHat },
-  { status: 'READY', label: 'Ready', description: 'Freshly plated', icon: CheckCircle2 },
-  { status: 'SERVED', label: 'Served', description: 'Enjoy your meal', icon: UtensilsCrossed },
-]
+/**
+ * The ladder, with a last rung named for how the food reaches the guest.
+ *
+ * Received → accepted → preparing → ready are the kitchen's steps and are the
+ * same for everyone. The last one is not: a guest at a table is SERVED, a
+ * guest waiting at a hostel is DELIVERED, and a guest at the counter COLLECTS.
+ * One word, but it is the word the guest is watching for.
+ */
+function stepsFor(type: TrackedOrder['type']) {
+  const last =
+    type === 'DELIVERY'
+      ? { label: 'Delivered', description: 'On its way, then at your door' }
+      : type === 'TAKEAWAY' || type === 'COUNTER'
+        ? { label: 'Collected', description: 'Picked up at the counter' }
+        : { label: 'Served', description: 'Enjoy your meal' }
+  const STEPS: Array<{ status: OrderStatus; label: string; description: string; icon: React.ElementType }> = [
+    { status: 'PENDING', label: 'Order received', description: 'Waiting to be confirmed', icon: Check },
+    { status: 'ACCEPTED', label: 'Accepted', description: 'Confirmed and sent to the kitchen', icon: Hand },
+    { status: 'PREPARING', label: 'Preparing', description: 'Your food is being cooked', icon: ChefHat },
+    {
+      status: 'READY',
+      label: 'Ready',
+      description: type === 'DELIVERY' ? 'Packed and with the rider' : 'Freshly plated',
+      icon: CheckCircle2,
+    },
+    { status: 'SERVED', ...last, icon: UtensilsCrossed },
+  ]
+  return STEPS
+}
 
 export interface TrackedOrder {
   id: string
@@ -64,6 +86,13 @@ export interface TrackedOrder {
   /** The restaurant's slug, so every link from here keeps the branch. */
   slug: string
   tableNumber: string | null
+  /**
+   * Dine-in, delivery, or collection. Decides the last step's name: a hostel
+   * guest is not "served", and a guest at the counter is not "delivered to".
+   */
+  type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'COUNTER'
+  /** Where a delivery is going — "University — Boys Hostel". */
+  deliveryLocationName: string | null
   customerName: string
   grandTotal: number
   estimatedMinutes: number
@@ -236,6 +265,7 @@ export function OrderTracker({
   })
 
   const cancelled = status === 'CANCELLED'
+  const STEPS = React.useMemo(() => stepsFor(initial.type), [initial.type])
   const currentIndex = STEPS.findIndex((step) => step.status === status)
   const activeIndex = status === 'COMPLETED' ? STEPS.length - 1 : currentIndex
 
@@ -279,7 +309,11 @@ export function OrderTracker({
           <h1 className="truncate text-sm font-semibold leading-tight">Order {initial.orderNumber}</h1>
           <p className="text-xs text-muted-foreground">
             {restaurantName}
-            {initial.tableNumber ? ` · Table ${initial.tableNumber}` : ''}
+            {initial.tableNumber
+              ? ` · Table ${initial.tableNumber}`
+              : initial.deliveryLocationName
+                ? ` · ${initial.deliveryLocationName}`
+                : ''}
           </p>
         </div>
         {initial.tableId ? (
@@ -569,7 +603,7 @@ const ITEM_STATUS_META: Record<OrderItemStatus, { label: string; className: stri
   QUEUED: { label: 'Pending', className: 'bg-muted text-muted-foreground' },
   PREPARING: { label: 'Preparing', className: 'bg-warning/15 text-warning' },
   READY: { label: 'Ready to serve', className: 'bg-primary/15 text-primary' },
-  SERVED: { label: 'Served ✓', className: 'bg-success/15 text-success' },
+  SERVED: { label: 'Done ✓', className: 'bg-success/15 text-success' },
   CANCELLED: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive' },
 }
 
