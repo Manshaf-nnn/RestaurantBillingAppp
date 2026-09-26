@@ -206,6 +206,12 @@ const SERVICE = [
   // now that submitting raises an approval request as well as setting the
   // order's status.
   'approvals-desk-test',
+  // The Inventory Reports screen against the ledger it reads: value is the
+  // sum of the layers (not a blended rate), the categories add back to the
+  // total, the trend ties to the ledger at both ends, opening + in − out =
+  // closing per item, transfers are their own bucket rather than an in and
+  // an out, and a branch filter narrows both value and movement.
+  'inventory-report-test',
   'supplier-ledger-test',
   'search-test',
   'locations-test',

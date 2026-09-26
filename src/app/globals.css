@@ -50,6 +50,30 @@
     --chart-5: 38 92% 50%;
 
     --radius: 0.75rem;
+
+    /*
+     * ── Categorical palette for charts ───────────────────────────────────
+     *
+     * Separate from `--chart-1..5`, which are the accent tints the older
+     * screens use. These six are a CATEGORICAL set: one hue per category,
+     * assigned in this fixed order and never cycled — a seventh category
+     * folds into "Others" in muted grey rather than repeating a hue, because
+     * two categories sharing a colour is a chart that lies.
+     *
+     * Both modes are validated rather than eyeballed, and dark is its own
+     * set of steps rather than a flip of light — a light-mode hue on a dark
+     * surface is either invisible or glaring. Checked with the palette
+     * validator: lightness band, chroma floor, colour-blind separation of
+     * every adjacent pair (protan, deutan, tritan), normal-vision floor, and
+     * contrast against the surface. All pass in both modes; the old
+     * `--chart-*` set does not, which is why these exist.
+     */
+    --viz-1: 217 91% 53%;
+    --viz-2: 142 69% 29%;
+    --viz-3: 262 83% 58%;
+    --viz-4: 175 84% 32%;
+    --viz-5: 32 94% 44%;
+    --viz-6: 333 74% 42%;
   }
 
   .dark {
@@ -92,6 +116,14 @@
     --chart-3: 152 55% 50%;
     --chart-4: 262 75% 68%;
     --chart-5: 38 88% 58%;
+
+    /* Dark steps, chosen and validated against the dark surface — see light. */
+    --viz-1: 217 91% 60%;
+    --viz-2: 142 72% 36%;
+    --viz-3: 258 90% 66%;
+    --viz-4: 175 84% 32%;
+    --viz-5: 32 94% 44%;
+    --viz-6: 333 74% 50%;
   }
 
   /* Force the light palette on a subtree (e.g. the classic light login) even

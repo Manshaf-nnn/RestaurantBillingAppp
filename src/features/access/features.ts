@@ -681,9 +681,21 @@ export const FEATURES: Feature[] = [
     key: 'reportInventory',
     label: 'Inventory report',
     group: 'Back office',
-    description: 'Stock value, movement and wastage.',
+    description: 'Stock value, movement and wastage, with the drill-downs behind each figure.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_INVENTORY }],
-    routes: ['/dashboard/reports/inventory'],
+    /*
+     * The four drill-downs are prefix-matched by `/dashboard/reports/inventory`
+     * and so need no entry of their own — they are listed anyway because
+     * `featureForRoute` takes the LONGEST match, and writing them down is what
+     * stops a future feature quietly claiming one of them.
+     */
+    routes: [
+      '/dashboard/reports/inventory',
+      '/dashboard/reports/inventory/items',
+      '/dashboard/reports/inventory/categories',
+      '/dashboard/reports/inventory/low-stock',
+      '/dashboard/reports/inventory/movements',
+    ],
   },
   {
     key: 'reportPurchasing',
