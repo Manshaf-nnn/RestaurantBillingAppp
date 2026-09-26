@@ -40,6 +40,8 @@ import {
   inferPreset,
   modulesShownBy,
   permissionsForSelection,
+  levelsOf,
+  levelHeldBy,
   requiredBy,
   requiredHrefs,
   sidebarModule,
@@ -335,6 +337,103 @@ console.log('\n4. "Start from scratch" lands somewhere the tabs can open\n')
   const empty = inferPreset([], OWNER_CAN)
   check('nothing ticked still resolves to something assignable', empty.preset !== null && OWNER_CAN.includes(empty.preset))
   check('nobody assignable → nothing inferred', inferPreset(posPerms, []).preset === null)
+}
+
+/* ── How much of a tab, not just whether ────────────────────────────────── */
+{
+  const TRANSFERS = '/dashboard/transfers'
+  const entry = sidebarModule(TRANSFERS)!
+  const levels = levelsOf(entry)
+
+  check(
+    'a tab with a real middle offers it, weakest first',
+    levels.map((l) => l.key).join(',') === 'read,request,handle,full',
+    levels.map((l) => l.key).join(','),
+  )
+  check('and every level says what it does NOT include', levels.every((l) => l.hint.length > 0))
+  check(
+    'the middle one is the job the owner described',
+    levels.find((l) => l.key === 'request')?.label === 'Can request',
+  )
+  // Most tabs have nothing to choose between, and show no picker at all.
+  check('a tab with one answer offers no choice', levelsOf(sidebarModule('/dashboard/tasks')!).length === 1)
+
+  const at = (level: string) =>
+    new Set(permissionsForSelection(new Map([[TRANSFERS, level]]), [], null))
+
+  const request = at('request')
+  check('“Can request” can raise one', request.has(PERMISSIONS.TRANSFER_REQUEST))
+  check('and read the screen', request.has(PERMISSIONS.TRANSFER_VIEW))
+  check(
+    'and cannot approve, dispatch or receive',
+    !request.has(PERMISSIONS.TRANSFER_APPROVE) &&
+      !request.has(PERMISSIONS.TRANSFER_DISPATCH) &&
+      !request.has(PERMISSIONS.TRANSFER_RECEIVE),
+  )
+  const handle = at('handle')
+  check(
+    '“Can request, send and receive” still cannot approve',
+    handle.has(PERMISSIONS.TRANSFER_DISPATCH) && !handle.has(PERMISSIONS.TRANSFER_APPROVE),
+  )
+  check('“Full access” can', at('full').has(PERMISSIONS.TRANSFER_APPROVE))
+  check('“View only” can do nothing but look', at('read').has(PERMISSIONS.TRANSFER_VIEW) && !at('read').has(PERMISSIONS.TRANSFER_REQUEST))
+
+  /*
+   * The one that matters. Seed from a template that CAN approve, drop the tab
+   * to "Can request", and the approve right has to go — it arrived in `base`,
+   * nothing on screen would admit it was still there, and the server's closure
+   * only ever adds.
+   */
+  const carriesApprove = [
+    PERMISSIONS.TRANSFER_VIEW,
+    PERMISSIONS.TRANSFER_REQUEST,
+    PERMISSIONS.TRANSFER_APPROVE,
+    PERMISSIONS.TRANSFER_DISPATCH,
+  ]
+  const downgraded = new Set(
+    permissionsForSelection(new Map([[TRANSFERS, 'request']]), carriesApprove, null),
+  )
+  check(
+    'downgrading a tab takes the rights above it out of the template too',
+    !downgraded.has(PERMISSIONS.TRANSFER_APPROVE) && !downgraded.has(PERMISSIONS.TRANSFER_DISPATCH),
+    [...downgraded].join(','),
+  )
+  check('while keeping the ones the level does grant', downgraded.has(PERMISSIONS.TRANSFER_REQUEST))
+
+  // And a saved role reads back into the level it is actually at.
+  check(
+    'a saved role reads back as the level it holds',
+    levelHeldBy(entry, new Set([PERMISSIONS.TRANSFER_VIEW, PERMISSIONS.TRANSFER_REQUEST])) === 'request',
+    levelHeldBy(entry, new Set([PERMISSIONS.TRANSFER_VIEW, PERMISSIONS.TRANSFER_REQUEST])),
+  )
+  check(
+    'and a hand-built one between levels reads as custom, not rounded',
+    levelHeldBy(entry, new Set([PERMISSIONS.TRANSFER_VIEW, PERMISSIONS.TRANSFER_APPROVE])) === 'custom',
+  )
+
+  /*
+   * §3 again, but through the map: every template, ticked at the level it
+   * actually holds, still round-trips. Without this the invariant above
+   * passes vacuously for levels — a set makes no claim about the actions, so
+   * it could never have caught a downgrade bug.
+   */
+  const lossyLevels = (Object.keys(ROLE_PERMISSIONS) as UserRole[]).flatMap((role) => {
+    const base = ROLE_PERMISSIONS[role] as string[]
+    const held = new Set(base)
+    const picked = new Map<string, string>()
+    for (const m of modulesShownBy(held, role)) {
+      const level = levelHeldBy(m, held)
+      // `custom` is not offerable; such a tab keeps what the template gave it.
+      picked.set(m.href, level === 'custom' || level === 'off' ? 'tick' : level)
+    }
+    const out = permissionsForSelection(picked, base, role)
+    return same(out, base) ? [] : [`${role}: −${diff(base, out).join(',')} +${diff(out, base).join(',')}`]
+  })
+  check(
+    'every template round-trips at the level it actually holds',
+    lossyLevels.length === 0,
+    lossyLevels.join('; '),
+  )
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

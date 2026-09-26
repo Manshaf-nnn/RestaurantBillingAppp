@@ -2,8 +2,17 @@ import type { UserRole } from '@prisma/client'
 
 import { NAV_SECTIONS, type NavItem } from '@/features/dashboard/nav'
 import { ROLE_HOME, ROLE_PERMISSIONS, requiresOwnBranch, seesAllLocations } from '@/lib/rbac'
-
-import { FEATURES, REGISTERED_PERMISSIONS, primaryAction } from './features'
+import {
+  FEATURES,
+  REGISTERED_PERMISSIONS,
+  allPermissionsOf,
+  featureForRoute,
+  levelOf,
+  levelsFor,
+  permissionsForLevel,
+  primaryAction,
+  type Feature,
+} from './features'
 
 /**
  * The sidebar, read as a list of modules an owner can hand out.
@@ -139,6 +148,128 @@ export function requiredBy(href: string, shown: Iterable<SidebarModule>): Sideba
 }
 
 /**
+ * What the builder has chosen.
+ *
+ * A map of href → level key says how much of each tab. A plain set says only
+ * which tabs are on, which is what a tick meant before levels existed — so
+ * every caller that predates them keeps its meaning without being touched,
+ * and, more importantly, without silently acquiring a downgrade it never
+ * asked for. See `permissionsForSelection`.
+ */
+export type Selection = ReadonlySet<string> | ReadonlyMap<string, string>
+
+export function asLevels(selected: Selection): ReadonlyMap<string, string> {
+  if (selected instanceof Map) return selected
+  const out = new Map<string, string>()
+  // `tick`, not `full`: a set says the tab is on and nothing about how much.
+  for (const href of selected as ReadonlySet<string>) out.set(href, 'tick')
+  return out
+}
+
+/** The feature a sidebar entry belongs to, where it has one. */
+export function featureOf(entry: SidebarModule): Feature | undefined {
+  return featureForRoute(entry.href)
+}
+
+/**
+ * What this entry hands out at a given level.
+ *
+ * Four kinds of level, and the distinction between the first two is the whole
+ * reason this reads carefully:
+ *
+ *   tick   what a tick meant before levels — the entry's own `grants`, wider
+ *          than the feature for a shell like the POS whose tabs are gated one
+ *          by one, and no claim about the feature's other actions
+ *   full   a CHOICE of everything: `grants` plus every action the feature has
+ *   open   reachability only, for a dependency pulled in by `requires`
+ *   …      any level the feature declares, answered by the feature itself
+ *
+ * Everything but `tick` and `open` is answered by the FEATURE, so one place
+ * decides what an amount of a feature means and the detailed grid, this
+ * builder and the per-location grid cannot drift apart.
+ */
+export function grantsAtLevel(entry: SidebarModule, level: string): string[] {
+  /*
+   * `tick` is what a tick meant before levels: the entry's own grants, and no
+   * statement about the feature's other actions. It is what a plain set of
+   * hrefs resolves to, so every caller that predates levels — and every
+   * template round-tripping through `modulesShownBy` — keeps its meaning.
+   */
+  if (level === 'tick' || level === '') return entry.grants
+  /*
+   * `full` is a CHOICE of full, so it means all of it: the entry's grants and
+   * everything its feature can hand out. It must be the exact complement of
+   * `everythingGrantable`, or choosing the top level would leave rights in
+   * `off` that nothing granted back and the top level would quietly be less
+   * than the one below it.
+   */
+  if (level === 'full') {
+    const feature = featureOf(entry)
+    return feature ? [...entry.grants, ...allPermissionsOf(feature)] : entry.grants
+  }
+  /*
+   * `open` is the level a DEPENDENCY comes in at: exactly what shows the
+   * entry, and no authority at all. `requires` exists so a ticked tab is not
+   * a dead link, and pulling its dependency in at full rights would make a
+   * tick grant more than its label says — POS would quietly confer every
+   * power on Payment details rather than the ability to open it.
+   */
+  if (level === 'open') return [entry.permission]
+  const feature = featureOf(entry)
+  if (!feature) return entry.grants
+  const granted = permissionsForLevel(feature, level)
+  /*
+   * A level that grants nothing would tick a tab the viewer cannot open, so
+   * it falls back to what SHOWS the entry. `levelsFor` never offers such a
+   * level; this is for a stored value that no longer matches its feature.
+   */
+  return granted.length > 0 ? granted : [entry.permission]
+}
+
+/** Everything this entry could grant at any level — what a downgrade drops. */
+export function everythingGrantable(entry: SidebarModule): string[] {
+  const feature = featureOf(entry)
+  return [...entry.grants, ...(feature ? allPermissionsOf(feature) : [])]
+}
+
+/**
+ * The levels this entry offers, weakest first, minus "off".
+ *
+ * "Off" is not offered as a level because the tick is already the off switch:
+ * two ways to say the same thing on one row is how a screen teaches people
+ * not to trust either.
+ */
+export function levelsOf(entry: SidebarModule): Array<{ key: string; label: string; hint: string }> {
+  const feature = featureOf(entry)
+  if (!feature) return [{ key: 'full', label: 'Full access', hint: 'Everything this tab can do.' }]
+
+  /*
+   * Levels that hand out exactly the same permissions are one level, and the
+   * weakest wording wins. A feature with a single action would otherwise offer
+   * "View only" and "Full access" as separate choices that do identically
+   * nothing different — a control whose options are indistinguishable teaches
+   * people the control is decorative.
+   */
+  const out: Array<{ key: string; label: string; hint: string }> = []
+  const seen = new Set<string>()
+  for (const level of levelsFor(feature)) {
+    if (level.key === 'off') continue
+    const fingerprint = [...new Set(permissionsForLevel(feature, level.key))].sort().join('|')
+    if (seen.has(fingerprint)) continue
+    seen.add(fingerprint)
+    out.push(level)
+  }
+  return out
+}
+
+/** Which level a saved role sits at for this entry, or `custom` if between. */
+export function levelHeldBy(entry: SidebarModule, granted: ReadonlySet<string>): string {
+  const feature = featureOf(entry)
+  if (!feature) return 'full'
+  return levelOf(feature, granted as Set<string>)
+}
+
+/**
  * An earlier entry that opens on the very same permission, if any.
  *
  * Stock, Stock ledger and Units & categories are all `inventory.view`, so
@@ -179,20 +310,74 @@ export function accessTwin(href: string): SidebarModule | null {
  * never be ticked and absent.
  */
 export function permissionsForSelection(
-  selected: ReadonlySet<string>,
+  selected: Selection,
   base: Iterable<string> = [],
   role?: string | null,
 ): string[] {
+  const chosen = asLevels(selected)
+  /*
+   * ── Did the caller say how MUCH, or only whether? ───────────────────────
+   *
+   * A stated level is a statement about what the role does NOT get as well as
+   * what it does, so lowering a tab has to take the rights above that level
+   * away — including ones that arrived from a template in `base`.
+   *
+   * `tick` states nothing. It is what a tick meant before levels existed, it
+   * is what a plain set of hrefs resolves to, and it is what a tab sits at
+   * when a role was composed switch by switch in the detailed grid and lands
+   * between two levels. Applying the downgrade to it would delete
+   * `transfer.approve` from every Manager, and would quietly round somebody's
+   * hand-built role to the nearest offered level. So the wide removal is per
+   * ENTRY and only for a level that was actually chosen.
+   */
   const on = new Set<string>()
-  const off = new Set<string>()
+  /*
+   * Two removals, kept apart because they are rescuable on different terms.
+   *
+   * `offShown` is what SHOWS an unticked entry — its `permission` and `anyOf`.
+   * This is the original rule and it is absolute: `order.create` is what shows
+   * the POS, so unticking the POS removes it even though the Orders feature
+   * also lists it as an action. Otherwise a tab could never be turned off
+   * while a neighbour sharing its feature stayed on.
+   *
+   * `offWide` is the rest of a feature's actions, and is what makes a level a
+   * level. It IS rescuable: a right two features sell survives while either
+   * still sells it, so unticking Purchasing does not take `purchase.approve`
+   * away from an approver whose Approvals tab offers it as "Decide".
+   */
+  const offShown = new Set<string>()
+  const offWide = new Set<string>()
   for (const entry of SIDEBAR_MODULES) {
-    if (selected.has(entry.href)) {
-      for (const permission of entry.grants) on.add(permission)
+    const level = chosen.get(entry.href)
+    if (level !== undefined) {
+      for (const permission of grantsAtLevel(entry, level)) on.add(permission)
+      // A stated level says what the role does NOT get, so it removes the
+      // rest of its feature — including rights that arrived from a template.
+      if (level !== 'tick') {
+        for (const permission of everythingGrantable(entry)) offWide.add(permission)
+      }
     } else if (edgeAllows(entry, role)) {
-      off.add(entry.permission)
-      for (const permission of entry.anyOf) off.add(permission)
+      offShown.add(entry.permission)
+      for (const permission of entry.anyOf) offShown.add(permission)
+      // Untick is the empty level, so it drops the same wide set.
+      for (const permission of everythingGrantable(entry)) offWide.add(permission)
     }
   }
+
+  /*
+   * A tab at a STATED level justifies only what that level grants — which is
+   * what makes a downgrade a downgrade: transfers at "Can request" does not
+   * rescue `transfer.approve` from its own removal. A tab at `tick` states
+   * nothing about its actions, so it justifies all of them.
+   */
+  for (const [href, level] of chosen) {
+    const entry = BY_HREF.get(href)
+    if (!entry) continue
+    const justified = level === 'tick' ? everythingGrantable(entry) : grantsAtLevel(entry, level)
+    for (const permission of justified) offWide.delete(permission)
+  }
+
+  const off = new Set<string>([...offShown, ...offWide])
   for (const permission of on) off.delete(permission)
 
   const result = new Set<string>()

@@ -81,6 +81,32 @@ export interface FeatureAction {
   hint?: string
 }
 
+/**
+ * A named amount of a feature, for the simple builder.
+ *
+ * ── Why a feature may need more than read and full ──────────────────────────
+ *
+ * "View only" and "Everything" answer most features. They cannot answer stock
+ * transfers, where the useful role is the one that can RAISE a request and not
+ * decide it — the difference between a storeman and the manager who approves
+ * him. Squeezing that into read/full either gives the storeman nothing he can
+ * do or gives him the authority to approve his own request.
+ *
+ * A level is a list of the feature's own ACTIONS, never a fresh list of raw
+ * permissions. There is already one place that decides what a feature's
+ * switches mean, and this stays inside it: add an action and every level that
+ * names it follows, with nothing to keep in step by hand.
+ */
+export interface FeatureLevelDef {
+  /** Stable, stored nowhere — the permission list is what is saved. */
+  key: string
+  /** What the owner picks, in their words: "Can request". */
+  label: string
+  /** The sentence under it, saying what it does NOT include. */
+  hint: string
+  actions: ActionKey[]
+}
+
 export interface Feature {
   key: string
   label: string
@@ -89,6 +115,14 @@ export interface Feature {
   /** What the switch means, for an owner who has not used the screen. */
   description: string
   actions: FeatureAction[]
+  /**
+   * Amounts of this feature between "view only" and "everything".
+   *
+   * Optional, and most features want none: read and full are synthesised from
+   * `actions` and say all there is to say. Declared only where the middle is a
+   * real job somebody does — see {@link FeatureLevelDef}.
+   */
+  levels?: FeatureLevelDef[]
   /**
    * The pages this feature owns. Prefix-matched, so a route listed here also
    * claims everything beneath it. Used by the static test to prove no page is
@@ -241,6 +275,20 @@ export const FEATURES: Feature[] = [
       { key: 'approve', permission: PERMISSIONS.TRANSFER_APPROVE },
       { key: 'transfer', label: 'Dispatch', permission: PERMISSIONS.TRANSFER_DISPATCH },
       { key: 'receive', permission: PERMISSIONS.TRANSFER_RECEIVE },
+    ],
+    levels: [
+      {
+        key: 'request',
+        label: 'Can request',
+        hint: 'Can raise a transfer request and watch it. Cannot approve one — not even their own.',
+        actions: ['view', 'create'],
+      },
+      {
+        key: 'handle',
+        label: 'Can request, send and receive',
+        hint: 'Everything except approving: raises requests, sends stock out, signs it in at the other end.',
+        actions: ['view', 'create', 'transfer', 'receive'],
+      },
     ],
     routes: ['/dashboard/transfers'],
   },
@@ -555,6 +603,20 @@ export const FEATURES: Feature[] = [
       },
       { key: 'receive', label: 'Receive goods', permission: PERMISSIONS.PURCHASE_RECEIVE },
       { key: 'reject', label: 'Return', permission: PERMISSIONS.PURCHASE_RETURN },
+    ],
+    levels: [
+      {
+        key: 'request',
+        label: 'Can raise orders',
+        hint: 'Can raise a purchase order and follow it. Cannot approve one, nor receive the goods.',
+        actions: ['view', 'create'],
+      },
+      {
+        key: 'receive',
+        label: 'Can raise and receive',
+        hint: 'Raises orders and books deliveries in. Approval still belongs to somebody else.',
+        actions: ['view', 'create', 'receive'],
+      },
     ],
     routes: ['/dashboard/purchases'],
   },
@@ -1075,17 +1137,77 @@ export function describePermissions(granted: Set<string>) {
  * that `custom`, and the Locations grid says so rather than rounding it to the
  * nearest word and silently rewriting somebody's careful work on save.
  */
-export type FeatureLevel = 'off' | 'read' | 'full' | 'custom'
+export type FeatureLevel = 'off' | 'read' | 'full' | 'custom' | (string & {})
 
-/** The permissions a level grants. `custom` is not expressible here by design. */
-export function permissionsForLevel(feature: Feature, level: Exclude<FeatureLevel, 'custom'>): string[] {
-  if (level === 'off') return []
-  if (level === 'full') return feature.actions.map((a) => a.permission)
+/**
+ * Every amount of this feature an owner may pick, weakest first.
+ *
+ * Always begins with "off" and ends with "full"; `read` appears only where the
+ * feature has a primary action to read with, and the feature's own declared
+ * middles sit between. This is the one list the pickers render and the one
+ * `permissionsForLevel` answers for, so a level can never be offered that
+ * nothing can grant.
+ */
+export function levelsFor(feature: Feature): Array<{
+  key: string
+  label: string
+  hint: string
+}> {
   const primary = primaryAction(feature)
-  return primary ? [primary.permission] : []
+  const out: Array<{ key: string; label: string; hint: string }> = [
+    { key: 'off', label: 'No access', hint: 'The tab is hidden and every action refused.' },
+  ]
+  if (primary) {
+    out.push({
+      key: 'read',
+      label: 'View only',
+      hint: `Can open ${feature.label} and read it. Cannot change anything.`,
+    })
+  }
+  for (const level of feature.levels ?? []) {
+    out.push({ key: level.key, label: level.label, hint: level.hint })
+  }
+  out.push({
+    key: 'full',
+    label: 'Full access',
+    hint: `Everything ${feature.label} can do: ${feature.actions
+      .map((a) => (a.label ?? ACTION_LABELS[a.key]).toLowerCase())
+      .join(', ')}.`,
+  })
+  return out
 }
 
-/** Which level a permission set corresponds to, or `custom` if it is between. */
+/** The permissions a level grants. `custom` is not expressible here by design. */
+export function permissionsForLevel(feature: Feature, level: string): string[] {
+  if (level === 'off') return []
+  if (level === 'full') return feature.actions.map((a) => a.permission)
+  if (level === 'read') {
+    const primary = primaryAction(feature)
+    return primary ? [primary.permission] : []
+  }
+  const declared = feature.levels?.find((l) => l.key === level)
+  if (!declared) return []
+  /*
+   * Matched by action key against this feature's own actions, so a level
+   * naming an action the feature does not have grants nothing rather than
+   * inventing a permission.
+   */
+  return feature.actions.filter((a) => declared.actions.includes(a.key)).map((a) => a.permission)
+}
+
+/** Every permission this feature can hand out, at any level. */
+export function allPermissionsOf(feature: Feature): string[] {
+  return feature.actions.map((a) => a.permission)
+}
+
+/**
+ * Which level a permission set corresponds to, or `custom` if it is between.
+ *
+ * Declared middles are tested before `custom`, and exactly — a set that holds
+ * a middle's permissions AND something else is not that middle. Rounding to
+ * the nearest level would quietly rewrite a role somebody composed switch by
+ * switch in the detailed grid.
+ */
 export function levelOf(feature: Feature, granted: Set<string>): FeatureLevel {
   const on = feature.actions.filter((a) => granted.has(a.permission))
   if (on.length === 0) return 'off'
@@ -1096,6 +1218,11 @@ export function levelOf(feature: Feature, granted: Set<string>): FeatureLevel {
   // happens to be one permission — a stray `discount.apply` with Payments off —
   // is not "read", it is a role somebody built deliberately.
   if (on.length === 1 && primary && on[0].permission === primary.permission) return 'read'
+
+  for (const level of feature.levels ?? []) {
+    const want = new Set(permissionsForLevel(feature, level.key))
+    if (want.size === on.length && on.every((a) => want.has(a.permission))) return level.key
+  }
   return 'custom'
 }
 

@@ -32,6 +32,8 @@ import {
   modulesShownBy,
   permissionsForSelection,
   requiredBy,
+  levelsOf,
+  levelHeldBy,
   type SidebarModule,
 } from '../sidebar-access'
 import { createRole, deleteRole, duplicateRole, setRoleActive, updateRole } from '../actions'
@@ -371,7 +373,15 @@ function CreateRoleDialog({
   const [baseKey, setBaseKey] = React.useState(SCRATCH)
   const [basePreset, setBasePreset] = React.useState('')
   const [base, setBase] = React.useState<string[]>([])
-  const [explicit, setExplicit] = React.useState<Set<string>>(() => new Set())
+  /**
+   * The tabs ticked, and how much of each.
+   *
+   * A map rather than a set: ticking a tab is now two decisions — whether the
+   * role gets it at all, and how much of it. Absent means unticked; the value
+   * is a level key from `levelsOf(entry)`, defaulting to `full` so a plain
+   * tick means what it always meant.
+   */
+  const [explicit, setExplicit] = React.useState<Map<string, string>>(() => new Map())
   const [branchId, setBranchId] = React.useState('')
   const [assignments, setAssignments] = React.useState<Array<{ userId: string; branchId: string }>>([])
   const [busy, setBusy] = React.useState(false)
@@ -387,12 +397,19 @@ function CreateRoleDialog({
    * second, with it, settles the list.
    */
   const view = React.useMemo(() => {
-    const first = permissionsForSelection(closeSelection(explicit, basePreset || null), base, basePreset || null)
+    const withDeps = (role: string | null) => {
+      const out = new Map<string, string>()
+      // Dependencies come in at `open` — enough to reach the tab, no authority.
+      for (const href of closeSelection(explicit.keys(), role)) out.set(href, 'open')
+      for (const [href, level] of explicit) if (out.has(href)) out.set(href, level)
+      return out
+    }
+    const first = permissionsForSelection(withDeps(basePreset || null), base, basePreset || null)
     const inferred = basePreset
       ? { preset: basePreset as UserRole, blockedBy: [] as SidebarModule[] }
       : inferPreset(first, candidates, branchId || null)
     const preset = inferred.preset
-    const selected = closeSelection(explicit, preset)
+    const selected = withDeps(preset)
     const permissions = permissionsForSelection(selected, base, preset).filter((p) => grantable.has(p))
     const held = new Set(permissions)
     const shown = modulesShownBy(held, preset)
@@ -431,14 +448,30 @@ function CreateRoleDialog({
     const seed = permissions.filter((p) => grantable.has(p))
     setBase(seed)
     setBasePreset(preset)
-    setExplicit(new Set(modulesShownBy(new Set(seed), preset || null).map((m) => m.href)))
+    const held = new Set(seed)
+    /*
+     * Read the seed back into levels rather than assuming full: a template
+     * that can request transfers but not approve them must arrive on "Can
+     * request", or opening the dialog would silently promote it.
+     */
+    setExplicit(
+      new Map(
+        modulesShownBy(held, preset || null).map((m) => {
+          const level = levelHeldBy(m, held)
+          return [m.href, level === 'custom' || level === 'off' ? 'full' : level]
+        }),
+      ),
+    )
   }
 
   function toggle(entry: SidebarModule, on: boolean) {
     setExplicit((prev) => {
-      const next = new Set(prev)
+      const next = new Map(prev)
       if (on) {
-        next.add(entry.href)
+        // Ticked at full unless this tab offers less; then the weakest, so a
+        // tick never hands out more than the owner has looked at.
+        const levels = levelsOf(entry)
+        next.set(entry.href, levels.length > 1 ? levels[0].key : 'full')
         return next
       }
       // Tabs on one permission come off together — there is nothing to keep.
@@ -448,6 +481,11 @@ function CreateRoleDialog({
       }
       return next
     })
+  }
+
+  /** Change how much of a ticked tab the role gets. */
+  function setLevel(entry: SidebarModule, level: string) {
+    setExplicit((prev) => new Map(prev).set(entry.href, level))
   }
 
   const unassigned = staff.filter((member) => !assignments.some((row) => row.userId === member.id))
@@ -602,12 +640,32 @@ function CreateRoleDialog({
                             onCheckedChange={(next) => toggle(entry, next === true)}
                             className="mt-0.5"
                           />
-                          <label htmlFor={id} className="min-w-0 cursor-pointer select-none">
-                            <span className="block truncate text-sm">{entry.label}</span>
-                            {note ? (
-                              <span className="block truncate text-xs text-muted-foreground">{note}</span>
+                          <div className="min-w-0 flex-1">
+                            <label htmlFor={id} className="min-w-0 cursor-pointer select-none">
+                              <span className="block truncate text-sm">{entry.label}</span>
+                              {note ? (
+                                <span className="block truncate text-xs text-muted-foreground">{note}</span>
+                              ) : null}
+                            </label>
+                            {/*
+                              How much of this tab, for tabs where that is a real
+                              question. Only when ticked, and only when there is
+                              more than one answer — a picker with one option is
+                              a control that teaches people it does nothing.
+
+                              The hint under it says what the level does NOT
+                              include, which is the half an owner is actually
+                              deciding: "can raise a transfer request, cannot
+                              approve one — not even their own".
+                            */}
+                            {checked && !disabled ? (
+                              <TabLevel
+                                entry={entry}
+                                value={explicit.get(entry.href) ?? 'full'}
+                                onChange={(level) => setLevel(entry, level)}
+                              />
                             ) : null}
-                          </label>
+                          </div>
                         </li>
                       )
                     })}
@@ -803,6 +861,21 @@ function RoleDialog({
    */
   function choosePreset(value: string) {
     setPreset(value)
+    /*
+     * Blank means "stop claiming a base", NOT "clear everything".
+     *
+     * This dialog edits a role that already exists, and reseeding from the
+     * chosen preset is right when a preset was chosen — that is what picking
+     * one is for. With no preset there is nothing to seed FROM, and treating
+     * that as an empty seed would wipe every permission on a saved role the
+     * moment somebody moved this dropdown to "Start from scratch", with no
+     * warning beyond the switches all going off at once.
+     *
+     * The create dialog's version of this deliberately does clear, because
+     * there is nothing to lose there and an unseeded start is the point. The
+     * two share a name and not a meaning.
+     */
+    if (!value) return
     const chosen = presets.find((p) => p.value === value)
     setGranted(new Set((chosen?.permissions ?? []).filter((p) => grantable.has(p))))
   }
@@ -878,6 +951,12 @@ function RoleDialog({
                 onChange={(e) => choosePreset(e.target.value)}
                 className={SELECT_CLASS}
               >
+                {/*
+                  Optional, like the create dialog's. Picking one REPLACES the
+                  switches below with that role's; choosing this leaves them
+                  exactly as they are and only stops claiming a base.
+                */}
+                <option value="">No base — just these switches</option>
                 {presets.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -885,8 +964,9 @@ function RoleDialog({
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                Fills in what that role can normally do, and decides where they land after signing
-                in. Change any switch below.
+                {preset
+                  ? 'Fills in what that role can normally do, and decides where they land after signing in. Change any switch below.'
+                  : 'No base role. Where they land after signing in is worked out from the switches below. Picking a base replaces those switches.'}
               </p>
             </div>
           </div>
@@ -1116,5 +1196,66 @@ function DuplicateDialog({ source, onClose }: { source: RoleRow; onClose: () => 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * How much of one tab a role gets.
+ *
+ * ── Why this is here at all ─────────────────────────────────────────────────
+ *
+ * A tick used to be all-or-nothing, and for most tabs that is the whole truth:
+ * either the role reads the menu or it does not. It is not the truth for the
+ * tabs where the useful job sits in the middle. A storeman raises a transfer
+ * request; his manager approves it. Ticking "Stock transfers" for the storeman
+ * used to hand him the approval too, which is the one thing the split exists
+ * to prevent — a request nobody else has to agree to is not a request.
+ *
+ * So the levels come from the FEATURE's own actions (`levelsFor`), not from a
+ * list kept here, and the same vocabulary answers the detailed grid on this
+ * screen and the per-location grid on Locations. Three places deciding what a
+ * tick means would be three places to disagree.
+ *
+ * The hint is the point of the control. "Can request" tells an owner what the
+ * role does; "Cannot approve one — not even their own" tells them what they
+ * are buying, which is the half they came to decide.
+ */
+function TabLevel({
+  entry,
+  value,
+  onChange,
+}: {
+  entry: SidebarModule
+  value: string
+  onChange: (level: string) => void
+}) {
+  const levels = levelsOf(entry)
+  // One answer is not a question. Most tabs land here and show nothing.
+  if (levels.length < 2) return null
+
+  const current = levels.find((l) => l.key === value)
+  const id = `level-${entry.href.replace(/[^a-z0-9]+/gi, '-')}`
+
+  return (
+    <div className="mt-1.5">
+      <label htmlFor={id} className="sr-only">
+        How much of {entry.label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 w-full max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs"
+      >
+        {levels.map((level) => (
+          <option key={level.key} value={level.key}>
+            {level.label}
+          </option>
+        ))}
+      </select>
+      {current ? (
+        <p className="mt-1 text-xs leading-snug text-muted-foreground">{current.hint}</p>
+      ) : null}
+    </div>
   )
 }
