@@ -46,4 +46,28 @@ export interface ApprovalDetailPayload {
       available: number
     }>
   } | null
+  /**
+   * The purchase request this is about, with its lines. Null for every other
+   * kind. Read-only here — the lines are the requester's; the approver's
+   * answer is approve, return for edit, or reject.
+   */
+  purchase: {
+    id: string
+    number: string
+    status: string
+    priority: string
+    branchName: string | null
+    supplierName: string | null
+    requiredBy: string | null
+    notes: string | null
+    total: number
+    lines: Array<{
+      id: string
+      name: string
+      unit: string
+      quantity: number
+      unitCost: number
+      lineTotal: number
+    }>
+  } | null
 }

@@ -239,11 +239,20 @@ export const AUDIT_ACTIONS = {
   INVENTORY_ITEM_EDITED: 'inventory.item_edited',
 
   PO_CREATED: 'purchase.created',
+  /** Sent for approval — a draft or a returned request becoming somebody's decision. */
+  PO_SUBMITTED: 'purchase.submitted',
   PO_APPROVED: 'purchase.approved',
+  /** Refused by an approver, with the reason in `after`. */
+  PO_REJECTED: 'purchase.rejected',
+  /** Sent back for changes by an approver, with the reason in `after`. */
+  PO_RETURNED_FOR_EDIT: 'purchase.returned_for_edit',
   PO_ORDERED: 'purchase.ordered',
   PO_CANCELLED: 'purchase.cancelled',
   PO_RECEIVED: 'purchase.received',
+  /** Done with: signed off after receipt, or closed short. */
+  PO_CLOSED: 'purchase.closed',
   PO_UPDATED: 'purchase.updated',
+  /** Goods sent back to the supplier (a stock movement), not a request sent back. */
   PO_RETURNED: 'purchase.returned',
   SUPPLIER_UPDATED: 'supplier.updated',
   /* ── Internal money accounts (bank.md §3) ─────────────────────────────── */

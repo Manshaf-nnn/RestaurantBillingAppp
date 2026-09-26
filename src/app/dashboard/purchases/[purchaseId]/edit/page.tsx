@@ -4,23 +4,20 @@ import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
-import { PoBuilder } from '@/features/purchasing/components/po-builder'
+import { PoRequestForm } from '@/features/purchasing/components/po-request-form'
 import { getPoBuilderData } from '@/features/purchasing/queries'
+import { EDITABLE_STATUSES } from '@/features/purchasing/service'
 import { PERMISSIONS, canAccessBranch } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
-export const metadata: Metadata = { title: 'Edit purchase order' }
+export const metadata: Metadata = { title: 'Edit purchase request' }
 
 /**
- * Correcting a draft order.
- *
- * The service could always do this — `updatePurchaseOrder`, with its rule that
- * only a draft may be edited — and nothing ever called it. There was no action,
- * no route and no button, so a draft with a wrong quantity could only be
- * cancelled and re-raised, losing its number and its history.
+ * Correcting a request that is still the requester's to change: a draft, one
+ * waiting on approval, or one an approver sent back.
  *
  * The status rule is enforced in three places on purpose: here, so the page
  * refuses to open; on the detail page, so the button is not offered; and in the
@@ -41,10 +38,13 @@ export default async function EditPurchaseOrderPage({
 
   const po = await prisma.purchase.findFirst({
     where: { id: purchaseId, restaurantId: user.restaurantId },
-    include: { items: { select: { itemId: true, quantity: true, unit: true, unitCost: true } } },
+    include: {
+      createdBy: { select: { name: true } },
+      items: { select: { itemId: true, quantity: true, unit: true, unitCost: true } },
+    },
   })
   if (!po) notFound()
-  if (po.status !== 'DRAFT' && po.status !== 'PENDING_APPROVAL') notFound()
+  if (!EDITABLE_STATUSES.includes(po.status)) notFound()
   if (po.branchId && !canAccessBranch(user, po.branchId)) notFound()
 
   const data = await getPoBuilderData({
@@ -63,16 +63,24 @@ export default async function EditPurchaseOrderPage({
       </Link>
       <PageHeader
         title={`Edit ${po.number}`}
-        description="Still a draft, so it can be changed freely. Once it is approved it becomes a commitment and this page closes."
+        description={
+          po.status === 'RETURNED'
+            ? `Sent back for edit${po.decisionNote ? `: ${po.decisionNote}` : ''}. Correct it and submit again.`
+            : 'Still yours to change. Once it is approved it becomes a commitment and this page closes.'
+        }
       />
-      <PoBuilder
+      <PoRequestForm
         data={data}
+        requestedBy={po.createdBy?.name ?? user.name}
+        canSubmit
         editing={{
           purchaseId: po.id,
           number: po.number,
+          status: po.status,
           supplierId: po.supplierId,
           branchId: po.branchId,
           expectedAt: po.expectedAt?.toISOString() ?? null,
+          priority: po.priority,
           notes: po.notes,
           discount: po.discount,
           taxTotal: po.taxTotal,

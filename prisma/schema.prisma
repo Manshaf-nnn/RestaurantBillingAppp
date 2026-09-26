@@ -510,6 +510,22 @@ enum PurchaseStatus {
   PARTIALLY_RECEIVED
   RECEIVED
   CANCELLED
+  /// Refused by an approver, with a reason. Terminal: raise a new request.
+  REJECTED
+  /// Sent back by an approver for changes, with a reason. Editable again,
+  /// like a draft, and resubmitted when corrected.
+  RETURNED
+  /// Done with. Either fully received and signed off, or closed short when
+  /// the remainder is not coming. Nothing further can be received against it.
+  CLOSED
+}
+
+/// How urgently a request is needed. Shown on the request and the queue; it
+/// changes nothing about how the order is processed.
+enum PurchasePriority {
+  LOW
+  NORMAL
+  URGENT
 }
 
 enum PaymentTerms {
@@ -2899,6 +2915,17 @@ model Purchase {
   orderedAt  DateTime?
   receivedAt DateTime?
 
+  /// How urgently it is needed. Informational.
+  priority PurchasePriority @default(NORMAL)
+  /// When it was last sent for approval. Null for a draft never submitted.
+  submittedAt DateTime?
+  /// Why an approver rejected it or sent it back for edit. Cleared when it is
+  /// resubmitted. `cancelReason` stays for cancellations, which are the
+  /// requester's own act.
+  decisionNote String?
+  /// When it was closed — signed off after receipt, or closed short.
+  closedAt DateTime?
+
   createdById  String?
   createdBy    User?     @relation("PurchaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   approvedById String?
@@ -4205,6 +4232,10 @@ model GoodsReceipt {
   number      String
   /// The supplier's own delivery note or invoice number.
   supplierRef String?
+  /// The date on that invoice, when it was entered. The receipt's own
+  /// `receivedAt` is when the goods came in; the two differ whenever the
+  /// paperwork arrives later than the van.
+  invoiceDate DateTime?
   notes       String?
 
   /// Where this delivery actually landed.

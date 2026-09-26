@@ -6,7 +6,7 @@ import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, guardLocks, type TxClient } from '@/server/db/prisma'
 import { postMovement } from '@/features/inventory/ledger'
 import { toBaseUnits } from '@/features/inventory/units'
-import { nextNumber, requirePurchase } from './service'
+import { RECEIVABLE_STATUSES, nextNumber, requirePurchase } from './service'
 
 /**
  * Goods receiving.
@@ -47,6 +47,8 @@ export async function receiveGoods(params: {
   purchaseId: string
   lines: ReceiveLineInput[]
   supplierRef?: string | null
+  /** The date on the supplier's invoice, when it was entered. */
+  invoiceDate?: Date | null
   notes?: string | null
   /*
    * Where this delivery actually landed, when it is not where the order said.
@@ -68,13 +70,43 @@ export async function receiveGoods(params: {
    * supplier twice. The replay read inside the lock is what stops that.
    */
   clientRequestId?: string | null
-}): Promise<{ receipt: GoodsReceipt; status: string; posted: number }> {
+}): Promise<{
+  receipt: GoodsReceipt
+  status: string
+  posted: number
+  /**
+   * Where the delivery differed from the order, per line, for the audit row
+   * and the confirmation. A variance is never silent: it is recorded on the
+   * receipt line, shown on the GRN, and named here.
+   */
+  variances: Array<{
+    itemId: string
+    name: string
+    orderedUnitCost: number
+    unitCost: number
+    /** Signed, as a fraction of the ordered price: 0.015 is 1.5% dearer. */
+    priceVariance: number
+  }>
+}> {
   const po = await requirePurchase(params.restaurantId, params.purchaseId)
 
+  /*
+   * A whitelist, not a blacklist. Receiving is the only thing in purchasing
+   * that touches stock, so the question is "may stock move for this order",
+   * and the answer is yes for exactly the approved states. A draft, a request
+   * still being decided, one sent back or refused, one closed or cancelled —
+   * none of them is an authority to put goods on the shelf.
+   */
   if (po.status === 'CANCELLED') {
     throw new AppError('That order was cancelled', 409, 'PO_CANCELLED')
   }
-  if (po.status === 'DRAFT' || po.status === 'PENDING_APPROVAL') {
+  if (po.status === 'CLOSED') {
+    throw new AppError('That order is closed — nothing more can be received against it', 409, 'PO_CLOSED')
+  }
+  // RECEIVED is let through to the line checks on purpose: every line is
+  // already complete, so anything sent is refused as over-receipt — naming
+  // the item and the quantity, which is the more useful answer.
+  if (po.status !== 'RECEIVED' && !RECEIVABLE_STATUSES.includes(po.status)) {
     throw new AppError(
       'Approve the order before receiving against it',
       409,
@@ -83,6 +115,23 @@ export async function receiveGoods(params: {
   }
   if (params.lines.length === 0) {
     throw new AppError('Nothing to receive', 400, 'RECEIPT_EMPTY')
+  }
+
+  /*
+   * A retry is answered before anything is checked against the order.
+   *
+   * The over-receipt check below reads what has ALREADY been received — which,
+   * after the first attempt landed, includes this very delivery. So a retry of
+   * a receipt that completed a line used to be refused as "more than ordered",
+   * an error about a delivery that had in fact succeeded. The read inside the
+   * lock further down still guards the race; this one makes the honest answer
+   * come first.
+   */
+  if (params.clientRequestId) {
+    const already = await prisma.goodsReceipt.findFirst({
+      where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
+    })
+    if (already) return { receipt: already, status: po.status, posted: 0, variances: [] }
   }
 
   // Resolved once, here, so every line of this receipt lands in the same place
@@ -149,7 +198,7 @@ export async function receiveGoods(params: {
       const already = await tx.goodsReceipt.findFirst({
         where: { restaurantId: params.restaurantId, clientRequestId: params.clientRequestId },
       })
-      if (already) return { receipt: already, status: po.status, posted: 0 }
+      if (already) return { receipt: already, status: po.status, posted: 0, variances: [] }
     }
     const current = await tx.purchaseItem.findMany({
       where: { purchaseId: po.id },
@@ -178,6 +227,7 @@ export async function receiveGoods(params: {
         purchaseId: po.id,
         number,
         supplierRef: params.supplierRef?.trim() || null,
+        invoiceDate: params.invoiceDate ?? null,
         notes: params.notes?.trim() || null,
         branchId: destinationBranchId,
         locationId: destinationLocationId,
@@ -187,6 +237,13 @@ export async function receiveGoods(params: {
     })
 
     let posted = 0
+    const variances: Array<{
+      itemId: string
+      name: string
+      orderedUnitCost: number
+      unitCost: number
+      priceVariance: number
+    }> = []
 
     for (const line of params.lines) {
       const purchaseItem = byId.get(line.purchaseItemId)!
@@ -196,6 +253,16 @@ export async function receiveGoods(params: {
 
       const unit = (purchaseItem.unit ?? purchaseItem.item.unit) as StockUnit
       const unitCost = line.unitCost ?? purchaseItem.unitCost
+      if (unitCost !== purchaseItem.unitCost) {
+        variances.push({
+          itemId: purchaseItem.itemId,
+          name: purchaseItem.item.name,
+          orderedUnitCost: purchaseItem.unitCost,
+          unitCost,
+          priceVariance:
+            purchaseItem.unitCost > 0 ? (unitCost - purchaseItem.unitCost) / purchaseItem.unitCost : 0,
+        })
+      }
 
       await tx.goodsReceiptLine.create({
         data: {
@@ -320,7 +387,7 @@ export async function receiveGoods(params: {
       data: { status, ...(complete ? { receivedAt: new Date() } : {}) },
     })
 
-    return { receipt, status, posted }
+    return { receipt, status, posted, variances }
   })
 }
 

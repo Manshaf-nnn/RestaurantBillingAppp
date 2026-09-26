@@ -34,6 +34,7 @@ import { callAction } from '@/lib/use-action'
 import { PaymentDestinations } from './payment-destinations'
 import { GuestAppearanceEditor } from './guest-appearance-editor'
 import { SmsSettings } from './sms-settings'
+import { UiStyleSwitcher } from './ui-style-switcher'
 import type { PublicSmsConfig } from '@/features/sms/types'
 import type { GuestAppearance } from '@/features/guest/appearance'
 import type { DestinationAccount } from './payment-destinations'
@@ -246,6 +247,7 @@ export function SettingsView({
         </TabsContent>
 
         <TabsContent value="profile" className="space-y-4">
+          <UiStyleSwitcher />
           <SectionCard title="Restaurant details">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Name" required className="sm:col-span-2">

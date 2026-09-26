@@ -3,12 +3,12 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 
-import { PageHeader } from '@/features/dashboard/components/page-header'
-import { ReceivePanel } from '@/features/purchasing/components/receive-panel'
-import { getPurchaseDetail } from '@/features/purchasing/queries'
-import { listSwitchableLocations } from '@/features/transfers/queries'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { PageHeader } from '@/features/dashboard/components/page-header'
+import { getApprovalPolicy, whyCannotApprove } from '@/features/approvals/service'
+import { PoDetail } from '@/features/purchasing/components/po-detail'
+import { getPurchaseDetail, pendingPurchaseApproval } from '@/features/purchasing/queries'
+import { PO_STATUS } from '@/features/purchasing/status'
 import { PERMISSIONS, can, canAccessBranch, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -34,22 +34,27 @@ export default async function PurchaseOrderPage({
   // page already refused it and this one did not.
   if (detail.branchId && !canAccessBranch(user, detail.branchId)) notFound()
 
-  /*
-   * Where a delivery may be diverted to. Only what this person may see, so a
-   * branch manager cannot receive goods into another site by choosing it from
-   * a menu.
-   */
-  const allowed = visibleBranchIds(user)
-  const locations = (await listSwitchableLocations(user.restaurantId, allowed)).map((l) => ({
-    id: l.id,
-    name: l.name,
-  }))
+  const canApprove = can(user, PERMISSIONS.PURCHASE_APPROVE)
 
-  // Draft only. The service refuses anything further along, and offering an
-  // Edit button that answers with a refusal teaches people the app is broken.
-  const editable =
-    ['DRAFT', 'PENDING_APPROVAL'].includes(detail.status) &&
-    can(user, PERMISSIONS.PURCHASE_CREATE)
+  /*
+   * The desk request behind a pending order, and whether this viewer may
+   * decide it normally — asked here, before the button, for the same reason
+   * the approvals desk asks: "you cannot approve your own request" belongs
+   * beside the control, not in a toast after it is pressed.
+   */
+  const pending = detail.status === 'PENDING_APPROVAL'
+    ? await pendingPurchaseApproval(user.restaurantId, detail.id)
+    : null
+  const blockedReason = pending && canApprove
+    ? whyCannotApprove({
+        policy: await getApprovalPolicy(user.restaurantId),
+        request: { branchId: pending.branchId, requestedById: pending.requestedById },
+        userId: user.id,
+        unconfined: visibleBranchIds(user) === null,
+      })?.message ?? null
+    : null
+
+  const status = PO_STATUS[detail.status]
 
   return (
     <>
@@ -63,31 +68,24 @@ export default async function PurchaseOrderPage({
       <PageHeader
         title={detail.number}
         description={
-          [
-            detail.supplierName,
-            detail.branchName && `for ${detail.branchName}`,
-            detail.createdByName && `raised by ${detail.createdByName}`,
-          ]
-            .filter(Boolean)
-            .join(' · ') || 'Purchase order'
+          detail.status === 'PENDING_APPROVAL'
+            ? 'Waiting for an approver. Nothing can be received against it until it is approved.'
+            : detail.status === 'DRAFT'
+              ? 'A draft. Submit it for approval when it is ready.'
+              : 'Purchase order'
         }
-        actions={
-          <>
-            {detail.branchName ? <Badge variant="secondary">{detail.branchName}</Badge> : null}
-            {editable ? (
-              <Button variant="outline" asChild>
-                <Link href={`/dashboard/purchases/${detail.id}/edit`}>Edit order</Link>
-              </Button>
-            ) : null}
-          </>
-        }
+        actions={<Badge variant={status.variant} size="lg">{status.label}</Badge>}
       />
-      <ReceivePanel
+      <PoDetail
         detail={detail}
-        canApprove={can(user, PERMISSIONS.PURCHASE_APPROVE)}
+        canApprove={canApprove}
+        canCreate={can(user, PERMISSIONS.PURCHASE_CREATE)}
         canReceive={can(user, PERMISSIONS.PURCHASE_RECEIVE)}
-        canEdit={editable}
-        locations={locations}
+        approval={{
+          pendingId: pending?.id ?? null,
+          blockedReason,
+          mayForce: can(user, PERMISSIONS.APPROVALS_FORCE),
+        }}
       />
     </>
   )

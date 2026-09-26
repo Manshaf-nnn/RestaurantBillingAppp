@@ -123,6 +123,7 @@ export function DashboardShell({
   initialNotifications,
   openTasks = 0,
   initialCollapsed = false,
+  uiStyle = 'classic',
   children,
 }: {
   user: ShellUser
@@ -163,6 +164,12 @@ export function DashboardShell({
    * than snapping after hydration. See `sidebar-preference.ts`.
    */
   initialCollapsed?: boolean
+  /**
+   * Which skin to draw the shell in. Read from a cookie by the layout, so the
+   * first frame is already right — see `ui-style.ts`. A class on the root,
+   * and the stylesheet does the rest; nothing below reads it.
+   */
+  uiStyle?: 'classic' | 'modern'
   children: React.ReactNode
 }) {
   const pathname = usePathname()
@@ -390,7 +397,7 @@ export function DashboardShell({
   )
 
   return (
-    <div className="flex min-h-dvh">
+    <div className={cn('flex min-h-dvh', uiStyle === 'modern' && 'ui-modern')}>
       {/*
         The same table-calling popup the till and the kitchen get
         (pro.A.md §17). A manager reading the dashboard is often the person who

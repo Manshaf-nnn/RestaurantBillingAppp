@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { Purchase, PurchaseStatus, StockUnit } from '@prisma/client'
+import type { Purchase, PurchasePriority, PurchaseStatus, StockUnit } from '@prisma/client'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { prisma, type TxClient } from '@/server/db/prisma'
@@ -18,8 +18,15 @@ import { toBaseUnits } from '@/features/inventory/units'
  *
  * ── Status ──────────────────────────────────────────────────────────────────
  *
- *   DRAFT → PENDING_APPROVAL → APPROVED → ORDERED → PARTIALLY_RECEIVED
- *                                                 → RECEIVED
+ *   request:  DRAFT → PENDING_APPROVAL → APPROVED
+ *                                      → RETURNED → PENDING_APPROVAL …
+ *                                      → REJECTED
+ *   order:    APPROVED → ORDERED → PARTIALLY_RECEIVED → RECEIVED → CLOSED
+ *                                                     → CLOSED (short)
+ *
+ * The first half is a request being decided; the second is an order being
+ * delivered. The same row carries both, because the approved request IS the
+ * order — there is no second document to keep in step with the first.
  *
  * Transitions are validated rather than assumed, because "approved" is a real
  * authority claim: an order that reached ORDERED without passing through
@@ -31,17 +38,45 @@ const ALLOWED: Record<PurchaseStatus, PurchaseStatus[]> = {
   DRAFT: ['PENDING_APPROVAL', 'APPROVED', 'CANCELLED'],
   // Approving straight from draft is allowed for an owner buying vegetables;
   // requiring a two-person dance in a five-person restaurant is theatre.
-  PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'CANCELLED'],
+  PENDING_APPROVAL: ['APPROVED', 'REJECTED', 'RETURNED', 'DRAFT', 'CANCELLED'],
+  // Sent back: edited like a draft, then submitted again. An approver may also
+  // approve it as it stands, the same shortcut a draft has.
+  RETURNED: ['PENDING_APPROVAL', 'APPROVED', 'CANCELLED'],
+  // Refused. Terminal on purpose: a rejection with its reason is a record, and
+  // reviving it would make the reason describe a request that no longer exists.
+  REJECTED: [],
   APPROVED: ['ORDERED', 'CANCELLED'],
   ORDERED: ['PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'],
-  PARTIALLY_RECEIVED: ['RECEIVED', 'CANCELLED'],
-  RECEIVED: [],
+  // Closing short: the remainder is not coming and the order should stop
+  // appearing as awaiting delivery.
+  PARTIALLY_RECEIVED: ['RECEIVED', 'CLOSED', 'CANCELLED'],
+  RECEIVED: ['CLOSED'],
+  CLOSED: [],
   CANCELLED: [],
 }
 
 export function canTransitionPurchase(from: PurchaseStatus, to: PurchaseStatus): boolean {
   return ALLOWED[from]?.includes(to) ?? false
 }
+
+/** A request that may still be changed by the person who raised it. */
+export const EDITABLE_STATUSES: PurchaseStatus[] = ['DRAFT', 'PENDING_APPROVAL', 'RETURNED']
+
+/** An order a delivery may be booked against. Nothing else ever touches stock. */
+export const RECEIVABLE_STATUSES: PurchaseStatus[] = ['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED']
+
+/** Requests waiting on, or shaped by, an approver's decision. */
+export const REQUEST_STATUSES: PurchaseStatus[] = ['DRAFT', 'PENDING_APPROVAL', 'RETURNED', 'REJECTED']
+
+/** Approved requests: the orders proper, through to closed. */
+export const ORDER_STATUSES: PurchaseStatus[] = [
+  'APPROVED',
+  'ORDERED',
+  'PARTIALLY_RECEIVED',
+  'RECEIVED',
+  'CLOSED',
+  'CANCELLED',
+]
 
 export interface PurchaseLineInput {
   itemId: string
@@ -138,6 +173,7 @@ export async function createPurchaseOrder(params: {
   discount?: number
   taxTotal?: number
   expectedAt?: Date | null
+  priority?: PurchasePriority | null
   notes?: string | null
   userId?: string | null
 }): Promise<Purchase> {
@@ -165,6 +201,7 @@ export async function createPurchaseOrder(params: {
         status: 'DRAFT',
         ...money,
         expectedAt: params.expectedAt ?? null,
+        priority: params.priority ?? 'NORMAL',
         notes: params.notes?.trim() || null,
         createdById: params.userId ?? null,
         items: {
@@ -240,16 +277,19 @@ export async function updatePurchaseOrder(params: {
   discount?: number
   taxTotal?: number
   expectedAt?: Date | null
+  priority?: PurchasePriority | null
   notes?: string | null
 }): Promise<Purchase> {
   const po = await requirePurchase(params.restaurantId, params.purchaseId)
 
   /*
-   * A draft is a proposal and may be changed freely. Once approved it is a
-   * commitment somebody signed, and once anything has been received it is also
-   * a stock history — editing either would rewrite a decision or a fact.
+   * A draft is a proposal and may be changed freely, and so is a request an
+   * approver has sent back — that is what "return for edit" is for. Once
+   * approved it is a commitment somebody signed, and once anything has been
+   * received it is also a stock history — editing either would rewrite a
+   * decision or a fact.
    */
-  if (po.status !== 'DRAFT' && po.status !== 'PENDING_APPROVAL') {
+  if (!EDITABLE_STATUSES.includes(po.status)) {
     throw new AppError(
       `A ${po.status.replace(/_/g, ' ').toLowerCase()} order cannot be edited — cancel it and raise a new one`,
       409,
@@ -278,6 +318,7 @@ export async function updatePurchaseOrder(params: {
         ...(params.branchId ? { branchId: params.branchId } : {}),
         ...(params.locationId !== undefined ? { locationId: params.locationId || null } : {}),
         expectedAt: params.expectedAt ?? null,
+        ...(params.priority ? { priority: params.priority } : {}),
         notes: params.notes?.trim() || null,
         items: {
           create: params.lines.map((l) => ({
@@ -299,8 +340,11 @@ export async function setPurchaseStatus(params: {
   status: PurchaseStatus
   userId?: string | null
   reason?: string | null
+  /** Run inside a caller's transaction — the approvals desk decides and applies as one. */
+  tx?: TxClient
 }): Promise<Purchase> {
-  const po = await requirePurchase(params.restaurantId, params.purchaseId)
+  const db = params.tx ?? prisma
+  const po = await requirePurchase(params.restaurantId, params.purchaseId, db)
 
   if (!canTransitionPurchase(po.status, params.status)) {
     throw new AppError(
@@ -312,21 +356,86 @@ export async function setPurchaseStatus(params: {
     )
   }
 
-  return prisma.purchase.update({
+  /*
+   * A refusal and a return each carry their reason (bill.md §3 — saying no
+   * has to say why). Enforced here, below the actions, so no caller can
+   * reject or return without one.
+   */
+  const reason = params.reason?.trim() || null
+  if ((params.status === 'REJECTED' || params.status === 'RETURNED') && !reason) {
+    throw new AppError(
+      params.status === 'REJECTED'
+        ? 'Give a reason for rejecting this request'
+        : 'Say what needs changing before sending it back',
+      400,
+      'PO_NO_REASON',
+    )
+  }
+
+  const now = new Date()
+  return db.purchase.update({
     where: { id: po.id },
     data: {
       status: params.status,
-      ...(params.status === 'APPROVED'
-        ? { approvedById: params.userId ?? null, approvedAt: new Date() }
+      ...(params.status === 'PENDING_APPROVAL'
+        // Resubmitting clears the last ruling, so a reader sees the decision
+        // that stands rather than one that has been acted on.
+        ? { submittedAt: now, decisionNote: null }
         : {}),
-      ...(params.status === 'ORDERED' ? { orderedAt: new Date() } : {}),
-      ...(params.status === 'CANCELLED' ? { cancelReason: params.reason?.trim() || null } : {}),
+      ...(params.status === 'APPROVED'
+        ? { approvedById: params.userId ?? null, approvedAt: now, decisionNote: null }
+        : {}),
+      ...(params.status === 'REJECTED' || params.status === 'RETURNED'
+        ? { decisionNote: reason }
+        : {}),
+      ...(params.status === 'ORDERED' ? { orderedAt: now } : {}),
+      ...(params.status === 'CLOSED' ? { closedAt: now } : {}),
+      ...(params.status === 'CANCELLED' ? { cancelReason: reason } : {}),
     },
   })
 }
 
-export async function requirePurchase(restaurantId: string, purchaseId: string): Promise<Purchase> {
-  const po = await prisma.purchase.findFirst({ where: { id: purchaseId, restaurantId } })
+/**
+ * The three things an approver can say, and what each does to the request.
+ *
+ * One function for the PO page and for the approvals desk, so "approved from
+ * the desk" and "approved from the order" cannot drift into two behaviours.
+ * The desk runs it inside `decideApproval`'s transaction; the page runs it on
+ * its own when no desk request is pending (an owner approving a draft they
+ * are looking at).
+ */
+export type PurchaseDecision = 'APPROVE' | 'REJECT' | 'RETURN'
+
+export const DECISION_STATUS: Record<PurchaseDecision, PurchaseStatus> = {
+  APPROVE: 'APPROVED',
+  REJECT: 'REJECTED',
+  RETURN: 'RETURNED',
+}
+
+export async function applyPurchaseDecision(params: {
+  restaurantId: string
+  purchaseId: string
+  decision: PurchaseDecision
+  userId: string
+  reason?: string | null
+  tx?: TxClient
+}): Promise<Purchase> {
+  return setPurchaseStatus({
+    restaurantId: params.restaurantId,
+    purchaseId: params.purchaseId,
+    status: DECISION_STATUS[params.decision],
+    userId: params.userId,
+    reason: params.reason,
+    tx: params.tx,
+  })
+}
+
+export async function requirePurchase(
+  restaurantId: string,
+  purchaseId: string,
+  db: TxClient | typeof prisma = prisma,
+): Promise<Purchase> {
+  const po = await db.purchase.findFirst({ where: { id: purchaseId, restaurantId } })
   if (!po) throw new NotFoundError('Purchase order')
   return po
 }

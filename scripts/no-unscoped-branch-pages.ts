@@ -103,7 +103,8 @@ const GROUP_WIDE: Record<string, string> = {
   'dashboard/purchases/[purchaseId]': 'One order; its own branch is checked',
   'dashboard/purchases/[purchaseId]/edit': 'As above',
   'dashboard/purchases/[purchaseId]/receipts/[receiptId]': 'As above',
-  'dashboard/purchases/new': 'The form picks the destination explicitly',
+  // `dashboard/purchases/new` was here, and is not any more: the request form
+  // now opens on the location the switcher is on, so the page resolves one.
   'dashboard/production/[orderId]': 'One run; its own branch is checked',
   'dashboard/inventory/[itemId]': 'One item; its history is scoped by visibleBranchIds in the query',
   'dashboard/inventory/counts/[countId]': 'One count; its own branch is checked',

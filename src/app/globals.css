@@ -402,6 +402,98 @@
   border-color: rgba(255, 255, 255, 0.08) !important;
 }
 
+/* ── Interface style: Modern ──────────────────────────────────────────────────
+ *
+ * The second skin (Settings → Interface style). One class on the dashboard
+ * shell's root, and everything under it re-reads the same tokens every
+ * component already uses — so no screen had to change to take part, and a
+ * screen written tomorrow takes part by default.
+ *
+ * Three moves: a blue accent in place of the warm one; flat, opaque white
+ * cards with a hairline border in place of the frosted glass; and a dark navy
+ * rail, done by re-scoping the ink tokens on the <aside> alone so the nav's
+ * own classes (text-muted-foreground, bg-primary/10) come out light-on-dark
+ * without knowing anything happened.
+ */
+.ui-modern {
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 221 83% 53%;
+  --accent: 221 83% 96%;
+  --accent-foreground: 221 83% 40%;
+  --background: 220 33% 98%;
+  --card: 0 0% 100%;
+  --popover: 0 0% 100%;
+  --border: 220 14% 90%;
+  --input: 220 14% 88%;
+  --muted: 220 20% 96%;
+  --muted-foreground: 220 9% 46%;
+  --chart-1: 221 83% 53%;
+  background: hsl(var(--background));
+}
+.dark .ui-modern {
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 47% 8%;
+  --ring: 217 91% 60%;
+  --accent: 217 60% 18%;
+  --accent-foreground: 217 91% 75%;
+  --background: 222 30% 8%;
+  --card: 222 24% 11%;
+  --popover: 222 24% 11%;
+  --border: 222 18% 19%;
+  --input: 222 18% 22%;
+  --muted: 222 18% 15%;
+  --muted-foreground: 218 11% 64%;
+}
+/* Flat cards: opaque, hairline border, soft shadow. Beats the glass rules
+   above on specificity, and the dark variant below beats `.dark [bg-card]`. */
+.ui-modern [class~='bg-card'] {
+  background-color: hsl(var(--card)) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.ui-modern [class~='bg-card'][class~='border'],
+.ui-modern [class~='bg-card'][class~='border-b'],
+.ui-modern [class~='bg-card'][class~='border-t'] {
+  border-color: hsl(var(--border)) !important;
+}
+.dark .ui-modern [class~='bg-card'] {
+  background-color: hsl(var(--card)) !important;
+  background-image: none !important;
+}
+/* The top bar: solid, in the card colour. */
+.ui-modern header.glass-chrome {
+  background: hsl(var(--card)) !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: hsl(var(--border)) !important;
+}
+/* The rail: dark navy, light ink. Tokens re-scoped, so the nav recolours itself. */
+.ui-modern aside.glass-chrome {
+  --background: 222 47% 11%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 11%;
+  --muted: 217 33% 18%;
+  --muted-foreground: 215 20% 70%;
+  --border: 217 33% 20%;
+  --input: 217 33% 22%;
+  --primary: 217 91% 66%;
+  --primary-foreground: 222 47% 11%;
+  --ring: 217 91% 66%;
+  background: hsl(var(--background)) !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground));
+}
+.ui-modern aside.glass-chrome [class~='bg-card'] {
+  background-color: hsl(var(--card)) !important;
+}
+.ui-modern aside.glass-chrome ::-webkit-scrollbar-thumb {
+  background: hsl(217 33% 28%);
+}
+
 /* ── Guest ordering: liquid glass in both themes ───────────────────────────────
  *
  * The guest flow (landing → menu → cart → tracking → bill) sits on top of the

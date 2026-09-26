@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { DashboardShell } from '@/features/dashboard/components/dashboard-shell'
 import { SIDEBAR_COOKIE } from '@/features/dashboard/sidebar-preference'
+import { UI_STYLE_COOKIE, parseUiStyle } from '@/features/dashboard/ui-style'
 import { appUrl } from '@/lib/env'
 import { prisma } from '@/server/db/prisma'
 import { listSwitchableLocations } from '@/features/transfers/queries'
@@ -144,7 +145,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
    * correcting the width after hydration means a visible snap on every single
    * page load. Not a security boundary — see `sidebar-preference.ts`.
    */
-  const sidebarCollapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === 'collapsed'
+  const jar = await cookies()
+  const sidebarCollapsed = jar.get(SIDEBAR_COOKIE)?.value === 'collapsed'
+  // Same reasoning: the skin is in the HTML, not applied after hydration.
+  const uiStyle = parseUiStyle(jar.get(UI_STYLE_COOKIE)?.value)
 
   const locations = allLocations
     .map((l) => ({
@@ -187,6 +191,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       unassignedToLocation={reach !== null && reach.length === 0}
       openTasks={openTasks}
       initialCollapsed={sidebarCollapsed}
+      uiStyle={uiStyle}
       user={{
         id: user.id,
         name: user.name,

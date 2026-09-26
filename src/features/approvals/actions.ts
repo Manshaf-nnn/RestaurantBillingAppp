@@ -24,6 +24,7 @@ import { DECIDE_PERMISSION } from './permissions'
 import type { ApprovalDetailPayload } from './types'
 import { approveTransfer, closeTransfer } from '@/features/transfers/service'
 import { adjustStock } from '@/features/inventory/operations'
+import { applyPurchaseDecision, type PurchaseDecision } from '@/features/purchasing/service'
 
 /**
  * Rule on a request (recorrection.md §1).
@@ -75,6 +76,15 @@ export async function decideApprovalAction(
           )
           .max(200)
           .optional(),
+        /*
+         * A purchase request sent back for changes rather than refused.
+         *
+         * The desk has two answers and a purchase request has three. On the
+         * desk row this is a refusal whose note says it was sent back; on the
+         * order it is RETURNED — editable again, resubmitted when corrected.
+         * Ignored for every other kind of request.
+         */
+        returnForEdit: z.boolean().optional(),
       })
       // A refusal has to carry its reason, and saying so on the FIELD gives
       // the person a message beside the box rather than a toast they have to
@@ -84,7 +94,9 @@ export async function decideApprovalAction(
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['note'],
-            message: 'Give a reason for rejecting this request',
+            message: value.returnForEdit
+              ? 'Say what needs changing before sending it back'
+              : 'Give a reason for rejecting this request',
           })
         }
       }),
@@ -112,8 +124,21 @@ export async function decideApprovalAction(
         )
       }
 
-      const note = data.note || null
       const isTransfer = target.kind === 'STOCK_TRANSFER' && Boolean(target.entityId)
+      const isPurchase = target.kind === 'PURCHASE_ORDER' && Boolean(target.entityId)
+      const purchaseDecision: PurchaseDecision | null = isPurchase
+        ? data.approve
+          ? 'APPROVE'
+          : data.returnForEdit
+            ? 'RETURN'
+            : 'REJECT'
+        : null
+      // The desk row keeps the reason as typed; a return says so in front of it,
+      // because the row itself can only read REJECTED.
+      const note =
+        purchaseDecision === 'RETURN' && data.note
+          ? `Returned for edit — ${data.note}`
+          : data.note || null
       /*
        * A stock adjustment somebody asked for rather than made (stockMa.md).
        * The request row IS the record — there is no half-written entity to
@@ -190,8 +215,43 @@ export async function decideApprovalAction(
                 })
               }
             }
+          : purchaseDecision
+          ? async (tx) => {
+              /*
+               * The order follows the ruling, in the same transaction, through
+               * the same function the order's own page uses — so "approved
+               * from the desk" and "approved from the order" are one behaviour.
+               */
+              await applyPurchaseDecision({
+                restaurantId: user.restaurantId,
+                purchaseId: target.entityId!,
+                decision: purchaseDecision,
+                userId: user.id,
+                reason: data.note || null,
+                tx,
+              })
+            }
           : undefined,
       })
+
+      if (purchaseDecision) {
+        // The order's own trail, so its history reads the decision without
+        // having to know it was made on the desk.
+        await audit({
+          restaurantId: user.restaurantId, branchId: request.branchId, userId: user.id,
+          actorName: user.name,
+          action:
+            purchaseDecision === 'APPROVE'
+              ? AUDIT_ACTIONS.PO_APPROVED
+              : purchaseDecision === 'REJECT'
+                ? AUDIT_ACTIONS.PO_REJECTED
+                : AUDIT_ACTIONS.PO_RETURNED_FOR_EDIT,
+          entity: 'Purchase', entityId: target.entityId!,
+          after: { reason: data.note || null, viaDesk: true, ...(request.forced ? { forced: true } : {}) },
+        })
+        revalidatePath('/dashboard/purchases')
+        revalidatePath(`/dashboard/purchases/${target.entityId}`)
+      }
 
       await audit({
         restaurantId: user.restaurantId, branchId: request.branchId, userId: user.id,
@@ -392,7 +452,7 @@ export async function approvalDetailAction(
     input,
     async (data) => {
       const user = await requirePermission(PERMISSIONS.APPROVALS_VIEW)
-      const { request, history, transfer } = await getApprovalDetail({
+      const { request, history, transfer, purchase } = await getApprovalDetail({
         restaurantId: user.restaurantId,
         approvalId: data.approvalId,
       })
@@ -462,12 +522,36 @@ export async function approvalDetailAction(
         href:
           request.kind === 'STOCK_TRANSFER' && request.entityId
             ? `/dashboard/transfers/${request.entityId}`
-            : null,
+            : request.kind === 'PURCHASE_ORDER' && request.entityId
+              ? `/dashboard/purchases/${request.entityId}`
+              : null,
         // The document's own number where it has one, not an id slice.
         reference:
           transfer?.number ??
+          purchase?.number ??
           (request.entityId ? `${request.entity} ${request.entityId.slice(0, 8)}` : null),
         details,
+        purchase: purchase
+          ? {
+              id: purchase.id,
+              number: purchase.number,
+              status: purchase.status,
+              priority: purchase.priority,
+              branchName: purchase.branch?.name ?? null,
+              supplierName: purchase.supplier?.name ?? null,
+              requiredBy: purchase.expectedAt?.toISOString() ?? null,
+              notes: purchase.notes,
+              total: purchase.total,
+              lines: purchase.items.map((line) => ({
+                id: line.id,
+                name: line.item.name,
+                unit: (line.unit ?? line.item.unit) as string,
+                quantity: line.quantity,
+                unitCost: line.unitCost,
+                lineTotal: line.lineTotal,
+              })),
+            }
+          : null,
         history: history.map((entry) => ({
           id: entry.id,
           action: entry.action,

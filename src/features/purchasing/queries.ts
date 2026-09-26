@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { PurchaseStatus } from '@prisma/client'
+import type { PurchasePriority, PurchaseStatus } from '@prisma/client'
 
 import { NotFoundError } from '@/lib/errors'
 import { prisma } from '@/server/db/prisma'
@@ -10,9 +10,13 @@ export interface PurchaseSummary {
   id: string
   number: string
   status: PurchaseStatus
+  priority: PurchasePriority
   supplierName: string | null
+  branchName: string | null
+  createdByName: string | null
   total: number
   expectedAt: string | null
+  submittedAt: string | null
   createdAt: string
   lineCount: number
   /** 0–100; how much of the order has arrived. */
@@ -27,6 +31,8 @@ export async function listPurchaseOrders(params: {
   /** Matched against the order number, the supplier, and the items on it. */
   search?: string
   status?: string
+  /** A set of statuses — the request queue, or the order book. Wins over `status`. */
+  statuses?: PurchaseStatus[]
 }): Promise<PurchaseSummary[]> {
   const term = params.search?.trim()
 
@@ -34,9 +40,11 @@ export async function listPurchaseOrders(params: {
     where: {
       restaurantId: params.restaurantId,
       ...(params.branchId ? { branchId: params.branchId } : {}),
-      ...(params.status && params.status !== 'ALL'
-        ? { status: params.status as PurchaseStatus }
-        : {}),
+      ...(params.statuses && params.statuses.length > 0
+        ? { status: { in: params.statuses } }
+        : params.status && params.status !== 'ALL'
+          ? { status: params.status as PurchaseStatus }
+          : {}),
       /*
        * Searched on the server, not filtered on the client. This list is
        * capped, so a client filter would search the fifty rows that happened to
@@ -61,6 +69,8 @@ export async function listPurchaseOrders(params: {
     take: params.limit ?? 50,
     include: {
       supplier: { select: { name: true } },
+      branch: { select: { name: true } },
+      createdBy: { select: { name: true } },
       items: { select: { quantity: true, receivedQty: true, rejectedQty: true } },
     },
   })
@@ -72,9 +82,13 @@ export async function listPurchaseOrders(params: {
       id: po.id,
       number: po.number,
       status: po.status,
+      priority: po.priority,
       supplierName: po.supplier?.name ?? null,
+      branchName: po.branch?.name ?? null,
+      createdByName: po.createdBy?.name ?? null,
       total: po.total,
       expectedAt: po.expectedAt?.toISOString() ?? null,
+      submittedAt: po.submittedAt?.toISOString() ?? null,
       createdAt: po.createdAt.toISOString(),
       lineCount: po.items.length,
       receivedPercent: ordered > 0 ? Math.min(100, Math.round((handled / ordered) * 100)) : 0,
@@ -82,10 +96,31 @@ export async function listPurchaseOrders(params: {
   })
 }
 
+/**
+ * The desk request still open for an order, if any.
+ *
+ * The order page decides THROUGH it — see `decidePurchaseAction` — and needs
+ * to know whether one exists to say so, and who raised it so the two-person
+ * rule can be explained before the button is pressed rather than after.
+ */
+export async function pendingPurchaseApproval(restaurantId: string, purchaseId: string) {
+  return prisma.approvalRequest.findFirst({
+    where: {
+      restaurantId,
+      entity: 'Purchase',
+      entityId: purchaseId,
+      kind: 'PURCHASE_ORDER',
+      status: 'PENDING',
+    },
+    select: { id: true, requestedById: true, branchId: true, requestedAt: true },
+  })
+}
+
 export interface PurchaseDetail {
   id: string
   number: string
   status: PurchaseStatus
+  priority: PurchasePriority
   supplierName: string | null
   supplierId: string | null
   subtotal: number
@@ -94,9 +129,15 @@ export interface PurchaseDetail {
   total: number
   notes: string | null
   expectedAt: string | null
+  createdById: string | null
   createdByName: string | null
   approvedByName: string | null
   approvedAt: string | null
+  submittedAt: string | null
+  closedAt: string | null
+  /** Why it was rejected or sent back, when it was. */
+  decisionNote: string | null
+  cancelReason: string | null
   createdAt: string
   /*
    * Where the goods are going. The columns have always existed and the detail
@@ -129,10 +170,20 @@ export interface PurchaseDetail {
     id: string
     number: string
     supplierRef: string | null
+    invoiceDate: string | null
     receivedAt: string
     receivedByName: string | null
     branchName: string | null
-    lines: Array<{ name: string; acceptedQty: number; rejectedQty: number; unit: string | null }>
+    /** Value of what was accepted, at what it actually cost. */
+    value: number
+    lines: Array<{
+      name: string
+      acceptedQty: number
+      rejectedQty: number
+      unit: string | null
+      unitCost: number
+      orderedUnitCost: number
+    }>
   }>
   /** Every item on this order, with what it last cost — shown while receiving. */
   lastPurchaseByItem: Record<
@@ -166,7 +217,12 @@ export async function getPurchaseDetail(params: {
         include: {
           receivedBy: { select: { name: true } },
           branch: { select: { name: true } },
-          lines: { include: { item: { select: { name: true } } } },
+          lines: {
+            include: {
+              item: { select: { name: true } },
+              purchaseItem: { select: { unitCost: true } },
+            },
+          },
         },
       },
     },
@@ -209,6 +265,7 @@ export async function getPurchaseDetail(params: {
     id: po.id,
     number: po.number,
     status: po.status,
+    priority: po.priority,
     supplierName: po.supplier?.name ?? null,
     supplierId: po.supplier?.id ?? null,
     subtotal: po.subtotal,
@@ -217,9 +274,14 @@ export async function getPurchaseDetail(params: {
     total: po.total,
     notes: po.notes,
     expectedAt: po.expectedAt?.toISOString() ?? null,
+    createdById: po.createdById,
     createdByName: po.createdBy?.name ?? null,
     approvedByName: po.approvedBy?.name ?? null,
     approvedAt: po.approvedAt?.toISOString() ?? null,
+    submittedAt: po.submittedAt?.toISOString() ?? null,
+    closedAt: po.closedAt?.toISOString() ?? null,
+    decisionNote: po.decisionNote,
+    cancelReason: po.cancelReason,
     createdAt: po.createdAt.toISOString(),
     branchId: po.branchId,
     branchName: po.branch?.name ?? null,
@@ -245,14 +307,18 @@ export async function getPurchaseDetail(params: {
       id: r.id,
       number: r.number,
       supplierRef: r.supplierRef,
+      invoiceDate: r.invoiceDate?.toISOString() ?? null,
       receivedAt: r.receivedAt.toISOString(),
       receivedByName: r.receivedBy?.name ?? null,
       branchName: r.branch?.name ?? null,
+      value: r.lines.reduce((sum, l) => sum + Math.round(l.acceptedQty * l.unitCost), 0),
       lines: r.lines.map((l) => ({
         name: l.item.name,
         acceptedQty: l.acceptedQty,
         rejectedQty: l.rejectedQty,
         unit: l.unit as string | null,
+        unitCost: l.unitCost,
+        orderedUnitCost: l.purchaseItem?.unitCost ?? l.unitCost,
       })),
     })),
     lastPurchaseByItem: Object.fromEntries(
@@ -278,8 +344,19 @@ export interface PoBuilderData {
   items: Array<{
     id: string
     name: string
+    sku: string | null
+    category: string | null
     unit: string
+    /** Restaurant-wide quantity, in the base unit. */
     quantity: number
+    /**
+     * What each location holds, in the base unit — so the request shows the
+     * stock at the site that is asking, not the group's total.
+     */
+    stockByBranch: Record<string, number>
+    /** The item's own packaging, when it is bought in something other than its base unit. */
+    purchaseUnit: string | null
+    unitsPerPurchaseUnit: number | null
     /** Supplier-specific pricing, best/preferred first. */
     sources: Array<{
       supplierId: string
@@ -327,7 +404,9 @@ export async function getPoBuilderData(params: {
       where: { restaurantId: params.restaurantId, isActive: true },
       orderBy: { name: 'asc' },
       select: {
-        id: true, name: true, unit: true, quantity: true, costPerUnit: true,
+        id: true, name: true, sku: true, category: true, unit: true, quantity: true, costPerUnit: true,
+        purchaseUnit: true, unitsPerPurchaseUnit: true,
+        locationStock: { select: { branchId: true, available: true } },
         supplierItems: {
           where: { isActive: true },
           orderBy: [{ isPreferred: 'desc' }, { price: 'asc' }],
@@ -396,8 +475,16 @@ export async function getPoBuilderData(params: {
     items: items.map((i) => ({
       id: i.id,
       name: i.name,
+      sku: i.sku,
+      category: i.category,
       unit: i.unit,
       quantity: i.quantity,
+      stockByBranch: i.locationStock.reduce<Record<string, number>>((acc, row) => {
+        acc[row.branchId] = roundQty((acc[row.branchId] ?? 0) + row.available)
+        return acc
+      }, {}),
+      purchaseUnit: i.purchaseUnit,
+      unitsPerPurchaseUnit: i.unitsPerPurchaseUnit,
       fallbackCost: i.costPerUnit,
       lastPurchase: lastByItem.get(i.id) ?? null,
       sources: i.supplierItems.map((si) => ({
@@ -413,6 +500,104 @@ export async function getPoBuilderData(params: {
   }
 }
 
+
+/**
+ * What one item has cost lately — the panel beside a request line.
+ *
+ * Every accepted delivery line writes a `PurchasePriceHistory` row, per base
+ * unit, so prices quoted per box and per kilo sit on one scale. This reads the
+ * recent ones and answers the buyer's four questions: what did we pay last
+ * time and to whom, what before that, what has it averaged, and what is the
+ * least we have paid — all within the window a price is worth remembering.
+ */
+export interface ItemPriceInsight {
+  itemId: string
+  name: string
+  unit: string
+  category: string | null
+  last: { unitCost: number; at: string; supplierName: string | null; receiptNumber: string | null } | null
+  previous: { unitCost: number; at: string; supplierName: string | null } | null
+  /** Weighted by quantity over the last 30 days. Null with nothing in the window. */
+  average30: number | null
+  lowest30: number | null
+  /** How many deliveries the 30-day figures are built from. */
+  count30: number
+  history: Array<{
+    at: string
+    supplierName: string | null
+    unitCost: number
+    quantity: number
+    unit: string | null
+    receiptNumber: string | null
+  }>
+}
+
+export async function getItemPriceInsight(params: {
+  restaurantId: string
+  itemId: string
+}): Promise<ItemPriceInsight> {
+  const item = await prisma.inventoryItem.findFirst({
+    where: { id: params.itemId, restaurantId: params.restaurantId },
+    select: { id: true, name: true, unit: true, category: true },
+  })
+  if (!item) throw new NotFoundError('Inventory item')
+
+  const rows = await prisma.purchasePriceHistory.findMany({
+    where: { restaurantId: params.restaurantId, itemId: item.id },
+    orderBy: { recordedAt: 'desc' },
+    take: 12,
+    include: { supplier: { select: { name: true } } },
+  })
+  const receiptIds = rows.map((row) => row.receiptId).filter((id): id is string => Boolean(id))
+  const receipts = receiptIds.length
+    ? await prisma.goodsReceipt.findMany({
+        where: { id: { in: receiptIds }, restaurantId: params.restaurantId },
+        select: { id: true, number: true },
+      })
+    : []
+  const numberOf = new Map(receipts.map((r) => [r.id, r.number]))
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  const recent = rows.filter((row) => row.recordedAt >= since)
+  const weight = recent.reduce((sum, row) => sum + Math.max(0, row.quantity), 0)
+  const average30 =
+    recent.length === 0
+      ? null
+      : weight > 0
+        ? Math.round(recent.reduce((sum, row) => sum + row.unitCost * Math.max(0, row.quantity), 0) / weight)
+        : Math.round(recent.reduce((sum, row) => sum + row.unitCost, 0) / recent.length)
+
+  const history = rows.map((row) => ({
+    at: row.recordedAt.toISOString(),
+    supplierName: row.supplier?.name ?? null,
+    unitCost: row.unitCost,
+    quantity: row.quantity,
+    unit: row.unit as string | null,
+    receiptNumber: row.receiptId ? numberOf.get(row.receiptId) ?? null : null,
+  }))
+
+  return {
+    itemId: item.id,
+    name: item.name,
+    unit: item.unit as string,
+    category: item.category,
+    last: history[0]
+      ? {
+          unitCost: history[0].unitCost,
+          at: history[0].at,
+          supplierName: history[0].supplierName,
+          receiptNumber: history[0].receiptNumber,
+        }
+      : null,
+    previous: history[1]
+      ? { unitCost: history[1].unitCost, at: history[1].at, supplierName: history[1].supplierName }
+      : null,
+    average30,
+    lowest30: recent.length ? Math.min(...recent.map((row) => row.unitCost)) : null,
+    count30: recent.length,
+    history,
+  }
+}
 
 export interface SupplierPricingData {
   supplier: {

@@ -188,6 +188,13 @@ const SERVICE = [
   'qr-experience-test',
   'catalog-test',
   'purchasing-test',
+  // PO request → approval → approved PO → receive/GRN → FIFO: a request is
+  // returned or rejected only with a reason and decided through the desk
+  // (no self-approval), nothing is received against anything but an approved
+  // order, a partial delivery leaves the rest outstanding, one more than
+  // ordered is refused, and each delivery is its own FIFO layer valued at what
+  // was paid — with the price variance recorded, not written onto the PO.
+  'po-workflow-test',
   'supplier-ledger-test',
   'search-test',
   'locations-test',
@@ -409,6 +416,11 @@ const RUNTIME = [
   // (inactive, other tenant, other site, impossible pair) leave no role
   // behind, and a person it connected is served the tabs and refused the rest.
   'role-create-test',
+  // The PO workflow over HTTP as the buyer, the approver and the storekeeper:
+  // who may raise, decide and receive; a decision from the wrong person, site
+  // or restaurant refused with nothing written; a partial delivery at the
+  // invoice price making a FIFO layer worth what was paid; every step audited.
+  'po-flow-runtime-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
   // The approvals desk and the transfers board still SAY what the browser test

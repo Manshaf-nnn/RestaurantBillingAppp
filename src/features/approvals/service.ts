@@ -641,6 +641,40 @@ export async function getApprovalDetail(params: {
       : null
 
   /*
+   * The record itself, when it is a purchase request. Same reasoning as the
+   * transfer above: the approver rules on which items, how many, at what
+   * price, for which site — and should not be sent to the Purchasing tab to
+   * find out.
+   */
+  const purchase =
+    request.entity === 'Purchase' && request.entityId
+      ? await prisma.purchase.findFirst({
+          where: { id: request.entityId, restaurantId: params.restaurantId },
+          select: {
+            id: true,
+            number: true,
+            status: true,
+            priority: true,
+            total: true,
+            notes: true,
+            expectedAt: true,
+            branch: { select: { name: true } },
+            supplier: { select: { name: true } },
+            items: {
+              select: {
+                id: true,
+                quantity: true,
+                unit: true,
+                unitCost: true,
+                lineTotal: true,
+                item: { select: { name: true, unit: true } },
+              },
+            },
+          },
+        })
+      : null
+
+  /*
    * The trail for this request AND for the record it is about. An approval on
    * its own says "somebody said yes"; the entity's history says what that yes
    * did, which is the question a reader actually has.
@@ -666,7 +700,7 @@ export async function getApprovalDetail(params: {
     },
   })
 
-  return { request, history, transfer }
+  return { request, history, transfer, purchase }
 }
 
 /** The restaurant row's `updatedAt`, read BEFORE the policy so `saveApprovers` can insist nothing moved. */

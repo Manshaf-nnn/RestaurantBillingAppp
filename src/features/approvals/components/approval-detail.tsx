@@ -57,6 +57,26 @@ export interface ApprovalDetailView {
       available: number
     }>
   } | null
+  /** The purchase request this is about, with its lines. Read-only here. */
+  purchase: {
+    id: string
+    number: string
+    status: string
+    priority: string
+    branchName: string | null
+    supplierName: string | null
+    requiredBy: string | null
+    notes: string | null
+    total: number
+    lines: Array<{
+      id: string
+      name: string
+      unit: string
+      quantity: number
+      unitCost: number
+      lineTotal: number
+    }>
+  } | null
 }
 
 /**
@@ -112,26 +132,32 @@ export function ApprovalDetail({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  if (!request) return null
-
-  const money = (value: number) => formatMoney(value, currency, locale)
   /*
    * What the approver will actually allow, per line.
    *
    * Starts at what was asked for, so approving without touching anything
    * behaves exactly as it did. Keyed by line id rather than index because the
    * table is re-rendered from a refreshed request after every decision.
+   *
+   * Declared before the early return below: a hook after a conditional
+   * return runs on some renders and not others, which React refuses.
    */
   const [allow, setAllow] = React.useState<Record<string, string>>(() =>
-    Object.fromEntries((request.transfer?.lines ?? []).map((line) => [line.id, String(line.quantity)])),
+    Object.fromEntries((request?.transfer?.lines ?? []).map((line) => [line.id, String(line.quantity)])),
   )
+
+  if (!request) return null
+
+  const money = (value: number) => formatMoney(value, currency, locale)
 
   const pending = request.status === 'PENDING'
   const blocked = request.blockedReason !== null
 
-  const decide = async (approve: boolean, force: boolean) => {
+  const isPurchase = request.kind === 'PURCHASE_ORDER' && request.purchase !== null
+
+  const decide = async (approve: boolean, force: boolean, returnForEdit = false) => {
     if (!approve && !note.trim()) {
-      toast.error('Give a reason for rejecting this request')
+      toast.error(returnForEdit ? 'Say what needs changing before sending it back' : 'Give a reason for rejecting this request')
       return
     }
     setBusy(true)
@@ -141,6 +167,7 @@ export function ApprovalDetail({
         approve,
         note: note.trim(),
         force,
+        returnForEdit: returnForEdit || undefined,
         /*
          * Only for a transfer, and only on an approval: a rejection sends
          * nothing anywhere, and a quantity on any other kind of request is
@@ -160,7 +187,9 @@ export function ApprovalDetail({
       toast.error(result.error)
       return
     }
-    toast.success(force ? 'Overridden and recorded' : approve ? 'Approved' : 'Rejected')
+    toast.success(
+      force ? 'Overridden and recorded' : approve ? 'Approved' : returnForEdit ? 'Sent back for edit' : 'Rejected',
+    )
     onClose()
     router.refresh()
   }
@@ -329,7 +358,61 @@ export function ApprovalDetail({
           </section>
         ) : null}
 
-        {request.details.length > 0 && !request.transfer ? (
+        {/*
+          A purchase request, in full: the lines and what they cost, the site,
+          the supplier, when it is needed and why. The approver's three answers
+          sit at the foot with the others; the lines themselves are the
+          requester's — "return for edit" is how an approver asks for a change.
+        */}
+        {request.purchase ? (
+          <section className="mt-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {request.purchase.number} · {request.purchase.branchName ?? 'No location'}
+              {request.purchase.supplierName ? ` · ${request.purchase.supplierName}` : ''}
+            </h3>
+            <table className="w-full rounded-lg border text-sm">
+              <thead>
+                <tr className="text-xs uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3 py-1.5 text-left font-medium">Item</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Qty</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Price</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {request.purchase.lines.map((line) => (
+                  <tr key={line.id}>
+                    <td className="px-3 py-1.5">{line.name}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                      {line.quantity} {line.unit.toLowerCase()}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{money(line.unitCost)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{money(line.lineTotal)}</td>
+                  </tr>
+                ))}
+                <tr className="font-medium">
+                  <td className="px-3 py-1.5" colSpan={3}>
+                    Estimated total
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{money(request.purchase.total)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {request.purchase.priority !== 'NORMAL' ? `${request.purchase.priority.toLowerCase()} priority · ` : ''}
+              {request.purchase.requiredBy ? (
+                <>
+                  needed by <LocalDateTime value={request.purchase.requiredBy} />
+                </>
+              ) : (
+                'no required date'
+              )}
+              {request.purchase.notes ? ` · ${request.purchase.notes}` : ''}
+            </p>
+          </section>
+        ) : null}
+
+        {request.details.length > 0 && !request.transfer && !request.purchase ? (
           <section className="mt-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               What would happen
@@ -376,7 +459,7 @@ export function ApprovalDetail({
             <Input
               value={note}
               onChange={(event) => setNote(event.target.value.slice(0, 200))}
-              placeholder="Reason — required to reject"
+              placeholder={isPurchase ? 'Reason — required to reject or return' : 'Reason — required to reject'}
               aria-label="Decision note"
             />
 
@@ -395,6 +478,11 @@ export function ApprovalDetail({
                     >
                       <ShieldAlert /> Override and approve
                     </Button>
+                    {isPurchase ? (
+                      <Button variant="outline" disabled={busy} onClick={() => decide(false, true, true)}>
+                        Override and return for edit
+                      </Button>
+                    ) : null}
                     <Button variant="outline" disabled={busy} onClick={() => decide(false, true)}>
                       Override and reject
                     </Button>
@@ -410,6 +498,11 @@ export function ApprovalDetail({
                 <Button disabled={busy} onClick={() => decide(true, false)}>
                   Approve
                 </Button>
+                {isPurchase ? (
+                  <Button variant="outline" disabled={busy} onClick={() => decide(false, false, true)}>
+                    Return for edit
+                  </Button>
+                ) : null}
                 <Button variant="outline" disabled={busy} onClick={() => decide(false, false)}>
                   Reject
                 </Button>
