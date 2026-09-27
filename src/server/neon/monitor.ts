@@ -44,6 +44,40 @@ export function appDatabaseHost(url: string | undefined = process.env.DATABASE_U
   }
 }
 
+/**
+ * What the connection string already says, without asking Neon anything.
+ *
+ * Role, host, database and region are not secrets and are the facts an
+ * operator most often needs to match against the Neon console; the password
+ * is never returned. Shown on the Database page so "which project is this?"
+ * has an answer before an API key exists.
+ */
+export function describeDatabaseUrl(url: string | undefined = process.env.DATABASE_URL): {
+  role: string | null
+  host: string | null
+  database: string | null
+  region: string | null
+  pooled: boolean
+  neon: boolean
+} | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname || null
+    const region = host?.match(/\b([a-z]{2}-[a-z]+-\d)\b/)?.[1] ?? null
+    return {
+      role: parsed.username ? decodeURIComponent(parsed.username) : null,
+      host,
+      database: parsed.pathname.replace(/^\//, '') || null,
+      region,
+      pooled: Boolean(host?.includes('-pooler')),
+      neon: Boolean(host?.includes('neon.tech')),
+    }
+  } catch {
+    return null
+  }
+}
+
 /** `ep-x-pooler.c-3.aws.neon.tech` and `ep-x.c-3.aws.neon.tech` are one endpoint. */
 export function endpointKey(host: string): string {
   return host.toLowerCase().replace('-pooler', '')

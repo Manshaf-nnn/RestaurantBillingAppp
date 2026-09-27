@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatDate } from '@/lib/datetime'
 import { publicNeonConfig, readNeonConfig, readNeonStatus } from '@/server/neon/config'
+import { describeDatabaseUrl } from '@/server/neon/monitor'
 import type { NeonAlertLevel } from '@/server/neon/types'
 
 import { NeonPanel } from './neon-panel'
@@ -24,6 +25,7 @@ function hours(value: number): string {
 export async function NeonSection({ adminEmail }: { adminEmail: string }) {
   const [config, status] = await Promise.all([readNeonConfig(), readNeonStatus()])
   const view = publicNeonConfig(config)
+  const connection = describeDatabaseUrl()
   const snapshot = status?.snapshot ?? null
   const project = snapshot?.project ?? null
   const alerts = status?.alerts ?? []
@@ -55,6 +57,30 @@ export async function NeonSection({ adminEmail }: { adminEmail: string }) {
           watched.
         </p>
       </div>
+
+      {connection ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>What the app is connected to</CardTitle>
+            <CardDescription>
+              Read from DATABASE_URL on the server. These are the facts to match against the Neon
+              console; the password is held by the app and never shown. Migrations use the same host
+              without “-pooler”. Neon&apos;s AI Gateway, Auth and Data API are not used by TableFlow and
+              need no setup.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+              <div className="flex justify-between gap-4 border-b py-1.5"><dt className="text-muted-foreground">Provider</dt><dd>{connection.neon ? 'Neon' : 'Postgres (not Neon)'}</dd></div>
+              <div className="flex justify-between gap-4 border-b py-1.5"><dt className="text-muted-foreground">Region</dt><dd>{connection.region ?? '—'}</dd></div>
+              <div className="flex justify-between gap-4 border-b py-1.5"><dt className="text-muted-foreground">Role</dt><dd className="font-mono text-xs">{connection.role ?? '—'}</dd></div>
+              <div className="flex justify-between gap-4 border-b py-1.5"><dt className="text-muted-foreground">Database</dt><dd className="font-mono text-xs">{connection.database ?? '—'}</dd></div>
+              <div className="flex justify-between gap-4 border-b py-1.5 sm:col-span-2"><dt className="text-muted-foreground">Endpoint</dt><dd className="truncate font-mono text-xs">{connection.host ?? '—'}</dd></div>
+              <div className="flex justify-between gap-4 py-1.5"><dt className="text-muted-foreground">Pooled</dt><dd>{connection.pooled ? 'Yes, as production should be' : 'No — production should use the “-pooler” host'}</dd></div>
+            </dl>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {view.configured && snapshot ? (
         <>
