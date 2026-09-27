@@ -1,0 +1,123 @@
+# ============================================================================
+# Ask the server what database it is dialling, and what that database says
+# back — without a deploy, and without SSH from a laptop.
+#
+# Written during the outage of 2026-09-27. The site went down when Neon
+# stopped answering at the endpoint in deploy/ovh/.env, nobody had SSH to
+# hand, and every diagnosis had to be inferred from Prisma's paraphrase of
+# the error in a failed deploy log. This runs in under a minute from the
+# Actions tab ("Run workflow") and prints the facts the guessing was about.
+#
+# What it prints is deliberately limited: role, host and database name of
+# each connection string, never the password; the raw Postgres error from the
+# server's own vantage point; and the Neon API's view of the project when the
+# box has an API key. It changes one thing, once — see step 1 — and is
+# otherwise read-only.
+# ============================================================================
+name: Diagnose database
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  diagnose:
+    name: Ask the server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect the database configuration on the box
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -uo pipefail
+            cd ~/RestaurantBillingAppp/deploy/ovh
+
+            # role, host and database only. The password never reaches a log.
+            describe() {
+              printf '%s' "$1" | sed -E 's#^[a-z]+://([^:]+):[^@]*@([^/?]+)/([^?]*).*#role=\1 host=\2 db=\3#'
+            }
+            current() {
+              grep "^$1=" .env | tail -1 | cut -d= -f2- | sed -E "s/^['\"]//; s/['\"]\$//"
+            }
+
+            echo "━━ 1. Put back the .env that served this morning (one-time, 2026-09-27) ━━"
+            # The DATABASE_URL secret set on the evening of 2026-09-27 pointed
+            # at a different Neon project — 29 tables, no migration history —
+            # and the deploy's env sync wrote it over the real one. The sync
+            # keeps a timestamped copy before it writes, so the real one is
+            # still on disk. Guarded on the exact wrong hostname, so this can
+            # never undo a later, legitimate change of endpoint.
+            if grep -q 'ep-purple-mud-az41kemf' .env; then
+              orig=$(grep -l '^DATABASE_URL=.*ep-weathered-band-azy9fnhg' .env.bak.* 2>/dev/null | sort | head -1)
+              if [ -n "$orig" ]; then
+                cp "$orig" .env && chmod 600 .env && echo "restored .env from $orig"
+              else
+                echo "no backup carries the original DATABASE_URL:"
+                ls -la .env.bak.* 2>/dev/null || echo "  (no backups at all)"
+              fi
+            else
+              echo ".env does not carry the wrong hostname; nothing to restore"
+            fi
+
+            echo
+            echo "━━ 2. What the box is configured for ━━"
+            DB_URL=$(current DATABASE_URL)
+            DIRECT=$(current DIRECT_URL)
+            echo "DATABASE_URL → $(describe "$DB_URL")"
+            echo "DIRECT_URL   → $(describe "$DIRECT")"
+            echo "backups on disk:"
+            for f in .env.bak.*; do
+              [ -f "$f" ] || continue
+              echo "  $f → $(describe "$(grep '^DATABASE_URL=' "$f" | cut -d= -f2-)")"
+            done
+
+            echo
+            echo "━━ 3. What the database says when the box dials it (the raw error, not Prisma's paraphrase) ━━"
+            probe() {
+              q="select current_database(), (select count(*) from information_schema.tables where table_schema='public') as tables, (select count(*) from pg_tables where tablename='_prisma_migrations') as history"
+              if command -v psql >/dev/null 2>&1; then
+                PGCONNECT_TIMEOUT=20 psql "$1" -Atc "$q" 2>&1
+              else
+                docker run --rm -e PGCONNECT_TIMEOUT=20 postgres:16-alpine psql "$1" -Atc "$q" 2>&1 | tail -3
+              fi
+            }
+            echo "pooled → $(probe "$DB_URL")"
+            echo "direct → $(probe "$DIRECT")"
+
+            echo
+            echo "━━ 4. The running container's own view ━━"
+            live=$(docker compose exec -T app sh -c 'printf %s "$DATABASE_URL"' 2>/dev/null || true)
+            if [ -n "$live" ]; then
+              echo "container dials → $(describe "$live")"
+            else
+              echo "(no running container to ask)"
+            fi
+            echo "recent database-related log lines:"
+            docker compose logs --tail 200 app 2>&1 \
+              | grep -iE "neon|P10[0-9][0-9]|ECONN|timed? ?out|password|quota|suspend|endpoint|can't reach|cannot reach" \
+              | tail -12 || echo "  (none)"
+
+            echo
+            echo "━━ 5. The Neon API, if the box has a key ━━"
+            KEY=$(current NEON_API_KEY)
+            PID=$(current NEON_PROJECT_ID)
+            if [ -z "$KEY" ]; then
+              echo "NEON_API_KEY is not set on the box, so Neon's own view is not available here."
+            else
+              echo "projects this key can see:"
+              curl -s -H "Authorization: Bearer $KEY" https://console.neon.tech/api/v2/projects \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("  ", p["id"], "|", p["name"], "|", p.get("region_id"), "| pg", p.get("pg_version"), "| org", p.get("org_id")) for p in d.get("projects", [])] or print("  (none, or:", d, ")")' 2>&1
+              if [ -n "$PID" ]; then
+                echo "endpoints of $PID:"
+                curl -s -H "Authorization: Bearer $KEY" "https://console.neon.tech/api/v2/projects/$PID/endpoints" \
+                  | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("  ", e["id"], "|", e.get("host"), "| state", e.get("current_state"), "| disabled", e.get("disabled"), "| branch", e.get("branch_id")) for e in d.get("endpoints", [])] or print("  ", d)' 2>&1
+                echo "branches of $PID:"
+                curl -s -H "Authorization: Bearer $KEY" "https://console.neon.tech/api/v2/projects/$PID/branches" \
+                  | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("  ", b["id"], "|", b["name"], "| state", b.get("current_state"), "| default", b.get("default"), "| bytes", b.get("logical_size")) for b in d.get("branches", [])] or print("  ", d)' 2>&1
+              fi
+            fi
+            echo
+            echo "done."
