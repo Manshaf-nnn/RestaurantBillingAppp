@@ -13,7 +13,19 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
       <input
         type={type}
         className={cn(
-          'flex h-10 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors',
+          /*
+           * `text-base` on a phone, `text-sm` from `sm` up.
+           *
+           * Safari on iOS zooms the page whenever a focused field's text is
+           * under 16px, and will not zoom back out — so tapping Name on the
+           * QR checkout left the guest on a magnified, sideways-scrolling
+           * page for the rest of their order. 16px is the whole fix.
+           *
+           * The alternative everybody reaches for, `maximum-scale=1` on the
+           * viewport, also works and takes pinch-zoom away from everyone who
+           * needs it to read. Never that.
+           */
+          'flex h-10 w-full rounded-lg border border-input bg-background px-3 py-2 text-base sm:text-sm shadow-sm transition-colors',
           'file:border-0 file:bg-transparent file:text-sm file:font-medium',
           'placeholder:text-muted-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
@@ -71,7 +83,8 @@ const Textarea = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <textarea
     className={cn(
-      'flex min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors',
+      // 16px on phones for the same reason as Input — see its note.
+      'flex min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-base sm:text-sm shadow-sm transition-colors',
       'placeholder:text-muted-foreground',
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
       'disabled:cursor-not-allowed disabled:opacity-50',

@@ -42,6 +42,8 @@ import { callAction } from '@/lib/use-action'
 export interface BillView {
   id: string
   orderNumber: string
+  /** A delivery is paid at a door, not at a table — see the payment block. */
+  type?: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'COUNTER' | null
   tableNumber: string | null
   customerName: string
   customerEmail: string | null
@@ -413,9 +415,25 @@ export function GuestBill({
         {!settled ? (
           <section className="no-print surface p-4">
             <h2 className="mb-1 text-sm font-semibold">Pay your bill</h2>
+            {/*
+              A delivery is not paid at a table and there is no waiter to call.
+              The old wording said both, on the one bill where neither is true.
+            */}
             <p className="mb-4 text-xs text-muted-foreground">
-              Pay from your phone, or call a waiter to pay by card or cash at the table.
+              {bill.type === 'DELIVERY'
+                ? 'Pay from your phone now, or pay the delivery person when your food arrives.'
+                : 'Pay from your phone, or call a waiter to pay by card or cash at the table.'}
             </p>
+
+            {bill.type === 'DELIVERY' ? (
+              <div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <p className="text-sm font-semibold text-primary">Cash on delivery</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Nothing to do now. Pay the delivery person at your door — they will confirm it
+                  against your order there and then.
+                </p>
+              </div>
+            ) : null}
 
             {showBank ? (
               <div className="space-y-3 rounded-xl border bg-card p-4">

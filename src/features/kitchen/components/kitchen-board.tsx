@@ -80,6 +80,8 @@ export interface KitchenStats {
  */
 const COLUMNS: Array<{
   key: 'ACTIVE' | 'READY'
+  /** Order types this column does not show — see the READY column. */
+  excludeTypes?: Array<'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'>
   title: string
   statuses: OrderStatus[]
   accent: string
@@ -92,7 +94,14 @@ const COLUMNS: Array<{
     accent: 'border-t-primary',
     icon: Flame,
   },
-  { key: 'READY', title: 'Ready to serve', statuses: ['READY'], accent: 'border-t-success', icon: Check },
+  /*
+   * "Ready to serve" is for food somebody carries to a table or hands across a
+   * counter. A delivery marked ready is not waiting for that — it is waiting
+   * for a rider, and it appears on the Delivery Desk the moment the kitchen
+   * finishes it. Leaving it here gave the kitchen a column of tickets nobody
+   * on that screen could act on, and made "ready" look unfinished.
+   */
+  { key: 'READY', title: 'Ready to serve', statuses: ['READY'], accent: 'border-t-success', icon: Check, excludeTypes: ['DELIVERY'] },
 ]
 
 export function KitchenBoard({
@@ -562,6 +571,8 @@ export function KitchenBoard({
         {COLUMNS.map((column) => {
           const columnTickets = tickets
             .filter((ticket) => column.statuses.includes(ticket.status))
+            // A delivery that is ready belongs to the Delivery Desk, not here.
+            .filter((ticket) => !column.excludeTypes?.includes(ticket.type))
             .filter(matchesSearch)
             .sort((a, b) => new Date(a.placedAt).getTime() - new Date(b.placedAt).getTime())
 

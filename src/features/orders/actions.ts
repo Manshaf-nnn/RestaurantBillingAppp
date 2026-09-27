@@ -16,6 +16,7 @@ import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
 import { findCustomerByPhone } from '@/features/customers/service'
+import { capturePayment } from '@/features/payments/service'
 import { completeDeliveryWithPin } from './delivery-handover'
 import { prisma } from '@/server/db/prisma'
 import { locationsForGuest, resolveLocationForOrder } from '@/features/qr/locations'
@@ -886,6 +887,45 @@ export async function completeDelivery(
       branchIds: visibleBranchIds(user),
     })
 
+    /*
+     * ── The money, taken in the same breath as the food ───────────────────
+     *
+     * A cash-on-delivery bill is settled at the door, so recording it is part
+     * of handing the order over rather than a second thing to remember. The
+     * commonest leak in a COD operation is an order marked delivered with the
+     * cash never entered — and the rider is three streets away by the time
+     * anybody notices.
+     *
+     * AFTER the completion, not inside it: `capturePayment` opens its own
+     * transaction and locks the same row, so calling it within the handover's
+     * fence would deadlock against it.
+     *
+     * If the capture fails the delivery still stands — the food really was
+     * handed over and pretending otherwise would be a worse lie than an unpaid
+     * bill. The order stays UNPAID, shows as owing money on the Orders screen
+     * and at the till, and the message below says so rather than reporting a
+     * clean success.
+     */
+    let collected = 0
+    let collectionError: string | null = null
+    if (result.outstanding > 0) {
+      try {
+        await capturePayment({
+          restaurantId: user.restaurantId,
+          orderId: result.orderId,
+          method: 'COD',
+          amount: result.outstanding,
+          receivedById: user.id,
+          // The delivery is the attempt: a retry of the same handover must not
+          // take the money twice.
+          clientRequestId: `cod:${result.orderId}`,
+        })
+        collected = result.outstanding
+      } catch (error) {
+        collectionError = error instanceof Error ? error.message : 'The payment could not be recorded'
+      }
+    }
+
     await audit({
       restaurantId: user.restaurantId,
       userId: user.id,
@@ -896,11 +936,20 @@ export async function completeDelivery(
       after: { status: 'SERVED', via: 'delivery-pin' },
     })
 
+    if (collectionError) {
+      throw new AppError(
+        `${result.orderNumber} is delivered, but the payment could not be recorded: ${collectionError} — settle it from the till.`,
+        409,
+        'DELIVERED_UNPAID',
+      )
+    }
+
     revalidatePath('/dashboard/delivery')
     revalidatePath('/dashboard/orders')
     revalidatePath('/cashier/pos')
     revalidatePath(`/order/track/${result.orderId}`)
-    return result
+    revalidatePath('/dashboard/payment-details')
+    return { ...result, collected }
   }, 'Delivered.')
 }
 

@@ -573,7 +573,13 @@ export function CartCheckout({
             >
               <select
                 id="deliveryLocation"
-                className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                /*
+                 * 16px on a phone, like every other field: iOS zooms a focused
+                 * control under that size and does not zoom back. This is the
+                 * "where to deliver" picker, so it is the one a delivery guest
+                 * taps every single time.
+                 */
+                className="h-10 w-full rounded-lg border border-border bg-background px-3 text-base sm:text-sm"
                 value={locationId}
                 onChange={(event) => setLocationId(event.target.value)}
               >

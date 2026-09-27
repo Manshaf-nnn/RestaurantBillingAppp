@@ -9,7 +9,7 @@ import { applyBranchOverrides, branchOverrides } from '@/features/menu/branch-me
 import { assertPeriodOpen } from '@/features/accounting/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { orderIsRouted, planRouting, routeOrderItems } from '@/features/kitchen/routing'
-import { evaluate } from '@/features/customers/discounts'
+import { evaluate, bestTargetedOffer } from '@/features/customers/discounts'
 import { notifyLowStock } from '@/features/inventory/alerts'
 import {
   prisma,
@@ -331,6 +331,50 @@ export async function buildDraft(params: {
         couponCode = coupon.code
         couponDiscount = verdict.amount
       }
+    }
+  }
+
+  /*
+   * ── An offer aimed at somebody applies without them asking ────────────────
+   *
+   * An owner who picks a customer category and gives it an offer has said who
+   * gets it. Making those people also know and type a code defeats the whole
+   * point: the offer was aimed, and the person it was aimed at is standing
+   * there identified by their phone number. Before this, a "campus student"
+   * offer existed, matched, and was never applied anywhere — the segment check
+   * only ever ran against a code somebody had already typed.
+   *
+   * Only TARGETED offers do this — ones carrying a customer group or a saved
+   * segment. A plain public code stays a code: it is aimed at nobody in
+   * particular, and auto-applying every active coupon would make the best one
+   * a lottery and the codes themselves pointless.
+   *
+   * A typed code wins. If the guest entered something, that is an explicit
+   * choice and this does not second-guess it — including when the typed code
+   * was refused, because silently substituting a different discount for the
+   * one they asked for would leave them reading an error beside a total that
+   * disagrees with it.
+   */
+  if (!couponId && !params.couponCode) {
+    const applied = await bestTargetedOffer(db, {
+      restaurantId: params.restaurantId,
+      customerId: params.customerId ?? null,
+      subtotal,
+      lines: priced.map((line) => ({
+        foodId: line.foodId,
+        categoryId: foodById.get(line.foodId)?.categoryId ?? null,
+        quantity: line.quantity,
+        lineTotal: line.lineTotal,
+      })),
+      branchId: params.branchId ?? null,
+      now,
+      timeZone: restaurant.timezone,
+      qrExperienceId: params.qrExperienceId ?? null,
+    })
+    if (applied) {
+      couponId = applied.couponId
+      couponCode = applied.code
+      couponDiscount = applied.amount
     }
   }
 

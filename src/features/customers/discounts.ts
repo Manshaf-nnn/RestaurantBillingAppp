@@ -1,6 +1,6 @@
 import 'server-only'
 
-import type { Coupon } from '@prisma/client'
+import { Prisma, type Coupon } from '@prisma/client'
 
 import { AppError } from '@/lib/errors'
 import { applyBps } from '@/lib/money'
@@ -435,4 +435,61 @@ function reject(reason: string): DiscountResult {
 }
 function pad(h: number) {
   return String(h).padStart(2, '0')
+}
+
+/**
+ * The best offer this customer already qualifies for, without typing anything.
+ *
+ * ── Why only targeted offers ────────────────────────────────────────────────
+ *
+ * A coupon with a customer group or a saved segment on it was AIMED: the owner
+ * chose who gets it. Requiring those people to also know a code makes the
+ * aiming pointless, and is the bug this exists to fix — a "campus student"
+ * offer that matched perfectly and was never applied because nobody typed it.
+ *
+ * An untargeted coupon is deliberately excluded. It is aimed at nobody, so
+ * "the best one" would be whichever the query happened to rank first, every
+ * public code would fire on every order, and a code would stop meaning
+ * anything. If an owner wants a discount for everyone they can price it that
+ * way; a code is how you say "only if you know this".
+ *
+ * ── Best, and deterministically so ──────────────────────────────────────────
+ *
+ * Every candidate is run through the SAME `evaluate` a typed code goes
+ * through — the minimum spend, the hours, the branch, the per-customer limit
+ * and the usage cap all still apply, and an offer that would be refused is not
+ * quietly forced through. The largest discount wins; ties break on the id so
+ * two orders a second apart cannot disagree.
+ */
+export async function bestTargetedOffer(
+  db: Pick<typeof prisma, 'coupon'>,
+  context: DiscountContext,
+): Promise<{ couponId: string; code: string; amount: number } | null> {
+  // No customer, no aim: every targeted offer needs somebody to be aimed at.
+  if (!context.customerId) return null
+
+  const now = context.now ?? new Date()
+  const candidates = await db.coupon.findMany({
+    where: {
+      restaurantId: context.restaurantId,
+      isActive: true,
+      // Targeted, one way or the other. `evaluate` re-checks both properly.
+      OR: [{ customerGroup: { not: null } }, { NOT: { segment: { equals: Prisma.DbNull } } }],
+      AND: [
+        { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+        { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
+      ],
+    },
+    orderBy: { id: 'asc' },
+  })
+
+  let best: { couponId: string; code: string; amount: number } | null = null
+  for (const coupon of candidates) {
+    const verdict = await evaluate(coupon, context)
+    if (!verdict.ok || verdict.amount <= 0) continue
+    if (!best || verdict.amount > best.amount) {
+      best = { couponId: coupon.id, code: coupon.code, amount: verdict.amount }
+    }
+  }
+  return best
 }

@@ -126,7 +126,11 @@ function DeliveryCard({
      * the refresh is on its way.
      */
     setDone(true)
-    toast.success(`${row.orderNumber} delivered`)
+    toast.success(
+      row.outstanding > 0
+        ? `${row.orderNumber} delivered · ${money(row.outstanding)} recorded`
+        : `${row.orderNumber} delivered`,
+    )
     router.refresh()
   }
 
@@ -201,6 +205,15 @@ function DeliveryCard({
         </label>
         <p className="mb-1.5 text-xs text-muted-foreground">
           Ask the customer for the four digits on their order screen.
+          {row.outstanding > 0 ? (
+            <>
+              {' '}
+              <span className="font-medium text-foreground">
+                Collect {money(row.outstanding)} as you hand it over
+              </span>{' '}
+              — confirming the PIN records it.
+            </>
+          ) : null}
         </p>
         <div className="flex flex-wrap gap-2">
           <Input
@@ -218,7 +231,12 @@ function DeliveryCard({
             className="w-28 text-center text-lg tracking-[0.4em] tabular-nums"
           />
           <Button onClick={confirm} loading={busy} disabled={busy || done || pin.length < 4}>
-            <Check /> {done ? 'Delivered' : 'Confirm PIN & complete'}
+            <Check />{' '}
+            {done
+              ? 'Delivered'
+              : row.outstanding > 0
+                ? `Take ${money(row.outstanding)} & complete`
+                : 'Confirm PIN & complete'}
           </Button>
         </div>
         {error ? <p className="mt-1.5 text-xs font-medium text-destructive">{error}</p> : null}

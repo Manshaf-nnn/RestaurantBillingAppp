@@ -142,6 +142,10 @@ const SERVICE = [
   // desk is never sent the PIN, a wrong guess is counted and refused, and a
   // second tap cannot complete an order twice.
   'delivery-desk-test',
+  // An offer aimed at a customer category reaches that customer without them
+  // typing anything — the whole point of aiming it — while a public code
+  // stays a code. Pins the delivery QR, which is where it was first noticed.
+  'targeted-offer-test',
   // bank.md — internal accounts. The balance is not stored, it is the history
   // summed, so these pin that every way money can move lands there exactly
   // once: a deposit, both halves of a transfer or neither, and a customer

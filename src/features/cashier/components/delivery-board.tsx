@@ -68,14 +68,21 @@ export interface DeliveryOrderView {
  * only check that makes "delivered" mean anything.
  */
 const NEXT: Record<string, { status: string; label: string; icon: typeof Check } | undefined> = {
-  PENDING: { status: 'ACCEPTED', label: 'Accept', icon: Check },
-  ACCEPTED: { status: 'PREPARING', label: 'Send to kitchen', icon: ChefHat },
+  /*
+   * Accept sends it straight to the kitchen. ACCEPTED already means "sent to
+   * the kitchen" — the order's own event says exactly that and the tickets are
+   * routed on it — so a separate "Send to kitchen" tap was a second button for
+   * something the first one had already done. One decision, one tap: this
+   * order is good, cook it.
+   */
+  PENDING: { status: 'ACCEPTED', label: 'Accept & send to kitchen', icon: ChefHat },
+  ACCEPTED: { status: 'PREPARING', label: 'Cooking', icon: ChefHat },
   PREPARING: { status: 'READY', label: 'Ready', icon: Check },
 }
 
 const STATUS_LABEL: Record<string, string> = {
   PENDING: 'Received',
-  ACCEPTED: 'Accepted',
+  ACCEPTED: 'With the kitchen',
   PREPARING: 'Preparing',
   READY: 'Ready — with the delivery desk',
 }

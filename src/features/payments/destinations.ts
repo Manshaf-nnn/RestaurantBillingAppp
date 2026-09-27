@@ -139,6 +139,8 @@ export const DEFAULT_DESTINATIONS: PaymentDestination[] = [
   { code: 'wallet', name: 'Wallet', kind: 'WALLET' },
   { code: 'bank_transfer', name: 'Bank transfer', kind: 'BANK' },
   { code: 'other', name: 'Other', kind: 'OTHER' },
+  // The rider float — see DEFAULT_ACCOUNTS in accounts.ts.
+  { code: 'cod', name: 'Cash on delivery', kind: 'CASH' },
 ]
 
 export const DEFAULT_METHOD_DESTINATIONS: Record<string, string> = {
@@ -149,6 +151,13 @@ export const DEFAULT_METHOD_DESTINATIONS: Record<string, string> = {
   WALLET: 'wallet',
   BANK_TRANSFER: 'bank_transfer',
   OTHER: 'other',
+  /*
+   * Its own account by default, not Cash. Money a rider is carrying is not
+   * money in the drawer, and an owner who wants them pooled can point COD at
+   * Cash from Settings — the reverse, separating them afterwards, is not
+   * possible once the rows are written.
+   */
+  COD: 'cod',
 }
 
 const DEFAULT_PAYMENT_CONFIG: PaymentConfig = {
@@ -168,6 +177,7 @@ export const METHOD_LABELS: Record<string, string> = {
   WALLET: 'Wallet',
   BANK_TRANSFER: 'Bank transfer',
   OTHER: 'Other',
+  COD: 'Cash on delivery',
 }
 
 /**

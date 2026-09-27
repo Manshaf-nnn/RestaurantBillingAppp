@@ -16,6 +16,9 @@ import { getDeliveryQueue } from '../src/features/orders/queries'
 import { placeOrder } from '../src/features/orders/service'
 import { posTabsFor, POS_TAB_LABEL } from '../src/features/cashier/pos-tabs'
 import { completeDeliveryWithPin, HandoverError } from '../src/features/orders/delivery-handover'
+import { capturePayment } from '../src/features/payments/service'
+import { seedDefaultAccounts } from '../src/features/payments/accounts'
+import { accountBalances } from '../src/features/payments/accounts-ledger'
 import { PERMISSIONS } from '../src/lib/rbac'
 
 let passed = 0
@@ -281,6 +284,71 @@ async function main() {
   check('and a rider from another site is told only that there is no such order',
     elsewhere === 'NotFoundError', String(elsewhere))
 
+  /* ── Cash on delivery ──────────────────────────────────────────────────── */
+
+  console.log('\n── Cash on delivery lands in its own account ────────────')
+  await seedDefaultAccounts(prisma, shop.id)
+
+  const codOrder = await placeOrder({
+    restaurantId: shop.id, branchId: branch.id, type: 'DELIVERY', channel: 'QR',
+    deliveryLocation: place, customerName: 'Kamala', customerPhone: `07770${S.slice(-5)}`,
+    guestSessionId: `sess-${S}-cod`, items: line,
+  })
+  const codRow = await prisma.order.findFirstOrThrow({ where: { id: codOrder.id } })
+  await prisma.order.update({ where: { id: codOrder.id }, data: { status: 'READY' } })
+
+  const before = await accountBalances(prisma, shop.id)
+  const codBefore = before.find((a) => a.code === 'cod')?.balance ?? 0
+
+  /*
+   * What the desk does: the PIN closes the order, and the money is recorded
+   * in the same action. Here the two halves are called as the action calls
+   * them, so the ordering is the one that ships.
+   */
+  const handover = await completeDeliveryWithPin({
+    restaurantId: shop.id, orderId: codOrder.id, pin: codRow.deliveryPin!,
+    actorId: rider.id, actorName: rider.name, branchIds: null,
+  })
+  check('the handover reports what is still owed', handover.outstanding === codOrder.grandTotal,
+    `${handover.outstanding} vs ${codOrder.grandTotal}`)
+
+  await capturePayment({
+    restaurantId: shop.id, orderId: codOrder.id, method: 'COD',
+    amount: handover.outstanding, receivedById: rider.id,
+    clientRequestId: `cod:${codOrder.id}`,
+  })
+
+  const settled = await prisma.order.findFirstOrThrow({ where: { id: codOrder.id } })
+  check('the bill is settled once the rider records it', settled.paymentStatus === 'PAID',
+    settled.paymentStatus)
+
+  const balances = await accountBalances(prisma, shop.id)
+  const cod = balances.find((a) => a.code === 'cod')
+  check('the money is in the Cash on delivery account — the rider float',
+    (cod?.balance ?? 0) - codBefore === codOrder.grandTotal,
+    `${(cod?.balance ?? 0) - codBefore} vs ${codOrder.grandTotal}`)
+  check('and not in the cash drawer account, which the rider never touched',
+    (balances.find((a) => a.code === 'cash')?.balance ?? 0) === 0)
+
+  /*
+   * The whole reason COD gets its own account: handing the float in is an
+   * ordinary transfer, and the accounts feature already does transfers.
+   */
+  const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: codOrder.id } })
+  check('the payment is recorded as COD', payment.method === 'COD', payment.method)
+  check('stamped with the account it landed in', payment.destination === 'cod',
+    String(payment.destination))
+  check('and with who took it', payment.receivedById === rider.id)
+
+  // A retried handover must not take the money twice.
+  await capturePayment({
+    restaurantId: shop.id, orderId: codOrder.id, method: 'COD',
+    amount: handover.outstanding, receivedById: rider.id,
+    clientRequestId: `cod:${codOrder.id}`,
+  })
+  check('a retry records one payment, not two',
+    (await prisma.payment.count({ where: { orderId: codOrder.id } })) === 1)
+
   console.log('\n── Customers are kept, which is the point of the campaign ')
   check('a delivery guest becomes a customer record',
     (await prisma.customer.count({ where: { restaurantId: shop.id, phone: `07710${S.slice(-5)}` } })) === 1)
@@ -289,6 +357,8 @@ async function main() {
   check('and the ordinary group every customer starts in',
     (await prisma.customer.findFirstOrThrow({ where: { id: nimal.id } })).group === 'GENERAL')
 
+  await prisma.paymentAccountEntry.deleteMany({ where: { restaurantId: shop.id } })
+  await prisma.paymentAccount.deleteMany({ where: { restaurantId: shop.id } })
   await prisma.orderEvent.deleteMany({ where: { order: { restaurantId: shop.id } } })
   await prisma.loyaltyEntry.deleteMany({ where: { restaurantId: shop.id } })
   await prisma.foodBranch.deleteMany({ where: { restaurantId: shop.id } })

@@ -212,6 +212,15 @@ enum PaymentMethod {
   /// A method the presets do not name — recorded, never processed (§6: no
   /// gateways). The reference field says what it actually was.
   OTHER
+  /// Cash on delivery: the customer chose to pay when the food arrives.
+  ///
+  /// A method rather than a flag on the order, because the money really is
+  /// taken — at a doorstep instead of a counter — and every payment in this
+  /// system has a row and a destination account. Giving COD its own account
+  /// makes that account the RIDER FLOAT: what riders have collected and not
+  /// yet handed in. Handing it in is then an ordinary transfer from that
+  /// account to Cash, which is what the accounts feature already does.
+  COD
 }
 
 enum CashDrawerStatus {

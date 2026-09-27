@@ -134,6 +134,11 @@ export const DEFAULT_ACCOUNTS: Array<{ code: string; name: string }> = [
   { code: 'wallet', name: 'Wallet' },
   { code: 'bank_transfer', name: 'Bank transfer' },
   { code: 'other', name: 'Other' },
+  /*
+   * The rider float. What has been collected at doorsteps and not yet handed
+   * in — an owner moves it to Cash with an ordinary transfer when it is.
+   */
+  { code: 'cod', name: 'Cash on delivery' },
 ]
 
 export async function seedDefaultAccounts(

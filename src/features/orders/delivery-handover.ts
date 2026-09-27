@@ -56,6 +56,8 @@ export interface HandoverResult {
   orderId: string
   orderNumber: string
   deliveredAt: string
+  /** Still owed after the handover, so the caller knows whether to collect. */
+  outstanding: number
 }
 
 /**
@@ -94,10 +96,14 @@ export async function completeDeliveryWithPin(params: {
         branchId: string
         deliveryPin: string | null
         deliveryPinAttempts: number
+        grandTotal: number
+        tipAmount: number
+        paidTotal: number
       }>
     >`
       SELECT id, "orderNumber", type::text AS type, status::text AS status,
-             "branchId", "deliveryPin", "deliveryPinAttempts"
+             "branchId", "deliveryPin", "deliveryPinAttempts",
+             "grandTotal", "tipAmount", "paidTotal"
         FROM orders
        WHERE id = ${params.orderId} AND "restaurantId" = ${params.restaurantId}
          FOR UPDATE
@@ -206,6 +212,11 @@ export async function completeDeliveryWithPin(params: {
         orderId: done.id,
         orderNumber: done.orderNumber,
         deliveredAt: now.toISOString(),
+        /*
+         * Read under the same lock that closed the order, so the figure the
+         * caller collects against cannot have moved between the two.
+         */
+        outstanding: Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
       },
     }
   })

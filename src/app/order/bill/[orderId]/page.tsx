@@ -56,6 +56,8 @@ export default async function GuestBillPage({
         bill={{
           id: order.id,
           orderNumber: order.orderNumber,
+          // So the payment block can speak to a doorstep, not a table.
+          type: order.type,
           tableNumber: order.tableNumber ?? order.table?.number ?? null,
           customerName: order.customerName,
           customerEmail: order.customerEmail,

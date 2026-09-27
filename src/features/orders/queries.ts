@@ -457,6 +457,17 @@ export async function getCashierQueue(restaurantId: string, branchIds?: string[]
       // screen was already branch-scoped; the queue beside it was not.
       ...atBranch(branchIds),
       status: { notIn: ['CANCELLED'] },
+      /*
+       * Deliveries are not the till's work.
+       *
+       * They have their own desk — accepted there, handed over there against
+       * the customer's PIN — and nobody is standing at the counter waiting to
+       * pay for one. Leaving them here put every delivery in two queues at
+       * once and made the cashier the bottleneck for an order they will never
+       * take money for face to face. They are still ORDERS: they appear on
+       * the Orders screen, in reports and in the customer's history.
+       */
+      type: { not: 'DELIVERY' },
       // Show unpaid/partially-paid bills plus takeaway orders (so cashier
       // can keep a copy of takeaway orders even after payment until the
       // food is served/delivered).
