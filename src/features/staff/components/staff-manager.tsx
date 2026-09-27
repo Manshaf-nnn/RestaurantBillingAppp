@@ -78,6 +78,8 @@ export interface StaffMember {
  * null on save. Same reason `ALL_LOCATIONS` exists a few lines below.
  */
 const NO_CUSTOM_ROLE = '__default__'
+/** The "no built-in role picked" option on the add dialog — a custom role alone is enough. */
+const NO_ROLE = '__none__'
 
 export interface AssignableRole {
   id: string
@@ -357,8 +359,8 @@ export function StaffManager({
  * longer offered, and the server would refuse the submit. Snapping to the
  * first real location keeps the form honest and the correction invisible.
  */
-function branchForRole(role: UserRole, current: string, locations: StaffLocation[]): string {
-  if (!requiresOwnBranch(role)) return current
+function branchForRole(role: UserRole | null, current: string, locations: StaffLocation[]): string {
+  if (!role || !requiresOwnBranch(role)) return current
   if (current !== ALL_LOCATIONS) return current
   return locations[0]?.id ?? current
 }
@@ -373,8 +375,8 @@ function WorksAtField({
   value: string
   onChange: (value: string) => void
   locations: StaffLocation[]
-  /** The role being given, which decides what a blank location would MEAN. */
-  role: UserRole
+  /** The role being given, which decides what a blank location would MEAN. Null until one is chosen. */
+  role: UserRole | null
   canAssignAllLocations?: boolean
 }) {
   /*
@@ -386,14 +388,14 @@ function WorksAtField({
    * "they see every site". Offering it to those roles is offering an account
    * that will look broken on a screen in another room, hours later.
    */
-  const mustHaveOne = requiresOwnBranch(role)
+  const mustHaveOne = role !== null && requiresOwnBranch(role)
   const offerAll = canAssignAllLocations && !mustHaveOne
 
   return (
     <Field
       label="Works at"
       hint={
-        mustHaveOne
+        mustHaveOne && role
           ? `A ${ROLE_LABELS[role].toLowerCase()} works at one place — their screens show that location's orders and nothing else.`
           : canAssignAllLocations
             ? 'All locations means they see every site. Pick one to confine them to it.'
@@ -508,8 +510,12 @@ function InviteDialog({
    */
   const [staffRoleId, setStaffRoleId] = React.useState('')
   const chosenRole = customRoles?.find((role) => role.id === staffRoleId) ?? null
+  /*
+   * Both the built-in role and the custom role are optional here, but not
+   * both at once: a custom role carries its own base, so it alone is enough.
+   */
   const [form, setForm] = React.useState(() => {
-    const role = roles[0] ?? 'WAITER'
+    const role = null as UserRole | null
     return {
       name: '', email: '', phone: '',
       role,
@@ -537,19 +543,22 @@ function InviteDialog({
 
   React.useEffect(() => {
     if (open) {
-      const role = roles[0] ?? 'WAITER'
       setForm({
-        name: '', email: '', phone: '', role,
-        branchId: branchForRole(role, ALL_LOCATIONS, locations),
+        name: '', email: '', phone: '', role: null,
+        branchId: canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
         branchIds: [],
       })
       setStaffRoleId('')
       setError(null)
       setCredentials(null)
     }
-  }, [open, roles, locations])
+  }, [open, locations, canAssignAllLocations])
 
   const invite = async () => {
+    if (!form.role && !staffRoleId) {
+      setError('Choose a role or a custom role.')
+      return
+    }
     setSaving(true)
     setError(null)
     const result = await callAction(() =>
@@ -613,22 +622,24 @@ function InviteDialog({
             <Field label="Phone">
               <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </Field>
-            <Field label="Role" required>
+            <Field label="Role">
               <Select
-                value={form.role}
+                value={form.role ?? NO_ROLE}
                 disabled={chosenRole !== null}
-                onValueChange={(value) =>
+                onValueChange={(value) => {
+                  const role = value === NO_ROLE ? null : (value as UserRole)
                   setForm({
                     ...form,
-                    role: value as UserRole,
-                    branchId: branchForRole(value as UserRole, form.branchId, locations),
+                    role,
+                    branchId: branchForRole(role, form.branchId, locations),
                   })
-                }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value={NO_ROLE}>None</SelectItem>
                   {roles.map((role) => (
                     <SelectItem key={role} value={role}>
                       {ROLE_LABELS[role]}
@@ -672,7 +683,7 @@ function InviteDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_CUSTOM_ROLE}>
-                      Default for {ROLE_LABELS[form.role]}
+                      {form.role ? `Default for ${ROLE_LABELS[form.role]}` : 'None'}
                     </SelectItem>
                     {customRoles.map((role) => (
                       <SelectItem key={role.id} value={role.id}>
@@ -682,8 +693,9 @@ function InviteDialog({
                   </SelectContent>
                 </Select>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  A custom role replaces the default features for this person, and sets which
-                  built-in role they are. Manage them under Roles &amp; access.
+                  Optional. A custom role replaces the default features for this person, and sets
+                  which built-in role they are — so it can be chosen on its own. Pick a role, a
+                  custom role, or both. Manage them under Roles &amp; access.
                 </p>
               </Field>
             ) : null}

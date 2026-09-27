@@ -7,7 +7,7 @@ import { generateSignInCode, issueSignInCode, nextStaffCode } from './codes'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { requireBranch } from '@/features/branches/service'
 import { assertNoEscalation, requireRole } from '@/features/access/service'
-import { AppError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/lib/errors'
 import {
   assignableRoles,
   canManageLocation,
@@ -195,6 +195,7 @@ export async function inviteStaff(
       }
 
       const role = staffRole?.preset ?? data.role
+      if (!role) throw new ValidationError('Choose a role or a custom role')
 
       if (!assignableRoles(admin.role).includes(role)) {
         throw new ForbiddenError('You cannot assign that role')
@@ -252,7 +253,7 @@ export async function inviteStaff(
           restaurantName: restaurant.name,
           email: data.email,
           temporaryPassword,
-          role: data.role,
+          role,
           // Sign in where their session will actually live.
           origin: tenantOrigin(restaurant),
         }),
@@ -265,7 +266,7 @@ export async function inviteStaff(
         action: AUDIT_ACTIONS.STAFF_INVITED,
         entity: 'User',
         entityId: user.id,
-        after: { email: data.email, role: data.role, branchId, extraBranchIds },
+        after: { email: data.email, role, staffRoleId: staffRole?.id ?? null, branchId, extraBranchIds },
       })
 
       revalidatePath('/dashboard/staff')

@@ -56,7 +56,11 @@ export const inviteStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(80),
   email: emailSchema,
   phone: phoneSchema.optional().or(z.literal('')),
-  role: z.enum(STAFF_ROLES),
+  /**
+   * Optional: a custom role alone is enough, since it carries its own base.
+   * One of the two must be given — every account still needs a built-in role.
+   */
+  role: z.enum(STAFF_ROLES).optional().nullable(),
   branchId: branchIdField,
   branchIds: extraBranchesField,
   /**
@@ -70,6 +74,9 @@ export const inviteStaffSchema = z.object({
    * it server-side rather than trusted from the form.
    */
   staffRoleId: z.string().cuid().optional().nullable(),
+}).refine((data) => Boolean(data.role || data.staffRoleId), {
+  message: 'Choose a role or a custom role',
+  path: ['role'],
 })
 export type InviteStaffInput = z.infer<typeof inviteStaffSchema>
 
