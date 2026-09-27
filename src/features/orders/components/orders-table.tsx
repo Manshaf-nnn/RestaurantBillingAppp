@@ -26,6 +26,7 @@ import { useSocketEvent } from '@/hooks/use-socket'
 import { channelLabel } from '../channels'
 import { TakePaymentDialog, type PayableOrder } from '@/features/payments/components/take-payment-dialog'
 import type { OrderListTotals } from '../queries'
+import { billedOn, outstandingOn } from '@/features/orders/pricing'
 
 export interface OrderRow {
   id: string
@@ -47,7 +48,7 @@ export interface OrderRow {
 
 /** What a row still owes: total + tip − collected, never negative. */
 const owedOn = (order: Pick<OrderRow, 'grandTotal' | 'tipAmount' | 'paidTotal'>) =>
-  Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal)
+  outstandingOn(order)
 
 const STATUS_OPTIONS = ['ALL', 'PENDING', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED']
 const PAYMENT_OPTIONS = ['ALL', 'UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']
@@ -288,7 +289,7 @@ export function OrdersTable({
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Total</dt>
-          <dd className="font-semibold tabular-nums">{formatMoney(liveTotals.grandTotal + liveTotals.tipAmount, currency, locale)}</dd>
+          <dd className="font-semibold tabular-nums">{formatMoney(billedOn(liveTotals), currency, locale)}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Collected</dt>

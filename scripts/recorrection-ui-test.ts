@@ -39,6 +39,7 @@ import { requestApproval } from '../src/features/approvals/service'
 import { startBatch } from '../src/features/production/service'
 import { requestTransfer } from '../src/features/transfers/service'
 import { ROLE_LABELS } from '../src/lib/rbac'
+import { purgeFixture } from './purge-fixture'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
@@ -91,6 +92,40 @@ async function signIn(user: {
 const seen = async (page: Page, text: string | RegExp) =>
   page.getByText(text).first().isVisible().catch(() => false)
 
+/**
+ * The count badge on one of the approvals desk's request-type tabs.
+ *
+ * `seen(page, /Stock transfers \(1\)/)` is what this replaced, and it stopped
+ * being able to pass when the desk was rebuilt around request type: the label
+ * is now "Stock transfer" and the count is a separate badge inside the tab,
+ * not "(1)" inside the label. Reading the tab's own text keeps the assertion
+ * — this type is on this person's desk, waiting once — while letting the
+ * wording move.
+ */
+async function typeTabCount(page: Page, label: RegExp): Promise<number> {
+  const tab = page.getByRole('tab', { name: label }).first()
+  const text = await tab.innerText().catch(() => '')
+  const digits = text.replace(label, '').match(/\d+/)
+  return digits ? Number(digits[0]) : 0
+}
+
+/**
+ * The status badge on the transfer row in that status, read from the row.
+ *
+ * `seen(page, /Requested/)` looked right and could never pass. The board's
+ * status FILTER renders `<option>Requested</option>` above the table, so
+ * `getByText(/Requested/).first()` resolved to an option inside a closed
+ * `<select>` — which Playwright correctly reports as not visible — and never
+ * reached the badge in the table below. Anchoring to the row by its
+ * `data-status` reads the badge the person actually sees, and still fails if
+ * the badge is missing.
+ */
+async function rowInStatus(page: Page, status: string): Promise<string> {
+  const row = page.locator(`tr[data-status="${status}"]`).first()
+  await row.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => undefined)
+  return (await row.innerText().catch(() => '')).trim()
+}
+
 /** Poll the database until the row reads as expected, or give up. */
 async function eventually<T>(read: () => Promise<T>, want: (value: T) => boolean, ms = 10_000): Promise<T> {
   const until = Date.now() + ms
@@ -106,9 +141,14 @@ const stamp = Date.now().toString(36)
 let restaurantId: string | null = null
 
 /**
- * Teardown. The approve click writes an audit row, and audit rows are
- * append-only at the database — so when the hard delete is refused the tenant
- * is retired in place instead, the way the export test retires its staff.
+ * Teardown.
+ *
+ * The approve click writes an audit row, and audit rows are append-only at
+ * the database — which used to mean the hard delete was refused and the
+ * tenant was retired in place instead. That is how fifty-two of them came to
+ * be sitting in the development database, still active, waiting for another
+ * suite to pick one up by mistake. `purgeFixture` removes it properly, in
+ * dependency order.
  */
 async function cleanup(id: string) {
   await prisma.session.deleteMany({ where: { id: { in: minted } } })
@@ -127,13 +167,16 @@ async function cleanup(id: string) {
   await prisma.stockBatch.deleteMany({ where: { restaurantId: id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: id } })
-  try {
-    await prisma.restaurant.delete({ where: { id } })
-  } catch {
-    await prisma.user.updateMany({ where: { restaurantId: id }, data: { isActive: false, deletedAt: new Date() } })
-    await prisma.restaurant.update({ where: { id }, data: { isActive: false } })
-    console.log('  (fixture retired in place — audit rows keep it from being deleted)')
-  }
+  /*
+   * `purgeFixture`, not `restaurant.delete`.
+   *
+   * This used to try the delete and fall back to deactivating when it threw.
+   * It threw every time — the RESTRICT foreign keys make a one-statement
+   * delete impossible once a tenant has any stock or transfers — so every run
+   * left its restaurant behind. Fifty-two of them had accumulated, and
+   * `page-render-test` began picking one and failing on it.
+   */
+  await purgeFixture(id)
 }
 
 async function main() {
@@ -221,7 +264,7 @@ async function main() {
     console.log('\n── 1. The destination watches its own request ──')
     {
       await jayPage.goto(`${BASE}/dashboard/approvals`, { waitUntil: 'networkidle' })
-      check('the request Jaffna raised is on Jaffna\'s desk', await seen(jayPage, /Stock transfers \(1\)/))
+      check('the request Jaffna raised is on Jaffna\'s desk', await typeTabCount(jayPage, /Stock transfer/) === 1)
       check('told what it is waiting for', await seen(jayPage, 'Waiting for Kandy to approve'))
       check('and offered no Approve — not theirs to decide', (await jayPage.getByRole('button', { name: 'Approve', exact: true }).count()) === 0)
       check('the lines are on the row', await seen(jayPage, `${chicken.name} · 3 kg`))
@@ -247,7 +290,7 @@ async function main() {
        */
       await jayPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
       check('the row is on the destination\'s list', await seen(jayPage, 'Waiting for Kandy to approve'))
-      check('shown as requested, not yet theirs to act on', await seen(jayPage, /Requested/))
+      check('shown as requested, not yet theirs to act on', /\bRequested\b/.test(await rowInStatus(jayPage, 'REQUESTED')))
       check('and it is not claimed to be waiting on them', !(await seen(jayPage, 'Waiting on you to dispatch')))
     }
 
@@ -286,7 +329,7 @@ async function main() {
     console.log('\n── 5. The desk: details from the pending row, approve from the dialog ──')
     {
       await ownerPage.goto(`${BASE}/dashboard/approvals`, { waitUntil: 'networkidle' })
-      check('grouped under Stock transfers', await seen(ownerPage, /Stock transfers \(1\)/))
+      check('grouped under Stock transfers', await typeTabCount(ownerPage, /Stock transfer/) === 1)
       check('the row carries the number', await seen(ownerPage, /TRF-\d+/))
       check('both ends', await seen(ownerPage, /Kandy\s*→\s*Jaffna/))
       check('and the lines', await seen(ownerPage, `${chicken.name} · 3 kg`))
@@ -318,7 +361,7 @@ async function main() {
     {
       await ownerPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
       check('the owner (at both ends) is told it is theirs to dispatch', await seen(ownerPage, 'Waiting on you to dispatch'))
-      check('and the status reads Approved', await seen(ownerPage, /Approved/))
+      check('and the status reads Approved', /\bApproved\b/.test(await rowInStatus(ownerPage, 'APPROVED')))
 
       await jayPage.goto(`${BASE}/dashboard/transfers`, { waitUntil: 'networkidle' })
       check('Jaffna is told it is not theirs yet', await seen(jayPage, /waiting for Kandy to dispatch/))
@@ -453,6 +496,10 @@ async function main() {
       check('the order in progress is listed under the tab', await seen(ownerPage, /1 production order in progress/))
       await ownerPage.getByRole('tab', { name: /Prepared/ }).click()
       const row = ownerPage.locator('tr[data-state="in-progress"]')
+      // The tab panel is hidden for a beat after the click, and `innerText`
+      // reports nothing for a hidden element — so this read the empty string
+      // and failed on a row that was about to be, and then was, correct.
+      await row.first().waitFor({ state: 'visible', timeout: 15_000 }).catch(() => undefined)
       check('the item is a row in the in-progress state', (await row.count()) === 1 && (await row.first().innerText().catch(() => '')).includes(mayo))
       // DELIBERATE behaviour change 2026-09 (pro.b.md §4): the row opens the
       // order's own page, where the ingredients are issued and the batch completed.

@@ -318,7 +318,18 @@ async function main() {
 
   console.log('\n── 11. The previous visit is never the current one ─────────')
 
-  const returning = await prisma.customer.findFirstOrThrow({ where: { phone: '0772222222' } })
+  /*
+   * Scoped to this run's own restaurant.
+   *
+   * Unscoped, this matched whichever tenant in the database happened to hold
+   * that phone number first — and another suite's leftover fixture used the
+   * same one, so `theirs` came back undefined and two assertions failed on a
+   * customer that was perfectly correct. The same unscoped-lookup mistake the
+   * product is linted against, made in a test.
+   */
+  const returning = await prisma.customer.findFirstOrThrow({
+    where: { restaurantId: shop.id, phone: '0772222222' },
+  })
   const hist = await getLiveBoard({ restaurantId: shop.id, branchId: branch.id })
   const theirs = hist.history.find((h) => h.customerId === returning.id)
   // They are sitting there right now with two open orders and no completed

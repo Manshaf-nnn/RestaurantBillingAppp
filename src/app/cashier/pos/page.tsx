@@ -31,6 +31,7 @@ import { PERMISSIONS, ROLE_LABELS, can } from '@/lib/rbac'
 import { requirePageAnyPermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
+import { outstandingOn } from '@/features/orders/pricing'
 
 export const dynamic = 'force-dynamic'
 
@@ -192,7 +193,7 @@ export default async function PosPage({
               placeNote: order.deliveryLocation?.note ?? null,
               source: order.qrExperience?.name ?? null,
               grandTotal: order.grandTotal,
-              outstanding: Math.max(0, order.grandTotal + order.tipAmount - paid),
+              outstanding: outstandingOn({ ...order, paidTotal: paid }),
               notes: order.notes,
               items: order.items.map((item) => ({
                 id: item.id,

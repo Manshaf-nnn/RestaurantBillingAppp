@@ -12,6 +12,7 @@
  *     moved from the number to the session.
  */
 import { prisma } from '../src/server/db/prisma'
+import { purgeFixture } from './purge-fixture'
 import { getDeliveryQueue } from '../src/features/orders/queries'
 import { placeOrder } from '../src/features/orders/service'
 import { posTabsFor, POS_TAB_LABEL } from '../src/features/cashier/pos-tabs'
@@ -29,6 +30,17 @@ function check(what: string, ok: boolean, detail = '') {
 }
 
 const S = Date.now().toString(36)
+/**
+ * Every tenant this suite makes, so the teardown cannot miss one.
+ *
+ * Filled as they are created and purged in a `finally`, because the cleanup
+ * that only runs when every assertion passes is the cleanup that leaves
+ * abandoned tenants behind exactly when something has already gone wrong.
+ * Nine of mine ended up in the database that way and broke another suite,
+ * which looks a customer up by phone without scoping it to a restaurant.
+ */
+const fixtures: string[] = []
+
 
 async function main() {
   const shop = await prisma.restaurant.create({
@@ -38,6 +50,7 @@ async function main() {
       loyaltyEnabled: true, loyaltyPointValue: 100, loyaltyEarnRateX100: 100,
     },
   })
+  fixtures.push(shop.id)
   const branch = await prisma.branch.create({
     data: { restaurantId: shop.id, name: 'Main', code: 'MAIN', isDefault: true },
   })
@@ -357,28 +370,15 @@ async function main() {
   check('and the ordinary group every customer starts in',
     (await prisma.customer.findFirstOrThrow({ where: { id: nimal.id } })).group === 'GENERAL')
 
-  await prisma.paymentAccountEntry.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.paymentAccount.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.orderEvent.deleteMany({ where: { order: { restaurantId: shop.id } } })
-  await prisma.loyaltyEntry.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.foodBranch.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.payment.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.orderItem.deleteMany({ where: { order: { restaurantId: shop.id } } })
-  await prisma.order.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.customer.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.deliveryLocation.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.food.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.category.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.tableSession.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.user.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.restaurantTable.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.branch.deleteMany({ where: { restaurantId: shop.id } })
-  await prisma.restaurant.delete({ where: { id: shop.id } })
 
   console.log(`\n═══ ${passed} passed, ${failed} failed ═══\n`)
   if (failed > 0) process.exitCode = 1
 }
 
+
 main()
   .catch((e) => { console.error(e); process.exitCode = 1 })
-  .finally(() => prisma.$disconnect())
+  .finally(async () => {
+    for (const id of fixtures) await purgeFixture(id).catch(() => 0)
+    await prisma.$disconnect()
+  })

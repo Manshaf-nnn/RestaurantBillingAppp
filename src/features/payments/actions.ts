@@ -25,6 +25,7 @@ import {
 } from './schema'
 import { needsApproval, requestApproval } from '@/features/approvals/service'
 import { ensureInvoice, capturePayment, createPaymentIntent, refundPayment } from './service'
+import { outstandingOn } from '@/features/orders/pricing'
 
 // ── guest ────────────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ export async function declareGuestPayment(input: unknown): Promise<ActionResult<
             orderId: order.id,
             method: 'BANK_TRANSFER',
             status: 'UNPAID',
-            amount: Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
+            amount: outstandingOn(order),
             reference: data.reference || 'Guest reported payment',
           },
         })
@@ -109,7 +110,7 @@ export async function declareGuestPayment(input: unknown): Promise<ActionResult<
         branchId: order.branchId,
         type: 'PAYMENT_RECEIVED',
         title: `Table ${order.table?.number ?? '—'} says they have paid`,
-        body: `${order.orderNumber} · ${formatMoney(order.grandTotal + order.tipAmount - order.paidTotal, restaurant.currency)} — please verify`,
+        body: `${order.orderNumber} · ${formatMoney(outstandingOn(order), restaurant.currency)} — please verify`,
         audience: 'CASHIER',
         data: { orderId: order.id, orderNumber: order.orderNumber, needsVerification: true },
       })

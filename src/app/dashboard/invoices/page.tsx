@@ -18,6 +18,7 @@ import { can, PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { billedOn, outstandingOn } from '@/features/orders/pricing'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Invoices' }
@@ -186,10 +187,7 @@ export default async function InvoicesPage({
               </thead>
               <tbody className="divide-y">
                 {invoices.map((invoice) => {
-                  const owed = Math.max(
-                    0,
-                    invoice.order.grandTotal + invoice.order.tipAmount - invoice.order.paidTotal,
-                  )
+                  const owed = outstandingOn(invoice.order)
                   return (
                     <tr key={invoice.id}>
                       <td className="whitespace-nowrap py-2.5 pr-3 font-medium tabular-nums">
@@ -208,7 +206,7 @@ export default async function InvoicesPage({
                         {formatDate(invoice.issuedAt, { timeZone: restaurant.timezone })}
                       </td>
                       <td className="py-2.5 pr-3 text-right tabular-nums">
-                        {money(invoice.order.grandTotal + invoice.order.tipAmount)}
+                        {money(billedOn(invoice.order))}
                       </td>
                       <td className="py-2.5 pr-3 text-right">
                         {owed > 0 ? (

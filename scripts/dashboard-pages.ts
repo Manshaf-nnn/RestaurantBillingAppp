@@ -1,0 +1,103 @@
+/**
+ * Every dashboard page an owner can open — the one list, in one place.
+ *
+ * Two suites sweep it and they must sweep the SAME pages, or a page added
+ * for one is silently untested by the other. `page-render-test` fetches each
+ * one and proves the server rendered it; `browser-console-test` opens each one
+ * in a browser and proves it still works once its JavaScript runs. A page
+ * added here is covered by both.
+ */
+export const PAGES = [
+  '/dashboard/live',
+  '/dashboard',
+  '/dashboard/insights',
+  '/dashboard/insights/menu',
+  '/dashboard/insights/inventory',
+  '/dashboard/insights/waste',
+  '/dashboard/help',
+  '/dashboard/tasks',
+  '/dashboard/reports',
+  '/dashboard/reports/sales',
+  '/dashboard/reports/profit',
+  '/dashboard/reports/inventory',
+  '/dashboard/reports/purchasing',
+  '/dashboard/reports/variance',
+  '/dashboard/reports/reconciliation',
+  '/dashboard/customers',
+  '/dashboard/customers/analytics',
+  '/dashboard/locations',
+  '/dashboard/transfers',
+  '/dashboard/transfers/report',
+  '/dashboard/transfers/new',
+  '/dashboard/production',
+  '/dashboard/inventory',
+  '/dashboard/inventory/wastage',
+  '/dashboard/inventory/counts',
+  '/dashboard/inventory/expiry',
+  '/dashboard/inventory/setup',
+  '/dashboard/purchases',
+  '/dashboard/purchases/receive',
+  '/dashboard/suppliers',
+  '/dashboard/recipes',
+  '/dashboard/staff',
+  '/dashboard/roles',
+  '/dashboard/staff/codes',
+  '/dashboard/menu',
+  '/dashboard/orders',
+  '/dashboard/invoices',
+  '/dashboard/tables',
+  '/dashboard/settings',
+  '/dashboard/loyalty',
+  '/dashboard/coupons',
+  '/dashboard/approvals',
+  '/dashboard/audit-logs',
+  '/dashboard/analytics',
+  '/dashboard/feedback',
+  '/dashboard/reviews',
+  '/dashboard/reservations',
+  '/dashboard/qr',
+  '/dashboard/qr/experiences',
+  '/dashboard/handover',
+  '/dashboard/shifts',
+  '/dashboard/shifts?tab=templates',
+  '/dashboard/shifts?tab=handovers',
+  '/dashboard/cash-drawer',
+  '/dashboard/petty-cash',
+  '/dashboard/links',
+  '/dashboard/reports/cash-drawer',
+  '/dashboard/reports/petty-cash',
+  '/dashboard/payment-details',
+
+  /*
+   * Added by the 2026-09 audit. These were reachable from the sidebar and from
+   * each other but were in neither sweep, so nothing had ever loaded them:
+   * the whole accounting module, the daily close, the inventory ledger and
+   * adjustments, and the four inventory drill-downs. A page that no check
+   * opens is a page whose first reader is a customer.
+   */
+  '/dashboard/accounting',
+  '/dashboard/accounting/approvals',
+  '/dashboard/accounting/close',
+  '/dashboard/accounting/expenses',
+  '/dashboard/accounting/ledger',
+  '/dashboard/accounting/payables',
+  '/dashboard/accounting/payments',
+  '/dashboard/accounting/reconciliation',
+  '/dashboard/accounting/reports',
+  '/dashboard/accounting/reports/variance',
+  '/dashboard/accounting/tools',
+  '/dashboard/categories',
+  '/dashboard/inventory/adjustments',
+  '/dashboard/inventory/ledger',
+  '/dashboard/kitchen-stations',
+  '/dashboard/menu/import',
+  '/dashboard/online-payments',
+  '/dashboard/purchases/new',
+  '/dashboard/reports/daily-close',
+  '/dashboard/reports/inventory/categories',
+  '/dashboard/reports/inventory/items',
+  '/dashboard/reports/inventory/low-stock',
+  '/dashboard/reports/inventory/movements',
+  '/dashboard/settings/guest',
+  '/dashboard/settings/profile',
+]

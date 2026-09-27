@@ -1014,7 +1014,7 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
           <p className="-mt-1 text-xs text-muted-foreground">
             This price applies to this lot only. It waits behind the {item?.quantity}{' '}
             {item?.unit.toLowerCase()} you already have and takes over once that runs out. For a
-            supplier delivery, <a className="underline" href="/dashboard/purchases">Purchases</a> records
+            supplier delivery, <Link className="underline" href="/dashboard/purchases">Purchases</Link> records
             the invoice and supplier too.
           </p>
         )}

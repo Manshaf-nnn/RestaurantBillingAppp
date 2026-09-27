@@ -28,7 +28,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/primitives'
 import { PaymentStatusBadge } from '@/components/ui/status'
 import { EVENTS } from '@/lib/realtime/events'
-import { derivePaymentStatus } from '@/features/orders/pricing'
+import { derivePaymentStatus, outstandingOn } from '@/features/orders/pricing'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { useOrderRoom, useSocketEvent } from '@/hooks/use-socket'
@@ -122,7 +122,7 @@ export function GuestBill({
   const [feedbackSubmitted, setFeedbackSubmitted] = React.useState(false)
   const [feedbackDismissed, setFeedbackDismissed] = React.useState(false)
 
-  const due = Math.max(0, bill.grandTotal + bill.tipAmount - bill.paidTotal)
+  const due = outstandingOn(bill)
   const settled = bill.paymentStatus === 'PAID' || due === 0
 
   React.useEffect(() => {

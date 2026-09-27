@@ -238,7 +238,7 @@ async function main() {
     const anon = await callAction(
       '/dashboard/locations',
       createId,
-      [{ name: 'nope', code: 'NOPE', type: 'BRANCH', address: '', phone: '' }],
+      [{ name: 'nope', code: `NOPE${stamp}`, type: 'BRANCH', address: '', phone: '' }],
       '',
     )
     check(
@@ -246,7 +246,14 @@ async function main() {
       anon.status !== 200 || !anon.body.includes('"ok":true'),
       `HTTP ${anon.status}`,
     )
-    const leaked = await prisma.branch.findFirst({ where: { code: 'NOPE' } })
+    /*
+     * Searched across every tenant on purpose: the request carried no
+     * session, so if it HAD created something there is no telling whose it
+     * would be, and narrowing the search to one restaurant could miss it.
+     * The code carries this run's stamp instead, which keeps the search
+     * global while making a collision with real data impossible.
+     */
+    const leaked = await prisma.branch.findFirst({ where: { code: `NOPE${stamp}` } })
     check('and nothing was written', !leaked)
     if (leaked) await prisma.branch.delete({ where: { id: leaked.id } }).catch(() => {})
   }

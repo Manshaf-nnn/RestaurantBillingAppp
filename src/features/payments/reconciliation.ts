@@ -2,6 +2,7 @@ import 'server-only'
 
 import type { DateRange } from '@/features/reports/range'
 import { prisma } from '@/server/db/prisma'
+import { billedOn } from '@/features/orders/pricing'
 
 /**
  * Payment reconciliation (acCal.md §5): every bill in the period, classified
@@ -97,7 +98,7 @@ export async function getPaymentReconciliation(params: {
   const problems: PaymentReconRow[] = []
 
   for (const order of scanned) {
-    const billed = order.grandTotal + order.tipAmount
+    const billed = billedOn(order)
     const received = order.payments.reduce((sum, row) => sum + row.amount, 0)
     const returned = order.refunds.reduce((sum, row) => sum + row.amount, 0)
     const net = received - returned

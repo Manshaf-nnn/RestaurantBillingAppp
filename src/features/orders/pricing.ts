@@ -293,17 +293,40 @@ export function computeTotals(input: TotalsInput): OrderTotals {
 }
 
 /**
+ * What the guest owes in total: the charge plus any tip promised.
+ *
+ * `grandTotal` is what the restaurant earns and is what every revenue figure
+ * reads; the tip is the staff's money passing through. The sum of the two is
+ * what the guest actually hands over, and it is a different question from
+ * either part — so it gets its own name rather than being written out at each
+ * of the eight screens that needed it.
+ */
+export function billedOn(order: { grandTotal: number; tipAmount: number }): number {
+  return order.grandTotal + order.tipAmount
+}
+
+/**
  * What is left to hand over on a bill: the charge plus any tip already
  * promised, less what has been paid. The ONE definition — every till screen,
  * intent and settlement check reads this, so "paid in full" cannot mean
  * different things on different screens.
+ *
+ * ── The clamp is part of the definition ─────────────────────────────────────
+ *
+ * Nine screens wrote this sum out by hand and three of them left the
+ * `Math.max(0, …)` off, so an overpaid bill showed a NEGATIVE amount due.
+ * `accounting/integrity.ts` names overpayment as a real historical class —
+ * every write path refuses it now, but rows predating that guard exist — so
+ * the clamp is not defensive padding, it is what makes the figure mean
+ * "outstanding" rather than "balance". `no-hand-rolled-money.ts` keeps the
+ * arithmetic here.
  */
 export function outstandingOn(order: {
   grandTotal: number
   tipAmount: number
   paidTotal: number
 }): number {
-  return Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal)
+  return Math.max(0, billedOn(order) - order.paidTotal)
 }
 
 /**

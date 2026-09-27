@@ -11,6 +11,34 @@ import { seedDefaultAccounts } from '../src/features/payments/accounts'
 const S = Date.now().toString(36)
 const shops: string[] = []
 
+/**
+ * How many sequential scans each table has taken, and how many rows they read.
+ *
+ * Timings say a query is slow. They do not say why, and at development
+ * volumes a full scan of a small table is fast — so a plan that will not
+ * survive production looks perfectly healthy. Postgres counts scans per
+ * table, so the difference across a workload says which tables were read end
+ * to end and how many rows that cost, whatever the clock said.
+ *
+ * This is measurement rather than inspection: no query shapes are written
+ * down here, so nothing drifts when a report is rewritten. If a loader starts
+ * scanning `orders`, this notices without being told the loader exists.
+ */
+async function scanCounters(): Promise<Map<string, { seq: number; rows: number; idx: number }>> {
+  const rows = await prisma.$queryRaw<
+    Array<{ relname: string; seq_scan: bigint; seq_tup_read: bigint; idx_scan: bigint | null }>
+  >`
+    SELECT relname, seq_scan, seq_tup_read, idx_scan
+      FROM pg_stat_user_tables
+  `
+  return new Map(
+    rows.map((row) => [
+      row.relname,
+      { seq: Number(row.seq_scan), rows: Number(row.seq_tup_read), idx: Number(row.idx_scan ?? 0) },
+    ]),
+  )
+}
+
 async function timed<T>(label: string, fn: () => Promise<T>): Promise<number> {
   const t = Date.now()
   await fn()
@@ -171,6 +199,8 @@ async function main() {
   const month = resolveRange({ preset: 'THIS_MONTH' })
   const wide = resolveRange({ preset: 'LAST_30' })
 
+  const scansBefore = await scanCounters()
+
   const timings: number[] = []
   timings.push(await timed('dashboard stats', () => getDashboardStats({ restaurantId: shop.id, range: resolveRange({ preset: 'TODAY' }) })))
   timings.push(await timed('sales report — this month', () => getSalesReport({ restaurantId: shop.id, range: month })))
@@ -217,6 +247,45 @@ async function main() {
 
   const slow = timings.filter((t) => t > 1500).length
   console.log(`\n  slowest ${Math.max(...timings)}ms · ${slow} over 1.5s`)
+
+  /*
+   * Which tables that workload read end to end.
+   *
+   * A sequential scan is not automatically wrong — Postgres rightly prefers
+   * one over an index for a small table, and reading 40 rows of `branches` is
+   * cheaper than descending a btree. What matters is rows read PER scan on a
+   * table that grows: that number is what multiplies as the restaurant trades.
+   */
+  console.log('\n── Sequential scans during that workload ────────────────')
+  const scansAfter = await scanCounters()
+  const scanned: Array<{ table: string; scans: number; rows: number; perScan: number }> = []
+  for (const [table, after] of scansAfter) {
+    const before = scansBefore.get(table) ?? { seq: 0, rows: 0, idx: 0 }
+    const scans = after.seq - before.seq
+    const rows = after.rows - before.rows
+    if (scans > 0 && rows > 0) scanned.push({ table, scans, rows, perScan: Math.round(rows / scans) })
+  }
+  scanned.sort((a, b) => b.perScan - a.perScan)
+
+  if (scanned.length === 0) {
+    console.log('  ✓ none — every query used an index')
+  } else {
+    for (const row of scanned.slice(0, 12)) {
+      const flag = row.perScan > 10_000 ? '  ⚠' : row.perScan > 1_000 ? '  ·' : '  ✓'
+      console.log(
+        `${flag} ${row.table.padEnd(30)} ${String(row.scans).padStart(4)} scan(s), ` +
+        `${String(row.perScan).padStart(8)} rows each`,
+      )
+    }
+    const heavy = scanned.filter((row) => row.perScan > 10_000)
+    if (heavy.length > 0) {
+      console.log(
+        `\n  ⚠ ${heavy.length} table(s) read more than 10,000 rows per scan: ` +
+        `${heavy.map((row) => row.table).join(', ')}`,
+      )
+      console.log('    At this dataset that is survivable. It is the number that grows.')
+    }
+  }
 
   console.log('\n── Cleanup ──────────────────────────────────────────────')
   await prisma.payment.deleteMany({ where: { restaurantId: shop.id } })

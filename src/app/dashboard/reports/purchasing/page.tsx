@@ -6,7 +6,7 @@ import { ReportFilters } from '@/features/reports/components/report-filters'
 import { ReportTable } from '@/features/reports/components/report-table'
 import { DrillDown, DrillTable, Pager } from '@/features/reports/components/drill-down'
 import { resolveRange } from '@/features/reports/range'
-import { listAwaitingDelivery } from '@/features/purchasing/queries'
+import { listAwaitingDelivery, listPriceMoves } from '@/features/purchasing/queries'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { getPurchasingReport } from '@/features/purchasing/report'
 import { getPurchasingDrill } from '@/features/purchasing/report-drill'
@@ -18,7 +18,6 @@ import { formatDate } from '@/lib/datetime'
 import { PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
-import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { cn } from '@/lib/utils'
 
@@ -125,18 +124,11 @@ export default async function PurchasingReportPage({
       ? getReorderSuggestions({ restaurantId: user.restaurantId, branchId: chosen })
       : Promise.resolve([]),
     view === 'overview'
-      ? prisma.purchasePriceHistory.findMany({
-          where: {
-            restaurantId: user.restaurantId,
-            recordedAt: { gte: range.from, lte: range.to },
-            // Price history reaches a branch only through its purchase.
-            ...(chosen ? { purchase: { branchId: chosen } } : {}),
-          },
-          include: {
-            item: { select: { name: true, unit: true } },
-            supplier: { select: { name: true } },
-          },
-          orderBy: { recordedAt: 'asc' },
+      ? listPriceMoves({
+          restaurantId: user.restaurantId,
+          from: range.from,
+          to: range.to,
+          branchId: chosen,
         })
       : Promise.resolve([]),
   ])

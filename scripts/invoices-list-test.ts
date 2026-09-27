@@ -22,6 +22,7 @@ import { prisma } from '../src/server/db/prisma'
 import { placeOrder } from '../src/features/orders/service'
 import { capturePayment, ensureInvoice } from '../src/features/payments/service'
 import { listInvoices } from '../src/features/payments/queries'
+import { PAGES } from './dashboard-pages'
 
 let passed = 0
 let failed = 0
@@ -174,8 +175,14 @@ async function main() {
     // control as the orders list, presets plus a custom number, no 'All'.
     const filters = readFileSync('src/features/payments/components/invoice-filters.tsx', 'utf8')
     check('rows per page is the shared, editable control', filters.includes('<RowsPerPage') && !filters.includes('All rows'))
-    const suite = readFileSync('scripts/page-render-test.ts', 'utf8')
-    check('and is rendered by the page suite', suite.includes("'/dashboard/invoices'"))
+    /*
+     * Imported rather than grepped out of the suite's source. This read
+     * `scripts/page-render-test.ts` for the literal string, which meant the
+     * check broke the moment the list moved into its own module — while the
+     * page was still swept, exactly as intended. Asserting against the array
+     * says what it means and survives the next move.
+     */
+    check('and is rendered by the page suite', PAGES.includes('/dashboard/invoices'))
   }
 }
 

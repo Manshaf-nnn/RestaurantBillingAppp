@@ -1,4 +1,5 @@
 import type { LiveBoardPolicy } from './policy'
+import { outstandingOn } from '@/features/orders/pricing'
 
 /**
  * Everything the live board works out, as pure functions.
@@ -330,7 +331,7 @@ export function foldOrdersToTables(params: {
         served: row.served,
         remaining: row.remaining,
         cancelled: row.cancelled,
-        outstanding: Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal),
+        outstanding: outstandingOn(row),
         paymentStatus: row.paymentStatus,
         customer: null,
         walkInName: row.customerName,
@@ -348,7 +349,7 @@ export function foldOrdersToTables(params: {
       existing.served += row.served
       existing.remaining += row.remaining
       existing.cancelled += row.cancelled
-      existing.outstanding += Math.max(0, row.grandTotal + row.tipAmount - row.paidTotal)
+      existing.outstanding += outstandingOn(row)
       // A party is only fully paid when every one of its bills is.
       if (row.paymentStatus !== 'PAID') existing.paymentStatus = row.paymentStatus
       // The freshest kitchen milestone across the party's tickets.

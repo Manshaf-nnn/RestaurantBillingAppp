@@ -2,6 +2,7 @@ import 'server-only'
 
 import { customersAtBranch } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
+import { outstandingOn } from '@/features/orders/pricing'
 
 /**
  * Customer analytics.
@@ -187,7 +188,7 @@ export async function getCustomerProfile(params: {
     }),
   ])
   const outstanding = outstandingAgg.reduce(
-    (sum, order) => sum + Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
+    (sum, order) => sum + outstandingOn(order),
     0,
   )
 

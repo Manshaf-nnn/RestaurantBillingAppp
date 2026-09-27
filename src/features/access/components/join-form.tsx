@@ -92,7 +92,7 @@ export function JoinForm({
           </p>
           <p className="mt-1.5">
             This link is shared by everybody on this role. Use your own email and code — what you
-            do is recorded under your name, not the link's.
+            do is recorded under your name, not the link&apos;s.
           </p>
         </div>
       ) : null}

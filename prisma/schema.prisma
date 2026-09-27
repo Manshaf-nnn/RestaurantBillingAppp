@@ -155,6 +155,22 @@ enum PrintJobKind {
   KITCHEN
 }
 
+/// What a print ATTEMPT ended as — not what the paper did.
+///
+/// Printing in TableFlow is browser-delegated: the app renders a document in
+/// a hidden iframe and hands it to the OS print pipeline (see
+/// `features/printing/print.ts`). Nothing downstream reports back, so the
+/// application genuinely cannot know whether a receipt came out, whether the
+/// printer was online, or whether it had paper.
+///
+/// `PRINTED` therefore means "the browser accepted the document", and
+/// `FAILED` means "it did not". Neither is a statement about physical paper,
+/// and no report should present them as one. `PrintJob.attempts` and the
+/// reprint list are what a cashier uses when the paper did not appear.
+///
+/// A true Queued → Printing → Printed state machine would need a print agent
+/// running beside the hardware to report back; that is infrastructure this
+/// system does not have, not a field that is missing here.
 enum PrintJobStatus {
   PRINTED
   FAILED
@@ -2253,8 +2269,13 @@ model Refund {
   destination String?
   reason      String
 
+  /*
+   * RESTRICT, not SetNull — refunds are append-only too, so SetNull was an
+   * UPDATE the trigger refused. Who handed the money back is the one fact a
+   * refund most needs to keep, so refusing the delete is the right answer.
+   */
   refundedById String?
-  refundedBy   User?   @relation("RefundIssuedBy", fields: [refundedById], references: [id], onDelete: SetNull)
+  refundedBy   User?   @relation("RefundIssuedBy", fields: [refundedById], references: [id], onDelete: Restrict)
 
   /// Retry safety for money going out — the same reasoning as
   /// `Payment.clientRequestId`, and it matters more here, because the failure
@@ -3332,8 +3353,21 @@ model AuditLog {
   id           String      @id @default(cuid())
   restaurantId String?
   restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /*
+   * RESTRICT, not SetNull.
+   *
+   * This table is append-only, enforced by a BEFORE UPDATE trigger, and
+   * `ON DELETE SET NULL` is an UPDATE issued on the parent's behalf — so the
+   * trigger refused it and deleting any audited user failed on an error about
+   * diaries. The rule could never be satisfied. RESTRICT says the same thing
+   * honestly: the trail keeps its actor, and a user who has acted cannot be
+   * removed until their audit rows are dealt with deliberately, which is what
+   * the tenant purge does in dependency order.
+   *
+   * See 20261008090000_audit_keeps_its_actor.
+   */
   userId       String?
-  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?       @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   actorName String?
   action    String
@@ -3347,7 +3381,9 @@ model AuditLog {
   userAgent String?
 
   createdAt DateTime @default(now())
-  branch    Branch?  @relation(fields: [branchId], references: [id])
+  /* RESTRICT for the same reason as `user` above: closing a branch must not
+   * silently rewrite the history of what happened there. */
+  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: Restrict)
   branchId  String?
 
   @@index([restaurantId, createdAt])

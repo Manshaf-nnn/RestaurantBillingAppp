@@ -23,7 +23,8 @@
     "setup": "node scripts/guard-local-db.mjs && prisma generate && prisma db push && npm run db:seed",
     "setup:prod": "node scripts/guard-local-db.mjs && prisma generate && prisma db push && npm run db:seed:prod",
     "netlify:build": "prisma generate && npm run db:deploy:safe && npm run db:seed:prod && next build",
-    "verify": "tsx --tsconfig tsconfig.test.json scripts/verify-all.ts"
+    "verify": "tsx --tsconfig tsconfig.test.json scripts/verify-all.ts",
+    "release": "tsx --tsconfig tsconfig.test.json scripts/release-gate.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

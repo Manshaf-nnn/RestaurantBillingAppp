@@ -3,6 +3,7 @@ import 'server-only'
 import type { DateRange } from '@/features/reports/range'
 import { prisma } from '@/server/db/prisma'
 import { accountForMethod, accountName, type AccountCode } from './accounts'
+import { billedOn } from '@/features/orders/pricing'
 
 /**
  * The derived journal (acCal.md §9).
@@ -362,7 +363,7 @@ export async function buildJournal(params: {
       narrative: `Bill ${order.orderNumber}`,
       href: `/dashboard/orders/${order.id}`,
       lines: [
-        { account: '1100', debit: order.grandTotal + order.tipAmount },
+        { account: '1100', debit: billedOn(order) },
         { account: '4100', debit: discounts },
         /*
          * Revenue is what the guest paid for the food, without the tax. On a

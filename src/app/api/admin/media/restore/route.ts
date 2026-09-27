@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 
 import { requireSuperAdmin } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { toAppError } from '@/lib/errors'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -176,10 +177,21 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ...summary, results })
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
-    )
+    /*
+     * Through `toAppError`, like every other route handler here.
+     *
+     * This used to answer 500 with the raw message for anything that threw,
+     * which got two things wrong at once. `requireSuperAdmin()` throws an
+     * AppError carrying 401, so an ordinary unauthenticated POST — which
+     * anybody can send — was reported as a server fault rather than a refusal,
+     * and it counted as a crash in `error_logs` alongside real ones. And the
+     * message went back verbatim, which is exactly what `toAppError` exists to
+     * prevent: in production it substitutes a neutral sentence rather than
+     * handing an anonymous caller whatever a Prisma or filesystem error
+     * happened to say.
+     */
+    const app = toAppError(error)
+    return NextResponse.json({ error: app.message, code: app.code }, { status: app.status })
   }
 }
 

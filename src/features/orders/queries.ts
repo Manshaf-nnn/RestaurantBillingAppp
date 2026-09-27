@@ -8,6 +8,7 @@ import { tableStatesFor } from '@/features/floor/table-state-server'
 import { getGuestSessionId } from '@/server/auth/session'
 import { GUEST_CHANNELS } from './channels'
 import type { SelectedOption } from './pricing'
+import { outstandingOn } from './pricing'
 
 const ORDER_DETAIL_INCLUDE = {
   /*
@@ -430,7 +431,7 @@ export async function listOrders(restaurantId: string, filter: OrderListFilter) 
     grandTotal,
     tipAmount,
     paidTotal,
-    outstanding: Math.max(0, grandTotal + tipAmount - paidTotal),
+    outstanding: outstandingOn({ grandTotal, tipAmount, paidTotal }),
   }
 
   return {

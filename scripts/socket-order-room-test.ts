@@ -277,6 +277,24 @@ async function main() {
 
   await prisma.session.deleteMany({ where: { user: { restaurantId: { in: [mine.id, theirs.id] } } } })
   await prisma.order.deleteMany({ where: { restaurantId: { in: [mine.id, theirs.id] } } })
+  /*
+   * The audit rows have to go before the users do.
+   *
+   * `AuditLog.user` is `onDelete: SetNull`, and SetNull is an UPDATE — which
+   * the `audit_logs_append_only` trigger refuses, by design. So deleting a
+   * user who has ever been audited fails outright, and this cleanup used to
+   * abort here and leave its fixtures behind. DELETE on the table is allowed
+   * (the trigger is BEFORE UPDATE only, so that removing a tenant still
+   * works), so clearing the logs first lets the users go.
+   */
+  await prisma.auditLog.deleteMany({
+    where: {
+      OR: [
+        { restaurantId: { in: [mine.id, theirs.id] } },
+        { user: { restaurantId: { in: [mine.id, theirs.id] } } },
+      ],
+    },
+  })
   await prisma.user.deleteMany({ where: { restaurantId: { in: [mine.id, theirs.id] } } })
   await prisma.branch.deleteMany({ where: { restaurantId: { in: [mine.id, theirs.id] } } })
   await prisma.restaurant.deleteMany({ where: { id: { in: [mine.id, theirs.id] } } })

@@ -4,7 +4,7 @@ import QRCode from 'qrcode'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { assertPeriodOpen } from '@/features/accounting/service'
-import { outstandingOn, derivePaymentStatus } from '@/features/orders/pricing'
+import { billedOn, derivePaymentStatus, outstandingOn } from '@/features/orders/pricing'
 import { nextCounterValue, yearIn } from '@/server/db/counters'
 import { formatMoney, minorUnitFactor } from '@/lib/money'
 import { prisma, guardLocks, type TxClient } from '@/server/db/prisma'
@@ -294,7 +294,7 @@ export async function capturePayment(params: {
      * the charge plus every tip promised so far.
      */
     const tip = Math.max(0, params.tipAmount ?? 0)
-    const owed = order.grandTotal + order.tipAmount + tip
+    const owed = billedOn(order) + tip
     const due = Math.max(0, owed - order.paidTotal)
 
     /*

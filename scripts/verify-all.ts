@@ -22,8 +22,46 @@
  *   BASE_URL=http://localhost:3210 npx tsx --tsconfig tsconfig.test.json scripts/verify-all.ts
  */
 import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 
 const BASE_URL = process.env.BASE_URL
+
+/**
+ * What a suite needs before it can run at all.
+ *
+ * ── Why this is written down ────────────────────────────────────────────────
+ *
+ * Four suites self-skip rather than fail when their dependency is missing,
+ * which is the right behaviour: a developer without Playwright's browser
+ * installed should not see a red run. The cost is that a SKIP and a PASS look
+ * almost the same in a summary line, and the gate could not tell the
+ * difference between "you do not have Chromium" and "Chromium was here a
+ * minute ago and the suite skipped anyway".
+ *
+ * That distinction is not academic. A `next start` was killed by memory
+ * pressure part-way through a run: twenty-two runtime suites turned into
+ * skips, nothing had actually been tested, and the summary read
+ * "5040 passed · 1 failed" — greener than a run that fails outright. The
+ * existing guard could not catch it, because it only fires when BASE_URL is
+ * UNSET, and BASE_URL was set. The server was simply dead.
+ *
+ * So: preflight probes each dependency, every skip is checked against what
+ * preflight found, and a skip nothing explains fails the run.
+ */
+type Dependency = 'postgres' | 'server' | 'socket' | 'browser'
+
+/**
+ * Suites that need more than a database, and what they need.
+ *
+ * Everything in RUNTIME implicitly needs `server`; this names the extras.
+ */
+const NEEDS: Record<string, Dependency[]> = {
+  'socket-order-room-test': ['server', 'socket'],
+  'socket-resilience-test': ['server', 'socket'],
+  'recorrection-ui-test': ['server', 'browser'],
+  'sidebar-responsive-test': ['server', 'browser'],
+  'browser-console-test': ['server', 'browser'],
+}
 
 const STATIC = [
   'billing-math-test',
@@ -38,6 +76,19 @@ const STATIC = [
   // bugfix.md S10 — an action asks for the split permission its feature sells,
   // never the parent a custom role can hold with the feature switched off.
   'no-parent-permission-actions',
+  // A bill's total and what is left on it are each defined once, in
+  // features/orders/pricing. Seventeen screens wrote the arithmetic out by
+  // hand and three had already lost the clamp, so an overpaid bill showed a
+  // negative amount due.
+  'no-hand-rolled-money',
+  // Every suite shares one database, so a fixture found by a bare phone
+  // number or name will one day match a row another suite left behind. That
+  // is how live-board-test started failing on a customer that was correct.
+  'no-unscoped-fixtures',
+  // Every API route declares how it authenticates, the declaration is checked
+  // against the file, and the middleware waves through nothing undeclared.
+  // The page surface had guards for this; the API surface had none.
+  'api-surface-test',
   'no-item-branch-filter',
   // FIFO.md — stock is worth the sum of its layers, never quantity × a blended
   // rate. Thirteen screens did the latter, and since `costPerUnit` is
@@ -94,6 +145,15 @@ const SERVICE = [
   'qa-suite',
   'phase1-test', 'phase2-test', 'phase3-test', 'phase4-test', 'phase5-test',
   'phase6-test', 'phase7-test', 'phase8-test', 'phase9-test', 'phase11-test',
+  // Two tills reaching for one bill with DIFFERENT idempotency keys — the
+  // race a replay check cannot save, where only the row lock stands between
+  // the restaurant and a double-settled order. payment-model-test covers the
+  // same-key replay; phase11-test covers the inventory side.
+  'concurrency-test',
+  // Removing a tenant, against one that has actually been traded in. The
+  // documented "remove a tenant's data on request" did not work: 43 RESTRICT
+  // foreign keys mean a plain DELETE fails on whichever it reaches first.
+  'tenant-purge-test',
   'storage-stock-test', 'connection-url-test', 'action-transport-test',
   'staff-login-test', 'order-lifecycle-test', 'cogs-test',
   // A waiter takes the order at the table and it reaches the kitchen with no
@@ -113,6 +173,12 @@ const SERVICE = [
   // a division that can lose money. Pins that every bill's shares add back to
   // that bill's discount, and each column back to the tile above it.
   'sales-detail-test',
+  // The Purchasing report's price history, which reaches a branch only
+  // through the goods receipt that recorded it. `report-filter-test` pins
+  // that the page stops throwing; an empty table cannot tell a working
+  // filter from one that silently returns nothing, so this gives it two
+  // branches and two prices and checks the trend it draws.
+  'price-moves-test',
   // Purchasing. A purchase REQUEST is not a purchase — a rejected request is
   // not cancelled spending and a draft is not committed money — and the
   // "variance" tile is committed against ACTUAL, since this system has no
@@ -123,6 +189,12 @@ const SERVICE = [
   // holds, layer value equals the item's value, and every movement's trace
   // sums to what the movement was worth.
   'fifo-invariants-test',
+  // Stock in at a price the item does not already carry: the new price makes
+  // its own layer, stays invisible behind older stock, and takes over only
+  // once that runs out. Before the price field existed an inbound adjustment
+  // was valued at the item's current cost, so a price rise never reached the
+  // books — this is what fails if that returns.
+  'stock-in-price-test',
   // FIFO.md — "the destination receives the same cost layers": a transfer
   // hands over one layer per source layer, at their values and their ORIGINAL
   // receipt dates, so the stock keeps its place in the queue at the far end.
@@ -451,8 +523,19 @@ const RUNTIME = [
   // or restaurant refused with nothing written; a partial delivery at the
   // invoice price making a FIFO layer worth what was paid; every step audited.
   'po-flow-runtime-test',
+  // Every guarded route asked without a caller: never 200, never 5xx, and
+  // nothing sensitive in the refusal. Found an authorization failure being
+  // reported as HTTP 500 with the raw error text.
+  'api-authorization-test',
   // Needs a served route: it asks the running app what its change-token says.
   'pulse-scope-test',
+  // Every report crossed with every filter the toolbar can set, on a tenant
+  // with two locations — the only shape where choosing one narrows anything.
+  // `page-render-test` sweeps each page with `?branch=` too, but as whichever
+  // owner comes first, and most tenants here have a single site; the
+  // Purchasing report threw for every multi-location tenant while that sweep
+  // stayed green.
+  'report-filter-test',
   // The approvals desk and the transfers board still SAY what the browser test
   // looks for. `recorrection-ui-test` owns that contract and needs Playwright's
   // browser; this checks the same text over plain HTTP, so the contract does
@@ -469,6 +552,12 @@ const RUNTIME = [
   'session-runtime-test',
   // Skips itself unless the server carries Socket.IO (`node server.mjs`).
   'socket-order-room-test',
+  // What the live stream does when the connection is not perfect. Restaurant
+  // wifi drops constantly, so "interrupted" is the normal case: the stream
+  // must resume, one event must arrive once per device however many times a
+  // client re-joins, and a reconnected socket must NOT be silently still in
+  // its old room — which is why a client resyncs rather than trusting it.
+  'socket-resilience-test',
   // correctionA.md §1 — every type the UI offers is one the route answers, in
   // both formats, and report.export alone opens none of them: each still needs
   // the permission that guards the screen it comes from.
@@ -477,6 +566,12 @@ const RUNTIME = [
   // browser at three widths. Both surfaces render the same component, so the
   // markup is identical at every size and only computed CSS can tell them apart.
   'sidebar-responsive-test',
+  // The same page list `page-render-test` sweeps, opened in a browser instead
+  // of fetched. That one proves the server rendered; this one proves the page
+  // still works once its JavaScript runs — a hydration mismatch, a throwing
+  // effect or a 500 from a route a panel calls all return a clean 200 and are
+  // visible only in the console.
+  'browser-console-test',
 ]
 
 interface Outcome {
@@ -531,7 +626,168 @@ function run(name: string, kind: string): Outcome {
   }
 }
 
+/** Is this dependency actually there, right now? */
+async function probe(what: Dependency): Promise<boolean> {
+  switch (what) {
+    case 'postgres': {
+      const { prisma } = await import('../src/server/db/prisma')
+      try {
+        await prisma.$queryRaw`SELECT 1`
+        return true
+      } catch {
+        return false
+      } finally {
+        // Held only for the probe: several servers each keeping a pool is how
+        // this database ran out of connections mid-run once already.
+        await prisma.$disconnect().catch(() => undefined)
+      }
+    }
+    case 'server': {
+      if (!BASE_URL) return false
+      /*
+       * Three tries. A single failed fetch is not proof of death — the server
+       * may simply be busy finishing the request a suite just made — and this
+       * probe decides whether to call the whole run invalid, so a false
+       * positive costs as much as a missed one. It cried wolf exactly once
+       * before the retries were here.
+       */
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const alive = await fetch(BASE_URL, { redirect: 'manual' }).then(() => true).catch(() => false)
+        if (alive) return true
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+      return false
+    }
+    case 'socket': {
+      if (!BASE_URL) return false
+      // A plain `next start` serves no Socket.IO; `node server.mjs` does.
+      return fetch(`${BASE_URL}/socket.io/?EIO=4&transport=polling`)
+        .then((response) => response.ok)
+        .catch(() => false)
+    }
+    case 'browser': {
+      try {
+        const { chromium } = await import('playwright')
+        const path = chromium.executablePath()
+        return Boolean(path) && existsSync(path)
+      } catch {
+        return false
+      }
+    }
+  }
+}
+
+async function preflight(): Promise<Set<Dependency>> {
+  console.log(`\n── preflight ${'─'.repeat(50)}`)
+  const available = new Set<Dependency>()
+  for (const what of ['postgres', 'server', 'socket', 'browser'] as const) {
+    const ok = await probe(what)
+    if (ok) available.add(what)
+    const note =
+      what === 'server' && !BASE_URL ? 'no BASE_URL set'
+        : what === 'socket' && !ok ? 'plain next start serves none; run node server.mjs'
+          : what === 'browser' && !ok ? 'run npx playwright install chromium'
+            : ''
+    console.log(`  ${ok ? '✓' : '·'} ${what.padEnd(10)} ${ok ? 'available' : `unavailable${note ? ` — ${note}` : ''}`}`)
+  }
+
+  /*
+   * Reachable is not the same as usable.
+   *
+   * A run needs roughly one pool per suite process, and this database has
+   * been exhausted mid-run four times — by servers killed without closing
+   * their pools, leaving backends that Postgres still counts as connected.
+   * The symptom is a scatter of `PrismaClientInitializationError` across
+   * unrelated suites, which reads as thirty-two broken features rather than
+   * as one environment with no room left. Checking the headroom up front
+   * turns an hour of confusion into a sentence.
+   */
+  if (available.has('postgres')) {
+    const { prisma } = await import('../src/server/db/prisma')
+    try {
+      const [room] = await prisma.$queryRaw<Array<{ used: bigint; limit: string }>>`
+        SELECT (SELECT count(*) FROM pg_stat_activity) AS used,
+               current_setting('max_connections')      AS limit
+      `
+      const used = Number(room.used)
+      const limit = Number(room.limit)
+      const free = limit - used
+      const ok = free >= 20
+      console.log(`  ${ok ? '✓' : '·'} headroom   ${used}/${limit} connections used, ${free} free`)
+      if (!ok) {
+        console.log('\n  Fewer than 20 connections are free. Suites will fail on connection')
+        console.log('  errors that have nothing to do with the code. Close other servers, or')
+        console.log('  clear backends left behind by killed ones:\n')
+        console.log("    SELECT pg_terminate_backend(pid) FROM pg_stat_activity")
+        console.log("     WHERE datname = current_database() AND pid <> pg_backend_pid()")
+        console.log("       AND state = 'idle' AND now() - state_change > interval '20 minutes';\n")
+        await prisma.$disconnect().catch(() => undefined)
+        process.exit(1)
+      }
+    } finally {
+      await prisma.$disconnect().catch(() => undefined)
+    }
+  }
+
+  /*
+   * Postgres is not optional for anything. Without it every service suite
+   * fails for the same uninteresting reason, and the run tells you nothing
+   * about the code.
+   */
+  if (!available.has('postgres')) {
+    console.log('\n  Postgres is unreachable. Every service suite would fail for that reason')
+    console.log('  alone and the run would say nothing about the code. Fix DATABASE_URL first.\n')
+    process.exit(1)
+  }
+
+  /*
+   * Setting BASE_URL is a statement of intent: the caller wants the runtime
+   * tier. If it is set and nothing answers, the runtime suites would all skip
+   * and — because preflight had recorded the server as absent — every one of
+   * those skips would be classified EXPECTED and the run could go green
+   * having tested none of them. That is the same false comfort as the dead
+   * server, arriving by a different door, so it fails here instead.
+   */
+  /*
+   * The server must be serving THIS build.
+   *
+   * Running the gate from one tree against a server built from another is a
+   * mistake that does not look like one: the pages render, the database is
+   * shared, and only the suites that invoke Server Actions fail — with
+   * "Failed to find Server Action", sixty-five times, scattered across seven
+   * suites that appear to have nothing in common. It cost an hour to
+   * recognise. Next writes its build id into the HTML, so the two can simply
+   * be compared.
+   */
+  if (available.has('server')) {
+    const localId = existsSync('.next/BUILD_ID')
+      ? readFileSync('.next/BUILD_ID', 'utf8').trim()
+      : null
+    if (localId) {
+      const html = await fetch(`${BASE_URL}/login`).then((r) => r.text()).catch(() => '')
+      if (html && !html.includes(localId)) {
+        console.log(`\n  The server at ${BASE_URL} is serving a DIFFERENT build.`)
+        console.log(`  This tree built ${localId}, and that server does not mention it.`)
+        console.log('  Server Action ids are per-build, so the action suites would fail in a')
+        console.log('  way that looks like broken code rather than a mismatched server.')
+        console.log('  Rebuild and restart, or run the gate from the tree that built it.\n')
+        process.exit(1)
+      }
+      console.log(`  ✓ build      ${localId} — the server is serving this tree`)
+    }
+  }
+
+  if (BASE_URL && !available.has('server')) {
+    console.log(`\n  BASE_URL is set to ${BASE_URL} and nothing answers there.`)
+    console.log('  That asks for the runtime tier and then cannot run it. Start the server,')
+    console.log('  or unset BASE_URL to run the static and service tiers on their own.\n')
+    process.exit(1)
+  }
+  return available
+}
+
 async function main() {
+  const available = await preflight()
   const results: Outcome[] = []
 
   for (const [list, kind] of [[STATIC, 'static'], [SERVICE, 'service'], [RUNTIME, 'runtime']] as const) {
@@ -553,11 +809,63 @@ async function main() {
   }
 
   const passed = results.reduce((n, r) => n + r.passed, 0)
-  const failed = results.reduce((n, r) => n + r.failed, 0)
+  let failed = results.reduce((n, r) => n + r.failed, 0)
   const skipped = results.filter((r) => r.skipped)
 
+  /*
+   * Did the server survive the run?
+   *
+   * If it was up at preflight and is down now, every runtime skip after the
+   * moment it died is an infrastructure failure wearing a skip's clothes, and
+   * the suites underneath were never executed. This is the exact shape that
+   * once reported "5040 passed · 1 failed" while twenty-two suites had not
+   * run at all.
+   */
+  const serverDiedMidRun = available.has('server') && !(await probe('server'))
+  if (serverDiedMidRun) available.delete('server')
+
+  /** A skip is expected only when preflight said the thing it needs is absent. */
+  const missingFor = (name: string): Dependency[] => {
+    const needs = NEEDS[name] ?? (results.find((r) => r.name === name)?.kind === 'runtime' ? ['server'] : [])
+    return (needs as Dependency[]).filter((need) => !available.has(need))
+  }
+  const expected = skipped.filter((r) => missingFor(r.name).length > 0)
+  const unexpected = skipped.filter((r) => missingFor(r.name).length === 0)
+
   console.log(`\n${'═'.repeat(62)}`)
-  console.log(`  ${passed} passed · ${failed} failed · ${skipped.length} suite(s) skipped`)
+  console.log(
+    `  ${passed} passed · ${failed} failed · ` +
+    `${expected.length} expected skip · ${unexpected.length} unexpected skip`,
+  )
+
+  if (expected.length > 0) {
+    console.log('\n  Skipped, and preflight says why:')
+    for (const outcome of expected) {
+      console.log(`    · ${outcome.name.padEnd(26)} needs ${missingFor(outcome.name).join(', ')}`)
+    }
+  }
+
+  if (serverDiedMidRun) {
+    console.log(
+      '\n  ✖ INFRASTRUCTURE: the server answered at preflight and does not now.\n' +
+      '    It died part-way through, so the runtime suites below it never ran.\n' +
+      '    Nothing about this run is evidence either way. Restart it and run again.',
+    )
+    failed += 1
+  }
+
+  if (unexpected.length > 0) {
+    console.log('\n  ✖ UNEXPECTED SKIPS — everything these need was available:')
+    for (const outcome of unexpected) {
+      console.log(`    ✗ ${outcome.name}`)
+    }
+    console.log(
+      '\n    A suite that skips with its dependencies present is not coverage.\n' +
+      '    Either it is looking for the wrong thing, or it needs something\n' +
+      '    nobody has written into NEEDS at the top of this file.',
+    )
+    failed += 1
+  }
 
   /*
    * The runtime tier is MANDATORY (§121, AUDIT.md slice 7). It exits green
@@ -581,6 +889,44 @@ async function main() {
     console.log('\n  A verify run without the runtime tier is not a pass. (SKIP_RUNTIME=1 to waive, deliberately.)\n')
     process.exit(1)
   }
+  /*
+   * A machine-readable copy, for `release-gate.ts`.
+   *
+   * A release gate must be able to assert that a NAMED suite actually ran,
+   * not merely that the total looked healthy — the whole lesson of the dead
+   * server is that a summary line cannot distinguish "passed" from "never
+   * executed". Parsing this console output would work until somebody changes
+   * a word in it, so the outcomes are written out as data instead.
+   */
+  if (process.env.VERIFY_REPORT) {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(
+      process.env.VERIFY_REPORT,
+      JSON.stringify(
+        {
+          at: new Date().toISOString(),
+          baseUrl: BASE_URL ?? null,
+          available: [...available],
+          passed,
+          failed,
+          expectedSkips: expected.map((r) => r.name),
+          unexpectedSkips: unexpected.map((r) => r.name),
+          serverDiedMidRun,
+          suites: results.map((r) => ({
+            name: r.name,
+            kind: r.kind,
+            passed: r.passed,
+            failed: r.failed,
+            skipped: r.skipped,
+          })),
+        },
+        null,
+        2,
+      ),
+    )
+    console.log(`\n  report written to ${process.env.VERIFY_REPORT}`)
+  }
+
   console.log()
   process.exit(failed === 0 ? 0 : 1)
 }

@@ -18,74 +18,20 @@
 import { prisma } from '../src/server/db/prisma'
 import { generateToken, hashToken } from '../src/server/auth/password'
 import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/auth/jwt'
+import { PAGES } from './dashboard-pages'
+import { renderFailure } from './streamed-error'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000'
 
-/** Pages an owner should be able to open. Add new ones here. */
-const PAGES = [
-  '/dashboard/live',
-  '/dashboard',
-  '/dashboard/insights',
-  '/dashboard/insights/menu',
-  '/dashboard/insights/inventory',
-  '/dashboard/insights/waste',
-  '/dashboard/help',
-  '/dashboard/tasks',
-  '/dashboard/reports',
-  '/dashboard/reports/sales',
-  '/dashboard/reports/profit',
-  '/dashboard/reports/inventory',
-  '/dashboard/reports/purchasing',
-  '/dashboard/reports/variance',
-  '/dashboard/reports/reconciliation',
-  '/dashboard/customers',
-  '/dashboard/customers/analytics',
-  '/dashboard/locations',
-  '/dashboard/transfers',
-  '/dashboard/transfers/report',
-  '/dashboard/transfers/new',
-  '/dashboard/production',
-  '/dashboard/inventory',
-  '/dashboard/inventory/wastage',
-  '/dashboard/inventory/counts',
-  '/dashboard/inventory/expiry',
-  '/dashboard/inventory/setup',
-  '/dashboard/purchases',
-  '/dashboard/purchases/receive',
-  '/dashboard/suppliers',
-  '/dashboard/recipes',
-  '/dashboard/staff',
-  '/dashboard/roles',
-  '/dashboard/staff/codes',
-  '/dashboard/menu',
-  '/dashboard/orders',
-  '/dashboard/invoices',
-  '/dashboard/tables',
-  '/dashboard/settings',
-  '/dashboard/loyalty',
-  '/dashboard/coupons',
-  '/dashboard/approvals',
-  '/dashboard/audit-logs',
-  '/dashboard/analytics',
-  '/dashboard/feedback',
-  '/dashboard/reviews',
-  '/dashboard/reservations',
-  '/dashboard/qr',
-  '/dashboard/qr/experiences',
-  '/dashboard/handover',
-  '/dashboard/shifts',
-  '/dashboard/shifts?tab=templates',
-  '/dashboard/shifts?tab=handovers',
-  '/dashboard/cash-drawer',
-  '/dashboard/petty-cash',
-  '/dashboard/links',
-  '/dashboard/reports/cash-drawer',
-  '/dashboard/reports/petty-cash',
-  '/dashboard/payment-details',
-]
 
-/** The dashboard error boundary's own words — the failure signal. */
-const BOUNDARY = ['This page could not load', 'Something went wrong', 'Application error']
+/*
+ * What counts as a failure lives in `streamed-error.ts`, because a 200 is not
+ * proof a page rendered: a `force-dynamic` page flushes its shell before its
+ * loaders finish, so a throw after that point arrives as a later chunk of the
+ * same 200 response and the boundary's words never appear in the HTML. This
+ * sweep reported 130 clean page-loads while the Purchasing report threw for
+ * every tenant that picked a location, for exactly that reason.
+ */
 
 const minted: string[] = []
 /** Accounts this run created purely to probe with, removed at the end. */
@@ -156,9 +102,9 @@ async function main() {
   for (const path of PAGES) {
     const response = await fetch(`${BASE}${path}`, { headers: { cookie }, redirect: 'manual' })
     const body = response.status === 200 ? await response.text() : ''
-    const boundary = BOUNDARY.find((needle) => body.includes(needle))
+    const failure = response.status === 200 ? renderFailure(response.status, body) : null
 
-    if (response.status === 200 && !boundary) {
+    if (response.status === 200 && !failure) {
       passed += 1
       console.log(`  ✓ ${path}`)
     } else if (response.status >= 300 && response.status < 400) {
@@ -178,7 +124,7 @@ async function main() {
       }
     } else {
       failed.push(path)
-      console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
+      console.log(`  ✗ ${path} — ${failure ?? `HTTP ${response.status}`}`)
     }
   }
 
@@ -226,14 +172,14 @@ async function main() {
     for (const path of detailPages) {
       const response = await fetch(`${BASE}${path}`, { headers: { cookie }, redirect: 'manual' })
       const body = response.status === 200 ? await response.text() : ''
-      const boundary = BOUNDARY.find((needle) => body.includes(needle))
+      const failure = response.status === 200 ? renderFailure(response.status, body) : null
 
-      if (response.status === 200 && !boundary) {
+      if (response.status === 200 && !failure) {
         passed += 1
         console.log(`  ✓ ${path}`)
       } else {
         failed.push(path)
-        console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
+        console.log(`  ✗ ${path} — ${failure ?? `HTTP ${response.status}`}`)
       }
     }
   }
@@ -261,9 +207,9 @@ async function main() {
       const url = `${BASE}${path}${path.includes('?') ? '&' : '?'}branch=${branch.id}`
       const response = await fetch(url, { headers: { cookie }, redirect: 'manual' })
       const body = response.status === 200 ? await response.text() : ''
-      const boundary = BOUNDARY.find((needle) => body.includes(needle))
+      const failure = response.status === 200 ? renderFailure(response.status, body) : null
 
-      if (response.status === 200 && !boundary) {
+      if (response.status === 200 && !failure) {
         passed += 1
         console.log(`  ✓ ${path}`)
       } else if (response.status >= 300 && response.status < 400) {
@@ -271,7 +217,7 @@ async function main() {
         console.log(`  · ${path} → ${response.headers.get('location') ?? ''}`)
       } else {
         failed.push(`${path}?branch=`)
-        console.log(`  ✗ ${path} — ${boundary ? `rendered "${boundary}"` : `HTTP ${response.status}`}`)
+        console.log(`  ✗ ${path} — ${failure ?? `HTTP ${response.status}`}`)
       }
     }
 

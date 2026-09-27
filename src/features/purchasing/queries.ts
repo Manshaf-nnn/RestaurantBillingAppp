@@ -943,3 +943,54 @@ export async function getReceiptDetail(params: {
 }
 
 export type ReceiptDetail = NonNullable<Awaited<ReturnType<typeof getReceiptDetail>>>
+
+/**
+ * Every price a branch paid in a period, oldest first.
+ *
+ * ── Why a branch filter here is two queries ─────────────────────────────────
+ *
+ * `PurchasePriceHistory` carries no branch of its own. A row reaches a branch
+ * only through the goods receipt that recorded it, and `receiptId` is a plain
+ * column with no Prisma relation behind it — the same shape `getItemPriceInsight`
+ * above already works around. So the branch filter cannot be a nested `where`;
+ * it has to resolve the receipts separately and keep the rows that point at
+ * them.
+ *
+ * The Purchasing report used to write it as `where: { purchase: { branchId } }`,
+ * reading as though a `purchase` relation existed. It does not, and Prisma
+ * rejects an unknown argument before it looks at a single row — so the report
+ * threw for everyone the moment they picked a location, while the unfiltered
+ * view kept working and looked fine. It is scoped by the range FIRST so the
+ * `in` list is bounded by the period on screen rather than by every receipt
+ * the branch has ever taken.
+ */
+export async function listPriceMoves(params: {
+  restaurantId: string
+  from: Date
+  to: Date
+  branchId?: string | null
+}) {
+  const rows = await prisma.purchasePriceHistory.findMany({
+    where: {
+      restaurantId: params.restaurantId,
+      recordedAt: { gte: params.from, lte: params.to },
+    },
+    include: {
+      item: { select: { name: true, unit: true } },
+      supplier: { select: { name: true } },
+    },
+    orderBy: { recordedAt: 'asc' },
+  })
+
+  if (!params.branchId) return rows
+
+  const receiptIds = [...new Set(rows.map((row) => row.receiptId).filter((id): id is string => Boolean(id)))]
+  if (receiptIds.length === 0) return []
+
+  const atBranch = await prisma.goodsReceipt.findMany({
+    where: { id: { in: receiptIds }, restaurantId: params.restaurantId, branchId: params.branchId },
+    select: { id: true },
+  })
+  const keep = new Set(atBranch.map((receipt) => receipt.id))
+  return rows.filter((row) => row.receiptId !== null && keep.has(row.receiptId))
+}

@@ -29,6 +29,7 @@ import { ACCESS_COOKIE, REFRESH_COOKIE, signAccessToken } from '../src/server/au
 import { postMovement } from '../src/features/inventory/ledger'
 import { requestTransfer } from '../src/features/transfers/service'
 import { requestApproval } from '../src/features/approvals/service'
+import { purgeFixture } from './purge-fixture'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3210'
 const stamp = Date.now().toString(36)
@@ -176,8 +177,9 @@ async function main() {
   await prisma.stockBatch.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryStock.deleteMany({ where: { restaurantId: restaurant.id } })
   await prisma.inventoryItem.deleteMany({ where: { restaurantId: restaurant.id } })
-  try { await prisma.restaurant.delete({ where: { id: restaurant.id } }) }
-  catch { await prisma.restaurant.update({ where: { id: restaurant.id }, data: { isActive: false } }) }
+  // See purge-fixture.ts: the plain delete always failed on a RESTRICT key and
+  // the catch turned that into a leaked, still-active tenant.
+  await purgeFixture(restaurant.id)
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`)
   process.exitCode = failed > 0 ? 1 : 0

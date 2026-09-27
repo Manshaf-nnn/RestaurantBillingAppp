@@ -9,6 +9,7 @@ import { localeForCurrency } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
+import { outstandingOn } from '@/features/orders/pricing'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Delivery Desk' }
@@ -64,7 +65,7 @@ export default async function DeliveryDeskPage({
         placedAt: order.placedAt.toISOString(),
         readyAt: order.readyAt?.toISOString() ?? null,
         grandTotal: order.grandTotal,
-        outstanding: Math.max(0, order.grandTotal + order.tipAmount - paid),
+        outstanding: outstandingOn({ ...order, paidTotal: paid }),
         items: order.items.map((item) => ({
           id: item.id,
           name: item.name,

@@ -2,6 +2,7 @@ import 'server-only'
 
 import { AppError, NotFoundError } from '@/lib/errors'
 import { guardLocks, prisma } from '@/server/db/prisma'
+import { outstandingOn } from './pricing'
 
 /**
  * Handing a delivery over at the door.
@@ -75,6 +76,60 @@ export interface HandoverResult {
  * second one finds SERVED and is refused as already done, rather than
  * overwriting who delivered it and when.
  */
+/**
+ * Is this Postgres telling us two transactions chose each other?
+ *
+ * `40P01` is deadlock_detected. Postgres resolves a deadlock by rolling ONE
+ * transaction back whole, so the data is never wrong — but the loser is handed
+ * a raw database error, and a rider standing at a door cannot act on
+ * "deadlock detected" and cannot tell whether the delivery went through.
+ */
+function isDeadlock(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === '40P01'
+  )
+}
+
+/**
+ * Run the handover, retrying a deadlock a bounded number of times.
+ *
+ * ── Why retry here and not everywhere ───────────────────────────────────────
+ *
+ * A four-way race on one order — a till taking money, a second till taking
+ * money, a manager voiding a line, the kitchen changing state — already
+ * deadlocks in this system. A delivery being handed over is a FIFTH actor on
+ * that same row, and it is the one whose user is standing on somebody's
+ * doorstep with the food in their hand.
+ *
+ * Retrying is right for `40P01` specifically because it is transient by
+ * definition: the loser rolled back completely, so a second attempt starts
+ * clean and usually wins. It is safe here because the attempt is idempotent in
+ * the ways that matter — a retry that finds the order already SERVED refuses
+ * as ALREADY_DONE rather than completing twice, and the wrong-PIN counter was
+ * rolled back with everything else, so a guess is never counted twice for one
+ * tap.
+ *
+ * Bounded at three and deliberately not a general policy. Making every money
+ * path retry, to improve an error message on data that is already correct, is
+ * a decision for somebody looking at all of them at once.
+ */
+async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await run()
+    } catch (error) {
+      if (!isDeadlock(error)) throw error
+      lastError = error
+      // A short, growing pause so two losers do not collide again immediately.
+      await new Promise((resolve) => setTimeout(resolve, 40 * (i + 1)))
+    }
+  }
+  throw lastError
+}
+
 export async function completeDeliveryWithPin(params: {
   restaurantId: string
   orderId: string
@@ -84,7 +139,7 @@ export async function completeDeliveryWithPin(params: {
   /** Locations this person may act in, or null for unconfined. */
   branchIds: string[] | null
 }): Promise<HandoverResult> {
-  const outcome = await prisma.$transaction(async (tx) => {
+  const outcome = await withDeadlockRetry(() => prisma.$transaction(async (tx) => {
     await guardLocks(tx)
 
     const locked = await tx.$queryRaw<
@@ -216,10 +271,10 @@ export async function completeDeliveryWithPin(params: {
          * Read under the same lock that closed the order, so the figure the
          * caller collects against cannot have moved between the two.
          */
-        outstanding: Math.max(0, order.grandTotal + order.tipAmount - order.paidTotal),
+        outstanding: outstandingOn(order),
       },
     }
-  })
+  }))
 
   /*
    * Raised out here, after the count above has committed. Inside the

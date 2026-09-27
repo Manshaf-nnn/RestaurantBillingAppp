@@ -33,6 +33,7 @@ import { cancelOrder, updateOrderStatus } from '../actions'
 import { refundOrderPayment } from '@/features/payments/actions'
 import { recordPrint } from '@/features/printing/actions'
 import { callAction } from '@/lib/use-action'
+import { billedOn, outstandingOn } from '@/features/orders/pricing'
 
 const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
   PENDING: { status: 'ACCEPTED', label: 'Accept order' },
@@ -300,16 +301,16 @@ export function OrderDetail({
                   <Row label="Tip" value={money(order.tipAmount)} />
                   <div className="flex justify-between text-sm font-semibold">
                     <span>Total with tip</span>
-                    <span>{money(order.grandTotal + order.tipAmount)}</span>
+                    <span>{money(billedOn(order))}</span>
                   </div>
                 </>
               ) : null}
-              {order.paidTotal > 0 && order.paidTotal < order.grandTotal + order.tipAmount ? (
+              {order.paidTotal > 0 && order.paidTotal < billedOn(order) ? (
                 <>
                   <Row label="Paid so far" value={money(order.paidTotal)} />
                   <div className="flex justify-between text-sm font-semibold text-warning">
                     <span>Balance due</span>
-                    <span>{money(order.grandTotal + order.tipAmount - order.paidTotal)}</span>
+                    <span>{money(outstandingOn(order))}</span>
                   </div>
                 </>
               ) : null}

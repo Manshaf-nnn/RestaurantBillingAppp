@@ -14,6 +14,7 @@ import { EmptyState } from '@/components/ui/feedback'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { callAction } from '@/lib/use-action'
 import { adjustStockAction } from '../stock-actions'
+import Link from 'next/link'
 
 const UNITS = ['KG', 'GRAM', 'LITRE', 'ML', 'PIECE', 'PACK', 'BOTTLE', 'DOZEN', 'BOX'] as const
 
@@ -226,7 +227,7 @@ export function AdjustmentsBoard({
               <p className="text-xs text-muted-foreground">
                 Sets the price for this batch only. It stays queued behind stock you already have and
                 takes over once that runs out. For a supplier delivery use{' '}
-                <a className="underline" href="/dashboard/purchases">Purchases</a> instead, so the invoice
+                <Link className="underline" href="/dashboard/purchases">Purchases</Link> instead, so the invoice
                 and supplier are recorded too.
               </p>
             </div>
