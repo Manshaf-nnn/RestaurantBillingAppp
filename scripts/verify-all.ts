@@ -214,6 +214,10 @@ const SERVICE = [
   // desk is never sent the PIN, a wrong guess is counted and refused, and a
   // second tap cannot complete an order twice.
   'delivery-desk-test',
+  // The deadlock retry on the handover, by injecting a 40P01 rather than
+  // racing for one. Control flow that only runs under a race nobody can
+  // reproduce on demand is control flow nothing checks — it shipped that way.
+  'delivery-retry-test',
   // An offer aimed at a customer category reaches that customer without them
   // typing anything — the whole point of aiming it — while a public code
   // stays a code. Pins the delivery QR, which is where it was first noticed.

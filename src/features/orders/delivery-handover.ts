@@ -79,12 +79,17 @@ export interface HandoverResult {
 /**
  * Is this Postgres telling us two transactions chose each other?
  *
+ * Exported for `delivery-retry-test`, which injects a `40P01` rather than
+ * trying to provoke a real deadlock — the retry is control flow, and control
+ * flow that only runs under a race nobody can reproduce on demand is control
+ * flow nothing checks.
+ *
  * `40P01` is deadlock_detected. Postgres resolves a deadlock by rolling ONE
  * transaction back whole, so the data is never wrong — but the loser is handed
  * a raw database error, and a rider standing at a door cannot act on
  * "deadlock detected" and cannot tell whether the delivery went through.
  */
-function isDeadlock(error: unknown): boolean {
+export function isDeadlock(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
@@ -115,7 +120,7 @@ function isDeadlock(error: unknown): boolean {
  * path retry, to improve an error message on data that is already correct, is
  * a decision for somebody looking at all of them at once.
  */
-async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+export async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
   let lastError: unknown
   for (let i = 0; i < attempts; i += 1) {
     try {
