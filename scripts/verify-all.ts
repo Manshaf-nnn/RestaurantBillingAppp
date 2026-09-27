@@ -316,6 +316,10 @@ const SERVICE = [
   // disabled endpoint, the app pointed at a project nobody watches, and that
   // an alert is announced once and not every hour.
   'neon-watch-test',
+  // A delivery QR order is accepted on the till's Delivery tab through the
+  // till's own accept — the plain status change refuses it, which is the bug
+  // the Delivery tab's button hit — and the cashier's list leaves it out.
+  'delivery-accept-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',

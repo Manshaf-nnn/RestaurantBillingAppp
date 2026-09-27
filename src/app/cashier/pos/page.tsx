@@ -171,6 +171,7 @@ export default async function PosPage({
         <DeliveryBoard
           currency={restaurant.currency}
           locale={locale}
+          canAccept={can(user, PERMISSIONS.ORDER_ACCEPT)}
           orders={deliveries.map((order) => {
             const paid = order.payments
               .filter((payment) => payment.status === 'PAID')

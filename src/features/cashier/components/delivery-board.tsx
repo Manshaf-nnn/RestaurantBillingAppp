@@ -12,6 +12,7 @@ import { callAction } from '@/lib/use-action'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { updateOrderStatus } from '@/features/orders/actions'
+import { acceptGuestOrderAction } from '@/features/cashier/actions'
 
 /**
  * The deliveries going out.
@@ -91,10 +92,13 @@ export function DeliveryBoard({
   orders,
   currency,
   locale,
+  canAccept,
 }: {
   orders: DeliveryOrderView[]
   currency: string
   locale: string
+  /** Holds ORDER_ACCEPT: may take a guest's delivery order into the kitchen. */
+  canAccept: boolean
 }) {
   const router = useRouter()
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -102,7 +106,19 @@ export function DeliveryBoard({
 
   async function advance(order: DeliveryOrderView, to: string, label: string) {
     setBusy(order.id)
-    const result = await callAction(() => updateOrderStatus({ orderId: order.id, status: to }))
+    /*
+     * A PENDING delivery is always a guest's (typed-in orders are born
+     * accepted), and a guest order has exactly one way in: the till's accept,
+     * which routes every dish to its kitchen section and prints the KOT. The
+     * plain status change refuses it on purpose — "waiting for the cashier to
+     * accept it" — which is what this button hit when it used that path. The
+     * Delivery tab IS the till for deliveries, so it uses the till's door.
+     */
+    const result = await callAction(() =>
+      order.status === 'PENDING'
+        ? acceptGuestOrderAction({ orderId: order.id })
+        : updateOrderStatus({ orderId: order.id, status: to }),
+    )
     setBusy(null)
     if (!result.ok) return toast.error(result.error)
     toast.success(`${order.orderNumber} — ${label.toLowerCase()}`)
@@ -209,7 +225,11 @@ export function DeliveryBoard({
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-2.5">
               <span className="font-semibold tabular-nums">{money(order.grandTotal)}</span>
-              {next ? (
+              {next && order.status === 'PENDING' && !canAccept ? (
+                <span className="text-xs text-muted-foreground">
+                  Accepting delivery orders needs the “Accept orders” permission — ask the owner.
+                </span>
+              ) : next ? (
                 <Button
                   size="sm"
                   onClick={() => advance(order, next.status, next.label)}

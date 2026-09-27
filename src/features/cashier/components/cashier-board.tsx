@@ -335,6 +335,13 @@ export function CashierBoard({
     if (!isOurs(payload)) return
     // A QR / online order is this screen's to accept (abc.md §5); the row
     // itself arrives with the next refresh, a few seconds at most.
+    if (awaitsCashier(payload) && payload.type === 'DELIVERY') {
+      // Deliveries are accepted on the Delivery tab, not here.
+      toast.warning(`New delivery order ${payload.orderNumber} — accept it on the Delivery tab`, {
+        description: payload.customerName,
+      })
+      return
+    }
     if (awaitsCashier(payload)) {
       toast.warning(`New ${channelLabel(payload.channel)} order ${payload.orderNumber} — accept it to send it to the kitchen`, {
         description: payload.tableNumber ? `Table ${payload.tableNumber}` : payload.customerName,
@@ -398,7 +405,16 @@ export function CashierBoard({
    * — routing, stock, the kitchen's chime — and the row simply moves down into
    * the bills below. Reject is a cancellation with a reason the guest reads.
    */
-  const awaiting = React.useMemo(() => bills.filter((bill) => awaitsCashier(bill)), [bills])
+  /*
+   * A delivery waiting for a yes is the Delivery tab's, where the place, the
+   * rider's note and the accept-and-send-to-kitchen button all are. Listing
+   * it here too gave two screens the same decision and let the order be
+   * accepted from the one that does not show where it is going.
+   */
+  const awaiting = React.useMemo(
+    () => bills.filter((bill) => awaitsCashier(bill) && bill.type !== 'DELIVERY'),
+    [bills],
+  )
   const [decidingId, setDecidingId] = React.useState<string | null>(null)
   const [rejecting, setRejecting] = React.useState<CashierBill | null>(null)
   const [rejectReason, setRejectReason] = React.useState('')
