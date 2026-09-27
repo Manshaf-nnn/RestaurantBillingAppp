@@ -342,6 +342,8 @@ export const AUDIT_ACTIONS = {
    * screen reads afterwards.
    */
   PLATFORM_PLAN_CHANGED: 'platform.plan_changed',
+  /** The database provider connected, re-keyed, re-pointed or disconnected. */
+  PLATFORM_NEON_CHANGED: 'platform.neon_changed',
   USER_REACTIVATED: 'user.reactivated',
   JOB_RETRIED: 'job.retried',
   JOBS_RUN: 'job.run',

@@ -37,3 +37,41 @@ Ledger tables are append-only in spirit: `stock_movements`, `refunds`,
 `InventoryItem.quantity`/`stockValue`, `Customer.loyaltyPoints`) are always
 recomputable from their ledger, and `runIntegrityChecks` verifies each
 identity on demand.
+
+## Neon: how the provider is run
+
+Production is one Neon project — since 2026-09-27 the paid project
+"restaurantos" (endpoint `ep-purple-mud-az41kemf`, Singapore). Everything
+below follows from the outage that day, when the previous project used up a
+free-plan allowance and Neon refused every connection until somebody
+noticed.
+
+- **Two connection strings, both from the project's Connect dialog.**
+  `DATABASE_URL` is the pooled one (host contains `-pooler`): the app serves
+  from it. `DIRECT_URL` is the same without `-pooler`: migrations run over
+  it, because a pooler cannot run `ALTER TYPE`. They rotate together.
+- **They live in two places.** The server's `deploy/ovh/.env`, and the
+  GitHub secrets `DATABASE_URL` / `DIRECT_URL`, which the deploy writes into
+  that file. To rotate the role password: Neon → Reset password → update
+  both secrets → push or "Run workflow". A refused string is rolled back.
+- **Stay on a paid plan.** The app keeps the compute awake around the clock
+  (health checks, the jobs loop), which is ~180 compute-hours a month —
+  more than any free allowance. A free project will go dark mid-month.
+- **Keep the card valid.** Neon invoices when the billing period closes and
+  charges the card on file. An unpaid invoice is the other way a project
+  gets suspended.
+- **Set history retention to days, not hours.** Project settings → History
+  retention. That is the point-in-time recovery window `/admin/backups`
+  reports; six hours means a mistake found tomorrow cannot be undone.
+- **Cap the compute.** Endpoint settings → autoscaling max. 8 CU is the
+  default ceiling; this app rarely needs more than 1–2 and a runaway query
+  should not be able to bill eight.
+- **Watch it from `/admin/database`.** Connect a Neon API key there (Neon →
+  Account settings → API keys, made in the organisation that owns the
+  project). The platform then checks hourly — usage against quotas, the
+  endpoint, whether the app is even connected to the watched project — and
+  reminds the alert address before each invoice. Alerts also land under
+  Errors. The key is sealed at rest with `CREDENTIAL_ENCRYPTION_KEY`.
+- **When it does go wrong:** run the "Diagnose database" GitHub workflow
+  first. It prints Neon's raw error from the server; Prisma's `P1001`
+  paraphrase hides whether it was quota, password or hostname.

@@ -6,6 +6,8 @@ import { prisma, isUniqueViolation } from '@/server/db/prisma'
 import { trimOutbox } from '@/server/realtime/outbox'
 import { runIntegrityChecks } from '@/features/accounting/integrity'
 import { captureError } from '@/server/errors'
+import { isNeonConfigured } from '@/server/neon/config'
+import { runNeonWatch } from '@/server/neon/monitor'
 
 /**
  * The one background job runner (production.md §4, §13).
@@ -148,6 +150,22 @@ export const HANDLERS: Record<string, JobHandler> = {
       where: { OR: [{ revokedAt: { lt: cutoff } }, { expiresAt: { lt: cutoff } }] },
     })
     return `${count} sessions revoked or expired more than 7 days ago removed`
+  },
+
+  /**
+   * The database provider, asked hourly (see `src/server/neon/monitor.ts`).
+   *
+   * Usage against limits, the invoice date, the endpoint, and whether the app
+   * is connected to the project being watched. Queued only while Neon is
+   * connected, so an unconfigured platform's Jobs page is not a wall of
+   * "nothing to check".
+   */
+  'neon-watch': async () => {
+    const result = await runNeonWatch()
+    if (!result.configured) return 'Neon is not connected; nothing to check'
+    if (result.error) throw new Error(result.error)
+    const alerts = result.status?.alerts.length ?? 0
+    return `${alerts} alert(s) open, ${result.notified.length} announced`
   },
 }
 
@@ -341,6 +359,18 @@ export async function enqueueDailyWork(): Promise<number> {
   let created = 0
   for (const kind of kinds) {
     const result = await enqueue({ kind, dedupeKey: `${kind}:${day}` })
+    if (result.created) created += 1
+  }
+
+  /*
+   * Hourly, not nightly: a quota can close within a day, and an invoice
+   * reminder that arrives at 2 a.m. is one that is read at breakfast. The
+   * dedupe key carries the hour, so the every-fifteen-minutes scheduler asks
+   * four times and queues once.
+   */
+  if (await isNeonConfigured()) {
+    const hour = new Date().toISOString().slice(0, 13)
+    const result = await enqueue({ kind: 'neon-watch', dedupeKey: `neon-watch:${hour}` })
     if (result.created) created += 1
   }
   return created

@@ -1,5 +1,7 @@
 import 'server-only'
 
+import { resolveNeonCredentials } from '@/server/neon/config'
+
 /**
  * What the database provider actually says about backups (production.md §10).
  *
@@ -56,18 +58,30 @@ const API = 'https://console.neon.tech/api/v2'
  * 500s during an incident is the least useful thing in the building.
  */
 export async function getNeonBackupStatus(): Promise<NeonBackupStatus> {
-  const key = process.env.NEON_API_KEY
-  const projectId = process.env.NEON_PROJECT_ID
   const fetchedAt = new Date().toISOString()
+
+  /*
+   * The key the operator saved on the Database page, else the environment.
+   * A stored key that cannot be opened (encryption key rotated) is reported
+   * as an error on the page rather than thrown through it.
+   */
+  let credentials: Awaited<ReturnType<typeof resolveNeonCredentials>>
+  try {
+    credentials = await resolveNeonCredentials()
+  } catch (error) {
+    return { configured: true, fetchedAt, error: error instanceof Error ? error.message : String(error) }
+  }
+  const key = credentials?.apiKey
+  const projectId = credentials?.projectId
 
   if (!key || !projectId) {
     return {
       configured: false,
       fetchedAt,
       reason:
-        'NEON_API_KEY and NEON_PROJECT_ID are not set, so this page cannot read the real backup state. ' +
-        'Create an API key in the Neon console under Account settings → API keys, find the project id on the project page, ' +
-        'and set both as environment variables. Until then, check backups in the Neon console directly.',
+        'Neon is not connected, so this page cannot read the real backup state. ' +
+        'Connect it on the Database page (Admin → Database → Neon) with an API key and the project, ' +
+        'or set NEON_API_KEY and NEON_PROJECT_ID on the server. Until then, check backups in the Neon console directly.',
     }
   }
 

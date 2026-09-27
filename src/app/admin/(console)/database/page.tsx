@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { getDatabaseHealth } from '@/features/platform/ops-queries'
+import { NeonSection } from '@/features/platform/components/neon-section'
 import { OpsTable, Stat, StatRow, StatusPill, bytes } from '@/features/platform/components/ops-ui'
 import { requirePageSuperAdmin } from '@/server/auth/guard'
 
@@ -27,7 +28,7 @@ export const metadata: Metadata = { title: 'Database health' }
  * hurt, plus a plain note saying where the real host metrics live.
  */
 export default async function DatabaseHealthPage() {
-  await requirePageSuperAdmin('/admin/database')
+  const admin = await requirePageSuperAdmin('/admin/database')
   const health = await getDatabaseHealth()
 
   const connectionPressure = health.connections.max > 0
@@ -116,6 +117,13 @@ export default async function DatabaseHealthPage() {
         empty="No statistics available."
         footer="For host CPU and memory, see the database provider's own console — this application cannot measure them and does not pretend to."
       />
+
+      {/*
+        The provider's side of the same database: usage, limits, endpoint,
+        invoice date. Read from the hourly watcher's last snapshot, so it does
+        not slow this page down when Neon is slow.
+      */}
+      <NeonSection adminEmail={admin.email} />
     </>
   )
 }

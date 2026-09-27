@@ -311,6 +311,11 @@ const SERVICE = [
   // production.md §13 — the queue claims without doubling up, backs off, stops,
   // and never sweeps away a failure.
   'jobs-test',
+  // The database watcher's judgement on fixtures, without a key: the invoice
+  // reminder window, a quota about to refuse connections (2026-09-27), a
+  // disabled endpoint, the app pointed at a project nobody watches, and that
+  // an alert is announced once and not every hour.
+  'neon-watch-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',
