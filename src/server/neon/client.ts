@@ -93,10 +93,39 @@ function summarise(raw: RawProject): NeonProjectSummary {
   }
 }
 
-/** Every project the key can see. Also the cheapest way to prove a key works. */
+/**
+ * Every project the key can see. Also the cheapest way to prove a key works.
+ *
+ * A personal key that belongs to an organisation cannot list projects
+ * without saying which organisation — Neon answers 400 "org_id is required"
+ * — so the organisations are asked first and each is listed in turn. A key
+ * with no organisations (a lone personal account, or a project-scoped key)
+ * falls back to the plain listing.
+ */
 export async function listProjects(apiKey: string): Promise<NeonProjectSummary[]> {
-  const data = await call<{ projects?: RawProject[] }>(apiKey, '/projects?limit=100')
-  return (data.projects ?? []).map(summarise)
+  let orgIds: string[] = []
+  try {
+    const me = await call<{ organizations?: Array<{ id: string }> }>(apiKey, '/users/me/organizations')
+    orgIds = (me.organizations ?? []).map((org) => org.id)
+  } catch {
+    // Not every key may read its organisations; the plain listing below still can.
+  }
+
+  const seen = new Map<string, NeonProjectSummary>()
+  const paths = orgIds.length
+    ? orgIds.map((id) => `/projects?org_id=${encodeURIComponent(id)}&limit=100`)
+    : ['/projects?limit=100']
+  let lastError: unknown = null
+  for (const path of paths) {
+    try {
+      const data = await call<{ projects?: RawProject[] }>(apiKey, path)
+      for (const raw of data.projects ?? []) seen.set(raw.id, summarise(raw))
+    } catch (error) {
+      lastError = error
+    }
+  }
+  if (seen.size === 0 && lastError) throw lastError
+  return [...seen.values()]
 }
 
 /** A quota of zero or absent means "none set"; Neon sends 0 for unlimited. */

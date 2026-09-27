@@ -47,6 +47,20 @@ export default async function BackupsPage() {
         description="Backups are performed by Neon, the database provider. This page reads their state; it cannot create or restore one."
       />
 
+      <OpsTable
+        title="The copy that does not live at Neon"
+        description="Every night at 03:00 Colombo the “Backup database” GitHub workflow dumps the database, restores it into a throwaway Postgres to prove it restores, encrypts it, and keeps it for 30 days."
+        columns={['Question', 'Answer']}
+        rows={[
+          ['Where', 'GitHub → Actions → “Backup database” → the run’s artifact (tableflow-db-<date>)'],
+          ['Opened with', 'The BACKUP_PASSPHRASE from your password manager; without it the file is noise'],
+          ['Verified', 'Each night the dump is restored and its tables and row counts compared with production; a mismatch is a red run'],
+          ['Restore', 'Into a NEW, empty Neon project or branch, never over the live one — DISASTER-RECOVERY.md §2'],
+        ]}
+        empty=""
+        footer="A red run of that workflow means last night has no copy. Read it the same morning."
+      />
+
       {!neon.configured ? (
         <OpsTable
           title="Not connected to the provider"

@@ -123,7 +123,7 @@ jobs:
           # opens a fresh shell on the server, which inherits none of it, so
           # they have to be named here to be forwarded. Without this the script
           # dies on `set -u` with "GHCR_TOKEN: unbound variable".
-          envs: GHCR_USER,GHCR_TOKEN,NEW_DATABASE_URL,NEW_DIRECT_URL
+          envs: GHCR_USER,GHCR_TOKEN,NEW_DATABASE_URL,NEW_DIRECT_URL,NEW_NEON_API_KEY,NEW_NEON_PROJECT_ID
           script: |
             set -euo pipefail
 
@@ -253,27 +253,32 @@ jobs:
             # first hand-run `docker compose up -d` would have pointed the
             # site at the wrong database. A refused secret must leave no
             # trace on the box.
+            #
+            # NEON_API_KEY and NEON_PROJECT_ID ride the same way (added
+            # 2026-09-28): they are what the console's Neon section and the
+            # backups page read when nothing has been saved in the console,
+            # so a fresh box watches its database from the first deploy.
             synced=0
             backup=""
-            if [ -n "${NEW_DATABASE_URL:-}" ] || [ -n "${NEW_DIRECT_URL:-}" ]; then
+            if [ -n "${NEW_DATABASE_URL:-}${NEW_DIRECT_URL:-}${NEW_NEON_API_KEY:-}${NEW_NEON_PROJECT_ID:-}" ]; then
               # Kept, timestamped, before any rewrite: a bad value here takes
               # the site down, and the previous one is what you want back.
               backup=".env.bak.$(date +%Y%m%d%H%M%S)"
               cp .env "$backup"
               synced=1
               cp .env .env.next
-              if [ -n "${NEW_DATABASE_URL:-}" ]; then
-                grep -v '^DATABASE_URL=' .env.next > .env.tmp || true
-                printf 'DATABASE_URL=%s\n' "$NEW_DATABASE_URL" >> .env.tmp
+              sync_var() {
+                # $1 = name in .env, $2 = value; empty value leaves the file alone.
+                [ -n "$2" ] || return 0
+                grep -v "^$1=" .env.next > .env.tmp || true
+                printf '%s=%s\n' "$1" "$2" >> .env.tmp
                 mv .env.tmp .env.next
-                echo "DATABASE_URL synced from the repository secret"
-              fi
-              if [ -n "${NEW_DIRECT_URL:-}" ]; then
-                grep -v '^DIRECT_URL=' .env.next > .env.tmp || true
-                printf 'DIRECT_URL=%s\n' "$NEW_DIRECT_URL" >> .env.tmp
-                mv .env.tmp .env.next
-                echo "DIRECT_URL synced from the repository secret"
-              fi
+                echo "$1 synced from the repository secret"
+              }
+              sync_var DATABASE_URL "${NEW_DATABASE_URL:-}"
+              sync_var DIRECT_URL "${NEW_DIRECT_URL:-}"
+              sync_var NEON_API_KEY "${NEW_NEON_API_KEY:-}"
+              sync_var NEON_PROJECT_ID "${NEW_NEON_PROJECT_ID:-}"
               mv .env.next .env
               chmod 600 .env
             fi
@@ -323,6 +328,10 @@ jobs:
           # Prisma migrates over a DIRECT connection, never the pooler, so the
           # two are separate settings and BOTH go stale together.
           NEW_DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          # Optional too. The console's Neon section and /admin/backups read
+          # these when nothing has been saved in the console.
+          NEW_NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEW_NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
 
       - name: Check the public URL, once DNS points here
         # Only meaningful after cutover. Skipped — not failed — while
