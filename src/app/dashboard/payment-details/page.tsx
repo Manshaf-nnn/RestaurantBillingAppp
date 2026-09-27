@@ -1,9 +1,10 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Landmark } from 'lucide-react'
+import { BarChart3, Landmark } from 'lucide-react'
 
 import { AutoRefresh } from '@/components/auto-refresh'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/feedback'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getOnlinePayments } from '@/features/payments/queries'
@@ -92,6 +93,13 @@ export default async function PaymentDetailsPage({
       <PageHeader
         title="Payment details"
         description="Every account your money is filed under, and the bank transfers waiting to be confirmed."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/reports/payment-details">
+              <BarChart3 /> Payment details report
+            </Link>
+          </Button>
+        }
       />
 
       <div className="mb-4">

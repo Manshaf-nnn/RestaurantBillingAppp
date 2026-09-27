@@ -16,9 +16,11 @@ import { prisma } from '@/server/db/prisma'
 import { buildReportWorkbook, toCsv, toExcel, type ExportColumn } from '@/features/reports/export'
 import { getCashDrawerReport, getPettyCashReport } from '@/features/reports/cash'
 import {
+  previousRange,
   resolveRange as canonicalResolveRange,
   type DateRange as CanonicalRange,
 } from '@/features/reports/range'
+import { getPaymentReport } from '@/features/payments/report'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -404,6 +406,60 @@ export async function GET(request: NextRequest) {
           decidedBy: r.decidedBy?.name ?? '',
           decidedAt: r.decidedAt?.toISOString() ?? '',
         })),
+        format,
+        stamp,
+      )
+    }
+
+    /*
+     * The Payment details report's figures, as three sheets' worth of rows in
+     * one file: by account, by method, and the deposits and transfers. Behind
+     * ACCOUNT_VIEW like the screen, and narrowed by the same owner-assigned
+     * accounts inside `getPaymentReport`, so a file never shows more than the
+     * page above it did.
+     */
+    if (type === 'payment-details') {
+      await requirePermission(PERMISSIONS.ACCOUNT_VIEW)
+      const data = await getPaymentReport({
+        user,
+        branchIds,
+        from: range.from,
+        to: range.to,
+        previous: previousRange(range),
+        timeZone: restaurant.timezone,
+      })
+      const rows: Array<Record<string, unknown>> = [
+        ...data.byAccount.map((row) => ({
+          section: 'By account', name: row.name, count: '',
+          collected: money(row.collected), refunded: money(row.refunded), net: money(row.net),
+          balance: money(data.balances.find((b) => b.code === row.code)?.balance ?? 0), when: '', by: '', note: '',
+        })),
+        ...data.byMethod.map((row) => ({
+          section: 'By method', name: row.method, count: row.count,
+          collected: money(row.collected), refunded: money(row.refunded), net: money(row.net),
+          balance: '', when: '', by: '', note: '',
+        })),
+        ...data.movements.map((row) => ({
+          section: row.kind, name: row.kind === 'Deposit' ? row.account : `${row.account} → ${row.counterparty ?? ''}`,
+          count: '', collected: '', refunded: '', net: money(row.amount), balance: '',
+          when: row.at, by: row.actorName ?? '', note: row.reason ?? '',
+        })),
+      ]
+      return respond(
+        'Payment details',
+        [
+          { header: 'Section', key: 'section' },
+          { header: 'Account / method', key: 'name' },
+          { header: 'Payments', key: 'count' },
+          { header: 'Collected', key: 'collected' },
+          { header: 'Refunded', key: 'refunded' },
+          { header: 'Net / amount', key: 'net' },
+          { header: 'Balance now', key: 'balance' },
+          { header: 'When', key: 'when' },
+          { header: 'By', key: 'by' },
+          { header: 'Reason', key: 'note' },
+        ],
+        rows,
         format,
         stamp,
       )

@@ -556,6 +556,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/dashboard/reports/purchasing', label: 'Purchasing report', icon: Truck, permission: PERMISSIONS.REPORT_PURCHASING },
       { href: '/dashboard/reports/cash-drawer', label: 'Cash drawer report', icon: Wallet, permission: PERMISSIONS.REPORT_CASH },
       { href: '/dashboard/reports/petty-cash', label: 'Petty cash report', icon: Coins, permission: PERMISSIONS.REPORT_CASH },
+      { href: '/dashboard/reports/payment-details', label: 'Payment details report', icon: Landmark, permission: PERMISSIONS.ACCOUNT_VIEW },
       { href: '/dashboard/qr', label: 'QR code', icon: QrCode, permission: PERMISSIONS.QR_VIEW },
     /*
      * ar.md §1 — what guests meet when they scan, as opposed to the printed

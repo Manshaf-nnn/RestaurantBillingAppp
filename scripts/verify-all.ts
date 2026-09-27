@@ -320,6 +320,9 @@ const SERVICE = [
   // till's own accept — the plain status change refuses it, which is the bug
   // the Delivery tab's button hit — and the cashier's list leaves it out.
   'delivery-accept-test',
+  // The Payment details report adds up to the account balances, and a
+  // staff member sees only the accounts the owner gave them.
+  'payment-report-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',
