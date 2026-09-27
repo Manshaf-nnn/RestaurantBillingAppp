@@ -123,7 +123,7 @@ jobs:
           # opens a fresh shell on the server, which inherits none of it, so
           # they have to be named here to be forwarded. Without this the script
           # dies on `set -u` with "GHCR_TOKEN: unbound variable".
-          envs: GHCR_USER,GHCR_TOKEN,NEW_DATABASE_URL
+          envs: GHCR_USER,GHCR_TOKEN,NEW_DATABASE_URL,NEW_DIRECT_URL
           script: |
             set -euo pipefail
 
@@ -209,16 +209,33 @@ jobs:
             # session. When it is unset — the ordinary case — nothing is
             # touched and the file on the box stays authoritative.
             # Already in deploy/ovh — the script cd'd there before pulling.
-            if [ -n "${NEW_DATABASE_URL:-}" ]; then
+            #
+            # BOTH urls, because Prisma uses two. `DATABASE_URL` is the pooled
+            # endpoint the app serves from; `DIRECT_URL` is the unpooled one it
+            # MIGRATES over, because a migration cannot run through a pooler.
+            # They differ only by `-pooler` in the hostname, they go stale
+            # together, and updating only the first is a deploy that gets
+            # further and still fails — which is exactly what happened on the
+            # first attempt at this fix.
+            if [ -n "${NEW_DATABASE_URL:-}" ] || [ -n "${NEW_DIRECT_URL:-}" ]; then
               # Kept, timestamped, before any rewrite: a bad value here takes
               # the site down, and the previous one is what you want back.
               cp .env ".env.bak.$(date +%Y%m%d%H%M%S)"
-              # Every other line survives untouched.
-              grep -v '^DATABASE_URL=' .env > .env.next || true
-              printf 'DATABASE_URL=%s\n' "$NEW_DATABASE_URL" >> .env.next
+              cp .env .env.next
+              if [ -n "${NEW_DATABASE_URL:-}" ]; then
+                grep -v '^DATABASE_URL=' .env.next > .env.tmp || true
+                printf 'DATABASE_URL=%s\n' "$NEW_DATABASE_URL" >> .env.tmp
+                mv .env.tmp .env.next
+                echo "DATABASE_URL synced from the repository secret"
+              fi
+              if [ -n "${NEW_DIRECT_URL:-}" ]; then
+                grep -v '^DIRECT_URL=' .env.next > .env.tmp || true
+                printf 'DIRECT_URL=%s\n' "$NEW_DIRECT_URL" >> .env.tmp
+                mv .env.tmp .env.next
+                echo "DIRECT_URL synced from the repository secret"
+              fi
               mv .env.next .env
               chmod 600 .env
-              echo "DATABASE_URL synced from the repository secret"
             fi
 
             # Migrations run BEFORE the new container takes traffic, in a
@@ -253,6 +270,9 @@ jobs:
           # Optional. Set the DATABASE_URL repository secret and the next
           # deploy rewrites the server's .env to match — see the step below.
           NEW_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Prisma migrates over a DIRECT connection, never the pooler, so the
+          # two are separate settings and BOTH go stale together.
+          NEW_DIRECT_URL: ${{ secrets.DIRECT_URL }}
 
       - name: Check the public URL, once DNS points here
         # Only meaningful after cutover. Skipped — not failed — while
