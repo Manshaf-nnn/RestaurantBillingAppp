@@ -8,7 +8,7 @@ import { AppError } from '@/lib/errors'
 import { requireSuperAdmin } from '@/server/auth/guard'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { openSecret } from '@/server/crypto/secret-box'
-import { NeonApiError, listProjects } from '@/server/neon/client'
+import { NeonApiError, listEndpoints, listProjects } from '@/server/neon/client'
 import {
   NEON_SECRET_NAMESPACE,
   clearNeonConfig,
@@ -16,8 +16,32 @@ import {
   sealApiKey,
   writeNeonConfig,
 } from '@/server/neon/config'
-import { runNeonWatch } from '@/server/neon/monitor'
+import { appDatabaseHost, endpointKey, runNeonWatch } from '@/server/neon/monitor'
 import type { NeonConfig, NeonProjectSummary } from '@/server/neon/types'
+
+/**
+ * Which of the key's projects is the one the app is actually connected to.
+ *
+ * The right default is not "the first project" or "the one called
+ * production" — on 2026-09-27 the project called production was the wrong
+ * one. It is the project whose endpoint DATABASE_URL names. Asking Neon for
+ * each project's endpoints costs one call per project, capped so a key that
+ * sees a hundred projects does not turn saving into a minute-long wait.
+ */
+async function detectProjectForApp(apiKey: string, projects: NeonProjectSummary[]): Promise<string | null> {
+  const host = appDatabaseHost()
+  if (!host || !host.includes('neon.tech')) return null
+  const wanted = endpointKey(host)
+  for (const project of projects.slice(0, 12)) {
+    try {
+      const endpoints = await listEndpoints(apiKey, project.id)
+      if (endpoints.some((endpoint) => endpointKey(endpoint.host) === wanted)) return project.id
+    } catch {
+      // A project this key cannot inspect is not the one we are looking for.
+    }
+  }
+  return null
+}
 
 /**
  * What the platform operator may do about the database provider.
@@ -87,7 +111,8 @@ export async function saveNeonConfigAction(
         data.projectId ||
         existing.projectId ||
         process.env.NEON_PROJECT_ID ||
-        (projects.length === 1 ? projects[0]!.id : null)
+        (projects.length === 1 ? projects[0]!.id : null) ||
+        (await detectProjectForApp(apiKey, projects))
       if (projectId && !projects.some((project) => project.id === projectId)) {
         throw new AppError(
           `This key cannot see a project with id "${projectId}". A key made inside an organisation sees only that organisation's projects — make the key where the production project lives.`,

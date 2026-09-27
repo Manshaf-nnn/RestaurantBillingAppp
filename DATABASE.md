@@ -75,3 +75,26 @@ noticed.
 - **When it does go wrong:** run the "Diagnose database" GitHub workflow
   first. It prints Neon's raw error from the server; Prisma's `P1001`
   paraphrase hides whether it was quota, password or hostname.
+
+## Never losing the data
+
+Two copies, in two places, on two mechanisms:
+
+1. **Neon's point-in-time history** (same account): undoes a bad hour.
+   Keep History retention at 7 days or more.
+2. **The nightly "Backup database" workflow** (`.github/workflows/backup-db.yml`,
+   03:00 Colombo): `pg_dump` over `DIRECT_URL`, restored into a throwaway
+   Postgres and compared table-for-table and row-for-row with production,
+   encrypted with the `BACKUP_PASSPHRASE` secret, kept as a GitHub artifact
+   for 30 days. A night it cannot dump, cannot restore, or cannot encrypt
+   is a red run — read those. The passphrase must live in a password
+   manager: without it the artifacts are noise.
+
+What is automatic: hourly watching and alerts, the invoice reminders, the
+nightly verified backup, the deploy refusing a wrong database and rolling
+its change back, the app reconnecting the moment the database answers.
+
+What is not, and cannot be: paying Neon. Keep the card valid, keep the plan
+paid, and read the reminder emails. A suspended project is intact but
+unreadable, and the platform can only tell you — loudly and early — never
+pay on your behalf.

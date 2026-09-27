@@ -117,8 +117,8 @@ export function NeonPanel({
             htmlFor="neon-project"
             hint={
               projects.length
-                ? 'The project that holds the production database.'
-                : 'Save the key first and the projects it can see appear here; or paste the project id from the Neon project page.'
+                ? 'Detected by matching DATABASE_URL against each project’s endpoints, so the watched project is the one the app really uses.'
+                : 'Leave blank: on save the project is detected from the app’s own connection string. Or paste a project id from the Neon project page.'
             }
           >
             {projects.length ? (
@@ -128,7 +128,7 @@ export function NeonPanel({
                 value={projectId}
                 onChange={(event) => setProjectId(event.target.value)}
               >
-                <option value="">Choose a project…</option>
+                <option value="">Detect from the app&apos;s connection string (recommended)</option>
                 {projects.map((project) => (
                   <option key={project.id} value={project.id}>
                     {project.name} · {project.regionId ?? 'region ?'} · {project.id}
