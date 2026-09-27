@@ -35,6 +35,23 @@ export const adjustStockSchema = z.object({
   reason: z.string().trim().min(2, 'Give a reason').max(200),
   /** Which shelf. Checked against what the caller may reach, never trusted. */
   branchId: z.string().min(1).optional().or(z.literal('')),
+  /**
+   * What this stock cost, per the unit being entered, in major currency.
+   *
+   * ── Why it is per ENTERED unit, not per base unit ─────────────────────────
+   *
+   * Because it is copied off an invoice, and invoices say "550 a kilo". The
+   * item's base unit may be grams, and asking somebody to divide by a thousand
+   * in their head is how a layer ends up valued a thousand times over. The
+   * action multiplies by the quantity to get an exact total and hands the
+   * ledger that, which also dodges the rounding trap documented on
+   * `postMovement.totalValue`.
+   *
+   * Only meaningful on an IN. Left out, the stock is valued at what the item
+   * already costs — which is the right default for a correction to a count,
+   * and exactly the wrong one for stock that arrived at a new price.
+   */
+  unitCost: z.coerce.number().nonnegative().max(10_000_000).optional(),
 })
 
 export const openingBalanceSchema = z.object({

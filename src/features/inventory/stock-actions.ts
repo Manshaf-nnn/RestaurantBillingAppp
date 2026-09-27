@@ -132,19 +132,33 @@ export async function adjustStockAction(
     const reference = `ADJ-${String(seq).padStart(4, '0')}`
     const unit = data.unit ?? item.unit
     /*
-     * What the correction is worth, for the desk's amount column — at what the
-     * next unit costs (FIFO.md), not the blended average. The ledger decides
-     * the real figure when the movement posts; this is what the approver sees
-     * before it does, so the two should agree as closely as they can.
+     * What this stock cost, when the person entering it said so.
+     *
+     * An exact total rather than a per-unit rate, because the price is typed
+     * per the unit on screen ("550 a kilo") while the ledger values in base
+     * units — and `postMovement.totalValue` documents why a per-unit integer
+     * cannot carry the answer without rounding the layer wrong.
      */
+    const pricedTotal =
+      data.direction === 'IN' && data.unitCost !== undefined && data.unitCost > 0
+        ? Math.round(
+            data.unitCost * minorUnitFactor((await requireRestaurant(user.restaurantId)).currency) * data.quantity,
+          )
+        : undefined
+
     const rate = await currentUnitCost(prisma, {
       restaurantId: user.restaurantId,
       itemId: item.id,
       branchId,
     })
-    const amount = Math.round(
-      Math.abs(toBaseUnits(data.quantity, unit, item)) * (rate || item.costPerUnit),
-    )
+    /*
+     * What the approver sees before anything moves. A priced correction is
+     * worth exactly what was typed; an unpriced one is valued at what the next
+     * unit costs (FIFO.md) rather than the blended average.
+     */
+    const amount =
+      pricedTotal ??
+      Math.round(Math.abs(toBaseUnits(data.quantity, unit, item)) * (rate || item.costPerUnit))
 
     if (!can(user, PERMISSIONS.INVENTORY_ADJUST)) {
       const request = await requestApproval({
@@ -165,6 +179,13 @@ export async function adjustStockAction(
           direction: data.direction,
           branchId,
           balanceBefore: item.quantity,
+          /*
+           * The price travels with the request. Without it, approving a
+           * priced correction would post the stock at the item's OLD cost —
+           * the very thing the field exists to avoid — and nothing on screen
+           * would say the figure had changed between asking and signing.
+           */
+          ...(pricedTotal !== undefined ? { totalValue: pricedTotal } : {}),
         },
       })
       // `requestApproval` writes the APPROVAL_REQUESTED audit row for every
@@ -177,6 +198,7 @@ export async function adjustStockAction(
       restaurantId: user.restaurantId, branchId,
       itemId: data.itemId, quantity: data.quantity,
       unit: data.unit, direction: data.direction, reason: data.reason,
+      totalValue: pricedTotal,
       reference, userId: user.id,
     })
     await audit({
@@ -186,6 +208,7 @@ export async function adjustStockAction(
       after: {
         balance: posted.balanceAfter, reference, direction: data.direction,
         quantity: data.quantity, unit, reason: data.reason,
+        ...(pricedTotal !== undefined ? { unitCost: data.unitCost, totalValue: pricedTotal } : {}),
       },
     })
     revalidateInventory(data.itemId)

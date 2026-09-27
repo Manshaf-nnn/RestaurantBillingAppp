@@ -153,6 +153,10 @@ export async function decideApprovalAction(
               quantity?: number
               unit?: StockUnit | null
               direction?: 'IN' | 'OUT'
+              /* What the requester said it cost. Carried from the request so
+               * approving posts the stock at that price rather than at the
+               * item's older one — see adjustStockAction. */
+              totalValue?: number
             } | null)
           : null
 
@@ -183,6 +187,7 @@ export async function decideApprovalAction(
                 quantity: adjustment.quantity!,
                 unit: adjustment.unit ?? undefined,
                 direction: adjustment.direction!,
+                totalValue: adjustment.totalValue,
                 reason: target.reason,
                 reference: adjustment.reference ?? null,
                 /*

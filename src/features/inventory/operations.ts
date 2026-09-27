@@ -186,19 +186,33 @@ export async function adjustStock(
     direction: 'IN' | 'OUT'
     reason: string
     reference?: string | null
+    /**
+     * Exact worth of an inbound correction, minor units.
+     *
+     * Passed when stock arrived at a price the item does not already carry —
+     * a market run, an opening balance, a delivery with no paperwork. Without
+     * it `postMovement` values the new layer at the item's current cost, which
+     * means a new price can never enter the FIFO queue at all.
+     *
+     * Ignored on an OUT: what leaving stock is worth is decided by the layers
+     * it is drawn from, never by the person removing it.
+     */
+    totalValue?: number
     tx?: Prisma.TransactionClient
   },
 ): Promise<PostedMovement> {
   if (params.reason.trim().length < 2) {
     throw new AppError('Give a reason for the adjustment', 400, 'ADJUSTMENT_NO_REASON')
   }
-  const { tx, reference, ...rest } = params
+  const { tx, reference, totalValue, ...rest } = params
   const run = (client: Prisma.TransactionClient) =>
     postMovement(client, {
       ...rest,
       type: params.direction === 'IN' ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
       enteredUnit: params.unit,
       reason: params.reason.trim(),
+      /* Only inbound. See the note on `totalValue` above. */
+      ...(params.direction === 'IN' && totalValue !== undefined ? { totalValue } : {}),
       ...(reference ? { referenceType: 'StockAdjustment', referenceId: reference } : {}),
     })
   return tx ? run(tx) : prisma.$transaction(run)

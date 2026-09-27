@@ -923,6 +923,8 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
   const [type, setType] = React.useState<'PURCHASE' | 'WASTE' | 'ADJUSTMENT' | 'EXPIRY'>('PURCHASE')
   const [quantity, setQuantity] = React.useState('')
   const [reason, setReason] = React.useState('')
+  /** Blank keeps the item's current cost, which is right for a correction. */
+  const [unitCost, setUnitCost] = React.useState('')
   const [saving, setSaving] = React.useState(false)
 
   React.useEffect(() => {
@@ -930,8 +932,16 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
       setType('PURCHASE')
       setQuantity('')
       setReason('')
+      setUnitCost('')
     }
   }, [item])
+
+  /*
+   * Only stock arriving can carry a price. An adjustment may go either way, so
+   * it is the sign of the quantity that decides — the same rule the action
+   * applies server-side.
+   */
+  const comingIn = type === 'PURCHASE' || (type === 'ADJUSTMENT' && Number(quantity) > 0)
 
   const save = async () => {
     if (!item) return
@@ -941,6 +951,7 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
       type,
       quantity: Number(quantity),
       reason,
+      unitCost: comingIn && unitCost.trim() ? Number(unitCost) : undefined,
     }))
     setSaving(false)
     if (result.ok) {
@@ -974,6 +985,39 @@ function MovementDialog({ item, onClose }: { item: InventoryRow | null; onClose:
         <Field label="Quantity" hint={type === 'ADJUSTMENT' ? 'Use a negative number to reduce' : undefined}>
           <Input type="number" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
         </Field>
+        {/*
+          The price this lot cost.
+
+          Without it, stock coming in is valued at whatever the item already
+          costs, so buying the same thing again at a higher price could not be
+          recorded at all — which is why people tried making a second item
+          under a name that was already taken. The edit form has refused a
+          typed cost for a while, telling people to "receive stock at the new
+          price"; this is where they do that.
+        */}
+        {comingIn && (
+          <Field
+            label={`Price per ${item?.unit.toLowerCase() ?? 'unit'} (optional)`}
+            hint="Leave blank to keep the current cost."
+          >
+            <Input
+              type="number"
+              step="any"
+              min={0}
+              value={unitCost}
+              onChange={(e) => setUnitCost(e.target.value)}
+              placeholder={item ? String(item.costPerUnit / 100) : ''}
+            />
+          </Field>
+        )}
+        {comingIn && unitCost.trim() && (
+          <p className="-mt-1 text-xs text-muted-foreground">
+            This price applies to this lot only. It waits behind the {item?.quantity}{' '}
+            {item?.unit.toLowerCase()} you already have and takes over once that runs out. For a
+            supplier delivery, <a className="underline" href="/dashboard/purchases">Purchases</a> records
+            the invoice and supplier too.
+          </p>
+        )}
         <Field label="Reason">
           <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Optional" />
         </Field>

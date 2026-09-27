@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
+import { minorUnitFactor } from '@/lib/money'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, requirePermission } from '@/server/auth/guard'
@@ -14,6 +15,7 @@ import { postMovement } from './ledger'
 import { nextPurchaseNumber } from '@/features/purchasing/service'
 import { notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
+import { requireRestaurant } from '@/server/db/tenant'
 import { realtime } from '@/server/realtime/emitter'
 import {
   inventoryItemSchema,
@@ -279,7 +281,18 @@ export async function saveInventoryItem(
         revalidatePath('/dashboard/inventory')
         return { id: record.id }
       } catch (error) {
-        if (isUniqueViolation(error)) throw new ConflictError('An item with that name already exists')
+        if (isUniqueViolation(error)) {
+          /*
+           * The commonest reason somebody reaches here is not a genuine
+           * duplicate: it is wanting the same item at a NEW price, and
+           * reasonably assuming a second item is how you record that. It is
+           * not — a price belongs to a delivery, not to an item — so the
+           * message names the two places that actually do it.
+           */
+          throw new ConflictError(
+            'An item with that name already exists. To add more of it at a new price, open the item and use Stock in — or record it under Purchases if it came from a supplier.',
+          )
+        }
         throw error
       }
     },
@@ -339,6 +352,29 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
       // land on another.
       const branchId = data.branchId || (await actingBranchId(user))
 
+      /*
+       * What this delivery cost, when whoever recorded it said so.
+       *
+       * An exact total rather than a per-unit rate: `postMovement.totalValue`
+       * documents why an integer per-unit cost cannot carry the answer without
+       * valuing the layer wrong — 6.50 over 1,000 units is 0.0065 each, which
+       * rounds to 0 or to 1 and books the batch at nothing or at 54% over.
+       * Quantity here is already in the item's own unit, so the multiplication
+       * is the whole conversion.
+       *
+       * Inbound only. What leaving stock is worth is decided by the layers it
+       * is drawn from, never by the person removing it.
+       */
+      const inbound = resolved === 'PURCHASE' || resolved === 'CUSTOMER_RETURN' || resolved === 'ADJUSTMENT_IN'
+      const pricedTotal =
+        inbound && data.unitCost !== undefined && data.unitCost > 0
+          ? Math.round(
+              data.unitCost *
+                minorUnitFactor((await requireRestaurant(user.restaurantId)).currency) *
+                Math.abs(data.quantity),
+            )
+          : undefined
+
       const posted = await prisma.$transaction((tx) =>
         postMovement(tx, {
           restaurantId: user.restaurantId,
@@ -349,6 +385,7 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
           userId: user.id,
           branchId,
           locationId: data.storageLocationId || null,
+          ...(pricedTotal !== undefined ? { totalValue: pricedTotal } : {}),
         }),
       )
       const nextQuantity = posted.balanceAfter
@@ -361,7 +398,10 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
         entity: 'InventoryItem',
         entityId: item.id,
         before: { quantity: item.quantity },
-        after: { quantity: nextQuantity, type: data.type },
+        after: {
+          quantity: nextQuantity, type: data.type,
+          ...(pricedTotal !== undefined ? { unitCost: data.unitCost, totalValue: pricedTotal } : {}),
+        },
       })
 
       if (nextQuantity <= item.reorderLevel) {

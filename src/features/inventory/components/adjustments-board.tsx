@@ -85,6 +85,8 @@ export function AdjustmentsBoard({
   const [quantity, setQuantity] = React.useState('')
   const [unit, setUnit] = React.useState('')
   const [reason, setReason] = React.useState('')
+  /** Blank means "value it at what the item already costs". */
+  const [unitCost, setUnitCost] = React.useState('')
 
   const chosen = items.find((i) => i.id === itemId) ?? null
   React.useEffect(() => {
@@ -105,6 +107,8 @@ export function AdjustmentsBoard({
         direction,
         reason: reason.trim(),
         branchId: branchId ?? undefined,
+        /* Only sent on the way in, and only when typed. */
+        unitCost: direction === 'IN' && unitCost.trim() ? Number(unitCost) : undefined,
       }),
     )
     setBusy(false)
@@ -120,6 +124,7 @@ export function AdjustmentsBoard({
     setItemId('')
     setQuantity('')
     setReason('')
+    setUnitCost('')
     router.refresh()
   }
 
@@ -190,6 +195,42 @@ export function AdjustmentsBoard({
               </select>
             </div>
           </div>
+
+          {/*
+            What it cost, when stock came IN at a price the item does not
+            already carry.
+
+            Without this the ledger values the new stock at the item's CURRENT
+            cost, so a new price can never enter the FIFO queue — which is what
+            drove people to try creating a second item under the same name to
+            get a new price in, and to hit the duplicate-name error instead.
+
+            Only on the way in: what leaving stock is worth is decided by the
+            layers it is drawn from, never by whoever removes it.
+          */}
+          {direction === 'IN' && (
+            <div className="space-y-1 sm:col-span-2">
+              <Label className="text-xs" htmlFor="adj-cost">
+                Price per {(unit || 'unit').toLowerCase()} <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <Input
+                id="adj-cost"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="any"
+                placeholder={`Leave blank to use the current cost`}
+                value={unitCost}
+                onChange={(event) => setUnitCost(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Sets the price for this batch only. It stays queued behind stock you already have and
+                takes over once that runs out. For a supplier delivery use{' '}
+                <a className="underline" href="/dashboard/purchases">Purchases</a> instead, so the invoice
+                and supplier are recorded too.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1 sm:col-span-2">
             <Label className="text-xs" htmlFor="adj-reason">Why</Label>

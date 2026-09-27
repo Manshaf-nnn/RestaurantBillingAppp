@@ -73,6 +73,25 @@ export const stockMovementSchema = z.object({
   type: z.enum(['PURCHASE', 'CONSUMPTION', 'WASTE', 'ADJUSTMENT', 'RETURN', 'EXPIRY']),
   quantity: z.coerce.number().refine((value) => value !== 0, 'Quantity cannot be zero'),
   reason: z.string().trim().max(160).optional().or(z.literal('')),
+  /**
+   * What this stock cost, per the item's own unit, in major currency.
+   *
+   * ── Why stock in needs it ─────────────────────────────────────────────────
+   *
+   * The same item bought again at a higher price is not a new item — a price
+   * belongs to a delivery, not to a name. Without somewhere to put the new
+   * price, an inbound movement is valued at whatever the item already costs,
+   * so a price rise never reaches the books and the only apparent way to
+   * record one is a second item under a name that is already taken.
+   *
+   * Given, it values that delivery's FIFO layer alone: older stock keeps
+   * costing what it cost, and the new price applies only once that runs out.
+   * Left out, the old behaviour stands, which is right for a correction to a
+   * count.
+   *
+   * Only meaningful when stock is coming IN.
+   */
+  unitCost: z.coerce.number().nonnegative().max(10_000_000).optional(),
 })
 export type StockMovementInput = z.infer<typeof stockMovementSchema>
 
