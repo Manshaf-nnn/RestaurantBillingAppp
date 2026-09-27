@@ -123,7 +123,7 @@ jobs:
           # opens a fresh shell on the server, which inherits none of it, so
           # they have to be named here to be forwarded. Without this the script
           # dies on `set -u` with "GHCR_TOKEN: unbound variable".
-          envs: GHCR_USER,GHCR_TOKEN
+          envs: GHCR_USER,GHCR_TOKEN,NEW_DATABASE_URL
           script: |
             set -euo pipefail
 
@@ -194,6 +194,33 @@ jobs:
               exit 1
             fi
 
+            # ── The connection string, when the repository carries one ──────
+            #
+            # `deploy/ovh/.env` on this box is the source of truth for
+            # DATABASE_URL, and that is fine until the day it has to change.
+            # Neon archives an idle branch and issues a NEW endpoint hostname
+            # when it does, which is exactly what took this site down on
+            # 2026-09-27: the server went on dialling an address that no longer
+            # existed, and fixing it needed SSH that nobody had to hand.
+            #
+            # So the repository may now hold a DATABASE_URL secret. When it is
+            # set, it is written here before anything tries to connect, which
+            # makes rotating the credential a deploy rather than a shell
+            # session. When it is unset — the ordinary case — nothing is
+            # touched and the file on the box stays authoritative.
+            # Already in deploy/ovh — the script cd'd there before pulling.
+            if [ -n "${NEW_DATABASE_URL:-}" ]; then
+              # Kept, timestamped, before any rewrite: a bad value here takes
+              # the site down, and the previous one is what you want back.
+              cp .env ".env.bak.$(date +%Y%m%d%H%M%S)"
+              # Every other line survives untouched.
+              grep -v '^DATABASE_URL=' .env > .env.next || true
+              printf 'DATABASE_URL=%s\n' "$NEW_DATABASE_URL" >> .env.next
+              mv .env.next .env
+              chmod 600 .env
+              echo "DATABASE_URL synced from the repository secret"
+            fi
+
             # Migrations run BEFORE the new container takes traffic, in a
             # throwaway container on the new image. If this fails the deploy
             # stops here and the old version keeps serving.
@@ -223,6 +250,9 @@ jobs:
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Set the DATABASE_URL repository secret and the next
+          # deploy rewrites the server's .env to match — see the step below.
+          NEW_DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Check the public URL, once DNS points here
         # Only meaningful after cutover. Skipped — not failed — while
