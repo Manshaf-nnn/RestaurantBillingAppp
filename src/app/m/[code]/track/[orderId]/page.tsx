@@ -114,6 +114,12 @@ export default async function QrTrackOrderPage({
           tableNumber: order.tableNumber ?? order.table?.number ?? null,
           type: order.type,
           deliveryLocationName: order.deliveryLocationName,
+          /*
+           * The customer's own screen is the only place this appears. The
+           * order is already scoped to this device's guest session, so seeing
+           * the PIN means being the person who placed the order.
+           */
+          deliveryPin: order.deliveryPin,
           customerName: order.customerName,
           grandTotal: order.grandTotal,
           estimatedMinutes: order.estimatedMinutes,

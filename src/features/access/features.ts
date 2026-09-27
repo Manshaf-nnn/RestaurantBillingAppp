@@ -168,6 +168,21 @@ export const FEATURES: Feature[] = [
     routes: ['/dashboard/analytics'],
   },
   {
+    key: 'deliveryDesk',
+    label: 'Delivery Desk',
+    group: 'Overview',
+    description: 'Handing ready deliveries over at the door, against the customer\u2019s PIN.',
+    actions: [
+      {
+        key: 'view',
+        label: 'Use the desk',
+        permission: PERMISSIONS.ORDER_UPDATE_STATUS,
+        hint: 'See ready deliveries and close them with the PIN the customer reads out.',
+      },
+    ],
+    routes: ['/dashboard/delivery'],
+  },
+  {
     key: 'approvals',
     label: 'Approvals',
     group: 'Overview',

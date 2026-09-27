@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { AutoRefresh } from '@/components/auto-refresh'
 import { CashierBoard } from '@/features/cashier/components/cashier-board'
+import { DeliveryBoard } from '@/features/cashier/components/delivery-board'
 import { PosTabs } from '@/features/cashier/components/pos-tabs'
 import { PosTerminal } from '@/features/cashier/components/pos-terminal'
 import { posTabsFor, resolvePosTab } from '@/features/cashier/pos-tabs'
@@ -22,7 +23,7 @@ import { ShiftPanel } from '@/features/shifts/components/shift-panel'
 import { loadShiftPanel } from '@/features/shifts/panel-data'
 import { listCustomerCategories } from '@/features/customers/service'
 import { getPublicMenu } from '@/features/menu/queries'
-import { getCashierQueue, readOptions } from '@/features/orders/queries'
+import { getCashierQueue, getDeliveryQueue, readOptions } from '@/features/orders/queries'
 import { readPaperWidths } from '@/features/printing/paper'
 import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { localeForCurrency } from '@/lib/money'
@@ -157,6 +158,56 @@ export default async function PosPage({
       </div>
     </header>
   )
+
+  // ── Deliveries ────────────────────────────────────────────────────────────
+  if (tab === 'delivery') {
+    const branchIds = branchId ? [branchId] : selection.branchIds
+    const deliveries = await getDeliveryQueue(user.restaurantId, branchIds)
+
+    return (
+      <div className="mx-auto w-full max-w-7xl p-4 pb-24 lg:pb-4">
+        {header}
+        <DeliveryBoard
+          currency={restaurant.currency}
+          locale={locale}
+          orders={deliveries.map((order) => {
+            const paid = order.payments
+              .filter((payment) => payment.status === 'PAID')
+              .reduce((sum, payment) => sum + payment.amount, 0)
+            return {
+              id: order.id,
+              orderNumber: order.orderNumber,
+              status: order.status,
+              paymentStatus: order.paymentStatus,
+              placedAt: order.placedAt.toISOString(),
+              customerName: order.customerName,
+              customerPhone: order.customerPhone || null,
+              /*
+               * The snapshot, not the live row: a place the owner has since
+               * renamed must still read as the guest chose it. The live row is
+               * loaded only for its note, which is for the rider and is not
+               * part of what was agreed.
+               */
+              place: order.deliveryLocationName,
+              placeNote: order.deliveryLocation?.note ?? null,
+              source: order.qrExperience?.name ?? null,
+              grandTotal: order.grandTotal,
+              outstanding: Math.max(0, order.grandTotal + order.tipAmount - paid),
+              notes: order.notes,
+              items: order.items.map((item) => ({
+                id: item.id,
+                name: item.name,
+                quantity: item.quantity,
+                lineTotal: item.lineTotal,
+                options: readOptions(item.options).map((option) => option.name).join(' · '),
+                notes: item.notes,
+              })),
+            }
+          })}
+        />
+      </div>
+    )
+  }
 
   // ── Orders ────────────────────────────────────────────────────────────────
   if (tab === 'orders') {

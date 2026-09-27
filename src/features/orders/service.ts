@@ -1,4 +1,5 @@
 import 'server-only'
+import { randomInt } from 'node:crypto'
 import type { Order, OrderItem, OrderStatus, Prisma } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
@@ -712,6 +713,16 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
               tableNumber: table?.number ?? null,
               deliveryLocationId: params.deliveryLocation?.id ?? null,
               deliveryLocationName: params.deliveryLocation?.name ?? null,
+              /*
+               * The handover PIN, for deliveries and nothing else.
+               *
+               * A dine-in guest is already sitting in front of the person
+               * carrying the plate, and a takeaway is collected at a counter
+               * by somebody standing there — neither needs proof that the food
+               * reached the right hands. A delivery is the only one where the
+               * two parties never meet until the doorstep.
+               */
+              deliveryPin: type === 'DELIVERY' ? mintDeliveryPin() : null,
               customerId: customer?.id ?? null,
               customerName: params.customerName,
               customerPhone: customerPhone,
@@ -1041,6 +1052,19 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlacedOrder>
  * (abc.md §3): a table is OCCUPIED or it is not, and `normalizeTableStatus`
  * answers that for any value the column still carries.
  */
+
+/**
+ * Four digits the customer reads out at the door.
+ *
+ * `randomInt` from node:crypto, not `Math.random`: the whole value of the PIN
+ * is that the rider cannot work it out, and a predictable generator makes a
+ * sequence of orders guessable from one known PIN. Padded rather than ranged
+ * from 1000 so that 0042 is as likely as 9042 — starting at 1000 would throw
+ * away a tenth of the space for the sake of never showing a leading zero.
+ */
+export function mintDeliveryPin(): string {
+  return String(randomInt(0, 10_000)).padStart(4, '0')
+}
 
 const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   PENDING: ['ACCEPTED', 'PREPARING', 'CANCELLED'],

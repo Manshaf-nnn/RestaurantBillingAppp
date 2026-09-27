@@ -1,21 +1,23 @@
 import { PERMISSIONS, can, type PermissionSubject } from '@/lib/rbac'
 
 /**
- * The POS is one screen with four tabs (abc.md §8): taking orders, the
- * cashier's bills and payments, the drawer, and handing the shift on. Which
- * tabs a person sees is a question about their permissions, answered here
- * once — the page, the tab strip and the tests all ask the same function.
+ * The POS is one screen with five tabs (abc.md §8): taking orders, the
+ * deliveries going out, the cashier's bills and payments, the drawer, and
+ * handing the shift on. Which tabs a person sees is a question about their
+ * permissions, answered here once — the page, the tab strip and the tests all
+ * ask the same function.
  *
  * Handover is last because it is the end of a shift, and it is HERE because
  * that is where the person finishing one is standing. The screen itself is
  * the same component the dashboard page mounts, reading the same server
  * data: one handover system, two doors onto it.
  */
-export const POS_TABS = ['orders', 'cashier', 'drawer', 'handover'] as const
+export const POS_TABS = ['orders', 'delivery', 'cashier', 'drawer', 'handover'] as const
 export type PosTab = (typeof POS_TABS)[number]
 
 export const POS_TAB_LABEL: Record<PosTab, string> = {
   orders: 'Orders',
+  delivery: 'Delivery',
   cashier: 'Cashier',
   drawer: 'Drawer',
   handover: 'Shift',
@@ -25,6 +27,16 @@ export const POS_TAB_LABEL: Record<PosTab, string> = {
 export function posTabsFor(user: PermissionSubject): PosTab[] {
   const tabs: PosTab[] = []
   if (can(user, PERMISSIONS.ORDER_CREATE)) tabs.push('orders')
+  /*
+   * Deliveries, for whoever accepts orders.
+   *
+   * `ORDER_ACCEPT` and not `PAYMENT_COLLECT`: taking a delivery in is
+   * accepting an order, not taking money — many of them are paid online, and
+   * the person who confirms them and chases the rider is not necessarily the
+   * one on the till. Gating it behind the cashier's permission would hide the
+   * screen from exactly the person whose job it is.
+   */
+  if (can(user, PERMISSIONS.ORDER_ACCEPT)) tabs.push('delivery')
   if (can(user, PERMISSIONS.PAYMENT_COLLECT)) tabs.push('cashier')
   if (can(user, PERMISSIONS.CASH_DRAWER_OPERATE) || can(user, PERMISSIONS.CASH_DRAWER_MANAGE)) {
     tabs.push('drawer')

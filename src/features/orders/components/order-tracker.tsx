@@ -93,6 +93,12 @@ export interface TrackedOrder {
   type: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'COUNTER'
   /** Where a delivery is going — "University — Boys Hostel". */
   deliveryLocationName: string | null
+  /**
+   * The four digits to read out at the door. Delivery orders only, and only
+   * ever sent to the customer's OWN tracker — the delivery desk is never given
+   * it, which is what makes saying it proof of anything.
+   */
+  deliveryPin?: string | null
   customerName: string
   grandTotal: number
   estimatedMinutes: number
@@ -339,6 +345,28 @@ export function OrderTracker({
       </header>
 
       <div className="space-y-5 p-4">
+        {/*
+          The PIN, as prominent as the order number.
+          
+          It is shown for as long as the order is open rather than only when it
+          is out for delivery: a customer who checks early should find it where
+          they last saw it, and hiding it until a particular status would teach
+          them it comes and goes. It disappears once the order is closed, when
+          it means nothing and repeating it only risks the next one.
+        */}
+        {initial.deliveryPin && !cancelled && initial.status !== 'SERVED' && initial.status !== 'COMPLETED' ? (
+          <section className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center">
+            <p className="text-xs font-medium text-muted-foreground">
+              Give this to the delivery person
+            </p>
+            <p className="mt-1 text-3xl font-bold tracking-[0.35em] tabular-nums text-primary">
+              {initial.deliveryPin}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              They cannot see it — reading it out is how your order is signed off.
+            </p>
+          </section>
+        ) : null}
         <AnimatePresence mode="wait">
           {cancelled ? (
             <motion.section

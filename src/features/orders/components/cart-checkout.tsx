@@ -170,17 +170,40 @@ export function CartCheckout({
   const nameRef = React.useRef(state.customer.name)
   nameRef.current = state.customer.name
 
+  /**
+   * What the number the guest typed turned out to have on it.
+   *
+   * `canRedeem` is the server's advice, not its permission: it is checked
+   * again when the order is placed, against an earlier order from this same
+   * session. The screen uses it only to decide whether offering the points is
+   * honest — showing a spend button that would be quietly ignored is worse
+   * than not showing one.
+   */
+  const [account, setAccount] = React.useState<{ points: number; canRedeem: boolean } | null>(null)
+  const [spendPoints, setSpendPoints] = React.useState(false)
+
   React.useEffect(() => {
     const phone = state.customer.phone.trim()
+    if (phone.length < 7) {
+      // A half-typed number belongs to nobody; drop whatever the last one said.
+      setAccount(null)
+      setSpendPoints(false)
+    }
     if (!qrCode || phone.length < 7 || phone === knownPhone.current) return
     let live = true
     const timer = setTimeout(() => {
       void callAction(() => lookupGuestIdentity({ code: qrCode, phone }, slug)).then((result) => {
-        if (!live || !result.ok || !result.data.found) return
+        if (!live || !result.ok) return
+        if (!result.data.found) {
+          setAccount(null)
+          setSpendPoints(false)
+          return
+        }
         const name = result.data.name
         knownPhone.current = phone
         // Never over-write what the guest has already written.
         if (name && !nameRef.current.trim()) setCustomer({ name })
+        setAccount({ points: result.data.points, canRedeem: result.data.canRedeem })
       })
     }, 400)
     return () => {
@@ -329,7 +352,11 @@ export function CartCheckout({
       notes: orderNotes,
       deliveryLocationId: locationId,
       couponCode: state.couponCode || '',
-      redeemPoints: 0,
+      /*
+       * A request. The server spends nothing on the strength of it unless this
+       * device has ordered under this number before — see `provenPointsFor`.
+       */
+      redeemPoints: spendPoints && account?.canRedeem ? account.points : 0,
       items: state.lines.map((line) => ({
         foodId: line.foodId,
         quantity: line.quantity,
@@ -652,6 +679,44 @@ export function CartCheckout({
             <span>{adding ? 'Added to your bill' : 'To pay'}</span>
             <span>{formatMoney(totals?.grandTotal ?? subtotal, currency, locale)}</span>
           </div>
+
+          {/*
+            What this number already has, and whether it can be spent here.
+
+            Shown the moment the phone is recognised, because the owner's
+            point is that a returning guest should not have to go looking for
+            it. Spending is offered only where the server said this device has
+            ordered under this number before — otherwise the balance is stated
+            and the guest is told where it can be used, which is true and is
+            better than a button that would be silently ignored.
+          */}
+          {loyaltyEnabled && account && account.points > 0 ? (
+            <div className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs">
+              <p className="flex items-center gap-1.5 font-medium text-primary">
+                <Sparkles className="size-3.5 shrink-0" />
+                You have {account.points.toLocaleString()} point
+                {account.points === 1 ? '' : 's'}
+              </p>
+              {account.canRedeem ? (
+                <label className="mt-1.5 flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={spendPoints}
+                    onChange={(e) => setSpendPoints(e.target.checked)}
+                    className="mt-0.5 size-3.5 accent-[hsl(var(--primary))]"
+                  />
+                  <span className="text-muted-foreground">
+                    Use them on this order. We&rsquo;ll take off as much as they cover.
+                  </span>
+                </label>
+              ) : (
+                <p className="mt-1 text-muted-foreground">
+                  To spend them here, order once with this number first — or use them at the
+                  counter, where a person can check it is you.
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {showPointsEarned && loyaltyEnabled && loyaltyEarnRateX100 > 0
             ? (() => {

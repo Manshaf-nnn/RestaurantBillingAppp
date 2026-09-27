@@ -138,6 +138,10 @@ const SERVICE = [
   // and one category, and the panel never advertises an offer the engine
   // would refuse.
   'waiter-qr-flow-test',
+  // The delivery desk: ready deliveries, and the PIN that closes one. The
+  // desk is never sent the PIN, a wrong guess is counted and refused, and a
+  // second tap cannot complete an order twice.
+  'delivery-desk-test',
   // bank.md — internal accounts. The balance is not stored, it is the history
   // summed, so these pin that every way money can move lands there exactly
   // once: a deposit, both halves of a transfer or neither, and a customer

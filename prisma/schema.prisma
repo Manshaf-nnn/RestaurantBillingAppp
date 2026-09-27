@@ -1986,6 +1986,24 @@ model Order {
   /// too, so the kitchen ticket says "Villa 2 — gate code 4417".
   deliveryLocationName String?
 
+  /// The four digits the customer reads out at the door.
+  ///
+  /// Minted when a DELIVERY order is placed and shown only to the customer, on
+  /// their own tracker. The rider is never sent it: the delivery desk selects
+  /// every other column and not this one, and the only way to learn whether a
+  /// guess is right is to submit it and be told, one attempt at a time.
+  ///
+  /// Not hashed, deliberately. The customer has to be able to READ it back off
+  /// their screen, so it cannot be one-way; and it is a handover token worth
+  /// one meal for a few hours, not a credential. What protects it is that
+  /// nobody who has not been given it can see it, and that guessing is capped
+  /// — see `deliveryPinAttempts`.
+  deliveryPin String?
+  /// Wrong guesses so far. Caps brute force at the ORDER rather than only per
+  /// session: 10,000 combinations fall in minutes to a script that can retry
+  /// freely, and a rate limit alone resets with a new sign-in.
+  deliveryPinAttempts Int @default(0)
+
   @@unique([restaurantId, orderNumber])
   @@unique([restaurantId, idempotencyKey])
   @@index([restaurantId, status, placedAt])

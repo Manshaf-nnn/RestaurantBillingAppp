@@ -11,10 +11,12 @@ import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { pinRecipeVersions, reconcileIfDepleted, snapshotLineCosts } from '@/features/inventory/depletion'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { AppError, NotFoundError } from '@/lib/errors'
-import { PERMISSIONS, can } from '@/lib/rbac'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { assertBranchAccess, assertRecordBranch, requirePermission, requireTenantUser } from '@/server/auth/guard'
 import { getGuestSessionId, getOrCreateGuestSessionId } from '@/server/auth/session'
+import { findCustomerByPhone } from '@/features/customers/service'
+import { completeDeliveryWithPin } from './delivery-handover'
 import { prisma } from '@/server/db/prisma'
 import { locationsForGuest, resolveLocationForOrder } from '@/features/qr/locations'
 import { readPublicId } from '@/features/qr/public-id'
@@ -43,6 +45,7 @@ import {
   updateOrderStatusSchema,
   progressItemsSchema,
   serveOrderSchema,
+  completeDeliverySchema,
 } from './schema'
 import {
   buildDraft,
@@ -267,6 +270,50 @@ export async function quoteCart(
   })
 }
 
+/**
+ * How many points this device may actually spend, whatever it asked for.
+ *
+ * The proof is an earlier order from this same guest session placed under the
+ * same phone number. That is what `redeemRewardAsGuest` relies on after the
+ * order exists ("the bill names whose it is"); before the order exists, the
+ * session's own history is the nearest honest equivalent.
+ *
+ * Returns 0 rather than throwing when the proof is missing, so an unprovable
+ * request quietly becomes a full-price order instead of a checkout that fails
+ * on the last tap over something the guest cannot fix.
+ */
+async function provenPointsFor(params: {
+  restaurantId: string
+  guestSessionId: string
+  phone: string
+  asked: number
+}): Promise<number> {
+  if (!(params.asked > 0) || !params.phone) return 0
+
+  const customer = await findCustomerByPhone({
+    restaurantId: params.restaurantId,
+    phone: params.phone,
+  })
+  if (!customer || customer.isBlocked) return 0
+
+  const provenBefore = await prisma.order.count({
+    where: {
+      restaurantId: params.restaurantId,
+      guestSessionId: params.guestSessionId,
+      customerId: customer.id,
+      status: { not: 'CANCELLED' },
+    },
+  })
+  if (provenBefore === 0) return 0
+
+  /*
+   * Capped at the balance here too. `placeOrder` caps it again against the
+   * row it reads inside the fence, which is the one that counts; this only
+   * keeps an absurd number out of the draft.
+   */
+  return Math.min(params.asked, customer.loyaltyPoints)
+}
+
 export async function placeGuestOrder(
   input: unknown,
   slug?: string,
@@ -395,6 +442,27 @@ export async function placeGuestOrder(
         customerEmail: data.customerEmail || null,
         guestCount: data.guestCount ?? null,
         notes: data.notes || null,
+        /*
+         * Points, only where this DEVICE has already proved the number.
+         *
+         * `redeemPoints` was taken out of the public schema because typing a
+         * phone number is not owning it — anyone could have spent a stranger's
+         * points by putting their number on an order. It is back, under the
+         * same proof `redeemRewardAsGuest` uses one step later: an earlier
+         * order from this guest session carrying this customer. The client's
+         * own `canRedeem` is advisory and is not consulted; this is the check.
+         *
+         * Nothing is thrown when the proof is missing. The guest asked to
+         * spend points and simply does not, which is the safe direction — the
+         * order goes through at full price rather than failing at the last tap
+         * over something they cannot fix from a phone.
+         */
+        redeemPoints: await provenPointsFor({
+          restaurantId: restaurant.id,
+          guestSessionId,
+          phone: data.customerPhone?.trim() || '',
+          asked: data.redeemPoints ?? 0,
+        }),
         items: data.items.map((item) => ({
           foodId: item.foodId,
           quantity: item.quantity,
@@ -781,6 +849,59 @@ async function orderBranch(restaurantId: string, orderId: string) {
     where: { id: orderId, restaurantId },
     select: { branchId: true },
   })
+}
+
+/**
+ * The delivery person types the PIN the customer read out.
+ *
+ * ── Where the checking happens ──────────────────────────────────────────────
+ *
+ * Here and in `completeDeliveryWithPin`, never in the browser. The desk is
+ * never sent the PIN, so there is nothing on the client to compare against —
+ * which is the point: a check the client could perform is a check the client
+ * could skip.
+ *
+ * Rate-limited per person as well as capped per order. The cap stops one order
+ * being ground down over a day; the limit stops one person working through
+ * many orders quickly.
+ */
+export async function completeDelivery(
+  input: unknown,
+): Promise<ActionResult<{ orderId: string; orderNumber: string; deliveredAt: string }>> {
+  return runAction(completeDeliverySchema, input, async (data) => {
+    /*
+     * Completing a delivery IS a status change, so it asks for the permission
+     * that already means that rather than inventing one. A person who may not
+     * advance an order may not close a delivery either.
+     */
+    const user = await requirePermission(PERMISSIONS.ORDER_UPDATE_STATUS)
+    await enforceRateLimit('deliveryPin', `user:${user.id}`)
+
+    const result = await completeDeliveryWithPin({
+      restaurantId: user.restaurantId,
+      orderId: data.orderId,
+      pin: data.pin,
+      actorId: user.id,
+      actorName: user.name,
+      branchIds: visibleBranchIds(user),
+    })
+
+    await audit({
+      restaurantId: user.restaurantId,
+      userId: user.id,
+      actorName: user.name,
+      action: AUDIT_ACTIONS.ORDER_STATUS,
+      entity: 'Order',
+      entityId: result.orderId,
+      after: { status: 'SERVED', via: 'delivery-pin' },
+    })
+
+    revalidatePath('/dashboard/delivery')
+    revalidatePath('/dashboard/orders')
+    revalidatePath('/cashier/pos')
+    revalidatePath(`/order/track/${result.orderId}`)
+    return result
+  }, 'Delivered.')
 }
 
 export async function updateOrderStatus(input: unknown): Promise<ActionResult<{ id: string; status: string }>> {

@@ -2,13 +2,14 @@
 
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { CreditCard, HandPlatter, Repeat, Wallet } from 'lucide-react'
+import { Bike, CreditCard, HandPlatter, Repeat, Wallet } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { POS_TAB_LABEL, type PosTab } from '../pos-tabs'
 
 const ICON: Record<PosTab, typeof HandPlatter> = {
   orders: HandPlatter,
+  delivery: Bike,
   cashier: CreditCard,
   drawer: Wallet,
   handover: Repeat,

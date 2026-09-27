@@ -469,6 +469,96 @@ export async function getCashierQueue(restaurantId: string, branchIds?: string[]
       items: { where: { status: { not: 'CANCELLED' } } },
       table: { select: { id: true, number: true } },
       payments: true,
+      /*
+       * Where it is going, for the deliveries that reach this queue.
+       *
+       * The till had the table but never the address, so a delivery sitting
+       * here unpaid showed a customer's name and nothing about where the food
+       * was meant to go — the one fact that order is ABOUT. The columns cost
+       * nothing for a dine-in bill, where they are null.
+       */
+      deliveryLocation: { select: { id: true, note: true, parent: { select: { name: true } } } },
+    },
+    orderBy: { placedAt: 'asc' },
+  })
+}
+
+/**
+ * Deliveries waiting to be dealt with.
+ *
+ * ── Why this is its own queue ───────────────────────────────────────────────
+ *
+ * A delivery is not a bill at a table. Nobody is standing there: the address
+ * IS the order, and the person handling it needs the place, the note for the
+ * rider and the phone number in front of them before anything else. The
+ * cashier queue answers a different question — "what is unpaid" — and a
+ * delivery that has already been paid for online would drop off it while the
+ * food had not left the kitchen.
+ *
+ * So the rule here is the OPPOSITE of the till's: a delivery stays until it
+ * has been delivered, whether or not it has been paid for, and disappears the
+ * moment it has. What is on this screen is work outstanding.
+ *
+ * ── Every delivery, not only the scanned ones ───────────────────────────────
+ *
+ * Orders of type DELIVERY, wherever they came from. A delivery phoned through
+ * to the counter is the same job as one from a QR code, and leaving it off the
+ * delivery screen because of how it arrived would send somebody hunting for it
+ * on the Orders tab. Where it came from is shown instead, which is the part
+ * that actually differs.
+ *
+ * Table orders are DINE_IN and never appear here, which is the separation the
+ * owner asked for.
+ */
+export async function getDeliveryQueue(restaurantId: string, branchIds?: string[] | null) {
+  return prisma.order.findMany({
+    where: {
+      restaurantId,
+      ...atBranch(branchIds),
+      type: 'DELIVERY',
+      // Done is done: delivered or closed drops off, cancelled never shows.
+      status: { notIn: ['CANCELLED', 'SERVED', 'COMPLETED'] },
+    },
+    /*
+     * ── `select`, not `include`, and that is the whole point ─────────────────
+     *
+     * `include` returns every scalar column on the row — which would hand the
+     * delivery desk `deliveryPin`, the one thing the person using that screen
+     * must not have. It would be in the page, in the RSC payload and in any
+     * response their browser could be made to print, and the PIN check would
+     * become theatre: a rider could read the answer and type it back.
+     *
+     * So every column this screen needs is named, and the PIN is not among
+     * them. Adding a field here is a decision to show it to a rider.
+     */
+    select: {
+      id: true,
+      orderNumber: true,
+      type: true,
+      status: true,
+      paymentStatus: true,
+      placedAt: true,
+      readyAt: true,
+      customerName: true,
+      customerPhone: true,
+      grandTotal: true,
+      tipAmount: true,
+      notes: true,
+      branchId: true,
+      deliveryLocationName: true,
+      items: {
+        where: { status: { not: 'CANCELLED' } },
+        select: { id: true, name: true, quantity: true, lineTotal: true, options: true, notes: true },
+      },
+      payments: { select: { amount: true, status: true } },
+      // The place, for its note to the rider — the snapshot on the order is
+      // what is DISPLAYED, since a place since renamed must still read as it
+      // did when the guest chose it.
+      deliveryLocation: { select: { id: true, note: true, parent: { select: { name: true } } } },
+      customer: { select: { id: true, name: true, loyaltyPoints: true } },
+      // Which printed code produced it, so the screen can say "scanned" or
+      // "taken at the counter" rather than leaving the reader to guess.
+      qrExperience: { select: { id: true, name: true } },
     },
     orderBy: { placedAt: 'asc' },
   })

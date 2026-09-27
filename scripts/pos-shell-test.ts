@@ -64,9 +64,14 @@ async function main() {
     const subject = (role: PermissionSubject['role'], permissions: string[] = []): PermissionSubject =>
       ({ role, permissions } as PermissionSubject)
     // DELIBERATE behaviour change 2026-09 (recorrection.md §2): Shift
-    // Handover is the fourth tab, where the person finishing a shift stands.
-    check('a cashier has all four', posTabsFor(subject('CASHIER')).join(',') === 'orders,cashier,drawer,handover')
-    check('an owner has all four', posTabsFor(subject('OWNER')).join(',') === 'orders,cashier,drawer,handover')
+    /*
+     * DELIBERATE: five tabs now, not four. Delivery sits between Orders and
+     * Cashier — a delivery is an order that has been placed and not yet gone
+     * out, so it reads in the order the work happens. Handover stays last,
+     * where the person finishing a shift stands.
+     */
+    check('a cashier has all five', posTabsFor(subject('CASHIER')).join(',') === 'orders,delivery,cashier,drawer,handover')
+    check('an owner has all five', posTabsFor(subject('OWNER')).join(',') === 'orders,delivery,cashier,drawer,handover')
     check('a waiter takes orders and hands their shift on', posTabsFor(subject('WAITER')).join(',') === 'orders,handover')
     check('the kitchen still has none — it hands over from its own screen', posTabsFor(subject('KITCHEN')).length === 0)
     check('and neither do the stores', posTabsFor(subject('WAREHOUSE_STAFF')).length === 0)
@@ -152,8 +157,24 @@ async function main() {
       const orders = await hit(`/cashier/pos?${q}`, asOwner)
       check('the POS renders for an owner', orders.status === 200, `status ${orders.status}`)
       check('with the tab strip', orders.body.includes('data-testid="pos-tabs"'))
-      check('showing every tab', orders.body.includes('>Orders<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<') && orders.body.includes('>Shift<'))
+      check('showing every tab', orders.body.includes('>Orders<') && orders.body.includes('>Delivery<') && orders.body.includes('>Cashier<') && orders.body.includes('>Drawer<') && orders.body.includes('>Shift<'))
       check('and the order-taking screen', /Tap a dish to add it/.test(orders.body))
+
+      /*
+       * The delivery desk, asserted on its WORDS and not on its status.
+       *
+       * This page is `force-dynamic`, so the shell flushes before the loaders
+       * resolve: a query that throws still leaves a 200 on the wire and the
+       * error arrives as a later chunk. A status check would sweep a broken
+       * desk green — so this looks for something only a rendered board says.
+       */
+      const delivery = await hit(`/cashier/pos?${q}&tab=delivery`, asOwner)
+      check('the Delivery tab renders the desk', delivery.status === 200, `status ${delivery.status}`)
+      check(
+        'with the board on it, not a streamed error',
+        /No deliveries waiting|Delivered|Accept/.test(delivery.body),
+      )
+      check('inside the shell, not a second screen', delivery.body.includes('data-testid="pos-tabs"'))
 
       const cashier = await hit(`/cashier/pos?${q}&tab=cashier`, asOwner)
       check('the Cashier tab renders the till', cashier.status === 200 && /Open bills/.test(cashier.body), `status ${cashier.status}`)

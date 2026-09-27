@@ -24,8 +24,13 @@ import { readPublicId } from './public-id'
  *
  *   · the owner has to have turned `identifyCustomer` on for that code. A
  *     restaurant not collecting names cannot leak them;
- *   · it returns the NAME and nothing else. Not the email, not the address,
- *     not the spend, not the points — none of which the checkout needs;
+ *   · it returns the name and the POINTS BALANCE, and nothing else. Not the
+ *     email, not the address, not the spend, not the order history. The
+ *     balance is here because the checkout now shows it, and it is the same
+ *     fact `lookupLoyalty` has always returned for a typed number under the
+ *     same limits — so this widens where that is asked, not what is answered.
+ *     Spending it is a separate question with a separate proof: see
+ *     `canRedeem`;
  *   · it is rate-limited twice, per device and per venue, at 6 in ten minutes.
  *     A guest fixing a typo is fine; a harvest is not;
  *   · an unknown number returns `found: false` with no name, which is what an
@@ -52,6 +57,36 @@ const identitySchema = z.object({
 export interface GuestIdentityView {
   found: boolean
   name: string | null
+  /**
+   * What this number has on it, when loyalty is running. Zero otherwise.
+   *
+   * The same exposure `lookupLoyalty` already makes, under the same two rate
+   * limits: a balance, for a number the caller typed, and nothing else about
+   * the person.
+   */
+  points: number
+  /**
+   * May this DEVICE spend those points on this order?
+   *
+   * ── Why a balance can be shown but not always spent ────────────────────────
+   *
+   * Typing a phone number is not proof of owning it. `redeemPoints` was taken
+   * out of the public order schema for exactly that reason — anyone could have
+   * posted an order under a stranger's number and spent their points — and
+   * `redeemRewardAsGuest` only works after the fact, because by then the bill
+   * names whose it is.
+   *
+   * At the checkout there is no bill yet, so the proof has to be something the
+   * device already did: an order placed EARLIER from this same guest session
+   * carrying this same number. That is the same evidence the after-the-fact
+   * path relies on, one step sooner. A stranger on a fresh device typing
+   * somebody's number gets the balance and no way to touch it; a returning
+   * customer on their own phone gets what the owner asked for.
+   *
+   * Advisory only. The server checks it again when the order is placed —
+   * a client saying `true` proves nothing.
+   */
+  canRedeem: boolean
 }
 
 export async function lookupGuestIdentity(
@@ -83,7 +118,7 @@ export async function lookupGuestIdentity(
 
       if (!experience?.identifyCustomer) {
         // Not an error: the screen simply learns nothing, and says nothing.
-        return { found: false, name: null }
+        return { found: false, name: null, points: 0, canRedeem: false }
       }
 
       const customer = await findCustomerByPhone({
@@ -93,9 +128,29 @@ export async function lookupGuestIdentity(
 
       // Blocked customers are not recognised. Greeting somebody the restaurant
       // has barred by name is the wrong moment to be friendly.
-      if (!customer || customer.isBlocked) return { found: false, name: null }
+      if (!customer || customer.isBlocked) {
+        return { found: false, name: null, points: 0, canRedeem: false }
+      }
 
-      return { found: true, name: customer.name }
+      /*
+       * Has this device ordered under this number before? One earlier order in
+       * this guest session, carrying this customer, is the proof the checkout
+       * has available — see `canRedeem`.
+       */
+      const points = restaurant.loyaltyEnabled ? customer.loyaltyPoints : 0
+      const proven =
+        restaurant.loyaltyEnabled && points > 0 && session
+          ? (await prisma.order.count({
+              where: {
+                restaurantId: restaurant.id,
+                guestSessionId: session,
+                customerId: customer.id,
+                status: { not: 'CANCELLED' },
+              },
+            })) > 0
+          : false
+
+      return { found: true, name: customer.name, points, canRedeem: proven }
     },
     undefined,
     'lookupGuestIdentity',

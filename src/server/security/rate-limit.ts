@@ -68,6 +68,15 @@ export const RATE_LIMITS = {
    */
   guestIdentity: { limit: 6, windowSeconds: 600 },
   guestIdentityBurst: { limit: 90, windowSeconds: 600 },
+  /**
+   * Delivery PIN attempts, per member of staff.
+   *
+   * The ORDER caps its own wrong guesses at ten, which stops one delivery
+   * being ground down. This stops one person working quickly through many —
+   * twenty a minute is far more than a rider typing at a door and far less
+   * than a script.
+   */
+  deliveryPin: { limit: 20, windowSeconds: 60 },
   /** per guest device */
   serviceRequest: { limit: 10, windowSeconds: 300 },
   /** per venue IP */

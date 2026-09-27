@@ -1,4 +1,5 @@
 import {
+  Bike,
   MonitorDot,
   BarChart3,
   ChefHat,
@@ -189,6 +190,17 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Approvals',
         icon: ShieldCheck,
         permission: PERMISSIONS.APPROVALS_VIEW,
+      },
+      {
+        /*
+         * Where a delivery is handed over. Its own tab rather than a corner of
+         * the till: the person using it is standing at a door with a phone,
+         * not behind a counter, and everything else on the POS is about money.
+         */
+        href: '/dashboard/delivery',
+        label: 'Delivery Desk',
+        icon: Bike,
+        permission: PERMISSIONS.ORDER_UPDATE_STATUS,
       },
       {
         href: '/dashboard/handover',
