@@ -197,17 +197,31 @@ jobs:
             # ── The connection string, when the repository carries one ──────
             #
             # `deploy/ovh/.env` on this box is the source of truth for
-            # DATABASE_URL, and that is fine until the day it has to change.
-            # Neon archives an idle branch and issues a NEW endpoint hostname
-            # when it does, which is exactly what took this site down on
-            # 2026-09-27: the server went on dialling an address that no longer
-            # existed, and fixing it needed SSH that nobody had to hand.
+            # DATABASE_URL, and that is fine until the day it has to change —
+            # and on the day it seems to, nobody may have SSH to hand. This
+            # was written on 2026-09-27 for exactly that situation.
             #
-            # So the repository may now hold a DATABASE_URL secret. When it is
+            # What that outage actually was, for the next person: NOT a
+            # changed hostname. The Neon project had exhausted its free-plan
+            # quota and Neon was refusing every connection with "Your account
+            # or project has exceeded the quota" — which Prisma reports as the
+            # unhelpful P1001 "Can't reach database server". The endpoint,
+            # the password and the data were all fine. Before rewriting a
+            # connection string, run the "Diagnose database" workflow: it
+            # prints the raw error from the box, and it would have said so.
+            #
+            # So the repository may hold a DATABASE_URL secret. When it is
             # set, it is written here before anything tries to connect, which
             # makes rotating the credential a deploy rather than a shell
             # session. When it is unset — the ordinary case — nothing is
             # touched and the file on the box stays authoritative.
+            #
+            # Setting it is the one way a deploy can point production at the
+            # WRONG database, so `db:deploy:safe` below is the backstop: it
+            # refuses a database whose tables do not match the migration
+            # history rather than baselining it, and that refusal is what
+            # stopped the 2026-09-27 secret — which pointed at an old
+            # development project — from becoming production.
             # Already in deploy/ovh — the script cd'd there before pulling.
             #
             # BOTH urls, because Prisma uses two. `DATABASE_URL` is the pooled
