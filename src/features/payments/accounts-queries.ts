@@ -3,7 +3,7 @@ import 'server-only'
 import { ROLE_LABELS } from '@/lib/rbac'
 import type { TenantUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
-import { visibleAccountsFor } from './accounts'
+import { unconfined, visibleAccountsFor } from './accounts'
 import type { AccountCard, AccountAccessRow, StaffOption } from './components/accounts-panel'
 
 /**
@@ -19,11 +19,20 @@ export async function accountsForScreen(user: TenantUser): Promise<AccountCard[]
   const balances = await visibleAccountsFor(user)
   if (balances.length === 0) return []
 
-  const details = await prisma.paymentAccount.findMany({
-    where: { id: { in: balances.map((row) => row.accountId) } },
-    select: { id: true, bankName: true, accountNumber: true, holderName: true, isActive: true },
-  })
+  const [details, mine] = await Promise.all([
+    prisma.paymentAccount.findMany({
+      where: { id: { in: balances.map((row) => row.accountId) } },
+      select: { id: true, bankName: true, accountNumber: true, holderName: true, isActive: true },
+    }),
+    // What THIS viewer may do on each, so the card offers only what will work.
+    prisma.paymentAccountStaff.findMany({
+      where: { userId: user.id, accountId: { in: balances.map((row) => row.accountId) } },
+      select: { accountId: true, canTransfer: true },
+    }),
+  ])
   const byId = new Map(details.map((row) => [row.id, row]))
+  const mayTransactOn = new Set(mine.filter((row) => row.canTransfer).map((row) => row.accountId))
+  const everything = unconfined(user)
 
   return balances.map((row) => {
     const detail = byId.get(row.accountId)
@@ -44,6 +53,7 @@ export async function accountsForScreen(user: TenantUser): Promise<AccountCard[]
           .join(' · ') || null,
       balance: row.balance,
       isActive: detail?.isActive ?? true,
+      mayTransact: everything || mayTransactOn.has(row.accountId),
     }
   })
 }

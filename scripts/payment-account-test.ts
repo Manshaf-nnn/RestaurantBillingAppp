@@ -18,6 +18,7 @@
  */
 import { capturePayment, refundPayment } from '../src/features/payments/service'
 import {
+  canAssignAccountStaff,
   createAccount,
   deposit,
   seedDefaultAccounts,
@@ -339,6 +340,25 @@ async function main() {
     })
     check('somebody on no account sees none',
       (await visibleAccountsFor({ ...outsider, restaurantId: restaurant.id } as unknown as TenantUser)).length === 0)
+
+    /*
+     * A bank account is not a location. Seeing every branch used to mean
+     * seeing — and moving money in — every account, which put accountants and
+     * unassigned managers beyond the owner's list. Now they need a tick too.
+     */
+    const as = (role: string, branchId: string | null = null) =>
+      ({ id: `${role}-x`, role, branchId, restaurantId: restaurant.id }) as unknown as TenantUser
+    check('an accountant is refused an account the owner has not given them',
+      whyCannotUseAccount({ user: as('ACCOUNTANT'), access: null, need: 'transfer' }) === 'NOT_ASSIGNED')
+    check('so is a manager who sees every branch',
+      whyCannotUseAccount({ user: as('MANAGER'), access: null, need: 'transfer' }) === 'NOT_ASSIGNED')
+    check('a manager allowed to view but not transact is stopped at the transaction',
+      whyCannotUseAccount({ user: as('MANAGER'), access: { canTransfer: false }, need: 'transfer' }) === 'NOT_A_TRANSFER_USER')
+    check('an administrator keeps full access',
+      whyCannotUseAccount({ user: as('ADMIN'), access: null, need: 'transfer' }) === null)
+    check('only the owner decides who may transact',
+      canAssignAccountStaff(as('OWNER')) && !canAssignAccountStaff(as('ADMIN')) &&
+        !canAssignAccountStaff(as('MANAGER')) && !canAssignAccountStaff(as('ACCOUNTANT')))
   }
 
   console.log('\n── 10. Retiring, and renaming ──')

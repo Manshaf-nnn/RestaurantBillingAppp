@@ -45,6 +45,8 @@ export interface AccountCard {
   detail: string | null
   balance: number
   isActive: boolean
+  /** The viewer may deposit into and transfer out of this account. */
+  mayTransact: boolean
 }
 
 export interface StaffOption {
@@ -66,6 +68,7 @@ export function AccountsPanel({
   currency,
   locale,
   canManage,
+  canAssign,
   basePath,
 }: {
   accounts: AccountCard[]
@@ -82,8 +85,10 @@ export function AccountsPanel({
    */
   currency: string
   locale: string
-  /** Creating, depositing and assigning staff. Reading needs less. */
+  /** Creating and editing accounts. Reading needs less. */
   canManage: boolean
+  /** The owner: decides who may use each account and who may transact on it. */
+  canAssign: boolean
   basePath: string
 }) {
   const money = React.useCallback(
@@ -108,22 +113,39 @@ export function AccountsPanel({
   }
 
   const live = accounts.filter((account) => account.isActive)
+  // A transfer needs one account to take from (yours to transact on) and another to put into.
+  const canTransferAny = live.some((account) => account.mayTransact) && live.length >= 2
+
+  /** "Nimal, Saman" — the people the owner has let transact on this account. */
+  const transactors = (accountId: string) =>
+    access
+      .filter((row) => row.accountId === accountId && row.canTransfer)
+      .map((row) => staff.find((person) => person.id === row.userId)?.name)
+      .filter((name): name is string => Boolean(name))
 
   return (
     <SectionCard
       title="Accounts"
       description="Where your money is held. A payment lands in the account its method points at, automatically."
       actions={
-        canManage ? (
+        canManage || canTransferAny ? (
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => setOpen({ kind: 'create' })}>
-              <Plus /> Create account
-            </Button>
+            {canManage ? (
+              <Button size="sm" onClick={() => setOpen({ kind: 'create' })}>
+                <Plus /> Create account
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
-              disabled={live.length < 2}
-              title={live.length < 2 ? 'Two accounts are needed before money can move between them' : undefined}
+              disabled={!canTransferAny}
+              title={
+                live.length < 2
+                  ? 'Two accounts are needed before money can move between them'
+                  : !canTransferAny
+                    ? 'The owner has not allowed you to make transactions on any account'
+                    : undefined
+              }
               onClick={() => setOpen({ kind: 'transfer' })}
             >
               <ArrowLeftRight /> Money transfer
@@ -165,8 +187,24 @@ export function AccountsPanel({
               <p className="mt-3 text-2xl font-bold tabular-nums">{money(account.balance)}</p>
               <p className="text-[11px] text-muted-foreground">Balance · all locations</p>
 
+              {/*
+                Who may move money here, in words, on the card itself — the
+                owner should not have to open a dialog to answer "who can take
+                money out of BOC?".
+              */}
+              {canAssign ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Can transact:</span>{' '}
+                  {transactors(account.accountId).length
+                    ? `You, ${transactors(account.accountId).join(', ')}`
+                    : 'Only you and administrators'}
+                </p>
+              ) : !account.mayTransact ? (
+                <p className="mt-2 text-xs text-muted-foreground">View only — the owner has not allowed you to transact here.</p>
+              ) : null}
+
               <div className="mt-3 flex flex-wrap gap-1.5 border-t pt-3">
-                {canManage && account.isActive ? (
+                {account.mayTransact && account.isActive ? (
                   <Button size="sm" variant="outline" onClick={() => setOpen({ kind: 'deposit', account })}>
                     Deposit
                   </Button>
@@ -175,19 +213,14 @@ export function AccountsPanel({
                   <Link href={`${basePath}/${account.code}`}>Transactions</Link>
                 </Button>
                 {canManage ? (
-                  <>
-                    <Button size="sm" variant="ghost" onClick={() => setOpen({ kind: 'edit', account })}>
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setOpen({ kind: 'staff', account })}
-                      aria-label={`Who may use ${account.name}`}
-                    >
-                      <Users />
-                    </Button>
-                  </>
+                  <Button size="sm" variant="ghost" onClick={() => setOpen({ kind: 'edit', account })}>
+                    Edit
+                  </Button>
+                ) : null}
+                {canAssign ? (
+                  <Button size="sm" variant="ghost" onClick={() => setOpen({ kind: 'staff', account })}>
+                    <Users /> Who can transact
+                  </Button>
                 ) : null}
               </div>
             </div>
@@ -419,8 +452,12 @@ function TransferDialog({
     key: string,
   ) => void
 }) {
-  const [fromAccountId, setFrom] = React.useState(accounts[0]?.accountId ?? '')
-  const [toAccountId, setTo] = React.useState(accounts[1]?.accountId ?? '')
+  // Money may only leave an account the owner lets this person transact on.
+  const sources = accounts.filter((account) => account.mayTransact)
+  const [fromAccountId, setFrom] = React.useState(sources[0]?.accountId ?? '')
+  const [toAccountId, setTo] = React.useState(
+    accounts.find((account) => account.accountId !== sources[0]?.accountId)?.accountId ?? '',
+  )
   const [major, setMajor] = React.useState('')
   const [reason, setReason] = React.useState('')
   const key = React.useRef(newRequestKey('transfer'))
@@ -430,14 +467,19 @@ function TransferDialog({
   const short = from ? amount > from.balance : false
   const same = fromAccountId === toAccountId
 
-  const select = (value: string, onChange: (next: string) => void, label: string) => (
+  const select = (
+    value: string,
+    onChange: (next: string) => void,
+    label: string,
+    options: AccountCard[] = accounts,
+  ) => (
     <select
       aria-label={label}
       className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     >
-      {accounts.map((account) => (
+      {options.map((account) => (
         <option key={account.accountId} value={account.accountId}>
           {account.name}
         </option>
@@ -454,7 +496,7 @@ function TransferDialog({
 
         <div className="space-y-3">
           <Field label="From" required hint={from ? `Holds ${money(from.balance)}` : undefined}>
-            {select(fromAccountId, setFrom, 'Account the money leaves')}
+            {select(fromAccountId, setFrom, 'Account the money leaves', sources)}
           </Field>
           <Field label="To" required error={same ? 'Choose a different account' : undefined}>
             {select(toAccountId, setTo, 'Account the money goes to')}
@@ -521,12 +563,13 @@ function StaffDialog({
     <Dialog open onOpenChange={(next) => (next ? null : onClose())}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Who may use {account.name}</DialogTitle>
+          <DialogTitle>Who can use {account.name}</DialogTitle>
         </DialogHeader>
 
         <p className="text-xs text-muted-foreground">
-          Owners and administrators always have full access. Everyone else sees this account only if
-          you tick them here — and can move money out of it only if you tick the second box.
+          You and administrators always have full access. Everyone else — managers and accountants
+          included — sees this account only if you tick them, and can deposit into it or transfer
+          money out of it only if you also tick “Can make transactions”. Only you can change this.
         </p>
 
         {staff.length === 0 ? (
@@ -553,9 +596,9 @@ function StaffDialog({
                     onCheckedChange={(value) =>
                       setMayTransfer((current) => ({ ...current, [person.id]: value === true }))
                     }
-                    aria-label={`Let ${person.name} transfer from this account`}
+                    aria-label={`Let ${person.name} make transactions on this account`}
                   />
-                  Can transfer
+                  Can make transactions
                 </label>
               </li>
             ))}

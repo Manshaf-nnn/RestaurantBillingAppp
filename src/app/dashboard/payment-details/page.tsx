@@ -9,6 +9,7 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { getOnlinePayments } from '@/features/payments/queries'
 import { AccountsPanel } from '@/features/payments/components/accounts-panel'
 import { accountStaffOptions, accountsForScreen } from '@/features/payments/accounts-queries'
+import { canAssignAccountStaff } from '@/features/payments/accounts'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { formatDateTime } from '@/lib/datetime'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
@@ -73,10 +74,12 @@ export default async function PaymentDetailsPage({
    * per-branch, so it keeps the filter.
    */
   const canManage = can(user, PERMISSIONS.ACCOUNT_MANAGE)
+  // Who may transact on each account is the owner's decision alone.
+  const canAssign = canAssignAccountStaff(user)
   const [rows, accounts, people] = await Promise.all([
     getOnlinePayments(user.restaurantId, branchIds),
     accountsForScreen(user),
-    canManage ? accountStaffOptions(user) : Promise.resolve({ staff: [], access: [] }),
+    canAssign ? accountStaffOptions(user) : Promise.resolve({ staff: [], access: [] }),
   ])
 
   const pending = rows.filter((r) => r.orderPaymentStatus !== 'PAID')
@@ -99,6 +102,7 @@ export default async function PaymentDetailsPage({
           currency={restaurant.currency}
           locale={locale}
           canManage={canManage}
+          canAssign={canAssign}
           basePath="/dashboard/payment-details"
         />
       </div>

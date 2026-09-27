@@ -6,8 +6,10 @@ import { runAction, type ActionResult } from '@/lib/action'
 import { PERMISSIONS } from '@/lib/rbac'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
+import { AppError } from '@/lib/errors'
 import {
   assertCanUseAccount,
+  canAssignAccountStaff,
   createAccount,
   deposit,
   setAccountActive,
@@ -212,6 +214,10 @@ export async function setAccountStaffAction(
 ): Promise<ActionResult<{ id: string }>> {
   return runAction(setAccountStaffSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ACCOUNT_MANAGE)
+    // The owner's decision, and only the owner's — see `canAssignAccountStaff`.
+    if (!canAssignAccountStaff(user)) {
+      throw new AppError('Only the owner can decide who may use an account or make transactions on it.', 403, 'OWNER_ONLY')
+    }
     const account = await assertCanUseAccount({ user, accountId: data.accountId, need: 'view' })
     await setAccountStaff({
       restaurantId: user.restaurantId,

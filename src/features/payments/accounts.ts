@@ -3,7 +3,6 @@ import 'server-only'
 import type { PaymentAccount } from '@prisma/client'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
-import { visibleBranchIds } from '@/lib/rbac'
 import type { TenantUser } from '@/server/auth/guard'
 import { isUniqueViolation, prisma, type TxClient } from '@/server/db/prisma'
 import {
@@ -45,13 +44,35 @@ import { slugifyDestinationCode } from './destinations'
  * from `KitchenStationStaff`, where an empty list means "sees every station",
  * because a section of a kitchen is a convenience and a bank account is money.
  *
- * Unconfined people — an owner or admin, who `visibleBranchIds` returns null
- * for — bypass the list entirely. They are who assigns it.
+ * The owner and administrators bypass the list entirely; the owner is who
+ * assigns it. See `unconfined` and `canAssignAccountStaff` below.
  */
 export type AccountRefusal = 'NOT_ASSIGNED' | 'NOT_A_TRANSFER_USER'
 
+/**
+ * Who has every account without being assigned: the owner and administrators.
+ *
+ * This used to be "anyone who sees every location" (`visibleBranchIds` null),
+ * which quietly included accountants, inventory and purchasing managers and a
+ * manager not tied to one branch. None of them appear in the owner's "who may
+ * use this account" list, so the owner could neither grant nor withhold money
+ * from them — the list lied about who could move money. A bank account is not
+ * a location. It is the owner's decision, per account, for everybody else.
+ */
+const FULL_ACCOUNT_ACCESS_ROLES = new Set(['OWNER', 'ADMIN', 'SUPER_ADMIN'])
+
 export function unconfined(user: TenantUser): boolean {
-  return visibleBranchIds(user) === null
+  return FULL_ACCOUNT_ACCESS_ROLES.has(user.role)
+}
+
+/**
+ * Only the owner decides who may use an account and who may move money in or
+ * out of it. A manager holding ACCOUNT_MANAGE can create accounts and deposit
+ * where allowed, but cannot hand themselves or anybody else the right to
+ * transact — that would make the owner's decision anybody's.
+ */
+export function canAssignAccountStaff(user: Pick<TenantUser, 'role'>): boolean {
+  return user.role === 'OWNER'
 }
 
 export function whyCannotUseAccount(params: {
