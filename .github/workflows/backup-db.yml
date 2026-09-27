@@ -124,8 +124,12 @@ jobs:
             -in "tableflow-$STAMP.sql.gz" -out "tableflow-$STAMP.sql.gz.enc"
           rm -f "tableflow-$STAMP.sql.gz"
           # Prove the ciphertext opens with the same passphrase before keeping it.
-          openssl enc -d -aes-256-cbc -md sha256 -pbkdf2 -iter 200000 \
-            -pass env:BACKUP_PASSPHRASE -in "tableflow-$STAMP.sql.gz.enc" | gunzip | head -c 64 >/dev/null
+          # Read the whole stream: `head` would close the pipe early and, under
+          # pipefail, a healthy gunzip would report a broken pipe as failure.
+          plain=$(openssl enc -d -aes-256-cbc -md sha256 -pbkdf2 -iter 200000 \
+            -pass env:BACKUP_PASSPHRASE -in "tableflow-$STAMP.sql.gz.enc" | gzip -dc | wc -c)
+          [ "$plain" -gt 0 ] || { echo "::error::The encrypted file did not decrypt to anything."; exit 1; }
+          echo "decrypts back to $plain bytes of SQL"
           echo "encrypted: tableflow-$STAMP.sql.gz.enc ($(du -h "tableflow-$STAMP.sql.gz.enc" | cut -f1))"
 
       - name: Keep it for 30 days
