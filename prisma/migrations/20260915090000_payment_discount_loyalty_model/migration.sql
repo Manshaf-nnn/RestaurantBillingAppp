@@ -50,6 +50,10 @@ CREATE TABLE "refunds" (
     "reason" TEXT NOT NULL,
     "refundedById" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Added by 20260911150000_payment_destinations on databases where this
+    -- table pre-dated the migration chain; on an empty database that
+    -- migration runs before this one, so the column is born here.
+    "destination" TEXT,
 
     CONSTRAINT "refunds_pkey" PRIMARY KEY ("id")
 );

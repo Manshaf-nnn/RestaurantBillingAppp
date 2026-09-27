@@ -11,8 +11,13 @@
 # What it prints is deliberately limited: role, host and database name of
 # each connection string, never the password; the raw Postgres error from the
 # server's own vantage point; and the Neon API's view of the project when the
-# box has an API key. It changes one thing, once — see step 1 — and is
-# otherwise read-only.
+# box has an API key. It is read-only.
+#
+# It once had a step that put .env back to the ep-weathered-band project when
+# it found ep-purple-mud in it, because on the afternoon of 2026-09-27 that
+# was the wrong project. By the evening it was the right one — production
+# moved to it, see the env-sync notes in deploy-ovh.yml — so the step was
+# removed; run against today's .env it would have taken the site down.
 # ============================================================================
 name: Diagnose database
 
@@ -43,27 +48,7 @@ jobs:
               grep "^$1=" .env | tail -1 | cut -d= -f2- | sed -E "s/^['\"]//; s/['\"]\$//"
             }
 
-            echo "━━ 1. Put back the .env that served this morning (one-time, 2026-09-27) ━━"
-            # The DATABASE_URL secret set on the evening of 2026-09-27 pointed
-            # at a different Neon project — 29 tables, no migration history —
-            # and the deploy's env sync wrote it over the real one. The sync
-            # keeps a timestamped copy before it writes, so the real one is
-            # still on disk. Guarded on the exact wrong hostname, so this can
-            # never undo a later, legitimate change of endpoint.
-            if grep -q 'ep-purple-mud-az41kemf' .env; then
-              orig=$(grep -l '^DATABASE_URL=.*ep-weathered-band-azy9fnhg' .env.bak.* 2>/dev/null | sort | head -1)
-              if [ -n "$orig" ]; then
-                cp "$orig" .env && chmod 600 .env && echo "restored .env from $orig"
-              else
-                echo "no backup carries the original DATABASE_URL:"
-                ls -la .env.bak.* 2>/dev/null || echo "  (no backups at all)"
-              fi
-            else
-              echo ".env does not carry the wrong hostname; nothing to restore"
-            fi
-
-            echo
-            echo "━━ 2. What the box is configured for ━━"
+            echo "━━ 1. What the box is configured for ━━"
             DB_URL=$(current DATABASE_URL)
             DIRECT=$(current DIRECT_URL)
             echo "DATABASE_URL → $(describe "$DB_URL")"
@@ -75,7 +60,7 @@ jobs:
             done
 
             echo
-            echo "━━ 3. What the database says when the box dials it (the raw error, not Prisma's paraphrase) ━━"
+            echo "━━ 2. What the database says when the box dials it (the raw error, not Prisma's paraphrase) ━━"
             probe() {
               q="select current_database(), (select count(*) from information_schema.tables where table_schema='public') as tables, (select count(*) from pg_tables where tablename='_prisma_migrations') as history"
               if command -v psql >/dev/null 2>&1; then
@@ -88,7 +73,7 @@ jobs:
             echo "direct → $(probe "$DIRECT")"
 
             echo
-            echo "━━ 4. The running container's own view ━━"
+            echo "━━ 3. The running container's own view ━━"
             live=$(docker compose exec -T app sh -c 'printf %s "$DATABASE_URL"' 2>/dev/null || true)
             if [ -n "$live" ]; then
               echo "container dials → $(describe "$live")"
@@ -101,7 +86,7 @@ jobs:
               | tail -12 || echo "  (none)"
 
             echo
-            echo "━━ 5. The Neon API, if the box has a key ━━"
+            echo "━━ 4. The Neon API, if the box has a key ━━"
             KEY=$(current NEON_API_KEY)
             PID=$(current NEON_PROJECT_ID)
             if [ -z "$KEY" ]; then

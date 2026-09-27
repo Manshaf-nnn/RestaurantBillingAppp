@@ -8,7 +8,19 @@
 -- correcting a typo in the name flows through to every label.
 
 ALTER TABLE "payments" ADD COLUMN "destination" TEXT;
-ALTER TABLE "refunds"  ADD COLUMN "destination" TEXT;
+
+-- `refunds` is created four migrations later (20260915090000), which now
+-- carries this column itself. The databases this ran against in September
+-- 2026 already had the table — built by `prisma db push` before migrations
+-- were adopted, then baselined — so the ALTER never met a missing table until
+-- the chain was first applied to an empty database on 2026-09-27. Add the
+-- column when the table is there; leave it to its creator when it is not.
+DO $$
+BEGIN
+  IF to_regclass('public.refunds') IS NOT NULL THEN
+    ALTER TABLE "refunds" ADD COLUMN IF NOT EXISTS "destination" TEXT;
+  END IF;
+END $$;
 
 -- Reports group by it over a date range.
 CREATE INDEX "payments_restaurantId_destination_paidAt_idx"
