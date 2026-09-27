@@ -231,10 +231,23 @@ jobs:
             # together, and updating only the first is a deploy that gets
             # further and still fails — which is exactly what happened on the
             # first attempt at this fix.
+            #
+            # And when the synced string is REFUSED — by Neon, or by the schema
+            # check below — the file goes back to what it was. Three deploys
+            # on 2026-09-27 wrote a wrong secret into .env, failed at the
+            # migration step, and left it there: the live container kept the
+            # old value only because it had already been created, and the
+            # first hand-run `docker compose up -d` would have pointed the
+            # site at the wrong database. A refused secret must leave no
+            # trace on the box.
+            synced=0
+            backup=""
             if [ -n "${NEW_DATABASE_URL:-}" ] || [ -n "${NEW_DIRECT_URL:-}" ]; then
               # Kept, timestamped, before any rewrite: a bad value here takes
               # the site down, and the previous one is what you want back.
-              cp .env ".env.bak.$(date +%Y%m%d%H%M%S)"
+              backup=".env.bak.$(date +%Y%m%d%H%M%S)"
+              cp .env "$backup"
+              synced=1
               cp .env .env.next
               if [ -n "${NEW_DATABASE_URL:-}" ]; then
                 grep -v '^DATABASE_URL=' .env.next > .env.tmp || true
@@ -254,8 +267,18 @@ jobs:
 
             # Migrations run BEFORE the new container takes traffic, in a
             # throwaway container on the new image. If this fails the deploy
-            # stops here and the old version keeps serving.
-            docker compose run --rm app npm run db:deploy:safe
+            # stops here and the old version keeps serving — and a connection
+            # string this deploy wrote is taken back out, so the box is left
+            # exactly as it was found.
+            if ! docker compose run --rm app npm run db:deploy:safe; then
+              if [ "$synced" = "1" ]; then
+                cp "$backup" .env && chmod 600 .env
+                echo "The synced DATABASE_URL/DIRECT_URL were refused; .env restored from $backup."
+                echo "Fix the repository secrets (or delete them) before deploying again."
+              fi
+              echo "Migrations did not apply. The running version is untouched; nothing was deployed."
+              exit 1
+            fi
 
             docker compose up -d
             docker image prune -f --filter "until=168h"
