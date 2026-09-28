@@ -31,7 +31,18 @@ export const RATE_LIMITS = {
    */
   mfa: { limit: 5, windowSeconds: 300 },
   register: { limit: 5, windowSeconds: 3600 },
+  /** Email-verification resends (the old name kept for its caller). */
   passwordReset: { limit: 5, windowSeconds: 3600 },
+  /*
+   * Forgot-password codes. Keyed twice by the caller — once on the address's
+   * hash, once on the IP — so neither a single address nor a single machine
+   * can ask for more than five codes an hour. Five codes × five tries is the
+   * most anyone gets at a six-digit space before the daily budget in
+   * `password-reset.ts` closes the door for the day.
+   */
+  resetRequest: { limit: 5, windowSeconds: 3600 },
+  /** Wrong codes from one machine, whatever address it claims. */
+  resetVerifyIp: { limit: 30, windowSeconds: 600 },
   /** per guest device */
   placeOrder: { limit: 12, windowSeconds: 600 },
   /** per venue IP — sized for a full dining room, not one phone */

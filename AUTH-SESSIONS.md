@@ -262,3 +262,45 @@ Nobody is signed out by shipping this. The migration is additive and runs from
   credential. Stated, not hidden.
 - Nothing weakened: staff lifetime unchanged, admin **shorter**, rotation still
   happens — daily, not 96 times a day.
+
+## 8. Forgot password — by emailed code (2026-09-28)
+
+The link-based reset is gone. The flow is: email → 6-digit code by email →
+code → new password → every session revoked → sign in. Rules live in
+`src/features/auth/password-reset.ts`; the actions in `actions.ts` own the two
+httpOnly cookies (`ros_pr_flow`, `ros_pr_grant`, path `/forgot-password`,
+SameSite=Strict, 15 min) and pad every reply to a 1.5 s floor.
+
+- **Nothing says whether the address exists.** An ineligible address (no
+  account, deactivated, or a user of another restaurant while on a
+  restaurant's custom domain) gets a *decoy* row (`userId` null) with the same
+  cookie, cooldown, attempt counting, lockout and daily budget. Only a real
+  account gets an email. Refusals that apply to everyone (SMTP not
+  configured, a send failed in the last 5 minutes, the limits) are checked
+  before the address is looked up.
+- **The code** is six digits from `randomInt`, stored only as an HMAC keyed on
+  the row id, valid 10 minutes, bound to the browser that asked (a nonce in
+  the flow cookie). A correct code earns a 10-minute *grant* (256 random bits,
+  stored as SHA-256) that the new-password step consumes with a compare-and-
+  swap — two browsers with the same grant, exactly one wins.
+- **Limits:** 5 codes/hour per address and per IP, 60 s resend cooldown, 5
+  wrong guesses per code (`attempts >= maxAttempts` is the lock), 10 wrong
+  guesses per address per day, 30 verifies per IP per 10 minutes.
+- **On success:** password hash swapped, `failedLogins`/`lockedUntil` cleared,
+  `signInCode` cleared (it was the password), mailbox marked verified, every
+  session revoked inside the same transaction under the per-user advisory
+  lock that `rotateSessionRecord` now also takes — so a refresh rotating at
+  that instant cannot outlive the reset. The resetting browser's own session
+  cookies are cleared when they belong to that user (otherwise its valid
+  access token would loop it between `/login` and `/dashboard`). Audited as
+  `auth.password_reset`; the request as `auth.password_reset_requested`;
+  a lockout as `auth.password_reset_code_locked`. MFA is untouched.
+- **Email failure:** the row is voided (an unsent code must not stay
+  guessable), the failure is captured without the code, and every request for
+  the next five minutes is refused up front for everyone alike.
+- **Residual, stated:** SMTP latency above the floor and the very first
+  request of an outage are observable; an open Socket.IO connection is
+  identified by its JWT and outlives revocation until the token expires
+  (pre-existing). Rotating `JWT_ACCESS_SECRET` cancels resets in progress.
+- **Tests:** `scripts/password-reset-test.ts` (service, every rule above),
+  `security-runtime-test` S14 (HTTP indistinguishability).

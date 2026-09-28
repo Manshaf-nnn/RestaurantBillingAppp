@@ -122,8 +122,15 @@ export const isCloudinaryConfigured = () =>
       process.env.CLOUDINARY_API_SECRET,
   )
 
-export const isSmtpConfigured = () =>
-  Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD)
+/**
+ * Whether email can be sent at all.
+ *
+ * A host is enough: an authenticated relay wants SMTP_USER and SMTP_PASSWORD
+ * as well, and a local catcher such as Mailpit wants neither. Requiring the
+ * credentials here meant a developer's Mailpit counted as "no email" and the
+ * whole message went to the console instead.
+ */
+export const isSmtpConfigured = () => Boolean(process.env.SMTP_HOST)
 
 /**
  * Whether credentials can be sealed at all.

@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import type { UserRole } from '@prisma/client'
 
@@ -9,10 +10,10 @@ import { AppError, ForbiddenError, UnauthorizedError } from '@/lib/errors'
 import { landingFor } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
 import { appUrl } from '@/lib/env'
-import { tenantOrigin } from '@/lib/tenant-url'
 import { defaultCategoryRows } from '@/features/menu/default-categories'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requireUser } from '@/server/auth/guard'
+import { cookieOptions } from '@/server/auth/jwt'
 import {
   assessPasswordStrength,
   generateToken,
@@ -21,6 +22,7 @@ import {
   verifyPassword,
 } from '@/server/auth/password'
 import {
+  clearSessionCookiesOwnedBy,
   createSession,
   destroySession,
   getAdminUser,
@@ -28,27 +30,32 @@ import {
   revokeAllSessions,
 } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
-import { getRestaurantByDomain, requestHost } from '@/server/db/tenant'
+import { hostOwnedByAnotherRestaurant, requestHost } from '@/server/db/tenant'
 import { clientIp, enforceRateLimit } from '@/server/security/rate-limit'
-import {
-  passwordResetEmail,
-  sendMail,
-  verificationEmail,
-} from '@/server/mailer'
+import { sendMail, verificationEmail } from '@/server/mailer'
 import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  newPasswordSchema,
   registerSchema,
-  resetPasswordSchema,
+  resetCodeSchema,
   updateProfileSchema,
 } from './schema'
 import { seedDefaultAccounts } from '@/features/payments/accounts'
 import { secondFactorGate } from './mfa-gate'
+import {
+  FLOW_MAX_AGE_MS,
+  completeReset,
+  openFlow,
+  requestResetCode,
+  sealFlow,
+  verifyResetCode,
+  type ResetFlow,
+} from './password-reset'
 
 const MAX_FAILED_LOGINS = 8
 const LOCKOUT_MINUTES = 15
-const RESET_TOKEN_TTL_MS = 60 * 60 * 1000
 const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 // ── login ────────────────────────────────────────────────────────────────────
@@ -125,14 +132,11 @@ export async function login(input: unknown): Promise<ActionResult<LoginResult>> 
      * Only applies where the host names a tenant. On the shared platform
      * address everyone signs in as before.
      */
-    const host = await requestHost()
-    if (host) {
-      const owner = await getRestaurantByDomain(host)
-      if (owner && user.restaurantId && owner.id !== user.restaurantId) {
-        throw new ForbiddenError(
-          `This address belongs to ${owner.name}. Sign in at ${appUrl()}/login instead.`,
-        )
-      }
+    const owner = await hostOwnedByAnotherRestaurant(user.restaurantId, await requestHost())
+    if (owner) {
+      throw new ForbiddenError(
+        `This address belongs to ${owner.name}. Sign in at ${appUrl()}/login instead.`,
+      )
     }
 
     /*
@@ -405,104 +409,146 @@ export async function logoutAdmin(): Promise<never> {
   redirect('/admin/login')
 }
 
-// ── password reset ───────────────────────────────────────────────────────────
+// ── password reset (prisma/email.md) ────────────────────────────────────────
+//
+// The flow's state lives in two httpOnly cookies scoped to /forgot-password:
+// the signed FLOW (which row, which browser, which address) and, after a
+// correct code, the GRANT. Nothing secret in a URL. The rules live in
+// ./password-reset.ts; these actions own the cookies and the clock.
 
-export async function requestPasswordReset(input: unknown): Promise<ActionResult<{ sent: true }>> {
+const FLOW_COOKIE = 'ros_pr_flow'
+const GRANT_COOKIE = 'ros_pr_grant'
+const FLOW_PATH = '/forgot-password'
+/** Every reply takes at least this long, so the work behind it is not on the clock. */
+const REPLY_FLOOR_MS = 1_500
+
+function flowCookieOptions() {
+  return { ...cookieOptions(FLOW_MAX_AGE_MS / 1000), path: FLOW_PATH, sameSite: 'strict' as const }
+}
+
+async function readFlow(): Promise<ResetFlow | null> {
+  const store = await cookies()
+  return openFlow(store.get(FLOW_COOKIE)?.value)
+}
+
+async function writeFlow(flow: ResetFlow): Promise<void> {
+  const store = await cookies()
+  store.set(FLOW_COOKIE, sealFlow(flow), flowCookieOptions())
+}
+
+async function clearFlowCookies(): Promise<void> {
+  const store = await cookies()
+  // Same path as they were set with — `delete()` clears at "/" and would miss them.
+  store.set(FLOW_COOKIE, '', { ...flowCookieOptions(), maxAge: 0 })
+  store.set(GRANT_COOKIE, '', { ...flowCookieOptions(), maxAge: 0 })
+}
+
+/** Hold the reply until the floor, whatever happened inside. */
+async function padded<T>(work: () => Promise<T>): Promise<T> {
+  const started = Date.now()
+  try {
+    return await work()
+  } finally {
+    const remaining = REPLY_FLOOR_MS - (Date.now() - started)
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining))
+  }
+}
+
+const NEUTRAL_SENT = 'If an account exists for this email, a reset code has been sent.'
+
+async function issueFor(
+  email: string,
+  from: ResetFlow['from'],
+): Promise<{ cooldownSeconds: number }> {
+  const result = await requestResetCode({ email, ip: await clientIp(), host: await requestHost() })
+  await writeFlow({
+    rowId: result.kind === 'issued' ? result.rowId : null,
+    nonce: result.nonce,
+    email,
+    from,
+    iat: Date.now(),
+  })
+  return { cooldownSeconds: result.kind === 'cooldown' ? result.retryAfterSeconds : 60 }
+}
+
+/**
+ * Step 1: "Send reset code". The reply is the same for every address.
+ */
+export async function requestPasswordResetCode(
+  input: unknown,
+): Promise<ActionResult<{ cooldownSeconds: number }>> {
   return runAction(
     forgotPasswordSchema,
     input,
-    async (data) => {
-      await enforceRateLimit('passwordReset')
-      const user = await prisma.user.findUnique({
-        where: { email: data.email },
-        // Their restaurant's own home, so the link lands where their session
-        // will live. Cookies are host-only — a reset that drops somebody on the
-        // platform address leaves them signed out with no way to tell why.
-        include: {
-          restaurant: { select: { customDomain: true, customDomainVerifiedAt: true } },
-        },
-      })
-
-      // Respond identically whether or not the account exists.
-      if (user && user.isActive && !user.deletedAt) {
-        // One live reset link at a time. Each request used to add another,
-        // so a mail intercepted last week still opened the door after the
-        // user had asked again; every earlier unused link expires now.
-        await prisma.verificationToken.updateMany({
-          where: { userId: user.id, purpose: 'PASSWORD_RESET', usedAt: null },
-          data: { expiresAt: new Date() },
-        })
-        const token = generateToken(24)
-        await prisma.verificationToken.create({
-          data: {
-            userId: user.id,
-            tokenHash: hashToken(token),
-            purpose: 'PASSWORD_RESET',
-            expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
-          },
-        })
-        await sendMail({
-          to: user.email,
-          ...passwordResetEmail(user.name, token, tenantOrigin(user.restaurant)),
-        })
-      }
-
-      return { sent: true as const }
-    },
-    'If an account exists for that email, a reset link is on its way.',
+    (data) => padded(() => issueFor(data.email, data.from ?? 'staff')),
+    NEUTRAL_SENT,
+    'requestPasswordResetCode',
   )
 }
 
-export async function resetPassword(input: unknown): Promise<ActionResult<{ email: string }>> {
+/** Step 1 again, for the address the flow cookie already names. */
+export async function resendPasswordResetCode(): Promise<ActionResult<{ cooldownSeconds: number }>> {
+  return runSafe(
+    () =>
+      padded(async () => {
+        const flow = await readFlow()
+        if (!flow) throw new AppError('Start again from the sign-in page.', 400, 'RESET_EXPIRED')
+        return issueFor(flow.email, flow.from)
+      }),
+    NEUTRAL_SENT,
+    'resendPasswordResetCode',
+  )
+}
+
+/** Step 2: the six digits. A correct code earns the grant cookie. */
+export async function verifyPasswordResetCode(input: unknown): Promise<ActionResult<{ verified: true }>> {
   return runAction(
-    resetPasswordSchema,
+    resetCodeSchema,
+    input,
+    (data) =>
+      padded(async () => {
+        const flow = await readFlow()
+        if (!flow) throw new AppError('Start again from the sign-in page.', 400, 'RESET_EXPIRED')
+        const { grant } = await verifyResetCode({
+          rowId: flow.rowId,
+          nonce: flow.nonce,
+          email: flow.email,
+          code: data.code,
+        })
+        const store = await cookies()
+        store.set(GRANT_COOKIE, grant, flowCookieOptions())
+        return { verified: true as const }
+      }),
+    'Code verified.',
+    'verifyPasswordResetCode',
+  )
+}
+
+/** Step 3: the new password. Consumes the grant, revokes every session, clears this browser. */
+export async function completePasswordReset(
+  input: unknown,
+): Promise<ActionResult<{ redirectTo: string }>> {
+  return runAction(
+    newPasswordSchema,
     input,
     async (data) => {
-      await enforceRateLimit('passwordReset')
+      const store = await cookies()
+      const flow = openFlow(store.get(FLOW_COOKIE)?.value)
+      const grant = store.get(GRANT_COOKIE)?.value
+      if (!grant) throw new AppError('This reset has expired. Request a new code.', 400, 'RESET_EXPIRED')
 
-      const record = await prisma.verificationToken.findUnique({
-        where: { tokenHash: hashToken(data.token) },
-        include: { user: true },
-      })
+      const result = await completeReset({ grant, password: data.password })
 
-      if (
-        !record ||
-        record.purpose !== 'PASSWORD_RESET' ||
-        record.usedAt ||
-        record.expiresAt < new Date()
-      ) {
-        throw new AppError('This reset link is invalid or has expired', 400, 'INVALID_TOKEN')
-      }
+      await clearFlowCookies()
+      // The browser that reset the password may itself be signed in as that
+      // person; its access token would loop it between /login and /dashboard.
+      await clearSessionCookiesOwnedBy(result.userId)
 
-      const passwordHash = await hashPassword(data.password)
-      await prisma.$transaction([
-        prisma.user.update({
-          where: { id: record.userId },
-          data: { passwordHash, failedLogins: 0, lockedUntil: null },
-        }),
-        prisma.verificationToken.update({
-          where: { id: record.id },
-          data: { usedAt: new Date() },
-        }),
-        // Any session opened with the old password is no longer trusted.
-        prisma.session.updateMany({
-          where: { userId: record.userId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        }),
-      ])
-
-      await audit({
-        restaurantId: record.user.restaurantId,
-        userId: record.userId,
-        actorName: record.user.name,
-        action: AUDIT_ACTIONS.PASSWORD_RESET,
-        entity: 'User',
-        entityId: record.userId,
-      })
-
-      return { email: record.user.email }
+      const admin = result.role === 'SUPER_ADMIN' || flow?.from === 'admin'
+      return { redirectTo: admin ? '/admin/login?reset=1' : '/login?reset=1&switch=1' }
     },
-    'Password updated. You can now sign in.',
+    'Password reset successfully. Please sign in with your new password.',
+    'completePasswordReset',
   )
 }
 

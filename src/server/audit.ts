@@ -52,6 +52,13 @@ const REDACTED_KEYS = new Set([
   'authToken',
   'apiSecret',
   'credentials',
+  // Forgot-password by code: the grant that stands in for a verified code,
+  // and the hashes a reset row is keyed by.
+  'grant',
+  'grantHash',
+  'emailHash',
+  'flowNonce',
+  'requestedIpHash',
 ])
 
 /** Strips credentials before anything is persisted to the audit trail. */
@@ -103,6 +110,10 @@ export const AUDIT_ACTIONS = {
   LOGOUT: 'auth.logout',
   REGISTER: 'auth.register',
   PASSWORD_RESET: 'auth.password_reset',
+  /** A reset code was emailed to a real account. Never written for an unknown address. */
+  PASSWORD_RESET_REQUESTED: 'auth.password_reset_requested',
+  /** A reset code was locked after too many wrong attempts. */
+  PASSWORD_RESET_CODE_LOCKED: 'auth.password_reset_code_locked',
   PASSWORD_CHANGED: 'auth.password_changed',
   SESSIONS_REVOKED: 'auth.sessions_revoked',
 
@@ -357,6 +368,8 @@ export const AUDIT_ACTIONS = {
   SMS_TEST_SENT: 'sms.test_sent',
   SMS_DISABLED: 'sms.disabled',
   SMS_RESENT: 'sms.resent',
+  /** One message to a filtered group of customers, from the Customers page. */
+  SMS_GROUP_SENT: 'sms.group_sent',
   ERROR_RESOLVED: 'error.resolved',
   MAINTENANCE_TOGGLED: 'platform.maintenance_toggled',
   RESTORE_TESTED: 'platform.restore_tested',

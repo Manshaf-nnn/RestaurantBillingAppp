@@ -15,11 +15,24 @@ let transporter: nodemailer.Transporter | null = null
 function getTransport(): nodemailer.Transporter | null {
   if (!isSmtpConfigured()) return null
   if (transporter) return transporter
+  const port = Number(process.env.SMTP_PORT ?? 587)
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 587),
-    secure: Number(process.env.SMTP_PORT ?? 587) === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    port,
+    secure: port === 465,
+    // A relay without credentials (a local Mailpit, an IP-allowlisted host)
+    // is configured by leaving both blank.
+    ...(process.env.SMTP_USER
+      ? { auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } }
+      : {}),
+    /*
+     * Bounded. nodemailer's defaults wait minutes for a silent server, and a
+     * password-reset request that waits minutes is one that tells an observer
+     * something about the address it was for. Fail in seconds and say so.
+     */
+    connectionTimeout: 5_000,
+    greetingTimeout: 5_000,
+    socketTimeout: 10_000,
   })
   return transporter
 }
@@ -30,28 +43,72 @@ export interface MailInput {
   html: string
   text?: string
   attachments?: Array<{ filename: string; content: Buffer | string; contentType?: string }>
+  /**
+   * The body carries a secret — a one-time code. When SMTP is not configured
+   * the message is normally written to the server log so a developer can
+   * follow the link; a code must never be, so only the envelope is logged.
+   */
+  sensitive?: boolean
 }
 
-export async function sendMail(input: MailInput): Promise<{ sent: boolean }> {
+export interface MailResult {
+  sent: boolean
+  /** False when no SMTP host is set at all, as opposed to a delivery that failed. */
+  configured: boolean
+}
+
+/** The address messages come from. `EMAIL_FROM` is accepted as a synonym. */
+function fromAddress(): string {
+  return process.env.SMTP_FROM || process.env.EMAIL_FROM || 'TableFlow <no-reply@tableflow.app>'
+}
+
+type MailTransportForTests = (input: MailInput & { from: string }) => Promise<void>
+let testTransport: MailTransportForTests | null = null
+
+/**
+ * Swap the real transport for a function, so a test can read what would have
+ * been sent — or throw, to stand in for a provider that is down. Passing
+ * `null` restores SMTP. Ignored in production.
+ */
+export function setMailTransportForTests(transport: MailTransportForTests | null): void {
+  if (process.env.NODE_ENV === 'production') return
+  testTransport = transport
+}
+
+export async function sendMail(input: MailInput): Promise<MailResult> {
+  const { sensitive: _sensitive, ...message } = input
+  void _sensitive
+  const envelope = { from: fromAddress(), ...message }
+
+  if (testTransport) {
+    try {
+      await testTransport({ ...input, from: envelope.from })
+      return { sent: true, configured: true }
+    } catch (error) {
+      console.error('[mail] delivery failed', error instanceof Error ? error.message : error)
+      return { sent: false, configured: true }
+    }
+  }
+
   const transport = getTransport()
   if (!transport) {
+    const body = input.sensitive
+      ? '(not logged — the message carries a one-time code)'
+      : (input.text ?? input.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 500))
     console.info(
-      `\n[mail] SMTP not configured — message not sent.\n  To:      ${input.to}\n  Subject: ${input.subject}\n  Text:    ${
-        input.text ?? input.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 500)
-      }\n`,
+      `\n[mail] SMTP not configured — message not sent.\n  To:      ${input.to}\n  Subject: ${input.subject}\n  Text:    ${body}\n`,
     )
-    return { sent: false }
+    return { sent: false, configured: false }
   }
 
   try {
-    await transport.sendMail({
-      from: process.env.SMTP_FROM ?? 'TableFlow <no-reply@tableflow.app>',
-      ...input,
-    })
-    return { sent: true }
+    await transport.sendMail(envelope)
+    return { sent: true, configured: true }
   } catch (error) {
-    console.error('[mail] delivery failed', error)
-    return { sent: false }
+    // The provider's words, never the message: a failed reset email must not
+    // put its code into the log by way of the error.
+    console.error('[mail] delivery failed', error instanceof Error ? error.message : String(error))
+    return { sent: false, configured: true }
   }
 }
 
@@ -108,16 +165,25 @@ export function verificationEmail(name: string, token: string, origin = appUrl()
   }
 }
 
-export function passwordResetEmail(name: string, token: string, origin = appUrl()) {
-  const href = `${origin}/reset-password?token=${token}`
+/**
+ * The forgot-password code (prisma/email.md §5).
+ *
+ * No name, no link, no origin: the code is typed into the screen that asked
+ * for it, so the message does not need to know where that screen lives, and
+ * a body with nothing interpolated but six digits has nothing to escape.
+ */
+export function passwordResetCodeEmail(code: string): Pick<MailInput, 'subject' | 'html' | 'text' | 'sensitive'> {
   return {
-    subject: 'Reset your TableFlow password',
+    subject: 'Your TableFlow password reset code',
     html: layout(
       'Reset your password',
-      `<p>Hi ${name}, we received a request to reset your password. This link expires in 1 hour and can be used once.</p><p>If you did not request this, no action is needed.</p>`,
-      { label: 'Reset password', href },
+      `<p>Use this code to reset your TableFlow password:</p>` +
+        `<p style="margin:20px 0;font-size:32px;font-weight:700;letter-spacing:0.3em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${code}</p>` +
+        `<p>This code expires in 10 minutes.</p>` +
+        `<p>If you did not request a password reset, you can ignore this email.</p>`,
     ),
-    text: `Reset your password: ${href}`,
+    text: `Use this code to reset your TableFlow password:\n\n${code}\n\nThis code expires in 10 minutes.\n\nIf you did not request a password reset, you can ignore this email.`,
+    sensitive: true,
   }
 }
 

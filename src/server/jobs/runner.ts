@@ -153,6 +153,19 @@ export const HANDLERS: Record<string, JobHandler> = {
   },
 
   /**
+   * Forgot-password codes, cleared out.
+   *
+   * A code is dead ten minutes after it is issued and its grant ten minutes
+   * after that; the rows are kept a week so a "somebody keeps asking for my
+   * password" report can be answered from the table, then dropped.
+   */
+  'password-reset-trim': async () => {
+    const cutoff = new Date(Date.now() - 7 * 86_400_000)
+    const { count } = await prisma.passwordResetCode.deleteMany({ where: { createdAt: { lt: cutoff } } })
+    return `${count} reset codes older than 7 days removed`
+  },
+
+  /**
    * The database provider, asked hourly (see `src/server/neon/monitor.ts`).
    *
    * Usage against limits, the invoice date, the endpoint, and whether the app
@@ -355,7 +368,7 @@ export async function retryJob(id: string): Promise<void> {
  */
 export async function enqueueDailyWork(): Promise<number> {
   const day = new Date().toISOString().slice(0, 10)
-  const kinds = ['integrity-check', 'errorlog-trim', 'outbox-trim', 'job-trim', 'sessions-trim']
+  const kinds = ['integrity-check', 'errorlog-trim', 'outbox-trim', 'job-trim', 'sessions-trim', 'password-reset-trim']
   let created = 0
   for (const kind of kinds) {
     const result = await enqueue({ kind, dedupeKey: `${kind}:${day}` })

@@ -58,6 +58,9 @@ async function main() {
     '/admin',
     '/admin/login',
     '/login',
+    '/forgot-password',
+    '/forgot-password/verify',
+    '/forgot-password/new',
     '/kitchen',
     '/cashier',
   ]

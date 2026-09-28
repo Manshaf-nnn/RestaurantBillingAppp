@@ -1044,6 +1044,7 @@ model User {
   errorLogs              ErrorLog[]
   sessions               Session[]
   tokens                 VerificationToken[]
+  passwordResets         PasswordResetCode[]
   auditLogs              AuditLog[]
   notifications          Notification[]
   createdOrders          Order[]               @relation("OrderCreatedBy")
@@ -1195,6 +1196,55 @@ model VerificationToken {
 
   @@index([userId, purpose])
   @@map("verification_tokens")
+}
+
+/// A forgot-password code, emailed as six digits (prisma/email.md).
+///
+/// Not a `VerificationToken`: a six-digit code needs an attempt counter and a
+/// lockout, its hash must be keyed (an unkeyed SHA-256 over a million
+/// possibilities is a lookup table), and it is unique per row, not globally.
+///
+/// `userId` is nullable ON PURPOSE. A request for an address with no eligible
+/// account still creates a row — same cooldown, same attempt counting, same
+/// lockout — that can never be redeemed, so the flow behaves identically
+/// whether or not the address exists. That is the whole defence against email
+/// enumeration, and it lives in the data model rather than in a message.
+model PasswordResetCode {
+  /// Generated in the app before insert: the code's hash is keyed on it.
+  id     String  @id
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// HMAC of the normalised address. Cooldown and budgets are keyed on it, so
+  /// a decoy row and a real one share the same limits.
+  emailHash String
+  /// HMAC over `${id}:${code}` under the app secret. The code is never stored.
+  codeHash String
+  /// Binds the code to the browser that asked for it (its flow cookie).
+  flowNonceHash String
+
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  /// Informational: `attempts >= maxAttempts` is the lock itself.
+  lockedAt DateTime?
+
+  verifiedAt DateTime?
+  /// SHA-256 of the one-time grant handed to the browser after a correct code.
+  grantHash      String?   @unique
+  grantExpiresAt DateTime?
+  /// Consumed by a reset, or superseded by a newer code.
+  usedAt DateTime?
+  /// The email could not be sent; never usable and never starts a cooldown.
+  voidedAt DateTime?
+
+  requestedIpHash String?
+  createdAt       DateTime @default(now())
+
+  @@index([emailHash, createdAt])
+  @@index([userId, usedAt])
+  @@index([expiresAt])
+  @@map("password_reset_codes")
 }
 
 /// A role the restaurant defined for itself.

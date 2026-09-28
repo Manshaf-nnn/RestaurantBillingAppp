@@ -1,15 +1,12 @@
-import { Suspense } from 'react'
-import type { Metadata } from 'next'
+import { permanentRedirect } from 'next/navigation'
 
-import { Skeleton } from '@/components/ui/feedback'
-import { ResetPasswordForm } from '@/features/auth/components/password-forms'
-
-export const metadata: Metadata = { title: 'Reset password' }
-
+/**
+ * The old address of the link-based reset.
+ *
+ * Reset links are no longer sent — a code is, and it is typed into
+ * /forgot-password/verify. A link from an email sent before the change
+ * lands here; the only useful answer is the start of the new flow.
+ */
 export default function ResetPasswordPage() {
-  return (
-    <Suspense fallback={<Skeleton className="h-64 w-full" />}>
-      <ResetPasswordForm />
-    </Suspense>
-  )
+  permanentRedirect('/forgot-password')
 }

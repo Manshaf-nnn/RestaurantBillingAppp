@@ -326,6 +326,12 @@ const SERVICE = [
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',
+  // prisma/email.md — forgot password by emailed code: an unknown address
+  // behaves exactly like a known one, the code is stored only as a keyed
+  // hash, five wrong guesses lock it, the grant is single-use even under a
+  // race, every session is revoked, and a provider outage refuses everyone
+  // alike.
+  'password-reset-test',
   // athu.md — the refresh-token rotation race, run AS a race: two tabs
   // refreshing one token must both keep a session. Plus grace, lineage,
   // daily rotation, scope lifetimes and the second-factor gate.

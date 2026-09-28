@@ -24,4 +24,9 @@
 - **Rate limits**: Redis where configured, else Postgres fixed-window
   counters shared across serverless instances (per-guest-device keys for
   ordering, per-venue-IP backstops), memory as last resort.
+- **Forgot password**: a 6-digit code by email, never a link. Stored only as
+  a keyed hash, 10-minute expiry, 5 guesses, per-address and per-IP limits,
+  a single-use grant consumed atomically, every session revoked in the same
+  transaction. An unknown address behaves exactly like a known one — the
+  decoy row is the defence, not the wording. Details: AUTH-SESSIONS.md §8.
 - **No payment processing**: card data never touches the system (§6).

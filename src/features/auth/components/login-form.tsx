@@ -224,7 +224,10 @@ export function LoginForm({ variant = 'staff' }: { variant?: 'staff' | 'admin' }
             />
             Remember me
           </label>
-          <Link href="/forgot-password" className="font-medium text-primary hover:underline">
+          <Link
+            href={variant === 'admin' ? '/forgot-password?from=admin' : '/forgot-password'}
+            className="font-medium text-primary hover:underline"
+          >
             Forgot password?
           </Link>
         </div>

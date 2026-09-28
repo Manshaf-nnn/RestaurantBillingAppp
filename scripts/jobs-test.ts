@@ -127,7 +127,7 @@ async function main() {
     const second = await enqueueDailyWork()
     // DELIBERATE behaviour change 2026-09-05: was 4. `sessions-trim` joined the
     // nightly set (athu.md) — the sessions table had no purge at all.
-    check('the first call queues the day\'s work', first === 5, `${first}`)
+    check('the first call queues the day\'s work', first === 6, `${first}`)
     check('…and the 95 invocations after it queue nothing', second === 0, `${second}`)
 
     await prisma.job.deleteMany({ where: { dedupeKey: { endsWith: `:${day}` } } })

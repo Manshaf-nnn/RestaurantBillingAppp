@@ -145,6 +145,27 @@ export function normaliseHost(host: string | null | undefined): string | null {
  *
  * `host` remains the fallback for local development and any un-proxied host.
  */
+/**
+ * The restaurant that owns this hostname, when the hostname is not this
+ * user's own restaurant.
+ *
+ * A restaurant with its own address should not be somewhere another
+ * restaurant's staff can sign in or reset a password. Nothing leaks if they
+ * do — tenancy comes from the session — but seeing your own dashboard at
+ * somebody else's web address reads exactly like a leak. Shared by `login`
+ * and the forgot-password flow so the two can never disagree. A user with
+ * no restaurant (the platform admin) is at home on every host.
+ */
+export async function hostOwnedByAnotherRestaurant(
+  restaurantId: string | null,
+  host: string | null,
+): Promise<{ id: string; name: string } | null> {
+  if (!host || !restaurantId) return null
+  const owner = await getRestaurantByDomain(host)
+  if (owner && owner.id !== restaurantId) return { id: owner.id, name: owner.name }
+  return null
+}
+
 export async function requestHost(): Promise<string | null> {
   const store = await headers()
   return normaliseHost(store.get('x-forwarded-host') ?? store.get('host'))

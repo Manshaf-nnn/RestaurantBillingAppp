@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import type { Metadata } from 'next'
 
-import { Skeleton } from '@/components/ui/feedback'
+import { Alert, Skeleton } from '@/components/ui/feedback'
 import { LoginForm } from '@/features/auth/components/login-form'
 import { getAdminUser } from '@/server/auth/session'
 
@@ -20,9 +20,14 @@ export const metadata: Metadata = {
  * restaurant staff login, so you can be signed in as admin here and as a
  * restaurant in another tab at the same time.
  */
-export default async function AdminLoginPage() {
+export default async function AdminLoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   // Already signed in as admin? Go straight to the console.
   if (await getAdminUser()) redirect('/admin')
+  const params = await searchParams
 
   return (
     <div className="theme-light relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-[#f5f6fa] px-4 py-10 text-foreground">
@@ -46,6 +51,14 @@ export default async function AdminLoginPage() {
               Platform Admin
             </span>
           </div>
+
+          {params.reset === '1' ? (
+            <div className="mb-5">
+              <Alert variant="success" title="Password reset successfully">
+                Please sign in with your new password.
+              </Alert>
+            </div>
+          ) : null}
 
           <Suspense fallback={<Skeleton className="h-72 w-full" />}>
             <LoginForm variant="admin" />

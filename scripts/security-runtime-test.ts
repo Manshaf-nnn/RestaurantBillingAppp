@@ -286,21 +286,35 @@ async function main() {
     check('…and one payment of 500.00 exists, not two', rows.length === 1 && rows[0].amount === 50_000, `${rows.length} rows`)
   }
 
-  console.log('\n── S14. One live reset link at a time ──')
+  console.log('\n── S14. Forgot password reveals nothing about the address ──')
   {
-    const ask = () => callAction('/forgot-password', id('requestPasswordReset'), [{ email: ownerA.email }], '')
-    await ask()
-    await ask()
-    const tokens = await prisma.verificationToken.findMany({ where: { userId: ownerA.id, purpose: 'PASSWORD_RESET' } })
-    const live = tokens.filter((t) => t.usedAt === null && t.expiresAt > new Date())
-    // The reset endpoint is IP-rate-limited, so on a server that has already
-    // served many requests one of the two asks may be turned away. Only assert
-    // the invariant when both landed; a fresh sign-off server has the budget.
-    if (tokens.length >= 2) {
-      check('a second request expires the first — exactly one link still opens the door',
-        live.length === 1, `${tokens.length} tokens, ${live.length} live`)
-    } else {
-      console.log(`  · only ${tokens.length} reset token created (endpoint rate-limited on this shared host) — a fresh run proves the invariant`)
+    /*
+     * Over HTTP, an address with an account and one without must be
+     * indistinguishable: same status, same body, same cookies. Whether a code
+     * was actually issued is the service test's business
+     * (scripts/password-reset-test.ts); here the question is only what an
+     * outsider can see — including on a server with no SMTP, where both are
+     * refused with the same "not set up" answer.
+     */
+    const ask = async (email: string) => {
+      const res = await fetch(`${BASE}/forgot-password`, {
+        method: 'POST',
+        headers: { 'Next-Action': id('requestPasswordResetCode'), 'Content-Type': 'text/plain;charset=UTF-8', Accept: 'text/x-component' },
+        body: JSON.stringify([{ email }]),
+      })
+      const body = await res.text()
+      const cookies = res.headers.getSetCookie?.() ?? []
+      // Cookie VALUES differ by design (a nonce); their names and attributes must not.
+      const shape = cookies.map((c) => c.replace(/^([^=]+)=[^;]*/, '$1=<v>')).sort().join('|')
+      return { status: res.status, body: body.replace(/\d{6}/g, '<n>'), shape }
+    }
+    const known = await ask(ownerA.email)
+    const unknown = await ask(`nobody-${Date.now().toString(36)}@example.test`)
+    check('same status for a known and an unknown address', known.status === unknown.status, `${known.status} vs ${unknown.status}`)
+    check('same reply body', known.body === unknown.body, known.body === unknown.body ? '' : `\n${known.body.slice(0, 200)}\n---\n${unknown.body.slice(0, 200)}`)
+    check('same cookies, by name and attributes', known.shape === unknown.shape, `${known.shape} vs ${unknown.shape}`)
+    if (known.shape) {
+      check('the flow cookie is httpOnly and scoped to /forgot-password', /HttpOnly/i.test(known.shape) && /Path=\/forgot-password/i.test(known.shape), known.shape)
     }
   }
 

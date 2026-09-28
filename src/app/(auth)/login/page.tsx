@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import type { Metadata } from 'next'
 import Link from 'next/link'
 
-import { Skeleton } from '@/components/ui/feedback'
+import { Alert, Skeleton } from '@/components/ui/feedback'
 import { LoginForm } from '@/features/auth/components/login-form'
 import { getCurrentUser } from '@/server/auth/session'
 
@@ -32,11 +32,22 @@ export const dynamic = 'force-dynamic'
  * current person exactly where they were, which is what you want when the
  * queue is out of the door.
  */
-export default async function LoginPage() {
-  const current = await getCurrentUser().catch(() => null)
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const [current, params] = await Promise.all([getCurrentUser().catch(() => null), searchParams])
 
   return (
     <>
+      {params.reset === '1' ? (
+        <div className="mb-5">
+          <Alert variant="success" title="Password reset successfully">
+            Please sign in with your new password.
+          </Alert>
+        </div>
+      ) : null}
       {current ? (
         <div className="mb-5 rounded-xl border border-border bg-muted/40 p-3 text-sm">
           <p>

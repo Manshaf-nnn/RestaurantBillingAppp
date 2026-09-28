@@ -5,7 +5,7 @@ import type { Prisma, Session, UserRole } from '@prisma/client'
 
 import { permissionsSoldByFeatures } from '@/features/access/features'
 import { BRANCH_COOKIE } from '@/features/dashboard/selected-branch'
-import { guardLocks, prisma } from '@/server/db/prisma'
+import { guardLocks, prisma, type TxClient } from '@/server/db/prisma'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
 import { due } from './presence'
@@ -510,6 +510,14 @@ export async function rotateSessionRecord(params: {
   try {
     const successor = await prisma.$transaction(async (tx) => {
       await guardLocks(tx)
+      /*
+       * The same per-user lock a password reset takes before revoking every
+       * session. Without it a rotation racing a reset could insert its
+       * successor after the reset's `updateMany` had already scanned — the
+       * predecessor would be found revoked (by the rotation) and the new row
+       * would outlive the reset that was meant to end everything.
+       */
+      await lockUserSessions(tx, params.predecessor.userId)
       const created = await tx.session.create({
         data: {
           userId: params.predecessor.userId,
@@ -695,8 +703,30 @@ export async function destroySession(scope: SessionScope = 'staff'): Promise<voi
   clearSessionCookies(store, scope)
 }
 
-export async function revokeAllSessions(userId: string, exceptSessionId?: string): Promise<number> {
-  const result = await prisma.session.updateMany({
+/**
+ * Serialise everything that creates or ends this user's sessions.
+ *
+ * Taken by `rotateSessionRecord` and by the transactional `revokeAllSessions`
+ * a password reset runs, so "every session is revoked" is true even against
+ * a refresh that is rotating at that very moment.
+ */
+export async function lockUserSessions(tx: TxClient, userId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`session-user:${userId}`}))`
+}
+
+/**
+ * End every session this user has, or every one but the current.
+ *
+ * Pass a transaction client to make the revocation part of a larger change —
+ * a password reset revokes inside the same transaction that swaps the hash,
+ * under `lockUserSessions`, so no session can be created between the two.
+ */
+export async function revokeAllSessions(
+  userId: string,
+  exceptSessionId?: string,
+  db: TxClient | typeof prisma = prisma,
+): Promise<number> {
+  const result = await db.session.updateMany({
     where: {
       userId,
       revokedAt: null,
@@ -705,6 +735,34 @@ export async function revokeAllSessions(userId: string, exceptSessionId?: string
     data: { revokedAt: new Date() },
   })
   return result.count
+}
+
+/**
+ * Drop this browser's session cookies, but only the ones that belong to this
+ * user.
+ *
+ * After a password reset every session row is revoked, yet a browser that
+ * was signed in still carries a valid fifteen-minute access token. The
+ * middleware trusts the token and sends `/login` to `/dashboard`; the page
+ * checks the row, finds it revoked, and sends it back — a loop until the
+ * token expires. Clearing the cookies here ends it.
+ *
+ * Only the cookies whose session is this user's: on a shared till somebody
+ * else may be signed in, and a colleague resetting their own password from
+ * that machine must not sign the cashier out. Deliberately not
+ * `destroySession`, which also closes an attendance shift.
+ */
+export async function clearSessionCookiesOwnedBy(userId: string): Promise<void> {
+  const store = await cookies()
+  for (const scope of ['staff', 'admin'] as const) {
+    const raw = store.get(refreshCookieName(scope))?.value
+    if (!raw) continue
+    const row = await prisma.session.findUnique({
+      where: { refreshTokenHash: hashToken(raw) },
+      select: { userId: true },
+    })
+    if (row?.userId === userId) clearSessionCookies(store, scope)
+  }
 }
 
 /**

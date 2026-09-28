@@ -65,12 +65,24 @@ export const registerSchema = z
   })
 export type RegisterInput = z.infer<typeof registerSchema>
 
-export const forgotPasswordSchema = z.object({ email: emailSchema })
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+  /** Which sign-in page "Back to sign in" returns to. Changes nothing else. */
+  from: z.enum(['staff', 'admin']).optional(),
+})
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
 
-export const resetPasswordSchema = z
+/** The six digits from the email. Spaces a person types between groups are tolerated. */
+export const resetCodeSchema = z.object({
+  code: z
+    .string()
+    .transform((value) => value.replace(/\s+/g, ''))
+    .pipe(z.string().regex(/^\d{6}$/, 'Enter the 6-digit code from the email')),
+})
+export type ResetCodeInput = z.input<typeof resetCodeSchema>
+
+export const newPasswordSchema = z
   .object({
-    token: z.string().min(10, 'This reset link is invalid'),
     password: passwordSchema,
     confirmPassword: z.string(),
   })
@@ -78,7 +90,7 @@ export const resetPasswordSchema = z
     message: 'Passwords do not match',
     path: ['confirmPassword'],
   })
-export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>
+export type NewPasswordInput = z.infer<typeof newPasswordSchema>
 
 export const changePasswordSchema = z
   .object({
