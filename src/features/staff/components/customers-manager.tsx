@@ -4,7 +4,7 @@ import { LocalDateTime } from '@/components/local-time'
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Eye, Gift, MoreVertical, Pencil, Percent, Plus, Trash2, UserRound } from 'lucide-react'
+import { Eye, Gift, MessageSquare, MoreVertical, Pencil, Percent, Plus, Trash2, UserRound } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -23,9 +23,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { EmptyState } from '@/components/ui/feedback'
+import { Alert, EmptyState } from '@/components/ui/feedback'
 import { Field } from '@/components/ui/label'
-import { Input } from '@/components/ui/input'
+import { Input, Textarea } from '@/components/ui/input'
 import { Switch } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -36,9 +36,13 @@ import { adjustLoyalty } from '../actions'
 import { SearchBox } from '@/components/search-box'
 import {
   createCustomerCampaignAction,
+  previewGroupSmsAction,
   removeCustomerCategoryAction,
   saveCustomerCategoryAction,
+  sendGroupSmsAction,
   setCustomerCategoryActiveAction,
+  type GroupSmsBatch,
+  type GroupSmsPreview,
 } from '@/features/customers/actions'
 import { CustomerFormDialog } from '@/features/customers/components/customer-form-dialog'
 import { callAction } from '@/lib/use-action'
@@ -72,6 +76,7 @@ export function CustomersManager({
   page = 1,
   pages = 1,
   canDiscountGroup = false,
+  groupSms = null,
   currency,
   locale,
   canManage,
@@ -88,6 +93,11 @@ export function CustomersManager({
   pages?: number
   /** Whether this person may aim an offer at the filtered group (§4). */
   canDiscountGroup?: boolean
+  /**
+   * Whether this person may text the filtered group, and the offer message
+   * from Settings to start them off. Null hides the button.
+   */
+  groupSms?: { template: string } | null
   /** Holds CUSTOMER_EXPORT: may download the phone list (the owner's decision, per role). */
   canExport?: boolean
   currency: string
@@ -142,8 +152,10 @@ export function CustomersManager({
       <CustomerFilters
         categories={categories}
         currency={currency}
+        locale={locale}
         reaches={total ?? customers.length}
         canDiscountGroup={canDiscountGroup}
+        groupSms={groupSms}
       />
 
       {filtered.length === 0 ? (
@@ -346,20 +358,47 @@ function PageLink({
   )
 }
 
+/**
+ * The filter on screen, as the server's segment schema wants it.
+ *
+ * Read off the URL rather than off React state, because the URL is where the
+ * filter lives — the list, the count, an offer and a text all narrow by the
+ * same parameters, and this is the one place they are translated.
+ */
+function segmentFromParams(params: URLSearchParams): Record<string, string> {
+  const segment: Record<string, string> = {}
+  for (const [key, param] of [
+    ['q', 'q'], ['categoryId', 'category'], ['kind', 'kind'],
+    ['minVisits', 'minVisits'], ['notSeenForDays', 'notSeenForDays'], ['minPoints', 'minPoints'],
+  ] as const) {
+    const v = params.get(param)
+    if (v) segment[key] = v
+  }
+  // Spend is typed in major units on the filter bar and stored in minor.
+  const spent = params.get('minSpent')
+  if (spent) segment.minSpent = String(Math.round(Number(spent) * 100))
+  return segment
+}
+
 function CustomerFilters({
   categories,
   currency,
+  locale,
   reaches,
   canDiscountGroup,
+  groupSms,
 }: {
   categories: Array<{ id: string; name: string }>
   currency: string
+  locale: string
   reaches: number
   canDiscountGroup: boolean
+  groupSms: { template: string } | null
 }) {
   const router = useRouter()
   const params = useSearchParams()
   const [campaignOpen, setCampaignOpen] = React.useState(false)
+  const [smsOpen, setSmsOpen] = React.useState(false)
 
   const value = (key: string) => params.get(key) ?? ''
   const set = (patch: Record<string, string>) => {
@@ -459,16 +498,25 @@ function CustomerFilters({
         ) : null}
       </div>
 
-      {canDiscountGroup ? (
+      {canDiscountGroup || groupSms ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
           <Percent className="size-4 text-muted-foreground" />
           <span>
             This filter reaches <strong>{reaches.toLocaleString()}</strong> customer
             {reaches === 1 ? '' : 's'}.
           </span>
-          <Button size="sm" className="ml-auto" disabled={reaches === 0} onClick={() => setCampaignOpen(true)}>
-            Give them an offer
-          </Button>
+          <div className="ml-auto flex flex-wrap gap-2">
+            {groupSms ? (
+              <Button size="sm" variant="outline" disabled={reaches === 0} onClick={() => setSmsOpen(true)}>
+                <MessageSquare /> Send them a message
+              </Button>
+            ) : null}
+            {canDiscountGroup ? (
+              <Button size="sm" disabled={reaches === 0} onClick={() => setCampaignOpen(true)}>
+                Give them an offer
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -478,7 +526,219 @@ function CustomerFilters({
         currency={currency}
         reaches={reaches}
       />
+      {groupSms ? (
+        <GroupSmsDialog
+          open={smsOpen}
+          onOpenChange={setSmsOpen}
+          currency={currency}
+          locale={locale}
+          reaches={reaches}
+          template={groupSms.template}
+        />
+      ) : null}
     </div>
+  )
+}
+
+/** What one run of the group send has added up to so far. */
+interface GroupSmsProgress {
+  handled: number
+  sent: number
+  skipped: number
+  alreadySent: number
+  failed: number
+  problems: GroupSmsBatch['problems']
+  stopped: string | null
+}
+
+/**
+ * Text the filtered group — the SMS counterpart of `CampaignDialog`.
+ *
+ * The message goes out ten people at a time (see `sendGroupSmsAction` for
+ * why), and this keeps asking for the next ten until the server hands back no
+ * cursor. The progress and the result live in the dialog that started them,
+ * because there is no other screen where they could.
+ */
+function GroupSmsDialog({
+  open,
+  onOpenChange,
+  currency,
+  locale,
+  reaches,
+  template,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  currency: string
+  locale: string
+  reaches: number
+  template: string
+}) {
+  const params = useSearchParams()
+  const [text, setText] = React.useState(template)
+  const [preview, setPreview] = React.useState<GroupSmsPreview | null>(null)
+  const [progress, setProgress] = React.useState<GroupSmsProgress | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const [finished, setFinished] = React.useState(false)
+
+  // Opening starts clean: the message from Settings, and no leftover result.
+  React.useEffect(() => {
+    if (!open) return
+    setText(template)
+    setPreview(null)
+    setProgress(null)
+    setFinished(false)
+  }, [open, template])
+
+  /*
+   * The count under the text box is the server's, not a guess: who is blocked,
+   * who has no number, who opted out and how many SMS parts the words cost
+   * are all decided in one place, and it is not here.
+   */
+  React.useEffect(() => {
+    if (!open || !text.trim()) return
+    const handle = setTimeout(async () => {
+      const result = await callAction(() =>
+        previewGroupSmsAction({ segment: segmentFromParams(params), text, branchId: params.get('branch') ?? '' }),
+      )
+      if (result.ok) setPreview(result.data)
+    }, 400)
+    return () => clearTimeout(handle)
+  }, [open, text, params])
+
+  const send = async () => {
+    setBusy(true)
+    const totals: GroupSmsProgress = {
+      handled: 0, sent: 0, skipped: 0, alreadySent: 0, failed: 0, problems: [], stopped: null,
+    }
+    setProgress({ ...totals })
+    let cursor = ''
+    for (;;) {
+      const result = await callAction(() =>
+        sendGroupSmsAction({ segment: segmentFromParams(params), text, cursor, branchId: params.get('branch') ?? '' }),
+      )
+      if (!result.ok) {
+        toast.error(result.error)
+        break
+      }
+      const batch = result.data
+      totals.sent += batch.sent
+      totals.skipped += batch.skipped
+      totals.alreadySent += batch.alreadySent
+      totals.failed += batch.failed
+      totals.handled += batch.sent + batch.skipped + batch.alreadySent + batch.failed
+      totals.problems = [...totals.problems, ...batch.problems].slice(0, 5)
+      totals.stopped = batch.stopped
+      setProgress({ ...totals })
+      if (batch.stopped || !batch.nextCursor) break
+      cursor = batch.nextCursor
+    }
+    setBusy(false)
+    setFinished(true)
+  }
+
+  const textable = preview?.textable ?? 0
+  const total = Math.max(textable, progress?.handled ?? 0)
+  const percent = total === 0 ? 0 : Math.min(100, Math.round(((progress?.handled ?? 0) / total) * 100))
+  const canSend = Boolean(text.trim()) && preview !== null && preview.blocker === null && textable > 0 && !busy
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>A message to these {reaches.toLocaleString()} customers</DialogTitle>
+          <DialogDescription>
+            One SMS each, from your sender name. Anyone blocked, without a number, or who asked to
+            stop is left out.
+          </DialogDescription>
+        </DialogHeader>
+
+        {progress === null ? (
+          <>
+            <Field
+              label="Message"
+              required
+              hint="Write {name} where their first name should go. Say how to stop, e.g. “Reply STOP to opt out”."
+            >
+              <Textarea
+                rows={4}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Hi {name}, this weekend only: 20% off dinner at Mr.Chai. Show this text. Reply STOP to opt out."
+              />
+            </Field>
+
+            {preview?.blocker ? (
+              <Alert variant="warning" title="Not ready to send">
+                {preview.blocker}{' '}
+                <Link href="/dashboard/settings" className="underline">Open Settings</Link>
+              </Alert>
+            ) : null}
+
+            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+              {preview === null ? (
+                <span className="text-muted-foreground">Counting…</span>
+              ) : (
+                <>
+                  <p>
+                    <strong>{preview.textable.toLocaleString()}</strong> of {preview.reaches.toLocaleString()} can be
+                    texted · {preview.parts} SMS part{preview.parts === 1 ? '' : 's'} each
+                    {preview.costMinor !== null ? ` · about ${formatMoney(preview.costMinor, currency as never, locale)}` : ''}
+                  </p>
+                  {preview.textable > preview.dailyCap ? (
+                    <p className="mt-1 text-xs text-warning-foreground">
+                      Your daily SMS cap is {preview.dailyCap.toLocaleString()}. The rest will be refused today —
+                      raise the cap under Settings → SMS, or send to a smaller group.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="space-y-3">
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+            </div>
+            <p className="text-sm">
+              {finished ? 'Done. ' : 'Sending… '}
+              <strong>{progress.sent}</strong> sent
+              {progress.alreadySent ? ` · ${progress.alreadySent} already had it today` : ''}
+              {progress.skipped ? ` · ${progress.skipped} skipped` : ''}
+              {progress.failed ? ` · ${progress.failed} failed` : ''}
+            </p>
+            {progress.stopped ? <Alert variant="warning" title="Stopped early">{progress.stopped}</Alert> : null}
+            {progress.problems.length > 0 ? (
+              <ul className="space-y-1 text-xs text-muted-foreground">
+                {progress.problems.map((problem, index) => (
+                  <li key={index}>
+                    <span className="text-foreground">{problem.name}</span> — {problem.reason}
+                  </li>
+                ))}
+                {progress.skipped + progress.failed > progress.problems.length ? (
+                  <li>…and {progress.skipped + progress.failed - progress.problems.length} more.</li>
+                ) : null}
+              </ul>
+            ) : null}
+          </div>
+        )}
+
+        <DialogFooter>
+          {progress === null ? (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+              <Button onClick={send} loading={busy} disabled={!canSend}>
+                Send to {textable.toLocaleString()}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => onOpenChange(false)} disabled={busy}>
+              {finished ? 'Close' : 'Sending…'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -521,17 +781,7 @@ function CampaignDialog({
 
   const save = async () => {
     setBusy(true)
-    const segment: Record<string, string> = {}
-    for (const [key, param] of [
-      ['q', 'q'], ['categoryId', 'category'], ['kind', 'kind'],
-      ['minVisits', 'minVisits'], ['notSeenForDays', 'notSeenForDays'], ['minPoints', 'minPoints'],
-    ] as const) {
-      const v = params.get(param)
-      if (v) segment[key] = v
-    }
-    // Spend is typed in major units on the filter bar and stored in minor.
-    const spent = params.get('minSpent')
-    if (spent) segment.minSpent = String(Math.round(Number(spent) * 100))
+    const segment = segmentFromParams(params)
 
     const result = await callAction(() =>
       createCustomerCampaignAction({

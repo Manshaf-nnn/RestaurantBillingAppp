@@ -8,6 +8,7 @@ import { requireRestaurant } from '@/server/db/tenant'
 import { prisma } from '@/server/db/prisma'
 import { listCustomerCategories } from '@/features/customers/service'
 import { listSegment, type CustomerSegment } from '@/features/customers/segments'
+import { readSmsConfig } from '@/features/sms/config'
 import { localeForCurrency } from '@/lib/money'
 
 export const dynamic = 'force-dynamic'
@@ -107,6 +108,16 @@ export default async function CustomersPage({
     ]),
   )
 
+  /*
+   * Texting the group is offered to whoever may manage customers; whether the
+   * gateway is ready is the dialog's business, which says which switch to
+   * flip rather than hiding the button. Only the offer template travels to the
+   * browser — never the config, which carries credentials.
+   */
+  const groupSms = can(user, PERMISSIONS.CUSTOMER_MANAGE)
+    ? { template: (await readSmsConfig(user.restaurantId)).templates.marketing ?? '' }
+    : null
+
   return (
     <CustomersManager
       canManage={can(user, PERMISSIONS.CUSTOMER_MANAGE)}
@@ -136,6 +147,7 @@ export default async function CustomersPage({
       page={listed.page}
       pages={listed.pages}
       canDiscountGroup={can(user, PERMISSIONS.DISCOUNT_APPLY) && can(user, PERMISSIONS.CUSTOMER_MANAGE)}
+      groupSms={groupSms}
       categoryRows={categories.map((category) => ({
         id: category.id,
         name: category.name,
