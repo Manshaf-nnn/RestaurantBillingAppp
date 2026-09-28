@@ -23,7 +23,7 @@
  * that makes a request lives in `./http-adapter`.
  */
 
-export type SmsProviderKey = 'notifylk' | 'textlk' | 'dialog' | 'mobitel' | 'custom'
+export type SmsProviderKey = 'notifylk' | 'textlk' | 'textware' | 'dialog' | 'mobitel' | 'custom'
 
 /** The credential slots any gateway may draw on. Not every gateway uses all. */
 export type SmsCredentialField = 'apiKey' | 'apiSecret' | 'username' | 'password' | 'accountId'

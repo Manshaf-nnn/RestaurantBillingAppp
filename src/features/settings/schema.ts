@@ -297,7 +297,7 @@ const smsSpecSchema = z.object({
 export const smsConfigSchema = z
   .object({
     enabled: z.coerce.boolean(),
-    provider: z.enum(['notifylk', 'textlk', 'dialog', 'mobitel', 'custom']),
+    provider: z.enum(['notifylk', 'textlk', 'textware', 'dialog', 'mobitel', 'custom']),
     /*
      * An alphanumeric mask is at most 11 characters and a numeric one at most
      * 15 — a GSM limit, not ours, and a mask over it is silently replaced by

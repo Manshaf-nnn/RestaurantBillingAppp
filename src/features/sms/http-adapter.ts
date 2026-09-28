@@ -315,7 +315,17 @@ export async function sendViaHttp(
     })
 
     const parsed = parseBody(response.body)
-    const accepted = evaluateSuccess(spec.success, response.status, response.body, parsed)
+    /*
+     * A status-only rule still must not call a 2xx that names an error a
+     * delivery. When the spec knows where the gateway writes its error, a
+     * reply that has one there is a refusal whatever the status says.
+     */
+    const bodyError =
+      spec.success.kind === 'httpStatus' && spec.errorMessagePath
+        ? asText(readPath(parsed, spec.errorMessagePath))
+        : null
+    const accepted =
+      evaluateSuccess(spec.success, response.status, response.body, parsed) && !bodyError
 
     if (accepted) {
       const id = spec.messageIdPath ? asText(readPath(parsed, spec.messageIdPath)) : null

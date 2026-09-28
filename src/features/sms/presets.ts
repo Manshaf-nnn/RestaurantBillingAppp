@@ -132,6 +132,59 @@ export const SMS_PRESETS: Record<SmsProviderKey, SmsPreset> = {
     requiresManualSpec: false,
   },
 
+  textware: {
+    key: 'textware',
+    label: 'Text-Ware',
+    tagline: 'Sri Lankan gateway (text-ware.lk). Username and password.',
+    credentialFields: [
+      {
+        name: 'username',
+        label: 'Username',
+        secret: false,
+        help: 'The account name Text-Ware gave you, e.g. bb00002_shop_tr.',
+      },
+      {
+        name: 'password',
+        label: 'Password',
+        secret: true,
+        help: 'The API password from your Text-Ware setup sheet — not your login to their website, unless they are the same.',
+      },
+    ],
+    /*
+     * Pinned against the sample request on a customer's setup sheet:
+     *
+     *   https://msg.text-ware.com/send_sms.php?username=<u>&password=<p>
+     *     &src=<Mr.Chai>&dst=<0752977591>&msg=<Testing>&dr=1
+     *
+     * A GET with everything in the query string. `dr=1` asks for a delivery
+     * report and is kept as their sample has it. The sample number is written
+     * with a leading zero, so that is the format we send.
+     *
+     * A refusal comes back as a 4xx with `{"error":"…"}` — the one reply we
+     * have seen. We have not seen a success reply, so the rule is the HTTP
+     * status, and the adapter refuses to call a 2xx that still carries an
+     * `error` field a delivery.
+     */
+    spec: {
+      method: 'GET',
+      url: 'https://msg.text-ware.com/send_sms.php',
+      headers: {},
+      bodyEncoding: 'form',
+      bodyTemplate: 'username={username}&password={password}&src={sender}&dst={to}&msg={text}&dr=1',
+      auth: { mode: 'field' },
+      success: { kind: 'httpStatus' },
+      errorMessagePath: 'error',
+      numberFormat: 'nationalLeadingZero',
+      encoding: 'auto',
+    },
+    onboardingNotes: [
+      'Your username and password are on the setup sheet Text-Ware sent when the account was opened.',
+      'The sender name must match the one registered on your Text-Ware account exactly, including capital letters — "Mr.Chai" and "MR.Chai" are different to them, and the wrong one is refused as an invalid source address.',
+      APPROVAL_NOTE,
+    ],
+    requiresManualSpec: false,
+  },
+
   dialog: {
     key: 'dialog',
     label: 'Dialog eSMS',
@@ -189,6 +242,7 @@ export const SMS_PRESETS: Record<SmsProviderKey, SmsPreset> = {
 export const PRESET_ORDER: SmsProviderKey[] = [
   'notifylk',
   'textlk',
+  'textware',
   'dialog',
   'mobitel',
   'custom',
