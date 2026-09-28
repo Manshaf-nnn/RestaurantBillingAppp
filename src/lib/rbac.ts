@@ -86,6 +86,14 @@ export const PERMISSIONS = {
   // people
   CUSTOMER_VIEW: 'customer.view',
   CUSTOMER_MANAGE: 'customer.manage',
+  /**
+   * Download the customers' phone numbers. Its own permission, not a facet
+   * of CUSTOMER_MANAGE or REPORT_EXPORT: a phone list is the most portable
+   * piece of customer data there is, and who may carry it out is a decision
+   * the owner makes per role. Held by the owner and administrators by
+   * default; granted to a manager from the Roles page, never assumed.
+   */
+  CUSTOMER_EXPORT: 'customer.export',
   STAFF_VIEW: 'staff.view',
   STAFF_MANAGE: 'staff.manage',
 
@@ -302,7 +310,9 @@ const MANAGER: Permission[] = ALL.filter(
     p !== PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE &&
     // The kinds of shift are the owner's to define (shifthandover.md §1); a
     // manager rosters people onto them at their own site.
-    p !== PERMISSIONS.SHIFT_TEMPLATE_MANAGE,
+    p !== PERMISSIONS.SHIFT_TEMPLATE_MANAGE &&
+    // The customer phone list leaves the building only on the owner's say-so.
+    p !== PERMISSIONS.CUSTOMER_EXPORT,
 )
 
 // A cashier handles money at the till, not the restaurant's buying. They are

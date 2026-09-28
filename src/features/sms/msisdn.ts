@@ -34,9 +34,11 @@ export interface CountryDialling {
   nsnLength: number
   /** The prefix a local number carries instead of the country code. */
   trunkPrefix: string
+  /** What a mobile's national number starts with — `7` for Sri Lanka's 07x range. */
+  mobileLeading: string[]
 }
 
-export const LK: CountryDialling = { iso: 'LK', code: '94', nsnLength: 9, trunkPrefix: '0' }
+export const LK: CountryDialling = { iso: 'LK', code: '94', nsnLength: 9, trunkPrefix: '0', mobileLeading: ['7'] }
 
 export const COUNTRIES: Record<'LK', CountryDialling> = { LK }
 
@@ -98,6 +100,21 @@ export function toE164(raw: string | null | undefined, country: CountryDialling)
 
   // 5 — no guessing. A refusal the owner can read beats a misdial they cannot.
   return { ok: false, reason: 'AMBIGUOUS' }
+}
+
+/**
+ * Whether an E.164 number is a mobile in this country.
+ *
+ * Sri Lankan mobiles are the 07x range: a national number beginning with 7.
+ * Landlines (011 Colombo, 081 Kandy, …) are real numbers that no text message
+ * will ever reach, so a list meant for SMS or WhatsApp leaves them out.
+ * Numbers from another country are not judged — they stay in.
+ */
+export function isMobile(e164: string, country: CountryDialling): boolean {
+  const digits = e164.replace(/\D/g, '')
+  if (!digits.startsWith(country.code)) return true
+  const national = digits.slice(country.code.length)
+  return country.mobileLeading.some((prefix) => national.startsWith(prefix))
 }
 
 /**

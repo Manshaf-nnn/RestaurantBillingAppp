@@ -323,6 +323,10 @@ const SERVICE = [
   // The Payment details report adds up to the account balances, and a
   // staff member sees only the accounts the owner gave them.
   'payment-report-test',
+  // Customers → Export numbers: category filter incl. "no category", blocked
+  // and undialable left out, landlines optional, duplicates folded, digits
+  // with country code, tenant-scoped, one number per line, owner-only.
+  'customer-export-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',

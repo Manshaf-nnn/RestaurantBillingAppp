@@ -73,6 +73,9 @@ const TYPES = [
   'shift-assignments',
   'shift-sessions',
   'shift-handovers',
+  // Where the money sits, and the owner's marketing list.
+  'payment-details',
+  'customer-numbers',
 ]
 
 const minted: string[] = []
@@ -169,7 +172,9 @@ async function main() {
   console.log('\n── 2. Each one answers, in both formats ──')
   {
     for (const type of TYPES) {
-      for (const format of ['csv', 'xlsx'] as const) {
+      // The phone list also comes as plain text, one number per line.
+      const formats = type === 'customer-numbers' ? (['csv', 'xlsx', 'txt'] as const) : (['csv', 'xlsx'] as const)
+      for (const format of formats) {
         const response = await fetch(
           `${BASE}/api/reports/export?type=${type}&format=${format}&preset=LAST_30`,
           { headers: { cookie }, redirect: 'manual' },
@@ -264,7 +269,7 @@ async function main() {
     })
     const theirCookie = await signIn(exporter)
 
-    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables', 'shift-assignments', 'shift-sessions', 'shift-handovers']
+    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables', 'shift-assignments', 'shift-sessions', 'shift-handovers', 'payment-details', 'customer-numbers']
     for (const type of gated) {
       const response = await fetch(`${BASE}/api/reports/export?type=${type}&format=csv`, {
         headers: { cookie: theirCookie },

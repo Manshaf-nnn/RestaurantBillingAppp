@@ -645,6 +645,8 @@ export const FEATURES: Feature[] = [
     actions: [
       { key: 'view', permission: PERMISSIONS.CUSTOMER_VIEW },
       { key: 'edit', label: 'Manage', permission: PERMISSIONS.CUSTOMER_MANAGE },
+      // A phone list leaving the building is the owner's call, per role.
+      { key: 'export', label: 'Export numbers', permission: PERMISSIONS.CUSTOMER_EXPORT },
     ],
     routes: ['/dashboard/customers'],
   },
@@ -818,7 +820,7 @@ export const FEATURES: Feature[] = [
         hint: 'Create accounts, record deposits, and choose who may transfer from each one.',
       },
     ],
-    routes: ['/dashboard/payment-details'],
+    routes: ['/dashboard/payment-details', '/dashboard/reports/payment-details'],
   },
   {
     key: 'accounting',

@@ -21,6 +21,7 @@ import {
   type DateRange as CanonicalRange,
 } from '@/features/reports/range'
 import { getPaymentReport } from '@/features/payments/report'
+import { categoryFilterFrom, listCustomerNumbers, numbersAsText } from '@/features/customers/export'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
@@ -460,6 +461,74 @@ export async function GET(request: NextRequest) {
           { header: 'Reason', key: 'note' },
         ],
         rows,
+        format,
+        stamp,
+      )
+    }
+
+    /*
+     * The customers' phone numbers — the owner's marketing list. Its own
+     * permission on top of REPORT_EXPORT (a phone list is the most portable
+     * customer data there is), filtered exactly as the Customers screen is
+     * plus the category chosen in the export dialog, and offered as plain
+     * text (one number per line, for pasting into an SMS or WhatsApp tool)
+     * as well as CSV and Excel.
+     */
+    if (type === 'customer-numbers') {
+      await requirePermission(PERMISSIONS.CUSTOMER_EXPORT)
+      const one = (key: string) => (params.get(key) ?? '').trim()
+      const num = (key: string) => {
+        const raw = one(key)
+        if (!raw) return undefined
+        const value = Number(raw)
+        return Number.isFinite(value) ? Math.trunc(value) : undefined
+      }
+      const kinds = ['new', 'returning', 'repeat', 'regular', 'lapsed'] as const
+      const kind = kinds.find((k) => k === one('kind'))
+      const result = await listCustomerNumbers({
+        restaurantId: user.restaurantId,
+        branchIds,
+        segment: {
+          ...(one('q') ? { q: one('q') } : {}),
+          ...(num('minVisits') !== undefined ? { minVisits: num('minVisits') } : {}),
+          ...(num('minSpent') !== undefined ? { minSpent: num('minSpent')! * 100 } : {}),
+          ...(num('notSeenForDays') !== undefined ? { notSeenForDays: num('notSeenForDays') } : {}),
+          ...(num('minPoints') !== undefined ? { minPoints: num('minPoints') } : {}),
+          ...(kind ? { kind } : {}),
+        },
+        category: categoryFilterFrom(one('category')),
+        mobileOnly: one('mobile') !== '0',
+      })
+
+      // A PII export says how much left with it.
+      await audit({
+        restaurantId: user.restaurantId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.REPORT_EXPORTED,
+        entity: 'Customer',
+        after: { type, format, category: one('category') || 'all', mobileOnly: one('mobile') !== '0', rows: result.rows.length, truncated: result.truncated },
+      })
+
+      if (format === 'txt') {
+        return fileResponse(Buffer.from(numbersAsText(result.rows), 'utf8'), `customer-numbers-${stamp}.txt`, 'text/plain; charset=utf-8')
+      }
+      return respond(
+        'Customer numbers',
+        [
+          { header: 'Name', key: 'name' },
+          { header: 'Mobile', key: 'number' },
+          { header: 'Category', key: 'category' },
+          { header: 'Group', key: 'group' },
+          { header: 'Last order', key: 'lastOrderAt' },
+        ],
+        result.rows.map((row) => ({
+          name: row.name,
+          number: row.number,
+          category: row.category ?? '',
+          group: row.group,
+          lastOrderAt: row.lastOrderAt ? formatDateTime(row.lastOrderAt, { timeZone: restaurant.timezone }) : '',
+        })),
         format,
         stamp,
       )
