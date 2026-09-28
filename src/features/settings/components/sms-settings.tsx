@@ -59,10 +59,12 @@ export interface SmsSettingsProps {
   initial: PublicSmsConfig
   canManage: boolean
   currency: string
+  /** The locations a message can be limited to. With one, the picker is not shown. */
+  branches?: Array<{ id: string; name: string }>
   credentialStoreReady: boolean
 }
 
-export function SmsSettings({ initial, canManage, currency, credentialStoreReady }: SmsSettingsProps) {
+export function SmsSettings({ initial, canManage, currency, branches = [], credentialStoreReady }: SmsSettingsProps) {
   const [config, setConfig] = React.useState(initial)
   const [credentials, setCredentials] = React.useState<Partial<Record<SmsCredentialField, string>>>({})
   const [saving, setSaving] = React.useState(false)
@@ -159,6 +161,7 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
         costCurrency: config.costCurrency ?? currency,
         triggers: config.triggers,
         templates: config.templates,
+        triggerBranches: config.triggerBranches,
         trialOnlyVerified: config.trialOnlyVerified,
         verifiedRecipients: config.verifiedRecipients.join('\n'),
         optOut: config.optOut.join('\n'),
@@ -205,6 +208,13 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
 
   const setTrigger = (key: SmsTriggerKey, value: boolean) =>
     setConfig((prev) => ({ ...prev, triggers: { ...prev.triggers, [key]: value } }))
+
+  /* Empty is "every location", so choosing all of them one by one becomes that. */
+  const setTriggerBranches = (key: SmsTriggerKey, ids: string[]) =>
+    setConfig((prev) => ({
+      ...prev,
+      triggerBranches: { ...prev.triggerBranches, [key]: ids.length === branches.length ? [] : ids },
+    }))
 
   return (
     <div className="space-y-4">
@@ -535,19 +545,70 @@ export function SmsSettings({ initial, canManage, currency, credentialStoreReady
         description={working ? 'Turn on only what you want.' : 'Available once the test above works.'}
       >
         <div className="space-y-3">
-          {TRIGGERS.map(({ key, label, help }) => (
-            <label key={key} className="flex items-start gap-2 text-sm">
-              <Switch
-                checked={config.triggers[key]}
-                disabled={!canManage || !working}
-                onCheckedChange={(value) => setTrigger(key, value)}
-              />
-              <span>
-                {label}
-                <span className="mt-0.5 block text-xs text-muted-foreground">{help}</span>
-              </span>
-            </label>
-          ))}
+          {TRIGGERS.map(({ key, label, help }) => {
+            const chosen = config.triggerBranches[key] ?? []
+            const everywhere = chosen.length === 0
+            return (
+              <div key={key}>
+                <label className="flex items-start gap-2 text-sm">
+                  <Switch
+                    checked={config.triggers[key]}
+                    disabled={!canManage || !working}
+                    onCheckedChange={(value) => setTrigger(key, value)}
+                  />
+                  <span>
+                    {label}
+                    <span className="mt-0.5 block text-xs text-muted-foreground">{help}</span>
+                  </span>
+                </label>
+
+                {/*
+                  Where it is sent from. Only asked when there is a choice: a
+                  single-site restaurant never sees this, and a message with
+                  nothing ticked goes from everywhere, which is the old
+                  behaviour and the usual answer.
+                */}
+                {config.triggers[key] && branches.length > 1 ? (
+                  <div className="ml-11 mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="mr-1 text-xs text-muted-foreground">From</span>
+                    <button
+                      type="button"
+                      disabled={!canManage}
+                      onClick={() => setTriggerBranches(key, [])}
+                      className={cn(
+                        'rounded-full border px-2.5 py-0.5 text-xs transition',
+                        everywhere ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/40',
+                      )}
+                    >
+                      All locations
+                    </button>
+                    {branches.map((branch) => {
+                      const on = chosen.includes(branch.id)
+                      return (
+                        <button
+                          key={branch.id}
+                          type="button"
+                          disabled={!canManage}
+                          onClick={() =>
+                            setTriggerBranches(
+                              key,
+                              on ? chosen.filter((id) => id !== branch.id) : [...chosen, branch.id],
+                            )
+                          }
+                          className={cn(
+                            'rounded-full border px-2.5 py-0.5 text-xs transition',
+                            on ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/40',
+                          )}
+                        >
+                          {branch.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
 
         {config.triggers.marketing && (

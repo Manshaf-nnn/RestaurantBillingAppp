@@ -150,6 +150,18 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
       )
     }
 
+    // 3b — switched on, but not at this location. An empty list means everywhere.
+    const sentFrom = input.trigger ? config.triggerBranches[input.trigger] ?? [] : []
+    if (!isTest && sentFrom.length > 0 && !(input.branchId && sentFrom.includes(input.branchId))) {
+      return suppress(
+        input,
+        provider,
+        'TRIGGER_OFF_HERE',
+        `The "${input.trigger}" SMS is not sent from this location`,
+        input.to,
+      )
+    }
+
     // 4 — a half-filled form is not a tenant who agreed to text their guests.
     if (!isTest && !config.verifiedAt) {
       return suppress(

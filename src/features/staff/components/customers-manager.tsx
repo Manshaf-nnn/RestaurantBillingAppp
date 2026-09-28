@@ -30,6 +30,7 @@ import { Switch } from '@/components/ui/primitives'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/features/dashboard/components/page-header'
+import { CustomerExportDialog } from '@/features/customers/components/customer-export-dialog'
 import { formatMoney } from '@/lib/money'
 import { adjustLoyalty } from '../actions'
 import { SearchBox } from '@/components/search-box'
@@ -74,6 +75,7 @@ export function CustomersManager({
   currency,
   locale,
   canManage,
+  canExport = false,
 }: {
   customers: CustomerRow[]
   /** The categories the owner has defined (pro.A.md §1). Active ones only. */
@@ -86,6 +88,8 @@ export function CustomersManager({
   pages?: number
   /** Whether this person may aim an offer at the filtered group (§4). */
   canDiscountGroup?: boolean
+  /** Holds CUSTOMER_EXPORT: may download the phone list (the owner's decision, per role). */
+  canExport?: boolean
   currency: string
   locale: string
   canManage: boolean
@@ -119,7 +123,9 @@ export function CustomersManager({
               }`
         }
         actions={
-          canManage ? (
+          <div className="flex flex-wrap gap-2">
+            {canExport ? <CustomerExportDialog categories={categories ?? []} /> : null}
+          {canManage ? (
             <Button
               onClick={() => {
                 setEditing(null)
@@ -128,7 +134,8 @@ export function CustomersManager({
             >
               <Plus /> Add customer
             </Button>
-          ) : null
+          ) : null}
+          </div>
         }
       />
 

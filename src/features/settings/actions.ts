@@ -21,6 +21,7 @@ import type { HttpGatewaySpec, SmsConfig } from '@/features/sms/types'
 import { assertSafeGatewayUrl } from '@/server/security/ssrf'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import { sendSms } from '@/server/sms/send'
+import { listBranches } from '@/features/branches/service'
 import { ConflictError, ValidationError } from '@/lib/errors'
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { bpsFromPercent } from '@/lib/money'
@@ -546,6 +547,26 @@ export async function updateGuestAppearance(input: unknown): Promise<ActionResul
  *     the values. `REDACTED_KEYS` would also catch them; this is the first line
  *     of defence rather than the second.
  */
+/**
+ * Keep only this restaurant's own locations in each message's list.
+ *
+ * A stale id from a deleted branch, or one pasted from elsewhere, would
+ * otherwise sit in the list forever looking like a place; and a message whose
+ * list held only ghosts would be sent from nowhere with no way to see why.
+ */
+async function ownBranchesOnly(
+  restaurantId: string,
+  lists: Record<string, string[]>,
+): Promise<SmsConfig['triggerBranches']> {
+  const known = new Set((await listBranches(restaurantId)).map((branch) => branch.id))
+  const kept: SmsConfig['triggerBranches'] = {}
+  for (const [trigger, ids] of Object.entries(lists)) {
+    const own = ids.filter((id) => known.has(id))
+    if (own.length) kept[trigger as keyof SmsConfig['triggerBranches']] = own
+  }
+  return kept
+}
+
 export async function updateSmsConfig(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(
     smsConfigSchema,
@@ -612,6 +633,7 @@ export async function updateSmsConfig(input: unknown): Promise<ActionResult<{ id
         costCurrency: data.costCurrency || restaurant.currency,
         triggers: data.triggers,
         templates: data.templates,
+        triggerBranches: await ownBranchesOnly(user.restaurantId, data.triggerBranches),
         trialOnlyVerified: data.trialOnlyVerified,
         verifiedRecipients: splitNumbers(data.verifiedRecipients),
         optOut: splitNumbers(data.optOut),

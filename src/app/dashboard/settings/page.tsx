@@ -7,6 +7,7 @@ import { readReceiptFields } from '@/features/printing/receipt-fields'
 import { getLiveBoardPolicy } from '@/features/live/policy'
 import { getApprovalPolicy } from '@/features/approvals/service'
 import { readAppearance } from '@/features/guest/appearance'
+import { listBranches } from '@/features/branches/service'
 import { mergeSmsConfig } from '@/features/sms/config'
 import { publicSmsConfig } from '@/features/sms/types'
 import { isOpenNow, parseOpeningHours, todayLabel } from '@/lib/opening-hours'
@@ -37,6 +38,7 @@ export default async function SettingsPage({
   })
   const policy = await getApprovalPolicy(user.restaurantId)
   const livePolicy = await getLiveBoardPolicy(user.restaurantId)
+  const branches = await listBranches(user.restaurantId)
   // Stored in minor units, shown and typed in major ones — the same boundary
   // every other cash field in the app crosses.
   const factor = minorUnitFactor(restaurant.currency)
@@ -54,6 +56,7 @@ export default async function SettingsPage({
       /* Ciphertext stripped here, at the boundary — the browser gets which
        * slots are filled and their last four characters, never the values. */
       sms={publicSmsConfig(mergeSmsConfig(restaurant.smsConfig as never))}
+      smsBranches={branches.filter((branch) => branch.isActive).map((branch) => ({ id: branch.id, name: branch.name }))}
       credentialStoreReady={isCredentialStoreReady()}
       initial={{
         name: restaurant.name,

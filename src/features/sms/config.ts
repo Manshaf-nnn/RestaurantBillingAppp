@@ -55,6 +55,7 @@ export function mergeSmsConfig(stored: Partial<SmsConfig> | null | undefined): S
     credentials: { ...(stored?.credentials ?? {}) },
     credentialHints: { ...(stored?.credentialHints ?? {}) },
     templates: { ...(stored?.templates ?? {}) },
+    triggerBranches: { ...(stored?.triggerBranches ?? {}) },
     /* Fixed in v1. Never inherited from Restaurant.country, which defaults to "IN". */
     defaultCountry: 'LK',
   }
@@ -107,12 +108,33 @@ export function mergeCredentials(
     const value = raw.trim()
     if (!value) continue
 
+    /*
+     * The same value again is not a change.
+     *
+     * The form keeps what was typed for as long as the page is open and sends
+     * it with every save, so without this a save made right after a
+     * successful test — to switch a message on — counted as new credentials,
+     * cleared the proof, and refused with "test it again". Compared in the
+     * clear because the ciphertext is salted and never repeats.
+     */
+    if (sameCredential(existing.credentials[field], value)) continue
+
     credentials[field] = sealSecret(value, SMS_SECRET_NAMESPACE)
     hints[field] = secretByField.get(field) === false ? value : credentialHint(value)
     changed.push(field)
   }
 
   return { credentials, hints, changed }
+}
+
+/** Whether a stored, sealed credential is this plaintext. Unreadable means no. */
+function sameCredential(sealed: string | undefined, plain: string): boolean {
+  if (!sealed) return false
+  try {
+    return openSecret(sealed, SMS_SECRET_NAMESPACE) === plain
+  } catch {
+    return false
+  }
 }
 
 /** Drop credential slots this gateway does not use, so a switch leaves nothing behind. */

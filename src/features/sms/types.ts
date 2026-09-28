@@ -220,6 +220,16 @@ export interface SmsConfig {
   triggers: Record<SmsTriggerKey, boolean>
   templates: Partial<Record<SmsTriggerKey, string>>
   /**
+   * Where each message is sent from. Missing or empty means every location.
+   *
+   * A group with one site that takes bookings and two that do not should not
+   * have to choose between confirming bookings everywhere and nowhere. Kept
+   * per message rather than per gateway because the gateway is the same
+   * account for the whole business; what differs by site is which events
+   * happen there.
+   */
+  triggerBranches: Partial<Record<SmsTriggerKey, string[]>>
+  /**
    * Trial accounts silently drop anything not on their verified list, which
    * presents as "it works for the owner and for nobody else" and costs a week.
    */
@@ -259,6 +269,7 @@ export const DEFAULT_SMS_CONFIG: SmsConfig = {
     marketing: false,
   },
   templates: {},
+  triggerBranches: {},
   trialOnlyVerified: false,
   verifiedRecipients: [],
   optOut: [],

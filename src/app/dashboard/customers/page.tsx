@@ -110,6 +110,7 @@ export default async function CustomersPage({
   return (
     <CustomersManager
       canManage={can(user, PERMISSIONS.CUSTOMER_MANAGE)}
+      canExport={can(user, PERMISSIONS.CUSTOMER_EXPORT)}
       currency={restaurant.currency}
       locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
       customers={customers.map((customer) => ({

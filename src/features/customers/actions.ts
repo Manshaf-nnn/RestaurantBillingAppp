@@ -20,13 +20,21 @@ import {
   setCustomerCategoryActive,
   updateCustomer,
 } from './service'
-import { countSegment, describeSegment, type CustomerSegment } from './segments'
+import { buildSegmentWhere, countSegment, describeSegment, type CustomerSegment } from './segments'
 import { offersForCustomer, type OfferForCustomer } from './discounts'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { readSmsConfig } from '@/features/sms/config'
+import { countSegments } from '@/features/sms/encoding'
+import type { SmsConfig } from '@/features/sms/types'
+import { sendSms } from '@/server/sms/send'
+import { createHash } from 'node:crypto'
+import { ValidationError } from '@/lib/errors'
 import {
   createCampaignSchema,
   customerCategoryIdSchema,
   customerSegmentSchema,
   findCustomerSchema,
+  groupSmsSchema,
   offersForCustomerSchema,
   saveCustomerCategorySchema,
   saveCustomerSchema,
@@ -535,6 +543,254 @@ export async function createCustomerCampaignAction(
     },
     undefined,
     'customers.campaign.create',
+  )
+}
+
+/* ── a message to a group: the SMS counterpart of a campaign ─────────────── */
+
+/**
+ * Why the owner cannot send yet, in words that name the switch to flip.
+ *
+ * `sendSms` refuses each of these on its own — but per message, writing a
+ * SUPPRESSED row for every customer in the group. Asked once up front, the
+ * same refusal is one sentence on the dialog instead of two hundred rows in
+ * the delivery log saying the same thing.
+ */
+function groupSmsBlocker(config: SmsConfig, branchId: string | null): string | null {
+  if (!config.enabled) return 'SMS is switched off for this restaurant. Turn it on under Settings → SMS.'
+  if (!config.verifiedAt) return 'Send yourself a test message under Settings → SMS first.'
+  if (!config.triggers.marketing) return 'Switch on "Send offers" under Settings → SMS.'
+  const sentFrom = config.triggerBranches.marketing ?? []
+  if (sentFrom.length > 0 && !(branchId && sentFrom.includes(branchId))) {
+    return 'Offers are only sent from some of your locations. Pick one of them in the location switcher at the top, then try again.'
+  }
+  return null
+}
+
+/**
+ * Who in the filter can actually be texted.
+ *
+ * The segment, minus anybody blocked, anybody with no number, and anybody who
+ * asked to stop. The opt-out list is kept as digits-only keys, which is what
+ * `Customer.phoneKey` is, so the match is one indexed clause. `sendSms` checks
+ * the same things again per message; this keeps the number on the button
+ * honest before anybody presses it.
+ */
+function textableWhere(params: {
+  restaurantId: string
+  branchIds: string[] | null
+  segment: CustomerSegment
+  optOut: string[]
+}): Prisma.CustomerWhereInput {
+  const base = buildSegmentWhere(params)
+  const and: Prisma.CustomerWhereInput[] = Array.isArray(base.AND) ? [...base.AND] : base.AND ? [base.AND] : []
+  and.push({ isBlocked: false }, { phone: { not: '' } })
+  if (params.optOut.length) {
+    and.push({ OR: [{ phoneKey: null }, { phoneKey: { notIn: params.optOut } }] })
+  }
+  return { ...base, AND: and }
+}
+
+/** `{name}` becomes their first name; a nameless guest just gets the message. */
+function personalise(text: string, name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? ''
+  return text.replace(/\{name\}/gi, first).replace(/[ \t]{2,}/g, ' ').trim()
+}
+
+export interface GroupSmsPreview {
+  /** Everybody the filter reaches, as the page counts them. */
+  reaches: number
+  /** Of those, the people a message can go to. */
+  textable: number
+  /** How many SMS parts each message costs, estimated on the unfilled text. */
+  parts: number
+  costMinor: number | null
+  dailyCap: number
+  /** Why nothing can be sent yet, or null when it can. */
+  blocker: string | null
+}
+
+/**
+ * The numbers the dialog shows before anybody spends a rupee.
+ */
+export async function previewGroupSmsAction(input: unknown): Promise<ActionResult<GroupSmsPreview>> {
+  return runAction(groupSmsSchema, input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.CUSTOMER_MANAGE)
+    const config = await readSmsConfig(user.restaurantId)
+    const segment = toSegment(data.segment)
+    const selection = await selectedBranch(user, data.branchId ? { branch: data.branchId } : undefined)
+    const scope = { restaurantId: user.restaurantId, branchIds: selection.branchIds, segment }
+
+    const [reaches, textable] = await Promise.all([
+      countSegment(scope),
+      prisma.customer.count({ where: textableWhere({ ...scope, optOut: config.optOut }) }),
+    ])
+    const parts = countSegments(data.text).segments
+
+    return {
+      reaches,
+      textable,
+      parts,
+      costMinor: config.costMinor === null ? null : config.costMinor * parts * textable,
+      dailyCap: config.caps.perDay,
+      blocker: groupSmsBlocker(config, selection.branchId),
+    }
+  })
+}
+
+/** How many people one call texts before handing the cursor back. */
+const GROUP_SMS_BATCH = 10
+
+export interface GroupSmsBatch {
+  sent: number
+  /** Refused before the gateway: opted out, bad number, over a cap. */
+  skipped: number
+  /** Already got this exact message today — a re-run does not send it twice. */
+  alreadySent: number
+  failed: number
+  /** The first few, by name, so the owner can see who and why. */
+  problems: Array<{ name: string; reason: string }>
+  /** The last customer handled. Call again with it, until null. */
+  nextCursor: string | null
+  /** Set when the run must stop early, e.g. the daily cap. */
+  stopped: string | null
+}
+
+/**
+ * Text everybody in the filter, ten at a time.
+ *
+ * ── Why slices and not a job ────────────────────────────────────────────────
+ *
+ * The gateway takes one number per request and answers in about a second, so
+ * two hundred customers is a few minutes of waiting — too long for one HTTP
+ * request behind a proxy, and there is no screen where a background job could
+ * report back to the owner. Ten per call, with the browser asking for the next
+ * ten, gives a progress bar and a result in the same dialog that started it.
+ *
+ * ── Why it is safe to run twice ─────────────────────────────────────────────
+ *
+ * Every message carries a dedupe key made of the customer, the day and the
+ * text. A tab closed half way and the button pressed again picks up where it
+ * left off: the people already texted are found by that key and counted as
+ * such rather than being texted again. The key is unique on the table, so the
+ * guarantee holds even if two people press the button at the same moment.
+ */
+export async function sendGroupSmsAction(input: unknown): Promise<ActionResult<GroupSmsBatch>> {
+  return runAction(
+    groupSmsSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.CUSTOMER_MANAGE)
+      const config = await readSmsConfig(user.restaurantId)
+      const segment = toSegment(data.segment)
+      const selection = await selectedBranch(user, data.branchId ? { branch: data.branchId } : undefined)
+      const blocker = groupSmsBlocker(config, selection.branchId)
+      if (blocker) throw new ValidationError(blocker)
+
+      const where = textableWhere({
+        restaurantId: user.restaurantId,
+        branchIds: selection.branchIds,
+        segment,
+        optOut: config.optOut,
+      })
+
+      // Recorded once, on the first slice: what was sent, to whom, by whom.
+      if (!data.cursor) {
+        const reaches = await prisma.customer.count({ where })
+        await audit({
+          restaurantId: user.restaurantId,
+          userId: user.id,
+          actorName: user.name,
+          action: AUDIT_ACTIONS.SMS_GROUP_SENT,
+          entity: 'Customer',
+          after: { segment, text: data.text, reaches, branchId: selection.branchId },
+        })
+      }
+
+      const rows = await prisma.customer.findMany({
+        where,
+        orderBy: { id: 'asc' },
+        take: GROUP_SMS_BATCH,
+        ...(data.cursor ? { cursor: { id: data.cursor }, skip: 1 } : {}),
+        select: { id: true, name: true, phone: true },
+      })
+
+      const digest = createHash('sha1').update(data.text).digest('hex').slice(0, 12)
+      const day = new Date().toISOString().slice(0, 10)
+      const keyFor = (customerId: string) => `group:${day}:${digest}:${customerId}`
+
+      // The people this slice already reached, on an earlier run of the same
+      // message today. One query for the slice rather than one per name.
+      const done = new Set(
+        (
+          await prisma.smsMessage.findMany({
+            where: {
+              restaurantId: user.restaurantId,
+              dedupeKey: { in: rows.map((row) => keyFor(row.id)) },
+              status: { in: ['SENT', 'DELIVERED'] },
+            },
+            select: { dedupeKey: true },
+          })
+        ).map((row) => row.dedupeKey),
+      )
+
+      const batch: GroupSmsBatch = {
+        sent: 0,
+        skipped: 0,
+        alreadySent: 0,
+        failed: 0,
+        problems: [],
+        nextCursor: null,
+        stopped: null,
+      }
+      const note = (name: string, reason: string) => {
+        if (batch.problems.length < 5) batch.problems.push({ name: name || 'Unnamed guest', reason })
+      }
+
+      for (const customer of rows) {
+        if (done.has(keyFor(customer.id))) {
+          batch.alreadySent += 1
+          continue
+        }
+        try {
+          const outcome = await sendSms({
+            restaurantId: user.restaurantId,
+            branchId: selection.branchId,
+            to: customer.phone,
+            text: personalise(data.text, customer.name),
+            purpose: 'MARKETING',
+            trigger: 'marketing',
+            dedupeKey: keyFor(customer.id),
+            entity: 'Customer',
+            entityId: customer.id,
+            requestedById: user.id,
+            config,
+          })
+          if (outcome.sent) {
+            batch.sent += 1
+          } else if (outcome.status === 'SUPPRESSED') {
+            batch.skipped += 1
+            note(customer.name, outcome.error ?? 'Not sent')
+          } else {
+            batch.failed += 1
+            note(customer.name, outcome.error ?? 'The gateway refused it')
+          }
+          // Past the cap, every further attempt is refused the same way.
+          if (outcome.errorCode === 'CAP_DAILY') {
+            batch.stopped = outcome.error ?? 'The daily SMS cap has been reached'
+            return batch
+          }
+        } catch (error) {
+          batch.failed += 1
+          note(customer.name, error instanceof Error ? error.message : 'Could not send')
+        }
+      }
+
+      if (rows.length === GROUP_SMS_BATCH) batch.nextCursor = rows[rows.length - 1]!.id
+      return batch
+    },
+    undefined,
+    'customers.sms.send',
   )
 }
 

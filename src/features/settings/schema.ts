@@ -339,6 +339,8 @@ export const smsConfigSchema = z
     }),
 
     templates: z.record(z.string().max(480)).default({}),
+    /** Per message, the locations it is sent from. Empty means everywhere. */
+    triggerBranches: z.record(z.array(z.string().trim().min(1).max(40)).max(50)).default({}),
 
     trialOnlyVerified: z.coerce.boolean(),
     /** One number per line on the way in; the action normalises to phoneKey form. */

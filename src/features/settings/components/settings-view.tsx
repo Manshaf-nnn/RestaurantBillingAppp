@@ -113,6 +113,7 @@ export function SettingsView({
   canManage,
   guest,
   sms,
+  smsBranches = [],
   credentialStoreReady,
   initialTab = 'profile',
 }: {
@@ -122,6 +123,8 @@ export function SettingsView({
   guest: { appearance: GuestAppearance; isOpen: boolean; openingLabel: string | null }
   /** The shop's own gateway, with the credential ciphertext already stripped. */
   sms: PublicSmsConfig
+  /** The locations a message can be limited to. One location shows no picker. */
+  smsBranches?: Array<{ id: string; name: string }>
   /** Whether the server has a key to encrypt a pasted API key with. */
   credentialStoreReady: boolean
   /** `?tab=` — so the old Guest experience link still lands on its screen. */
@@ -224,6 +227,7 @@ export function SettingsView({
             initial={sms}
             canManage={canManage}
             currency={form.currency}
+            branches={smsBranches}
             credentialStoreReady={credentialStoreReady}
           />
         </TabsContent>

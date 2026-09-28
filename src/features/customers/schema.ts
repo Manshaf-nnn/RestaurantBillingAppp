@@ -131,6 +131,24 @@ export const createCampaignSchema = z.object({
 })
 
 /**
+ * A text message to the filtered group — the SMS counterpart of a campaign.
+ *
+ * The same segment an offer is aimed with, plus the words. `cursor` is how a
+ * long list goes out in slices: the browser calls again with the last customer
+ * it was told about, so five hundred names are fifty short requests behind a
+ * progress bar rather than one request a proxy gives up on.
+ */
+export const groupSmsSchema = z.object({
+  segment: customerSegmentSchema,
+  /** Up to three GSM segments. Longer than that is a letter, not a text. */
+  text: z.string().trim().min(1, 'Write the message').max(480),
+  cursor: z.string().cuid().optional().or(z.literal('')),
+  /** The branch chosen in the switcher, so the count matches the screen. */
+  branchId: z.string().trim().max(40).optional().or(z.literal('')),
+})
+export type GroupSmsInput = z.infer<typeof groupSmsSchema>
+
+/**
  * The basket a guest is standing in front of, for the offers question
  * (pro.A.md §4).
  *
