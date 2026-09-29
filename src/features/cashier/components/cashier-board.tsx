@@ -1817,6 +1817,7 @@ function BillPanel({
         currency={restaurant.currency}
         locale={restaurant.locale}
         currentDiscount={bill.discountTotal}
+        discountableBase={Math.max(0, bill.subtotal - bill.items.reduce((sum, item) => sum + item.discountAmount, 0))}
       />
     </div>
   )
@@ -2109,28 +2110,72 @@ function DiscountDialog({
   currency,
   locale,
   currentDiscount,
+  discountableBase,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   orderId: string
   currency: string
   locale: string
+  /** Every discount already on the bill, items and coupons included. Shown, never re-applied. */
   currentDiscount: number
+  /** Subtotal less item discounts: what a bill discount comes off, for the preview. */
+  discountableBase: number
 }) {
-  const [amount, setAmount] = React.useState(String(toMajor(currentDiscount, currency)))
+  const [mode, setMode] = React.useState<'amount' | 'percent'>('amount')
+  const [value, setValue] = React.useState('')
   const [reason, setReason] = React.useState('')
   const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  /*
+   * Blank on every open. It used to start at the bill's whole discount —
+   * item discounts and coupons included — so applying it unchanged stacked
+   * them a second time as a bill discount.
+   */
+  React.useEffect(() => {
+    if (!open) return
+    setMode('amount')
+    setValue('')
+    setReason('')
+    setError(null)
+  }, [open])
+
+  const number = value.trim() === '' ? NaN : Number(value)
+  const valid =
+    Number.isFinite(number) &&
+    number >= 0 &&
+    (mode === 'percent' ? number <= 100 && Math.round(number * 100) === number * 100 : true)
+  const money = (minor: number) => formatMoney(minor, currency, locale)
+  /*
+   * A preview only. The server takes the percentage of the bill as it is at
+   * the moment of applying (after any coupon too), and the toast afterwards
+   * says the real new total.
+   */
+  const previewOff = !valid
+    ? null
+    : mode === 'percent'
+      ? Math.round((discountableBase * number) / 100)
+      : Math.min(parseMoney(value, currency), discountableBase)
 
   const apply = async () => {
+    if (!valid) {
+      setError(mode === 'percent' ? 'Enter a percentage from 0 to 100.' : 'Enter an amount.')
+      return
+    }
     setPending(true)
-    const result = await callAction(() => applyManualDiscount({
-      orderId,
-      amount: parseMoney(amount, currency),
-      reason,
-    }))
+    setError(null)
+    const result = await callAction(() =>
+      applyManualDiscount(
+        mode === 'percent'
+          ? { orderId, mode: 'percent', percent: number, reason }
+          : { orderId, mode: 'amount', amount: parseMoney(value, currency), reason },
+      ),
+    )
     setPending(false)
 
     if (!result.ok) {
+      setError(result.error)
       toast.error(result.error)
       return
     }
@@ -2144,18 +2189,74 @@ function DiscountDialog({
         <DialogHeader>
           <DialogTitle>Apply a discount</DialogTitle>
           <DialogDescription>
-            Recorded in the audit log against your account.
+            A fixed amount or a percentage of the bill. Recorded in the audit log against your account.
           </DialogDescription>
         </DialogHeader>
 
-        <Field label="Discount amount" htmlFor="discount-amount">
-          <Input
-            id="discount-amount"
-            inputMode="decimal"
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-          />
+        {/* Fixed or percentage — one choice, two buttons, the current one filled. */}
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Discount type">
+          {(
+            [
+              ['amount', `Fixed amount (${currency})`],
+              ['percent', 'Percentage (%)'],
+            ] as const
+          ).map(([key, label]) => (
+            <Button
+              key={key}
+              type="button"
+              role="radio"
+              aria-checked={mode === key}
+              variant={mode === key ? 'default' : 'outline'}
+              onClick={() => {
+                setMode(key)
+                setValue('')
+                setError(null)
+              }}
+            >
+              {key === 'percent' ? <Percent /> : null}
+              {label}
+            </Button>
+          ))}
+        </div>
+
+        <Field
+          label={mode === 'percent' ? 'Discount percentage' : 'Discount amount'}
+          htmlFor="discount-value"
+          hint={
+            currentDiscount > 0
+              ? `Already off this bill: ${money(currentDiscount)} (items and coupons). This is added on top.`
+              : undefined
+          }
+          error={error ?? undefined}
+        >
+          <div className="relative">
+            <Input
+              id="discount-value"
+              inputMode="decimal"
+              value={value}
+              placeholder={mode === 'percent' ? 'e.g. 10' : 'e.g. 100'}
+              onChange={(event) => {
+                setValue(event.target.value)
+                setError(null)
+              }}
+              className="pr-12"
+              autoFocus
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+              {mode === 'percent' ? '%' : currency}
+            </span>
+          </div>
         </Field>
+
+        {previewOff !== null ? (
+          <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm">
+            <span className="font-medium">{money(previewOff)} off</span>
+            <span className="text-muted-foreground">
+              {mode === 'percent' ? ` — ${number}% of ${money(discountableBase)}` : ''}
+              {mode === 'amount' && parseMoney(value, currency) > discountableBase ? ' — capped at what the bill has left' : ''}
+            </span>
+          </p>
+        ) : null}
 
         <Field label="Reason" htmlFor="discount-reason">
           <Input
@@ -2170,7 +2271,7 @@ function DiscountDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button loading={pending} onClick={apply}>
+          <Button loading={pending} onClick={apply} disabled={!valid}>
             Apply discount
           </Button>
         </DialogFooter>

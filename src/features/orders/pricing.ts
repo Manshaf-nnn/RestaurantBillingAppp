@@ -211,6 +211,29 @@ export interface OrderTotals {
  * levied on the discounted base, and tax applies to base + service charge —
  * which is the standard treatment for restaurant billing.
  */
+/**
+ * What a manual (bill) discount can come off: the live lines after their own
+ * item discounts and the coupon — exactly the room `computeTotals` leaves it.
+ *
+ * A percentage discount is taken of this, so "10%" can never mean ten percent
+ * of money already discounted away, and never more than the bill has left.
+ */
+export function manualDiscountBase(input: {
+  lines: Array<{ lineTotal: number; discount?: number }>
+  couponDiscount?: number
+}): number {
+  const subtotal = input.lines.reduce((total, line) => total + line.lineTotal, 0)
+  const itemDiscount = Math.min(
+    input.lines.reduce(
+      (total, line) => total + Math.min(Math.max(0, line.discount ?? 0), Math.max(0, line.lineTotal)),
+      0,
+    ),
+    subtotal,
+  )
+  const couponDiscount = Math.min(Math.max(0, input.couponDiscount ?? 0), subtotal - itemDiscount)
+  return Math.max(0, subtotal - itemDiscount - couponDiscount)
+}
+
 export function computeTotals(input: TotalsInput): OrderTotals {
   const subtotal = input.lines.reduce((total, line) => total + line.lineTotal, 0)
 

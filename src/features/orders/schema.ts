@@ -324,11 +324,31 @@ export const orderFilterSchema = z.object({
 })
 export type OrderFilterInput = z.infer<typeof orderFilterSchema>
 
-export const applyDiscountSchema = z.object({
-  orderId: z.string().cuid(),
-  amount: z.coerce.number().int().min(0),
-  reason: z.string().trim().max(160).optional(),
-})
+/**
+ * A bill discount, as a fixed amount (minor units) or as a percentage.
+ *
+ * A percentage is sent as a percentage, not pre-multiplied in the browser:
+ * the server takes it of the bill's CURRENT discountable figure, so a screen
+ * a few seconds stale cannot turn "10%" into the wrong amount. Exactly one
+ * of the two. Up to two decimals of a percent (12.5% is a real discount).
+ */
+export const applyDiscountSchema = z
+  .object({
+    orderId: z.string().cuid(),
+    mode: z.enum(['amount', 'percent']).default('amount'),
+    amount: z.coerce.number().int().min(0).optional(),
+    percent: z.coerce
+      .number()
+      .min(0, 'A percentage cannot be negative')
+      .max(100, 'A percentage cannot be more than 100')
+      .refine((value) => Math.round(value * 100) === value * 100, 'Use at most two decimals')
+      .optional(),
+    reason: z.string().trim().max(160).optional(),
+  })
+  .refine((data) => (data.mode === 'percent' ? data.percent !== undefined : data.amount !== undefined), {
+    message: 'Enter the discount',
+    path: ['amount'],
+  })
 
 /**
  * Confirming a delivery at the door.

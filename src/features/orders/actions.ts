@@ -61,7 +61,7 @@ import {
   toOrderPayload,
   type ProgressedItem,
 } from './service'
-import { computeTotals, estimatePrepMinutes } from './pricing'
+import { computeTotals, estimatePrepMinutes, manualDiscountBase } from './pricing'
 import { readOptions } from './queries'
 
 // ── guest surface ────────────────────────────────────────────────────────────
@@ -1457,6 +1457,25 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
       await assertPeriodOpen(prisma, user.restaurantId, order.placedAt)
 
       /*
+       * The amount, whichever way it was asked for. A percentage is taken of
+       * exactly what a manual discount comes off in `computeTotals` — the
+       * live lines after their own item discounts and any coupon — so "10%"
+       * means ten percent of what the guest is being charged for, and it is
+       * resolved HERE, before the approval check, so a large percentage
+       * needs a manager exactly as the same amount typed in would.
+       */
+      const discountable = manualDiscountBase({
+        lines: order.items
+          .filter((item) => item.status !== 'CANCELLED')
+          .map((item) => ({ lineTotal: item.lineTotal, discount: item.discountAmount })),
+        couponDiscount: order.couponDiscount,
+      })
+      const amount =
+        data.mode === 'percent'
+          ? Math.round((discountable * (data.percent ?? 0)) / 100)
+          : Math.min(data.amount ?? 0, discountable)
+      
+      /*
        * Past the restaurant's threshold, the discount stops here until a
        * manager has signed it off. The request is raised once (repeats return
        * the same open request), the cashier is told, and the retry after
@@ -1467,7 +1486,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
         await needsApproval({
           restaurantId: user.restaurantId,
           kind: 'DISCOUNT',
-          amount: data.amount,
+          amount: amount,
         })
       ) {
         /*
@@ -1485,7 +1504,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
             kind: 'DISCOUNT',
             status: 'APPROVED',
             consumedAt: null,
-            amount: { gte: data.amount },
+            amount: { gte: amount },
           },
           select: { id: true },
         })
@@ -1503,7 +1522,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
             kind: 'DISCOUNT',
             entity: 'Order',
             entityId: order.id,
-            amount: data.amount,
+            amount: amount,
             reason: data.reason?.trim() || `Discount on ${order.orderNumber}`,
             userId: user.id,
           })
@@ -1534,7 +1553,7 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
         serviceChargeBps: order.serviceChargeBps,
         taxInclusive: order.taxInclusive,
         couponDiscount,
-        manualDiscount: data.amount,
+        manualDiscount: amount,
         loyaltyDiscount: order.loyaltyDiscount,
         currency: order.restaurant.currency,
         roundTotal: true,
@@ -1563,7 +1582,12 @@ export async function applyManualDiscount(input: unknown): Promise<ActionResult<
         entity: 'Order',
         entityId: order.id,
         before: { grandTotal: order.grandTotal },
-        after: { grandTotal: updated.grandTotal, reason: data.reason },
+        after: {
+          grandTotal: updated.grandTotal,
+          reason: data.reason,
+          discount: amount,
+          ...(data.mode === 'percent' ? { percent: data.percent } : {}),
+        },
       })
 
       revalidatePath(`/dashboard/orders/${order.id}`)

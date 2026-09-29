@@ -334,6 +334,9 @@ const SERVICE = [
   // Delivery report: delivered vs cancelled, sales from delivered only, cash
   // at the door from COD, times from the order's own stamps, branch-scoped.
   'delivery-report-test',
+  // Cashier bill discount as a percentage: taken of exactly the room a manual
+  // discount has in computeTotals; the schema takes one of amount or percent.
+  'percent-discount-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',
