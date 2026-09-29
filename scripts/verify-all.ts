@@ -331,6 +331,9 @@ const SERVICE = [
   // Reservations: cancelling keeps the reason and releases the table, only a
   // holding booking can be cancelled, and the report's figures add up.
   'reservation-report-test',
+  // Delivery report: delivered vs cancelled, sales from delivered only, cash
+  // at the door from COD, times from the order's own stamps, branch-scoped.
+  'delivery-report-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',

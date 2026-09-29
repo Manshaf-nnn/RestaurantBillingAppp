@@ -551,6 +551,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, permission: PERMISSIONS.REPORT_VIEW },
       { href: '/dashboard/reports/sales', label: 'Sales report', icon: TrendingUp, permission: PERMISSIONS.REPORT_SALES },
+      { href: '/dashboard/reports/delivery', label: 'Delivery report', icon: Bike, permission: PERMISSIONS.REPORT_SALES },
       { href: '/dashboard/reports/profit', label: 'Gross profit', icon: PiggyBank, permission: PERMISSIONS.REPORT_PROFIT },
       { href: '/dashboard/reports/inventory', label: 'Inventory report', icon: Package, permission: PERMISSIONS.REPORT_INVENTORY },
       { href: '/dashboard/reports/purchasing', label: 'Purchasing report', icon: Truck, permission: PERMISSIONS.REPORT_PURCHASING },

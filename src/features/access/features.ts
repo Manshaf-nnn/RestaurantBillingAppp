@@ -746,7 +746,7 @@ export const FEATURES: Feature[] = [
     group: 'Back office',
     description: 'Takings by day, hour, item and payment method.',
     actions: [{ key: 'view', permission: PERMISSIONS.REPORT_SALES }],
-    routes: ['/dashboard/reports/sales'],
+    routes: ['/dashboard/reports/sales', '/dashboard/reports/delivery'],
   },
   {
     key: 'reportProfit',

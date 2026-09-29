@@ -474,6 +474,67 @@ export async function GET(request: NextRequest) {
      * text (one number per line, for pasting into an SMS or WhatsApp tool)
      * as well as CSV and Excel.
      */
+    /* Every delivery in the period with its place, times, handover and payment. */
+    if (type === 'deliveries') {
+      await requirePermission(PERMISSIONS.REPORT_SALES)
+      const rows = await prisma.order.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          type: 'DELIVERY',
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          placedAt: { gte: range.from, lte: range.to },
+        },
+        orderBy: { placedAt: 'asc' },
+        take: EXPORT_LIMIT,
+        select: {
+          orderNumber: true, status: true, customerName: true, customerPhone: true, deliveryLocationName: true,
+          grandTotal: true, paymentStatus: true, placedAt: true, readyAt: true, servedAt: true,
+          servedBy: { select: { name: true } },
+          branch: { select: { name: true } },
+          payments: { where: { status: { in: ['PAID', 'REFUNDED'] } }, select: { method: true } },
+        },
+      })
+      const at = (d: Date | null) => (d ? formatDateTime(d, { timeZone: restaurant.timezone }) : '')
+      const gap = (a: Date | null, b: Date | null) => (a && b && b >= a ? Math.round((b.getTime() - a.getTime()) / 60_000) : '')
+      return respond(
+        'Deliveries',
+        [
+          { header: 'Order', key: 'order' },
+          { header: 'Status', key: 'status' },
+          { header: 'Customer', key: 'customer' },
+          { header: 'Phone', key: 'phone' },
+          { header: 'Place', key: 'place' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Placed', key: 'placed' },
+          { header: 'Ready', key: 'ready' },
+          { header: 'Delivered', key: 'delivered' },
+          { header: 'Minutes to door', key: 'minutes' },
+          { header: 'Handed over by', key: 'by' },
+          { header: 'Total', key: 'total' },
+          { header: 'Payment', key: 'payment' },
+          { header: 'Paid by', key: 'method' },
+        ],
+        rows.map((o) => ({
+          order: o.orderNumber,
+          status: o.status,
+          customer: o.customerName,
+          phone: o.customerPhone ?? '',
+          place: o.deliveryLocationName ?? '',
+          branch: o.branch?.name ?? '',
+          placed: at(o.placedAt),
+          ready: at(o.readyAt),
+          delivered: at(o.servedAt),
+          minutes: gap(o.placedAt, o.servedAt),
+          by: o.servedBy?.name ?? '',
+          total: money(o.grandTotal),
+          payment: o.paymentStatus,
+          method: [...new Set(o.payments.map((p) => p.method))].join(', '),
+        })),
+        format,
+        stamp,
+      )
+    }
+
     /* The diary, as a file: every booking in the period with its outcome. */
     if (type === 'reservations') {
       await requirePermission(PERMISSIONS.RESERVATION_MANAGE)

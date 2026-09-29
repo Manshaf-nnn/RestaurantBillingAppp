@@ -1,4 +1,8 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
+import { BarChart3 } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { AutoRefresh } from '@/components/auto-refresh'
@@ -6,7 +10,7 @@ import { DeliveryDesk } from '@/features/orders/components/delivery-desk'
 import { getDeliveryQueue, readOptions } from '@/features/orders/queries'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { localeForCurrency } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 import { outstandingOn } from '@/features/orders/pricing'
@@ -85,6 +89,16 @@ export default async function DeliveryDeskPage({
       <PageHeader
         title="Delivery Desk"
         description="Orders the kitchen has marked ready. Confirm the customer's PIN to close one."
+        actions={
+          // The report is money; riders who use the desk hold only the status permission.
+          can(user, PERMISSIONS.REPORT_SALES) ? (
+            <Button variant="outline" asChild>
+              <Link href="/dashboard/reports/delivery">
+                <BarChart3 /> Delivery report
+              </Link>
+            </Button>
+          ) : null
+        }
       />
       <DeliveryDesk
         rows={rows}

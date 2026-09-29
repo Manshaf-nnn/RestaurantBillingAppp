@@ -22,6 +22,7 @@ export const PAGES = [
   '/dashboard/reports/inventory',
   '/dashboard/reports/payment-details',
   '/dashboard/reports/reservations',
+  '/dashboard/reports/delivery',
   '/dashboard/reports/purchasing',
   '/dashboard/reports/variance',
   '/dashboard/reports/reconciliation',
