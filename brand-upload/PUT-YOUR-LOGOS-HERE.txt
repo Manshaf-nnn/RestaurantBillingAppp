@@ -1,0 +1,10 @@
+Drop your logo images in this folder, then tell Claude "logos are uploaded".
+
+  logo-wide    -> the full logo with the name (for the sign-in pages)
+  logo-square  -> the icon on its own (dashboard corner, browser tab, phone icon)
+
+Any size is fine as long as it is large (1000 px or more is best).
+PNG with a transparent background is ideal; JPG, SVG or WEBP also work.
+The exact filenames do not matter — any name is fine.
+/Users/manshafjamsith/Downloads/tableflow_app_icon.ico 
+/Users/manshafjamsith/Downloads/tableflow_profile_icon.ico

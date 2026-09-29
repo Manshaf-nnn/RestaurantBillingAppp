@@ -41,10 +41,10 @@ export default async function AdminLoginPage({
               <Image
                 src="/logo-full.png"
                 alt="TableFlow"
-                width={1143}
-                height={380}
+                width={1158}
+                height={895}
                 priority
-                className="h-11 w-auto"
+                className="h-28 w-auto"
               />
             </Link>
             <span className="rounded-full bg-foreground px-3 py-0.5 text-xs font-semibold text-background">

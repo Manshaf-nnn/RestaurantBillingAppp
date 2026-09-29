@@ -28,11 +28,11 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             <Link href="/">
               <Image
                 src="/logo-full.png"
-                alt="TableFlow — Smart Dining, Simplified"
-                width={1143}
-                height={380}
+                alt="TableFlow — Run better. Grow smarter."
+                width={1158}
+                height={895}
                 priority
-                className="h-12 w-auto"
+                className="h-28 w-auto"
               />
             </Link>
           </div>
