@@ -101,6 +101,47 @@ export async function upsertReservation(params: {
 }
 
 /**
+ * Cancel a booking: the table is released, the reason is kept.
+ *
+ * Only a booking that still holds a table (PENDING, CONFIRMED, SEATED) can be
+ * cancelled — one that already ended, was cancelled, or never showed is a
+ * fact, not a plan. Nothing is deleted: the report counts cancellations by
+ * reason and by when they were made relative to the booking.
+ */
+export async function cancelReservation(params: {
+  restaurantId: string
+  id: string
+  reason: string
+  actorName: string | null
+  now?: Date
+}): Promise<Reservation> {
+  const now = params.now ?? new Date()
+  const reason = params.reason.trim()
+  if (reason.length < 2) throw new ConflictError('Say why the booking is being cancelled')
+
+  const existing = await prisma.reservation.findFirst({
+    where: { id: params.id, restaurantId: params.restaurantId },
+    select: { status: true, customerName: true },
+  })
+  if (!existing) throw new NotFoundError('Reservation')
+  if (!HOLDING_STATUSES.includes(existing.status)) {
+    throw new ConflictError(
+      existing.status === 'CANCELLED'
+        ? `${existing.customerName}'s booking is already cancelled`
+        : `${existing.customerName}'s booking is ${existing.status.toLowerCase().replace('_', ' ')} and cannot be cancelled`,
+    )
+  }
+
+  // Compare-and-swap on the status: two hosts cancelling together record one cancellation.
+  const { count } = await prisma.reservation.updateMany({
+    where: { id: params.id, restaurantId: params.restaurantId, status: { in: HOLDING_STATUSES } },
+    data: { status: 'CANCELLED', cancelledAt: now, cancelReason: reason, cancelledByName: params.actorName },
+  })
+  if (count === 0) throw new ConflictError(`${existing.customerName}'s booking was already cancelled`)
+  return prisma.reservation.findUniqueOrThrow({ where: { id: params.id } })
+}
+
+/**
  * The booked party has sat down: the first order at a table whose booking
  * window covers now turns that booking SEATED (abc.md §4), so the table stops
  * reading Reserved and the diary says who actually came. Inside the order's

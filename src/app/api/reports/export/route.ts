@@ -474,6 +474,54 @@ export async function GET(request: NextRequest) {
      * text (one number per line, for pasting into an SMS or WhatsApp tool)
      * as well as CSV and Excel.
      */
+    /* The diary, as a file: every booking in the period with its outcome. */
+    if (type === 'reservations') {
+      await requirePermission(PERMISSIONS.RESERVATION_MANAGE)
+      const rows = await prisma.reservation.findMany({
+        where: {
+          restaurantId: user.restaurantId,
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          reservedAt: { gte: range.from, lte: range.to },
+        },
+        orderBy: { reservedAt: 'asc' },
+        take: EXPORT_LIMIT,
+        include: { table: { select: { number: true } }, branch: { select: { name: true } } },
+      })
+      return respond(
+        'Reservations',
+        [
+          { header: 'Guest', key: 'guest' },
+          { header: 'Phone', key: 'phone' },
+          { header: 'Party', key: 'party' },
+          { header: 'Booked for', key: 'reservedAt' },
+          { header: 'Until', key: 'endsAt' },
+          { header: 'Table', key: 'table' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Status', key: 'status' },
+          { header: 'Notes', key: 'notes' },
+          { header: 'Cancelled', key: 'cancelledAt' },
+          { header: 'Cancel reason', key: 'cancelReason' },
+          { header: 'Cancelled by', key: 'cancelledBy' },
+        ],
+        rows.map((r) => ({
+          guest: r.customerName,
+          phone: r.customerPhone,
+          party: r.partySize,
+          reservedAt: formatDateTime(r.reservedAt, { timeZone: restaurant.timezone }),
+          endsAt: r.endsAt ? formatDateTime(r.endsAt, { timeZone: restaurant.timezone }) : '',
+          table: r.table?.number ?? '',
+          branch: r.branch?.name ?? '',
+          status: r.status,
+          notes: r.notes ?? '',
+          cancelledAt: r.cancelledAt ? formatDateTime(r.cancelledAt, { timeZone: restaurant.timezone }) : '',
+          cancelReason: r.cancelReason ?? '',
+          cancelledBy: r.cancelledByName ?? '',
+        })),
+        format,
+        stamp,
+      )
+    }
+
     if (type === 'customer-numbers') {
       await requirePermission(PERMISSIONS.CUSTOMER_EXPORT)
       const one = (key: string) => (params.get(key) ?? '').trim()

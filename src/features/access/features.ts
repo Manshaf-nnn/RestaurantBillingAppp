@@ -378,7 +378,7 @@ export const FEATURES: Feature[] = [
     group: 'Operations',
     description: 'Bookings and the guests expected.',
     actions: [{ key: 'edit', label: 'Manage', permission: PERMISSIONS.RESERVATION_MANAGE }],
-    routes: ['/dashboard/reservations'],
+    routes: ['/dashboard/reservations', '/dashboard/reports/reservations'],
   },
   {
     key: 'kitchen',

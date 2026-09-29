@@ -73,6 +73,12 @@ export const reservationSchema = z.object({
 })
 export type ReservationInput = z.infer<typeof reservationSchema>
 
+export const cancelReservationSchema = z.object({
+  id: z.string().cuid(),
+  reason: z.string().trim().min(2, 'Say why the booking is being cancelled').max(200),
+})
+export type CancelReservationInput = z.infer<typeof cancelReservationSchema>
+
 /** Moving a table between locations. Deliberate, and its own act. */
 export const moveTableSchema = z.object({
   id: z.string().cuid(),

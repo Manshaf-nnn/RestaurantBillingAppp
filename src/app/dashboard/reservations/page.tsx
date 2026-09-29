@@ -8,6 +8,7 @@ import { listSwitchableLocations } from '@/features/transfers/queries'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { reservationsHolding } from '@/features/floor/table-state-server'
 import { requireRestaurant } from '@/server/db/tenant'
 import { localeForCurrency } from '@/lib/money'
 
@@ -46,7 +47,7 @@ export default async function ReservationsPage({
     timeZone: restaurant.timezone,
   })
 
-  const [reservations, tables, locations] = await Promise.all([
+  const [reservations, tables, locations, holding] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         restaurantId: user.restaurantId,
@@ -73,6 +74,12 @@ export default async function ReservationsPage({
       orderBy: { number: 'asc' },
     }),
     listSwitchableLocations(user.restaurantId, visibleBranchIds(user)),
+    /*
+     * Which tables are spoken for at this moment, by the same rule the
+     * tables screen and the live floor use — so the host's panel and the
+     * floor plan never disagree about a table.
+     */
+    reservationsHolding(prisma, { restaurantId: user.restaurantId, branchId: branchId ?? undefined }),
   ])
 
   return (
@@ -86,6 +93,23 @@ export default async function ReservationsPage({
     />
     <ReservationsManager
       locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+      tableCount={tables.length}
+      reservedTables={tables
+        .filter((t) => holding.has(t.id))
+        .map((t) => {
+          const held = holding.get(t.id)!
+          return {
+            tableId: t.id,
+            number: t.number,
+            capacity: t.capacity,
+            branchName: new Set(tables.map((x) => x.branch?.name)).size > 1 ? (t.branch?.name ?? null) : null,
+            reservationId: held.id,
+            customerName: held.customerName,
+            partySize: held.partySize,
+            reservedAt: held.reservedAt.toISOString(),
+            endsAt: held.endsAt.toISOString(),
+          }
+        })}
       /*
        * The branch label is only worth showing when the list spans more than
        * one — on a single-site restaurant it is noise on every row.
@@ -101,14 +125,20 @@ export default async function ReservationsPage({
         id: reservation.id,
         customerName: reservation.customerName,
         customerPhone: reservation.customerPhone,
+        customerEmail: reservation.customerEmail,
         partySize: reservation.partySize,
         reservedAt: reservation.reservedAt.toISOString(),
         endsAt: (reservation.endsAt ?? new Date(reservation.reservedAt.getTime() + reservation.durationMinutes * 60_000)).toISOString(),
         durationMinutes: reservation.durationMinutes,
         tableId: reservation.tableId,
         tableNumber: reservation.table?.number ?? null,
+        branchName: reservation.branch?.name ?? null,
         status: reservation.status,
         notes: reservation.notes,
+        createdAt: reservation.createdAt.toISOString(),
+        cancelledAt: reservation.cancelledAt?.toISOString() ?? null,
+        cancelReason: reservation.cancelReason,
+        cancelledByName: reservation.cancelledByName,
       }))}
     />
     </>

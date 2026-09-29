@@ -328,6 +328,9 @@ const SERVICE = [
   // and undialable left out, landlines optional, duplicates folded, digits
   // with country code, tenant-scoped, one number per line, owner-only.
   'customer-export-test',
+  // Reservations: cancelling keeps the reason and releases the table, only a
+  // holding booking can be cancelled, and the report's figures add up.
+  'reservation-report-test',
   // production.md §14 — TOTP against the RFC vector, encrypted at rest,
   // single-use recovery codes.
   'mfa-test',

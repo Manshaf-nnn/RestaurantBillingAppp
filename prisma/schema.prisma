@@ -3105,6 +3105,12 @@ model Reservation {
   status          ReservationStatus @default(PENDING)
   notes           String?
 
+  /// Why and when a booking was cancelled, and by whom — a cancelled booking
+  /// is a fact the report reads, not a row that went away.
+  cancelledAt     DateTime?
+  cancelReason    String?
+  cancelledByName String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

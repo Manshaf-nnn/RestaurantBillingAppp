@@ -6,10 +6,10 @@ import { runAction, runSafe, type ActionResult } from '@/lib/action'
 import { ConflictError, NotFoundError } from '@/lib/errors'
 import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
-import { upsertReservation } from './reservations'
+import { cancelReservation, upsertReservation } from './reservations'
 import { openServiceRequest } from './service-requests'
 import { callWaiterSchema } from '@/features/orders/schema'
-import { swapTableSchema, swapTargetsSchema } from './schema'
+import { cancelReservationSchema, swapTableSchema, swapTargetsSchema } from './schema'
 import { swapTable } from './service'
 import { tableStatesFor } from './table-state-server'
 import { toOrderPayload } from '@/features/orders/service'
@@ -549,6 +549,64 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
       return { id: record.id }
     },
     'Reservation saved.',
+  )
+}
+
+/**
+ * Cancel a booking with a reason. The table is released the moment it is
+ * cancelled, the reason is kept for the report, and the floor hears about it.
+ */
+export async function cancelReservationAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+  return runAction(
+    cancelReservationSchema,
+    input,
+    async (data) => {
+      const user = await requirePermission(PERMISSIONS.RESERVATION_MANAGE)
+      const existing = await prisma.reservation.findFirst({
+        where: { id: data.id, restaurantId: user.restaurantId },
+        select: { id: true, branchId: true, status: true, tableId: true, customerName: true },
+      })
+      if (!existing) throw new NotFoundError('Reservation')
+      await assertRecordBranch(user, existing, 'reservation')
+
+      const record = await cancelReservation({
+        restaurantId: user.restaurantId,
+        id: existing.id,
+        reason: data.reason,
+        actorName: user.name,
+      })
+
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: existing.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.RESERVATION_CANCELLED,
+        entity: 'Reservation',
+        entityId: record.id,
+        before: { status: existing.status },
+        after: { status: 'CANCELLED', reason: data.reason, guest: existing.customerName },
+      })
+
+      if (record.tableId) {
+        const table = await prisma.restaurantTable.findUnique({
+          where: { id: record.tableId },
+          select: { number: true, branchId: true, status: true },
+        })
+        realtime.tableUpdated(user.restaurantId, {
+          id: record.tableId,
+          number: table?.number ?? '',
+          status: table?.status ?? 'AVAILABLE',
+          branchId: table?.branchId ?? null,
+        })
+      }
+      revalidatePath('/dashboard/reservations')
+      revalidatePath('/dashboard/tables')
+      revalidatePath('/waiter')
+      return { id: record.id }
+    },
+    'Reservation cancelled.',
+    'cancelReservation',
   )
 }
 

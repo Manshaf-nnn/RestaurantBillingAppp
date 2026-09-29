@@ -76,6 +76,7 @@ const TYPES = [
   // Where the money sits, and the owner's marketing list.
   'payment-details',
   'customer-numbers',
+  'reservations',
 ]
 
 const minted: string[] = []
@@ -269,7 +270,7 @@ async function main() {
     })
     const theirCookie = await signIn(exporter)
 
-    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables', 'shift-assignments', 'shift-sessions', 'shift-handovers', 'payment-details', 'customer-numbers']
+    const gated = ['transfers', 'approvals', 'inventory', 'purchases', 'production', 'invoices', 'drawers', 'payables', 'shift-assignments', 'shift-sessions', 'shift-handovers', 'payment-details', 'customer-numbers', 'reservations']
     for (const type of gated) {
       const response = await fetch(`${BASE}/api/reports/export?type=${type}&format=csv`, {
         headers: { cookie: theirCookie },
