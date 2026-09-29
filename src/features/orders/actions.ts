@@ -49,6 +49,7 @@ import {
   completeDeliverySchema,
 } from './schema'
 import {
+  announceOrderStatus,
   buildDraft,
   cancelOrder as cancelOrderService,
   deriveOrderStatus,
@@ -935,6 +936,16 @@ export async function completeDelivery(
       entityId: result.orderId,
       after: { status: 'SERVED', via: 'delivery-pin' },
     })
+
+    /*
+     * The guest's tracker moves only on the live status event. The handover
+     * closed the order under its own lock and used to stop there, so a QR
+     * delivery customer watched "Ready" for ever after the rider had left.
+     * Announced after the payment so the tracker's refresh shows it settled.
+     * Before the unpaid check below: the food WAS delivered either way.
+     */
+    await announceOrderStatus(result.orderId)
+    revalidatePath('/m/[code]/track/[orderId]', 'page')
 
     if (collectionError) {
       throw new AppError(

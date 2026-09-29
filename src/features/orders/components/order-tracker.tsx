@@ -288,6 +288,12 @@ export function OrderTracker({
   })
 
   const cancelled = status === 'CANCELLED'
+  /*
+   * Served, delivered or closed. A delivery is closed by the PIN at the door,
+   * which moves the ORDER, not each line — so the lines are shown done here
+   * rather than stuck on "Ready", and the order is no longer the guest's to edit.
+   */
+  const finished = status === 'SERVED' || status === 'COMPLETED'
   const STEPS = React.useMemo(() => stepsFor(initial.type), [initial.type])
   const currentIndex = STEPS.findIndex((step) => step.status === status)
   const activeIndex = status === 'COMPLETED' ? STEPS.length - 1 : currentIndex
@@ -412,12 +418,16 @@ export function OrderTracker({
 
                 <h2 className="text-xl font-bold">
                   {status === 'SERVED' || status === 'COMPLETED'
-                    ? 'Your food has been served'
+                    ? initial.type === 'DELIVERY'
+                      ? 'Your order has been delivered'
+                      : 'Your food has been served'
                     : (STEPS[Math.max(0, activeIndex)]?.label ?? 'Order received')}
                 </h2>
                 <p className="mt-1 text-sm text-primary-foreground/85">
                   {status === 'READY'
-                    ? 'A waiter is bringing it over'
+                    ? initial.type === 'DELIVERY'
+                      ? 'Packed and with the rider'
+                      : 'A waiter is bringing it over'
                     : status === 'SERVED' || status === 'COMPLETED'
                       ? 'Enjoy your meal'
                       : remaining > 0
@@ -508,7 +518,7 @@ export function OrderTracker({
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="font-medium">{formatMoney(item.lineTotal, currency, locale)}</span>
-                  <ItemStatusPill status={live.status} />
+                  <ItemStatusPill status={finished && live.status !== 'CANCELLED' ? 'SERVED' : live.status} delivery={initial.type === 'DELIVERY'} />
                   {partial ? (
                     <span className="text-[11px] tabular-nums text-muted-foreground">{partial}</span>
                   ) : null}
@@ -554,7 +564,7 @@ export function OrderTracker({
         </div>
         ) : null}
 
-        {showEdit ? (
+        {showEdit && !finished && !cancelled ? (
         <section className="surface p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -652,8 +662,9 @@ const ITEM_STATUS_META: Record<OrderItemStatus, { label: string; className: stri
   CANCELLED: { label: 'Cancelled', className: 'bg-destructive/15 text-destructive' },
 }
 
-function ItemStatusPill({ status }: { status: OrderItemStatus }) {
-  const meta = ITEM_STATUS_META[status]
+function ItemStatusPill({ status, delivery = false }: { status: OrderItemStatus; delivery?: boolean }) {
+  // A delivery line is packed, not served at a table.
+  const meta = delivery && status === 'READY' ? { ...ITEM_STATUS_META.READY, label: 'Packed' } : ITEM_STATUS_META[status]
   return (
     <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold', meta.className)}>
       {meta.label}

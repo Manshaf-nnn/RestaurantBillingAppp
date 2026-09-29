@@ -2114,6 +2114,26 @@ export async function toOrderPayload(orderId: string): Promise<OrderSummaryPaylo
   }
 }
 
+/**
+ * Tell every screen — the staff boards and the guest's own tracker — that an
+ * order's status moved, the same way `updateOrderStatus` does after it
+ * commits, and file the staff notification.
+ *
+ * For status changes made outside `updateOrderStatus`. The delivery PIN
+ * handover (`completeDeliveryWithPin`) closes an order itself, under its own
+ * lock, and until this existed it told nobody: the order was SERVED in the
+ * database while the guest's tracker, which only moves on the live event,
+ * sat on "Ready" for good.
+ */
+export async function announceOrderStatus(orderId: string): Promise<void> {
+  await broadcastOrder(orderId, 'status')
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { table: { select: { number: true } } },
+  })
+  if (order) await notifyStatusChange(order, order.table?.number ?? null)
+}
+
 async function broadcastOrder(orderId: string, kind: 'created' | 'status') {
   const payload = await toOrderPayload(orderId)
   if (!payload) return
