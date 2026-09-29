@@ -70,6 +70,11 @@ export const reservationSchema = z.object({
     .enum(['PENDING', 'CONFIRMED', 'SEATED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'])
     .default('PENDING'),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
+  /** Cancel by itself if the party is this late. Blank or 0 means never. */
+  noShowAfterMinutes: z.preprocess(
+    (value) => (value === '' || value === null || value === undefined || value === '0' || value === 0 ? null : value),
+    z.coerce.number().int().min(5, 'At least 5 minutes').max(240, 'At most 4 hours').nullable(),
+  ),
 })
 export type ReservationInput = z.infer<typeof reservationSchema>
 

@@ -9,6 +9,7 @@ import { captureError } from '@/server/errors'
 import { isNeonConfigured } from '@/server/neon/config'
 import { runNeonWatch } from '@/server/neon/monitor'
 import { sendReservationReminders } from '@/server/sms/notify'
+import { cancelNoShows } from '@/features/floor/no-shows'
 
 /**
  * The one background job runner (production.md §4, §13).
@@ -108,6 +109,12 @@ export const HANDLERS: Record<string, JobHandler> = {
    * Queued every quarter hour; each booking is reminded once, by dedupe key.
    */
   'reservation-reminders': async () => sendReservationReminders(),
+
+  /**
+   * Bookings that carry a grace period and whose party is later than it.
+   * Queued every quarter hour alongside the reminders.
+   */
+  'reservation-no-shows': async () => cancelNoShows(),
 
   'errorlog-trim': async () => {
     const cutoff = new Date(Date.now() - 90 * 86_400_000)
@@ -404,6 +411,8 @@ export async function enqueueDailyWork(): Promise<number> {
     const quarter = `${now.toISOString().slice(0, 13)}:${Math.floor(now.getUTCMinutes() / 15)}`
     const result = await enqueue({ kind: 'reservation-reminders', dedupeKey: `reservation-reminders:${quarter}` })
     if (result.created) created += 1
+    const noShows = await enqueue({ kind: 'reservation-no-shows', dedupeKey: `reservation-no-shows:${quarter}` })
+    if (noShows.created) created += 1
   }
   return created
 }

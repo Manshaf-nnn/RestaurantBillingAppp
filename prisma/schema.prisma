@@ -3111,6 +3111,12 @@ model Reservation {
   cancelReason    String?
   cancelledByName String?
 
+  /// Cancel by itself if the party has not arrived this many minutes after
+  /// `reservedAt`. Null means never — the host decides. Enforced by the
+  /// quarter-hourly `reservation-no-shows` job, so it can be up to fifteen
+  /// minutes late, never early.
+  noShowAfterMinutes Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

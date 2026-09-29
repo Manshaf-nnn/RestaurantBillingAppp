@@ -44,6 +44,19 @@ import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 
 const STATUSES: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'SEATED', 'COMPLETED', 'CANCELLED', 'NO_SHOW']
+
+/** Grace periods offered for a no-show. Enforced every quarter hour, so finer is not honest. */
+const NO_SHOW_CHOICES = [15, 20, 30, 45, 60, 90, 120]
+
+/** A ready-to-send nudge for a guest who has not arrived yet. */
+function reminderText(booking: ReservationRow, tableNumber: string): string {
+  const first = booking.customerName.trim().split(/\s+/)[0] ?? ''
+  const at = new Date(booking.reservedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const grace = booking.noShowAfterMinutes
+    ? ` We can hold table ${tableNumber} until ${new Date(new Date(booking.reservedAt).getTime() + booking.noShowAfterMinutes * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`
+    : ''
+  return `Hi ${first}, your table for ${booking.partySize} was booked for ${at}. Are you still coming?${grace}`
+}
 /** A booking in one of these still holds its table, so it can be cancelled. */
 const CANCELLABLE: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'SEATED']
 
@@ -66,6 +79,8 @@ export interface ReservationRow {
   cancelledAt: string | null
   cancelReason: string | null
   cancelledByName: string | null
+  /** Cancels itself if the party is this many minutes late. Null: never. */
+  noShowAfterMinutes: number | null
 }
 
 /** A table that is spoken for right now, and by whom. */
@@ -83,12 +98,18 @@ export interface ReservedTable {
 
 export function ReservationsManager({
   reservations: initial,
+  heldBookings = [],
   reservedTables,
   tableCount,
   tables,
   locale,
 }: {
   reservations: ReservationRow[]
+  /**
+   * The bookings behind held tables that fall outside the listed range. Not
+   * shown in the list; they are what the cards' buttons act on.
+   */
+  heldBookings?: ReservationRow[]
   /** Tables held by a booking at this moment (aO.md §2), in table order. */
   reservedTables: ReservedTable[]
   /** How many active tables this person can see, for "3 of 12". */
@@ -105,7 +126,10 @@ export function ReservationsManager({
 
   React.useEffect(() => setReservations(initial), [initial])
 
-  const byId = React.useMemo(() => new Map(reservations.map((r) => [r.id, r])), [reservations])
+  const byId = React.useMemo(
+    () => new Map([...heldBookings, ...reservations].map((r) => [r.id, r])),
+    [heldBookings, reservations],
+  )
 
   const remove = async () => {
     if (!deleteId) return
@@ -186,13 +210,35 @@ export function ReservationsManager({
                     </div>
                     <Badge variant="warning">Reserved</Badge>
                   </div>
-                  <div className="mt-2 flex gap-1.5">
+                  {booking?.noShowAfterMinutes ? (
+                    <p className="mt-1 text-xs text-warning">
+                      Cancels itself at{' '}
+                      <LocalDateTime
+                        value={new Date(new Date(booking.reservedAt).getTime() + booking.noShowAfterMinutes * 60_000).toISOString()}
+                        locale={locale}
+                        options={{ timeStyle: 'short' }}
+                      />{' '}
+                      if they have not arrived
+                    </p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
                     <Button size="sm" variant="ghost" onClick={() => booking && setViewing(booking)} disabled={!booking}>
                       <Eye /> Details
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => booking && setCancelling(booking)} disabled={!booking}>
                       <CalendarX2 /> Cancel
                     </Button>
+                    {booking?.customerPhone ? (
+                      <SendSmsButton
+                        entity="Reservation"
+                        entityId={booking.id}
+                        to={booking.customerPhone}
+                        name={booking.customerName}
+                        size="sm"
+                        variant="ghost"
+                        defaultText={reminderText(booking, held.number)}
+                      />
+                    ) : null}
                   </div>
                 </li>
               )
@@ -398,6 +444,12 @@ function DetailsDialog({
             </>,
           )}
           {row('Held for', `${reservation.durationMinutes} minutes`)}
+          {row(
+            'Auto-cancel',
+            reservation.noShowAfterMinutes
+              ? `If not arrived ${reservation.noShowAfterMinutes} minutes after the booking time`
+              : 'Off — the host decides',
+          )}
           {row('Table', reservation.tableNumber ? `Table ${reservation.tableNumber}${reservation.branchName ? ` · ${reservation.branchName}` : ''}` : 'Not assigned')}
           {reservation.notes ? row('Notes', reservation.notes) : null}
           {row('Taken', <LocalDateTime value={reservation.createdAt} locale={locale} options={{ dateStyle: 'medium', timeStyle: 'short' }} />)}
@@ -506,6 +558,7 @@ function ReservationDialog({
     tableId: '',
     status: 'PENDING' as ReservationStatus,
     notes: '',
+    noShowAfterMinutes: '',
   })
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -526,6 +579,7 @@ function ReservationDialog({
       tableId: reservation?.tableId ?? '',
       status: reservation?.status ?? 'PENDING',
       notes: reservation?.notes ?? '',
+      noShowAfterMinutes: reservation?.noShowAfterMinutes ? String(reservation.noShowAfterMinutes) : '',
     })
   }, [open, reservation])
 
@@ -596,6 +650,27 @@ function ReservationDialog({
               </Select>
             </Field>
           ) : null}
+          <Field
+            label="Cancel if not arrived within"
+            hint="After the booking time. Frees the table by itself — text them first from the card."
+          >
+            <Select
+              value={form.noShowAfterMinutes || 'never'}
+              onValueChange={(value) => setForm({ ...form, noShowAfterMinutes: value === 'never' ? '' : value })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="never">Never — the host decides</SelectItem>
+                {NO_SHOW_CHOICES.map((minutes) => (
+                  <SelectItem key={minutes} value={String(minutes)}>
+                    {minutes < 60 ? `${minutes} minutes` : `${minutes / 60} hour${minutes === 60 ? '' : 's'}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
           <Field label="Status">
             <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value as ReservationStatus })}>
               <SelectTrigger>

@@ -46,12 +46,18 @@ export default async function ReservationsPage({
     to: typeof params.to === 'string' ? params.to : undefined,
     timeZone: restaurant.timezone,
   })
+  /*
+   * A diary looks forward. "This week" is week-to-date for the reports, which
+   * ends today — so tomorrow's bookings were missing from the list, and the
+   * held-table cards above had no row behind them. Here it runs to Sunday.
+   */
+  const listTo = range.preset === 'THIS_WEEK' ? new Date(range.from.getTime() + 7 * 86_400_000 - 1) : range.to
 
   const [reservations, tables, locations, holding] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         restaurantId: user.restaurantId,
-        reservedAt: { gte: range.from, lte: range.to },
+        reservedAt: { gte: range.from, lte: listTo },
         /*
          * A booking with no branch is one taken before this column existed and
          * with no table to infer from. It stays visible to whoever can see
@@ -81,6 +87,40 @@ export default async function ReservationsPage({
      */
     reservationsHolding(prisma, { restaurantId: user.restaurantId, branchId: branchId ?? undefined }),
   ])
+
+  /*
+   * Every held table's booking, whatever range the list shows. The cards
+   * above the list act on the booking itself — Details, Cancel, text the
+   * guest — so a card whose booking fell outside the range had dead buttons.
+   */
+  const listed = new Set(reservations.map((r) => r.id))
+  const heldIds = [...holding.values()].map((h) => h.id).filter((id) => !listed.has(id))
+  const heldOnly = heldIds.length
+    ? await prisma.reservation.findMany({
+        where: { id: { in: heldIds }, restaurantId: user.restaurantId },
+        include: { table: { select: { number: true } }, branch: { select: { name: true } } },
+      })
+    : []
+  const toRow = (reservation: (typeof reservations)[number]) => ({
+    id: reservation.id,
+    customerName: reservation.customerName,
+    customerPhone: reservation.customerPhone,
+    customerEmail: reservation.customerEmail,
+    partySize: reservation.partySize,
+    reservedAt: reservation.reservedAt.toISOString(),
+    endsAt: (reservation.endsAt ?? new Date(reservation.reservedAt.getTime() + reservation.durationMinutes * 60_000)).toISOString(),
+    durationMinutes: reservation.durationMinutes,
+    tableId: reservation.tableId,
+    tableNumber: reservation.table?.number ?? null,
+    branchName: reservation.branch?.name ?? null,
+    status: reservation.status,
+    notes: reservation.notes,
+    createdAt: reservation.createdAt.toISOString(),
+    cancelledAt: reservation.cancelledAt?.toISOString() ?? null,
+    cancelReason: reservation.cancelReason,
+    cancelledByName: reservation.cancelledByName,
+    noShowAfterMinutes: reservation.noShowAfterMinutes,
+  })
 
   return (
     <>
@@ -121,25 +161,8 @@ export default async function ReservationsPage({
         branchName:
           new Set(tables.map((x) => x.branch?.name)).size > 1 ? (t.branch?.name ?? null) : null,
       }))}
-      reservations={reservations.map((reservation) => ({
-        id: reservation.id,
-        customerName: reservation.customerName,
-        customerPhone: reservation.customerPhone,
-        customerEmail: reservation.customerEmail,
-        partySize: reservation.partySize,
-        reservedAt: reservation.reservedAt.toISOString(),
-        endsAt: (reservation.endsAt ?? new Date(reservation.reservedAt.getTime() + reservation.durationMinutes * 60_000)).toISOString(),
-        durationMinutes: reservation.durationMinutes,
-        tableId: reservation.tableId,
-        tableNumber: reservation.table?.number ?? null,
-        branchName: reservation.branch?.name ?? null,
-        status: reservation.status,
-        notes: reservation.notes,
-        createdAt: reservation.createdAt.toISOString(),
-        cancelledAt: reservation.cancelledAt?.toISOString() ?? null,
-        cancelReason: reservation.cancelReason,
-        cancelledByName: reservation.cancelledByName,
-      }))}
+      reservations={reservations.map(toRow)}
+      heldBookings={heldOnly.map(toRow)}
     />
     </>
   )

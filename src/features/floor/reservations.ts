@@ -43,6 +43,8 @@ export interface ReservationWrite {
   durationMinutes: number
   status: ReservationStatus
   notes: string | null
+  /** Omitted leaves it as it is; null switches auto-cancel off. */
+  noShowAfterMinutes?: number | null
 }
 
 export function reservationEnd(reservedAt: Date, durationMinutes: number): Date {

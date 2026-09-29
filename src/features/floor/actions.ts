@@ -506,6 +506,7 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
           durationMinutes: data.durationMinutes,
           status: data.status,
           notes: data.notes || null,
+          noShowAfterMinutes: data.noShowAfterMinutes,
         },
       })
 

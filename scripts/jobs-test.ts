@@ -121,16 +121,30 @@ async function main() {
   console.log('\n── 6. The scheduler enqueues the day\'s work exactly once ──')
   {
     const day = new Date().toISOString().slice(0, 10)
+    // The quarter-hourly booking sweeps are keyed by the quarter, not the day.
+    const quarterly = {
+      OR: [
+        { dedupeKey: { startsWith: 'reservation-reminders:' } },
+        { dedupeKey: { startsWith: 'reservation-no-shows:' } },
+        { dedupeKey: { startsWith: 'neon-watch:' } },
+      ],
+    }
     await prisma.job.deleteMany({ where: { dedupeKey: { endsWith: `:${day}` } } })
+    await prisma.job.deleteMany({ where: quarterly })
 
     const first = await enqueueDailyWork()
     const second = await enqueueDailyWork()
     // DELIBERATE behaviour change 2026-09-05: was 4. `sessions-trim` joined the
     // nightly set (athu.md) — the sessions table had no purge at all.
-    check('the first call queues the day\'s work', first === 6, `${first}`)
+    // DELIBERATE 2026-09-29: +2 — booking reminders and no-show cancellation
+    // are queued every quarter hour. `neon-watch` adds one more where Neon is configured.
+    // Cleared above, so it exists now only if this call queued it.
+    const neon = (await prisma.job.count({ where: { dedupeKey: { startsWith: 'neon-watch:' } } })) > 0 ? 1 : 0
+    check('the first call queues the day\'s work and this quarter\'s', first === 8 + neon, `${first}`)
     check('…and the 95 invocations after it queue nothing', second === 0, `${second}`)
 
     await prisma.job.deleteMany({ where: { dedupeKey: { endsWith: `:${day}` } } })
+    await prisma.job.deleteMany({ where: quarterly })
   }
 
   await prisma.job.deleteMany({ where: { kind: { startsWith: `test-${stamp}` } } })
