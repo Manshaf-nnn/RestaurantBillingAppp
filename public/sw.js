@@ -12,7 +12,9 @@
  */
 // Bumped to tf-v3 so the activate handler drops `tf-v2-pages`, which had been
 // hoarding rendered dashboard HTML since it was written.
-const VERSION = 'tf-v4'
+// tf-v5 (2026-09-29): the new TableFlow logo and icons. Without the bump,
+// browsers that had seen the old ones kept serving them from this cache.
+const VERSION = 'tf-v5'
 const STATIC_CACHE = `${VERSION}-static`
 const PAGE_CACHE = `${VERSION}-pages`
 const OFFLINE_URL = '/offline'

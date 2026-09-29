@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation'
 import type { UserRole } from '@prisma/client'
 
 import { runAction, runSafe, type ActionResult } from '@/lib/action'
-import { AppError, ForbiddenError, UnauthorizedError } from '@/lib/errors'
+import { AppError, ForbiddenError } from '@/lib/errors'
 import { landingFor } from '@/lib/rbac'
 import { slugify } from '@/lib/utils'
 import { appUrl } from '@/lib/env'
@@ -106,7 +106,14 @@ export async function login(input: unknown): Promise<ActionResult<LoginResult>> 
           entityId: user.id,
         })
       }
-      throw new UnauthorizedError('Incorrect email or password')
+      /*
+       * Not UnauthorizedError. `callAction` reads code UNAUTHORIZED as "the
+       * session ran out": it tries a refresh and then replaces the message
+       * with "Your session expired. Sign in again" — so a mistyped password
+       * on the sign-in page told people their session had expired. Same 401,
+       * its own code, the way MFA_BAD_CODE already does it.
+       */
+      throw new AppError('Incorrect email or password', 401, 'INVALID_CREDENTIALS')
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -614,7 +621,8 @@ export async function changePassword(input: unknown): Promise<ActionResult<{ cha
       const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } })
 
       if (!(await verifyPassword(data.currentPassword, user.passwordHash))) {
-        throw new UnauthorizedError('Your current password is incorrect')
+        // Its own code, not UNAUTHORIZED — see INVALID_CREDENTIALS in `login`.
+        throw new AppError('Your current password is incorrect', 401, 'WRONG_CURRENT_PASSWORD')
       }
 
       await prisma.user.update({
