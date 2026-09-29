@@ -11,6 +11,7 @@ import { SectionCard } from '@/features/dashboard/components/page-header'
 import { callAction } from '@/lib/use-action'
 import { cn } from '@/lib/utils'
 import { countSegments, nonGsm7Characters } from '@/features/sms/encoding'
+import { DEFAULT_MESSAGES, MESSAGE_PLACEHOLDERS, type TemplatedTrigger } from '@/features/sms/messages'
 import { LK, toE164, formatForGateway, E164_FAILURE_MESSAGE } from '@/features/sms/msisdn'
 import { PRESET_ORDER, SMS_PRESETS } from '@/features/sms/presets'
 import { parseGatewayUrl, TOKEN_LABELS } from '@/features/sms/parse-url'
@@ -47,9 +48,10 @@ import { previewSmsRequest, sendTestSms, updateSmsConfig, type SmsRequestPreview
  */
 
 const TRIGGERS: Array<{ key: SmsTriggerKey; label: string; help: string }> = [
-  { key: 'receipt', label: 'Send the bill by SMS', help: 'After a guest pays.' },
-  { key: 'orderReady', label: 'Tell guests their food is ready', help: 'For takeaway and QR orders.' },
-  { key: 'reservationConfirm', label: 'Confirm table bookings', help: 'As soon as a table is booked.' },
+  { key: 'receipt', label: 'Send the bill by SMS', help: 'After a guest pays in full.' },
+  { key: 'orderReady', label: 'Tell guests their food is ready', help: 'When an order is marked ready. Not deliveries — see below.' },
+  { key: 'deliveryOnTheWay', label: 'Tell guests their delivery is on its way', help: 'When a delivery order is marked ready for the rider.' },
+  { key: 'reservationConfirm', label: 'Confirm table bookings', help: 'As soon as a table is booked, and again if it is confirmed later.' },
   { key: 'reservationReminder', label: 'Remind guests of their booking', help: 'A couple of hours before.' },
   { key: 'otp', label: 'Verify a guest’s phone number', help: 'Sends a code they type back.' },
   { key: 'marketing', label: 'Send offers', help: 'Only to guests who agreed, and must say how to stop.' },
@@ -471,7 +473,7 @@ export function SmsSettings({ initial, canManage, currency, branches = [], crede
       {/* ── Step 2: prove it ────────────────────────────────────────────── */}
       <SectionCard
         title="2. Send yourself a test"
-        description="Uses one message from your account. Nothing can be switched on until this works."
+        description="Uses one message from your account. Worth doing once, so you know the gateway works."
       >
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Your phone number" className="min-w-[200px] flex-1">
@@ -542,7 +544,11 @@ export function SmsSettings({ initial, canManage, currency, branches = [], crede
       {/* ── Step 3: what guests receive ─────────────────────────────────── */}
       <SectionCard
         title="3. What to send your guests"
-        description={working ? 'Turn on only what you want.' : 'Available once the test above works.'}
+        description={
+          working
+            ? 'Turn on only what you want. Each one goes out by itself when that thing happens.'
+            : 'Turn on only what you want. Each one goes out by itself when that thing happens — send yourself a test first if you have not.'
+        }
       >
         <div className="space-y-3">
           {TRIGGERS.map(({ key, label, help }) => {
@@ -553,7 +559,7 @@ export function SmsSettings({ initial, canManage, currency, branches = [], crede
                 <label className="flex items-start gap-2 text-sm">
                   <Switch
                     checked={config.triggers[key]}
-                    disabled={!canManage || !working}
+                    disabled={!canManage}
                     onCheckedChange={(value) => setTrigger(key, value)}
                   />
                   <span>
@@ -606,31 +612,46 @@ export function SmsSettings({ initial, canManage, currency, branches = [], crede
                     })}
                   </div>
                 ) : null}
+
+                {/*
+                  The words. A blank box sends the standard wording shown as
+                  the placeholder, so nobody has to write six messages before
+                  anything works; the offer is the exception, because only
+                  the owner can say what the offer is.
+                */}
+                {config.triggers[key] && key !== 'otp' ? (
+                  <Field
+                    className="ml-11 mt-2"
+                    label={key === 'marketing' ? 'Your offer message' : 'Message'}
+                    hint={
+                      (key === 'marketing'
+                        ? 'Must tell guests how to stop receiving offers. '
+                        : 'Blank sends the standard wording. ') +
+                      `You can use ${MESSAGE_PLACEHOLDERS[key].map((p) => `{${p}}`).join(', ')}.`
+                    }
+                  >
+                    <Textarea
+                      rows={2}
+                      disabled={!canManage}
+                      placeholder={
+                        key === 'marketing'
+                          ? '10% off this weekend at {restaurant}. Reply STOP to opt out.'
+                          : DEFAULT_MESSAGES[key as TemplatedTrigger]
+                      }
+                      value={config.templates[key] ?? ''}
+                      onChange={(event) =>
+                        setConfig((prev) => ({
+                          ...prev,
+                          templates: { ...prev.templates, [key]: event.target.value },
+                        }))
+                      }
+                    />
+                  </Field>
+                ) : null}
               </div>
             )
           })}
         </div>
-
-        {config.triggers.marketing && (
-          <Field
-            className="mt-4"
-            label="Your offer message"
-            hint="Must tell guests how to stop receiving offers."
-          >
-            <Textarea
-              rows={3}
-              disabled={!canManage}
-              placeholder="10% off this weekend at MYSHOP. Tell our staff to stop these messages."
-              value={config.templates.marketing ?? ''}
-              onChange={(event) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  templates: { ...prev.templates, marketing: event.target.value },
-                }))
-              }
-            />
-          </Field>
-        )}
 
         <div className="mt-4 flex items-center gap-3 border-t pt-4">
           <label className="flex items-center gap-2 text-sm">

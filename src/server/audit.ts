@@ -370,6 +370,8 @@ export const AUDIT_ACTIONS = {
   SMS_RESENT: 'sms.resent',
   /** One message to a filtered group of customers, from the Customers page. */
   SMS_GROUP_SENT: 'sms.group_sent',
+  /** One message typed by a member of staff to one guest, from an order, booking or customer. */
+  SMS_MANUAL_SENT: 'sms.manual_sent',
   ERROR_RESOLVED: 'error.resolved',
   MAINTENANCE_TOGGLED: 'platform.maintenance_toggled',
   RESTORE_TESTED: 'platform.restore_tested',

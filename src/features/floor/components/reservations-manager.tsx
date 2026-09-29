@@ -7,6 +7,7 @@ import { CalendarClock, MoreVertical, Pencil, Plus, Trash2, Users } from 'lucide
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { SendSmsButton } from '@/features/sms/components/send-sms-button'
 import {
   Dialog,
   DialogContent,
@@ -139,7 +140,20 @@ export function ReservationsManager({
                 <TableRow key={reservation.id}>
                   <TableCell>
                     <p className="font-medium">{reservation.customerName}</p>
-                    <p className="text-xs text-muted-foreground">{reservation.customerPhone}</p>
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      {reservation.customerPhone}
+                      {reservation.customerPhone ? (
+                        <SendSmsButton
+                          entity="Reservation"
+                          entityId={reservation.id}
+                          to={reservation.customerPhone}
+                          name={reservation.customerName}
+                          size="sm"
+                          variant="ghost"
+                          iconOnly
+                        />
+                      ) : null}
+                    </p>
                   </TableCell>
                   <TableCell className="text-sm">
                     <LocalDateTime

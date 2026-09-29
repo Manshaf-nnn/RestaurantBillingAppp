@@ -603,18 +603,15 @@ export async function updateSmsConfig(input: unknown): Promise<ActionResult<{ id
         data.provider !== existing.provider ||
         JSON.stringify(spec) !== JSON.stringify(existing.spec)
 
+      /*
+       * Kept as a record of the last proven send, not as a gate. Messages
+       * used to be locked until a test had passed, and the lock bit owners
+       * more than it protected them: a test to a mistyped number, or a save
+       * made while the typed password was still in the form, cleared it and
+       * refused the very switches the test was meant to unlock. A gateway
+       * that does not work now shows as failed rows in the log instead.
+       */
       const verifiedAt = deliveryChanged ? null : existing.verifiedAt
-
-      const anyTrigger = Object.values(data.triggers).some(Boolean)
-      if (anyTrigger && !verifiedAt) {
-        throw new ValidationError('Send a test message before switching any messages on', {
-          triggers: [
-            deliveryChanged
-              ? 'The gateway details changed, so it needs testing again before messages can go out'
-              : 'Send a test message first, so we know the gateway works',
-          ],
-        })
-      }
 
       const factor = minorUnitFactor(data.costCurrency || restaurant.currency)
       const next: SmsConfig = {

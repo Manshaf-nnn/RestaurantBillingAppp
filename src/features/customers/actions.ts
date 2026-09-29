@@ -558,7 +558,6 @@ export async function createCustomerCampaignAction(
  */
 function groupSmsBlocker(config: SmsConfig, branchId: string | null): string | null {
   if (!config.enabled) return 'SMS is switched off for this restaurant. Turn it on under Settings → SMS.'
-  if (!config.verifiedAt) return 'Send yourself a test message under Settings → SMS first.'
   if (!config.triggers.marketing) return 'Switch on "Send offers" under Settings → SMS.'
   const sentFrom = config.triggerBranches.marketing ?? []
   if (sentFrom.length > 0 && !(branchId && sentFrom.includes(branchId))) {

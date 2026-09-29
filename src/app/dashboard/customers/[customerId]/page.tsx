@@ -7,7 +7,8 @@ import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { getCustomerProfile } from '@/features/customers/analytics'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS } from '@/lib/rbac'
+import { can, PERMISSIONS } from '@/lib/rbac'
+import { SendSmsButton } from '@/features/sms/components/send-sms-button'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -50,6 +51,9 @@ export default async function CustomerPage({
           <div className="flex items-center gap-2">
             {c.categoryName ? <Badge variant="secondary">{c.categoryName}</Badge> : null}
             {c.marketingConsent && <Badge variant="success">marketing ok</Badge>}
+            {c.phone && can(user, PERMISSIONS.CUSTOMER_MANAGE) ? (
+              <SendSmsButton entity="Customer" entityId={c.id} to={c.phone} name={c.name} />
+            ) : null}
           </div>
         }
       />

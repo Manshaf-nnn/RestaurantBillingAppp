@@ -1,6 +1,7 @@
 import 'server-only'
 import { randomInt } from 'node:crypto'
 import type { Order, OrderItem, OrderStatus, Prisma } from '@prisma/client'
+import { smsOrderReady } from '@/server/sms/notify'
 
 import { AppError, ConflictError, NotFoundError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
@@ -1828,6 +1829,8 @@ export async function updateOrderStatus(params: {
 
   await broadcastOrder(order.id, 'status')
   await notifyStatusChange(updated, order.table?.number ?? null)
+  // The guest's own copy of the news, if the owner has switched it on. Never throws.
+  if (updated.status === 'READY') await smsOrderReady(updated)
 
   /*
    * Served and paid: the sitting is over (aO.md §2).

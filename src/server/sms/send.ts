@@ -125,12 +125,11 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
     }
 
     /*
-     * A test send is the act that PROVES the configuration, so it cannot
-     * require the proof as a precondition — checks 2 to 4 would make the
-     * button that sets `verifiedAt` refuse to run until `verifiedAt` was set.
-     * It still passes every other gate below: the SSRF guard, number
-     * resolution, the trial list and the caps all apply, because a test
-     * spends a real credit and reaches a real phone.
+     * A test send proves the configuration, so it skips the owner's own
+     * switches (2 and 3) — otherwise the test button would refuse to run
+     * until SMS was on. It still passes every other gate below: the SSRF
+     * guard, number resolution, the trial list and the caps all apply,
+     * because a test spends a real credit and reaches a real phone.
      */
     const isTest = input.purpose === 'TEST'
 
@@ -158,17 +157,6 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
         provider,
         'TRIGGER_OFF_HERE',
         `The "${input.trigger}" SMS is not sent from this location`,
-        input.to,
-      )
-    }
-
-    // 4 — a half-filled form is not a tenant who agreed to text their guests.
-    if (!isTest && !config.verifiedAt) {
-      return suppress(
-        input,
-        provider,
-        'NOT_VERIFIED',
-        'Send a test SMS from Settings before switching triggers on',
         input.to,
       )
     }

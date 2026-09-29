@@ -18,6 +18,7 @@ import { assertBranchAccess, assertRecordBranch, requirePermission } from '@/ser
 import { resolveBranchId } from '@/features/branches/service'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { realtime } from '@/server/realtime/emitter'
+import { smsReservationSaved } from '@/server/sms/notify'
 import {
   bulkTablesSchema,
   reservationSchema,
@@ -463,7 +464,8 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
       const existing = data.id
         ? await prisma.reservation.findFirst({
             where: { id: data.id, restaurantId: user.restaurantId },
-            select: { id: true, branchId: true },
+            // `status` so the text below can tell a confirmation from an edit.
+            select: { id: true, branchId: true, status: true },
           })
         : null
       if (data.id && !existing) throw new NotFoundError('Reservation')
@@ -514,6 +516,12 @@ export async function saveReservation(input: unknown): Promise<ActionResult<{ id
         action: data.id ? AUDIT_ACTIONS.UPDATE : AUDIT_ACTIONS.CREATE,
         entity: 'Reservation',
         entityId: record.id,
+      })
+
+      // The guest's confirmation by text, if the owner has switched it on. Never throws.
+      await smsReservationSaved(record, {
+        wasNew: !existing,
+        previousStatus: existing?.status ?? null,
       })
 
       /*

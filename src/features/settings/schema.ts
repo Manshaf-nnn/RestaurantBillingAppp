@@ -333,6 +333,7 @@ export const smsConfigSchema = z
       otp: z.coerce.boolean(),
       receipt: z.coerce.boolean(),
       orderReady: z.coerce.boolean(),
+      deliveryOnTheWay: z.coerce.boolean(),
       reservationConfirm: z.coerce.boolean(),
       reservationReminder: z.coerce.boolean(),
       marketing: z.coerce.boolean(),

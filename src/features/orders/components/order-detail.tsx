@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SendSmsButton } from '@/features/sms/components/send-sms-button'
 import {
   Dialog,
   DialogContent,
@@ -240,6 +241,9 @@ export function OrderDetail({
         </div>
 
         <div className="flex items-center gap-2">
+          {order.customerPhone ? (
+            <SendSmsButton entity="Order" entityId={order.id} to={order.customerPhone} name={order.customerName} />
+          ) : null}
           <Button variant="outline" onClick={print}>
             <Printer /> Print
           </Button>

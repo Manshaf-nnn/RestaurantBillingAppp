@@ -175,6 +175,7 @@ export type SmsTriggerKey =
   | 'otp'
   | 'receipt'
   | 'orderReady'
+  | 'deliveryOnTheWay'
   | 'reservationConfirm'
   | 'reservationReminder'
   | 'marketing'
@@ -264,6 +265,7 @@ export const DEFAULT_SMS_CONFIG: SmsConfig = {
     otp: false,
     receipt: false,
     orderReady: false,
+    deliveryOnTheWay: false,
     reservationConfirm: false,
     reservationReminder: false,
     marketing: false,

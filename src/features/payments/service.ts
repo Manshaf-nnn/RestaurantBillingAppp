@@ -17,6 +17,7 @@ import { emitOutbox } from '@/server/realtime/outbox'
 import { EVENTS } from '@/lib/realtime/events'
 import { settleLoyalty } from '@/features/orders/service'
 import { readOptions } from '@/features/orders/queries'
+import { smsOrderPaid } from '@/server/sms/notify'
 import { accountForMethod } from './accounts-ledger'
 
 import {
@@ -514,6 +515,8 @@ export async function capturePayment(params: {
     await settleLoyalty(params.orderId).catch((error) =>
       console.error('[payments] loyalty accrual failed', error),
     )
+    // The bill by text, if the owner has switched it on. Never throws.
+    await smsOrderPaid(result.order, restaurant)
   }
 
   realtime.paymentReceived(params.restaurantId, {

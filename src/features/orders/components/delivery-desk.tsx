@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SendSmsButton } from '@/features/sms/components/send-sms-button'
 import { EmptyState } from '@/components/ui/feedback'
 import { Input } from '@/components/ui/input'
 import { callAction } from '@/lib/use-action'
@@ -180,6 +181,7 @@ function DeliveryCard({
           <Button size="sm" variant="ghost" onClick={copyPhone} aria-label="Copy the number">
             <Copy className="size-3.5" />
           </Button>
+          <SendSmsButton entity="Order" entityId={row.id} to={row.customerPhone} name={row.customerName} size="sm" variant="ghost" iconOnly />
         </div>
       ) : null}
 

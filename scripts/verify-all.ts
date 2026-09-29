@@ -111,6 +111,7 @@ const STATIC = [
   // functions only; the end-to-end lives in scripts/sms-e2e-test.ts, which
   // needs a database and the fake gateway running.
   'sms-test',
+  'sms-messages-test',
   // athu.md — only a credential or deactivation event may write `revokedAt`.
   // A feature-flag edit once logged a whole restaurant out by copying six lines.
   'no-collateral-session-revocation',

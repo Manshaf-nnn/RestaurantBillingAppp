@@ -8,6 +8,7 @@ import { runIntegrityChecks } from '@/features/accounting/integrity'
 import { captureError } from '@/server/errors'
 import { isNeonConfigured } from '@/server/neon/config'
 import { runNeonWatch } from '@/server/neon/monitor'
+import { sendReservationReminders } from '@/server/sms/notify'
 
 /**
  * The one background job runner (production.md §4, §13).
@@ -102,6 +103,12 @@ export const HANDLERS: Record<string, JobHandler> = {
    * event is not; 90 days is long enough to see a seasonal pattern and short
    * enough that the table stays cheap to query.
    */
+  /**
+   * Booking reminders by text, for every restaurant that has them on.
+   * Queued every quarter hour; each booking is reminded once, by dedupe key.
+   */
+  'reservation-reminders': async () => sendReservationReminders(),
+
   'errorlog-trim': async () => {
     const cutoff = new Date(Date.now() - 90 * 86_400_000)
     const { count } = await prisma.errorLog.deleteMany({
@@ -384,6 +391,18 @@ export async function enqueueDailyWork(): Promise<number> {
   if (await isNeonConfigured()) {
     const hour = new Date().toISOString().slice(0, 13)
     const result = await enqueue({ kind: 'neon-watch', dedupeKey: `neon-watch:${hour}` })
+    if (result.created) created += 1
+  }
+
+  /*
+   * Every quarter hour, which is as often as the scheduler fires. The key
+   * names the quarter so a late or doubled tick queues nothing extra, and
+   * the sweep itself is idempotent per booking — see `sendReservationReminders`.
+   */
+  {
+    const now = new Date()
+    const quarter = `${now.toISOString().slice(0, 13)}:${Math.floor(now.getUTCMinutes() / 15)}`
+    const result = await enqueue({ kind: 'reservation-reminders', dedupeKey: `reservation-reminders:${quarter}` })
     if (result.created) created += 1
   }
   return created
