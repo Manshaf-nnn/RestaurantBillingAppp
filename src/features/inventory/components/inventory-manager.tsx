@@ -557,6 +557,8 @@ function ItemDialog({
     unit: 'PIECE' as StockUnit,
     quantity: '0',
     branchId: '',
+    /** Opening quantity per location id, as typed. Only used when creating. */
+    openingStock: {} as Record<string, string>,
     alertBelow: '0',
     maxStock: '',
     costPerUnit: '',
@@ -604,6 +606,7 @@ function ItemDialog({
       // Defaults to the location on screen, so the commonest case needs no
       // thought and the number lands where the person can see it.
       branchId: selectedBranchId ?? '',
+      openingStock: {},
       /*
        * The higher of the two old columns. That is how `alerts.ts` and
        * `suggestions.ts` have always read them, so merging on read shows the
@@ -622,6 +625,17 @@ function ItemDialog({
     setAdvanced(Boolean(item?.purchaseUnit))
   }, [open, item, currency, selectedBranchId])
 
+  /*
+   * The opening quantity, location by location, when there is more than one
+   * place it could sit. With one location the single "Opening quantity" box
+   * is that location's row; the server treats both shapes the same way.
+   */
+  const perLocation = !item?.id && locations.length > 1
+  const openingRows = perLocation
+    ? locations.map((l) => ({ branchId: l.id, quantity: Number(form.openingStock[l.id]) || 0 }))
+    : null
+  const openingTotal = openingRows?.reduce((sum, row) => sum + row.quantity, 0) ?? 0
+
   const save = async () => {
     setSaving(true)
     const result = await callAction(() => saveInventoryItem({
@@ -630,8 +644,9 @@ function ItemDialog({
       sku: form.sku,
       category: form.category,
       unit: form.unit,
-      quantity: Number(form.quantity),
-      branchId: form.branchId,
+      quantity: perLocation ? 0 : Number(form.quantity),
+      branchId: perLocation ? '' : form.branchId,
+      ...(openingRows ? { openingStock: openingRows } : {}),
       alertBelow: Number(form.alertBelow) || 0,
       maxStock: form.maxStock ? Number(form.maxStock) : null,
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
@@ -744,37 +759,58 @@ function ItemDialog({
                 {form.quantity} — change this with <strong>Stock movement</strong> or a stock count.
               </p>
             </Field>
+          ) : perLocation ? (
+            /*
+              One item, several shelves. An item is defined once for the whole
+              business — it is the STOCK that lives somewhere — so the opening
+              quantity is asked per location: 5 kg in Colombo and 3 kg in
+              Ampara are both true on the day the item is created, and each
+              becomes its own opening balance there. This used to be one
+              number and a location picker, which could only ever say one of
+              them and left the other branch reading 0 until somebody posted
+              an adjustment.
+            */
+            <div className="sm:col-span-2">
+              <p className="text-sm font-medium">Opening stock</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                How much is on the shelf at each location today. Leave a location at 0 if
+                it holds none yet.
+              </p>
+              <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+                {locations.map((l) => (
+                  <label key={l.id} className="flex items-center gap-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate">{l.name}</span>
+                    <Input
+                      type="number"
+                      step="any"
+                      min="0"
+                      inputMode="decimal"
+                      aria-label={`Opening quantity at ${l.name}`}
+                      className="w-32"
+                      placeholder="0"
+                      value={form.openingStock[l.id] ?? ''}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          openingStock: { ...form.openingStock, [l.id]: e.target.value },
+                        })
+                      }
+                    />
+                    <span className="w-10 text-xs text-muted-foreground">{unitLabel(form.unit)}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Total {openingTotal.toLocaleString('en-US', { maximumFractionDigits: 3 })}{' '}
+                {unitLabel(form.unit)} across {locations.length} locations, valued at the cost per
+                unit below.
+              </p>
+            </div>
           ) : (
             <Field label="Opening quantity">
               <Input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
             </Field>
           )}
-          {/*
-            Which location the opening stock goes to.
-            Only when creating, and only when there is more than one place it
-            could go. An item is defined once for the whole business — it is the
-            STOCK that lives somewhere — so this asks about the quantity above,
-            not about the item, and says so.
-          */}
-          {!item?.id && locations.length > 1 ? (
-            <Field label="Location">
-              <Select
-                value={form.branchId || locations[0].id}
-                onValueChange={(v) => setForm({ ...form, branchId: v })}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {locations.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Where the opening quantity is counted. The item itself is shared
-                by every location.
-              </p>
-            </Field>
-          ) : null}
           <Field label="Alert me below">
             <Input type="number" step="any" value={form.alertBelow} onChange={(e) => setForm({ ...form, alertBelow: e.target.value })} />
             <p className="mt-1 text-xs text-muted-foreground">

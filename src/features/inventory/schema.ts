@@ -59,6 +59,28 @@ export const inventoryItemSchema = z.object({
    */
   /** Where the opening quantity lands. Defaults to the restaurant's main location. */
   branchId: z.string().min(1).optional().or(z.literal('')),
+  /*
+   * The opening quantity, location by location.
+   *
+   * One item, several shelves: cheese arrives as 5 kg in Colombo and 3 kg in
+   * Ampara, and both are true on the day the item is created. `quantity` +
+   * `branchId` above can only say one of them, so an owner with two branches
+   * had to create the item at one and post an adjustment at the other — a
+   * second step with a reason box, for what is plainly an opening balance.
+   *
+   * When this is sent it wins over the single pair above. Each row becomes
+   * its own opening balance at that location, with the same cost per unit;
+   * rows at zero are simply locations that hold none yet.
+   */
+  openingStock: z
+    .array(
+      z.object({
+        branchId: z.string().min(1),
+        quantity: z.coerce.number().min(0).max(1_000_000_000),
+      }),
+    )
+    .max(100)
+    .optional(),
   purchaseUnit: z.enum(UNITS).optional().or(z.literal('')),
   unitsPerPurchaseUnit: z.coerce.number().min(0).max(100_000).default(0),
 })

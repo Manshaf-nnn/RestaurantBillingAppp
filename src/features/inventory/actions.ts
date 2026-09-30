@@ -58,6 +58,45 @@ function toSavedItem(row: {
   }
 }
 
+/**
+ * The opening balances a new item starts with, one per location.
+ *
+ * `openingStock` — the per-location list the form sends — wins when present.
+ * The older single pair (`quantity` at `branchId`) is still honoured for
+ * callers that send it, landing on the branch the form chose and failing that
+ * the one on screen: that fallback is the "every new item reads 0" fix, where
+ * an owner (who has no home branch) typing 10 while looking at Branch 02 had
+ * the 10 posted to the restaurant's default branch.
+ *
+ * Every location is checked before anything is written: it must be one this
+ * person may post stock to, and it must be this restaurant's — `canAccessBranch`
+ * says yes to any id for somebody who sees everything, so the tenant check
+ * is the one that stops a guessed id from another restaurant.
+ */
+async function resolveOpeningStock(
+  user: Awaited<ReturnType<typeof requirePermission>>,
+  data: { quantity: number; branchId?: string; openingStock?: Array<{ branchId: string; quantity: number }> },
+): Promise<Array<{ branchId: string; quantity: number }>> {
+  const rows = data.openingStock
+    ? data.openingStock.filter((row) => row.quantity > 0)
+    : data.quantity > 0
+      ? [{ branchId: data.branchId || (await actingBranchId(user)), quantity: data.quantity }]
+      : []
+  if (rows.length === 0) return []
+
+  const ids = [...new Set(rows.map((row) => row.branchId))]
+  if (ids.length !== rows.length) {
+    throw new AppError('Each location can only be listed once', 400, 'DUPLICATE_LOCATION')
+  }
+  for (const id of ids) await assertBranchAccess(user, id)
+  const known = await prisma.branch.findMany({
+    where: { id: { in: ids }, restaurantId: user.restaurantId, deletedAt: null },
+    select: { id: true },
+  })
+  if (known.length !== ids.length) throw new NotFoundError('Location')
+  return rows
+}
+
 export async function saveInventoryItem(
   input: unknown,
 ): Promise<ActionResult<{ id: string; saved?: SavedInventoryItem }>> {
@@ -231,23 +270,11 @@ export async function saveInventoryItem(
         }
 
         /*
-         * Where the opening quantity lands — the branch the form chose, and
-         * failing that the one on screen.
-         *
-         * This is the "every new item reads 0" bug. It used to resolve
-         * `data.branchId`, which the form never sent, then `user.branchId`,
-         * which is null for an owner — so it fell all the way through to the
-         * restaurant's DEFAULT branch. Meanwhile the stock list shows the
-         * SELECTED branch's `InventoryStock`. Type 10 in while looking at
-         * Branch 02 and the 10 was posted to Main, so Branch 02 read 0 for
-         * ever, and the item looked broken the moment it was created.
-         *
-         * Every other stock action in this codebase already used
-         * `actingBranchId`; this path and `recordStockMovement` were the two
-         * that did not. The form now also asks outright, because guessing where
-         * stock is turned out to be the whole problem.
+         * Where the opening quantity lands — resolved and vetted before the
+         * item exists, so a location the person may not write to refuses the
+         * whole save rather than leaving an item behind at zero.
          */
-        const branchId = data.branchId || (await actingBranchId(user))
+        const openings = await resolveOpeningStock(user, data)
 
         /*
          * One transaction, so an item cannot exist without its opening stock.
@@ -261,18 +288,22 @@ export async function saveInventoryItem(
             data: { ...payload, quantity: 0, restaurantId: user.restaurantId },
           })
 
-          // A starting quantity on a brand-new item is legitimate — but it goes
-          // in as an opening balance so it has a date, an author and a ledger
-          // row.
-          if (data.quantity > 0) {
+          /*
+           * A starting quantity on a brand-new item is legitimate — but it goes
+           * in as an opening balance so it has a date, an author and a ledger
+           * row. One per location: each gets its own ledger row, its own FIFO
+           * layer and its own `InventoryStock` balance, exactly as if the
+           * opening balance had been set at that location on its own.
+           */
+          for (const opening of openings) {
             await postMovement(tx, {
               restaurantId: user.restaurantId,
               itemId: created.id,
               type: 'OPENING_BALANCE',
-              quantity: data.quantity,
+              quantity: opening.quantity,
               unitCost: data.costPerUnit,
               userId: user.id,
-              branchId,
+              branchId: opening.branchId,
             })
           }
           return created
