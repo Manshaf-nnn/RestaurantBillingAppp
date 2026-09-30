@@ -540,7 +540,7 @@ export async function setLocationFeaturesAction(
       assertPresetScopeAllowed(user, 'MANAGER')
       // Re-resolves the branch through the same helper the role builder uses,
       // so a pin this person may not set is refused here too.
-      const branchId = await resolveRoleBranch(user, branch.id, 'MANAGER')
+      const branchId = await resolveRoleBranch(user, branch.id)
 
       /*
        * One role per location, found by its pin rather than by its name.

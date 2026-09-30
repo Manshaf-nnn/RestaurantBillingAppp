@@ -5,7 +5,7 @@ import { z } from 'zod'
 
 import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, assignableRoles, canActOnRole } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, assignableRoles, canActOnRole, requiresOwnBranch } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission, assertBranchAccess } from '@/server/auth/guard'
@@ -43,6 +43,8 @@ async function vetLink(
    * wrong for the account it signs in to.
    */
   effectiveRole: UserRole,
+  /** For a personal link: the person's own home site, which a blank link falls back to. */
+  personBranchId: string | null = null,
 ) {
   if (!assignableRoles(admin.role).includes(effectiveRole)) {
     throw new ForbiddenError(`You cannot create a link for the ${ROLE_LABELS[effectiveRole]} role`)
@@ -60,14 +62,21 @@ async function vetLink(
   /*
    * A link's branch is the one thing that decides whether the account it makes
    * can see anything at all, so it is resolved through the same helper the
-   * role builder uses: a preset that `requiresOwnBranch` must have one, and
-   * "all locations" is only grantable by somebody who has all of them.
+   * role builder uses — "all locations" is only grantable by somebody who has
+   * all of them — and then held to the rule the role builder no longer needs
+   * to: a preset that `requiresOwnBranch` must end up with one. Roles stopped
+   * pinning a location, so the link is where a shared screen gets its site;
+   * a personal link may lean on the person's own.
    */
   const branchId = await resolveRoleBranch(
     admin,
     data.branchId ?? staffRole?.branchId ?? null,
-    effectiveRole,
   )
+  if (!(branchId ?? personBranchId) && requiresOwnBranch(effectiveRole)) {
+    throw new ForbiddenError(
+      'This role works at one place — choose a location for the link, or its screens would show nothing at all.',
+    )
+  }
 
   return { staffRole, branchId }
 }
@@ -116,7 +125,7 @@ export async function createAccessLink(
     async (data) => {
       const admin = await requirePermission(PERMISSIONS.STAFF_MANAGE)
       const { role: linkRole, person } = await effectiveLinkRole(admin, data)
-      const { staffRole, branchId } = await vetLink(admin, data, linkRole)
+      const { staffRole, branchId } = await vetLink(admin, data, linkRole, person?.branchId ?? null)
 
       let userId: string | null = null
       let signInCode: string | null = null

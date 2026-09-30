@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { ConflictError, ForbiddenError } from '@/lib/errors'
 import { runAction, type ActionResult } from '@/lib/action'
-import { PERMISSIONS, ROLE_LABELS, assignableRoles } from '@/lib/rbac'
+import { PERMISSIONS, ROLE_LABELS, assignableRoles, requiresOwnBranch } from '@/lib/rbac'
 import type { UserRole } from '@prisma/client'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
@@ -106,7 +106,7 @@ async function vet(
   assertPresetScopeAllowed(admin, preset)
   const permissions = withRequiredPermissions(input.permissions, preset)
   assertNoEscalation(admin, permissions)
-  const branchId = await resolveRoleBranch(admin, input.branchId, preset)
+  const branchId = await resolveRoleBranch(admin, input.branchId)
   // The caller writes the row, so it needs what was settled here — the preset
   // rather than the blank it sent, and the list with its dependencies in it.
   return { branchId, preset, permissions }
@@ -226,16 +226,57 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
       const { branchId, preset, permissions } = await vet(admin, data)
       await assertNameFree(admin.restaurantId, data.name, data.id)
 
-      const role = await prisma.staffRole.update({
-        where: { id: data.id },
-        data: {
-          name: data.name,
-          description: data.description || null,
-          preset,
-          branchId,
-          permissions,
-          isActive: data.isActive,
-        },
+      /*
+       * The preset is applied, not just recorded — on edit as much as on
+       * assignment (see `planAssignment`).
+       *
+       * The built-in a role behaves like is worked out from its tabs, so
+       * adding the Kitchen tab to a till role can turn a POS role into a
+       * manager-based one. Members carry that built-in on their own record
+       * (`User.role`): it decides where they land and what the edge lets them
+       * reach. Leaving them on the old one would give them a tab the edge
+       * bounces to /forbidden, which is exactly the bug the preset exists to
+       * prevent. So when the preset changes, everyone on the role follows —
+       * and if the new preset needs a home site that somebody lacks, the edit
+       * is refused by name rather than blinding them.
+       */
+      const presetChanged = existing.preset !== preset
+      const members = presetChanged
+        ? await prisma.user.findMany({
+            where: { staffRoleId: existing.id, restaurantId: admin.restaurantId, deletedAt: null },
+            select: { id: true, name: true, branchId: true },
+          })
+        : []
+      if (presetChanged && requiresOwnBranch(preset) && !branchId) {
+        const blind = members.filter((member) => !member.branchId)
+        if (blind.length > 0) {
+          throw new ConflictError(
+            `With these tabs the role works at one location. Give ${blind
+              .map((member) => member.name)
+              .join(', ')} a location first, or their screens would show nothing at all.`,
+          )
+        }
+      }
+
+      const role = await prisma.$transaction(async (tx) => {
+        const updated = await tx.staffRole.update({
+          where: { id: data.id },
+          data: {
+            name: data.name,
+            description: data.description || null,
+            preset,
+            branchId,
+            permissions,
+            isActive: data.isActive,
+          },
+        })
+        if (presetChanged && members.length > 0) {
+          await tx.user.updateMany({
+            where: { id: { in: members.map((member) => member.id) } },
+            data: { role: preset },
+          })
+        }
+        return updated
       })
 
       await audit({
@@ -246,8 +287,15 @@ export async function updateRole(input: unknown): Promise<ActionResult<{ id: str
         action: AUDIT_ACTIONS.ROLE_UPDATED,
         entity: 'StaffRole',
         entityId: role.id,
-        before: { name: existing.name, permissions: existing.permissions, isActive: existing.isActive },
-        after: { name: role.name, permissions: role.permissions, isActive: role.isActive },
+        before: {
+          name: existing.name, preset: existing.preset, permissions: existing.permissions,
+          isActive: existing.isActive,
+        },
+        after: {
+          name: role.name, preset: role.preset, permissions: role.permissions,
+          isActive: role.isActive,
+          ...(presetChanged ? { membersMoved: members.map((member) => member.id) } : {}),
+        },
       })
 
       /*

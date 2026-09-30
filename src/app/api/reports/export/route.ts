@@ -3,8 +3,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { requirePermission } from '@/server/auth/guard'
 import { PERMISSIONS } from '@/lib/rbac'
-import { AppError, toAppError } from '@/lib/errors'
+import { AppError, NotFoundError, toAppError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
+import { roundQty } from '@/lib/quantity'
+import { listPurchasedItems } from '@/features/purchasing/purchased-items'
 import { buildShiftExport, isShiftExportType } from '@/features/shifts/export'
 import { getReportSummary } from '@/features/analytics/queries'
 import { listOrders } from '@/features/orders/queries'
@@ -711,6 +713,171 @@ export async function GET(request: NextRequest) {
           // The layers' own sum — the same figure the stock screens show, so
           // the file and the screen add up to the same number.
           value: money(valueAt.get(key(l.itemId, l.branchId)) ?? 0),
+        })),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'stock-history') {
+      await requirePermission(PERMISSIONS.INVENTORY_VIEW)
+      /*
+       * One item's history (`?item=`), or the whole ledger for the locations
+       * on the switcher. Undated unless a period was asked for: the item page
+       * and the ledger page show everything, so their export must too — a
+       * silent LAST_7 would hand somebody a file quietly missing every
+       * movement older than a week.
+       */
+      const itemId = params.get('item') || null
+      const item = itemId
+        ? await prisma.inventoryItem.findFirst({
+            where: { id: itemId, restaurantId: user.restaurantId },
+            select: { id: true, name: true },
+          })
+        : null
+      if (itemId && !item) throw new NotFoundError('Inventory item')
+
+      const scope = {
+        restaurantId: user.restaurantId,
+        ...(item ? { itemId: item.id } : {}),
+        ...(branchIds ? { branchId: { in: branchIds } } : {}),
+      }
+      const movements = await prisma.stockMovement.findMany({
+        where: {
+          ...scope,
+          ...(rangeRequested ? { createdAt: { gte: range.from, lte: range.to } } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: EXPORT_LIMIT,
+        include: {
+          item: { select: { name: true, sku: true, unit: true } },
+          branch: { select: { name: true } },
+          user: { select: { name: true } },
+          purchase: { select: { number: true } },
+          order: { select: { orderNumber: true } },
+          stockCount: { select: { reference: true } },
+        },
+      })
+
+      /*
+       * The balance column is the running total of the locations being
+       * exported, after each row — replayed downwards from the scope's own
+       * ledger sum, exactly as the item page does, rather than the
+       * restaurant-wide `balanceAfter` the ledger stamps. With a period, the
+       * rows newer than its end are subtracted first so the replay starts
+       * where the period ends.
+       */
+      const [totals, newer] = await Promise.all([
+        prisma.stockMovement.groupBy({ by: ['itemId'], where: scope, _sum: { quantity: true } }),
+        rangeRequested
+          ? prisma.stockMovement.groupBy({
+              by: ['itemId'],
+              where: { ...scope, createdAt: { gt: range.to } },
+              _sum: { quantity: true },
+            })
+          : Promise.resolve([]),
+      ])
+      const running = new Map<string, number>()
+      for (const row of totals) running.set(row.itemId, row._sum.quantity ?? 0)
+      for (const row of newer) {
+        running.set(row.itemId, (running.get(row.itemId) ?? 0) - (row._sum.quantity ?? 0))
+      }
+
+      const label = (t: string) => t.replace(/_/g, ' ').toLowerCase()
+      return respond(
+        item ? `Stock history ${item.name}` : 'Stock history',
+        [
+          { header: 'When', key: 'when' },
+          { header: 'Item', key: 'item' },
+          { header: 'SKU', key: 'sku' },
+          { header: 'Location', key: 'branch' },
+          { header: 'Movement', key: 'movement' },
+          { header: 'Change', key: 'change' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'As entered', key: 'entered' },
+          { header: 'Unit cost', key: 'cost' },
+          { header: 'Value', key: 'value' },
+          { header: 'Balance after', key: 'balance' },
+          { header: 'Reason', key: 'reason' },
+          { header: 'Source', key: 'source' },
+          { header: 'By', key: 'by' },
+        ],
+        movements.map((m) => {
+          const balance = roundQty(running.get(m.itemId) ?? 0)
+          running.set(m.itemId, roundQty(balance - m.quantity))
+          const source =
+            m.purchase?.number ??
+            m.order?.orderNumber ??
+            m.stockCount?.reference ??
+            (m.referenceType ? `${m.referenceType} ${m.referenceId ?? ''}`.trim() : '')
+          return {
+            when: formatDateTime(m.createdAt, { timeZone: restaurant.timezone }),
+            item: m.item.name,
+            sku: m.item.sku ?? '',
+            branch: m.branch.name,
+            movement: label(m.type),
+            change: roundQty(m.quantity),
+            unit: m.item.unit,
+            entered:
+              m.quantityEntered !== null && m.enteredUnit
+                ? `${roundQty(m.quantityEntered)} ${m.enteredUnit}`
+                : '',
+            cost: money(m.unitCost),
+            value: money(m.valueMoved || Math.round(Math.abs(m.quantity) * m.unitCost)),
+            balance,
+            reason: m.reason ?? m.notes ?? '',
+            source,
+            by: m.user?.name ?? '',
+          }
+        }),
+        format,
+        stamp,
+      )
+    }
+
+    if (type === 'purchased-items') {
+      await requirePermission(PERMISSIONS.REPORT_PURCHASING)
+      const purchased = await listPurchasedItems({
+        restaurantId: user.restaurantId,
+        range,
+        branchIds,
+        limit: EXPORT_LIMIT,
+      })
+      return respond(
+        'Purchased items',
+        [
+          { header: 'Item', key: 'item' },
+          { header: 'SKU', key: 'sku' },
+          { header: 'Category', key: 'category' },
+          { header: 'Unit', key: 'unit' },
+          { header: 'Qty bought', key: 'quantity' },
+          { header: 'Deliveries', key: 'deliveries' },
+          { header: 'Spend', key: 'value' },
+          { header: 'Avg cost / unit', key: 'average' },
+          { header: 'Last paid / unit', key: 'last' },
+          { header: 'Last bought', key: 'lastAt' },
+          { header: 'Returned qty', key: 'returned' },
+          { header: 'Returned value', key: 'returnedValue' },
+          { header: 'Suppliers', key: 'suppliers' },
+          { header: 'Locations', key: 'locations' },
+        ],
+        purchased.rows.map((row) => ({
+          item: row.name,
+          sku: row.sku ?? '',
+          category: row.category,
+          unit: row.unit,
+          quantity: roundQty(row.quantity),
+          deliveries: row.deliveries,
+          value: money(row.value),
+          average: money(row.averageUnitCost),
+          last: money(row.lastUnitCost),
+          lastAt: row.lastBoughtAt
+            ? formatDateTime(row.lastBoughtAt, { timeZone: restaurant.timezone })
+            : '',
+          returned: roundQty(row.returnedQuantity),
+          returnedValue: money(row.returnedValue),
+          suppliers: row.suppliers.join(', '),
+          locations: row.locations.join(', '),
         })),
         format,
         stamp,

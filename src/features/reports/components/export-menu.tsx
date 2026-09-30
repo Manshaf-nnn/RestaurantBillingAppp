@@ -43,23 +43,31 @@ export function ExportMenu({
   type,
   label = 'Export',
   disabled,
+  extra,
 }: {
   /** The endpoint's `?type=` — must be one the route knows. */
   type: string
   label?: string
   /** For a screen with nothing on it: an empty file helps nobody. */
   disabled?: boolean
+  /**
+   * Filters the screen holds in its PATH rather than its query — an item's
+   * history page is `/inventory/<id>`, and the id is as much a filter as
+   * `?branch=` is. Forwarded on top of the query, never instead of it.
+   */
+  extra?: Record<string, string>
 }) {
   const params = useSearchParams()
 
   const href = React.useCallback(
     (format: 'csv' | 'xlsx') => {
       const next = new URLSearchParams(params.toString())
+      for (const [key, value] of Object.entries(extra ?? {})) next.set(key, value)
       next.set('type', type)
       next.set('format', format)
       return `/api/reports/export?${next.toString()}`
     },
-    [params, type],
+    [params, type, extra],
   )
 
   return (

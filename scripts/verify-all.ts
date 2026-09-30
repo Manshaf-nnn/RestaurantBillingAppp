@@ -185,6 +185,7 @@ const SERVICE = [
   // "variance" tile is committed against ACTUAL, since this system has no
   // budget: what the order said, against what the delivery was invoiced at.
   'purchasing-report-test',
+  'purchased-items-test',
   // FIFO.md — the books tie to the layers after purchase, sale, wastage,
   // adjustment, transfer and reversal: layer quantity equals what the branch
   // holds, layer value equals the item's value, and every movement's trace

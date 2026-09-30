@@ -7,7 +7,8 @@ import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch
 import { LocalDateTime } from '@/components/local-time'
 import { formatMoney } from '@/lib/money'
 import { formatQuantity } from '@/features/inventory/units'
-import { PERMISSIONS } from '@/lib/rbac'
+import { ExportMenu } from '@/features/reports/components/export-menu'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -70,7 +71,15 @@ export default async function LedgerPage({
         <StatCard label="Value in (listed rows)" value={money(valueIn)} hint="purchases, production, returns" />
         <StatCard label="Value out (listed rows)" value={money(valueOut)} hint="sales at cost, wastage, transfers" />
       </div>
-      <SectionCard title="Latest movements" description="The 200 most recent, for the locations on the switcher.">
+      <SectionCard
+        title="Latest movements"
+        description="The 200 most recent, for the locations on the switcher. The export takes every movement, not just these."
+        actions={
+          can(user, PERMISSIONS.REPORT_EXPORT) ? (
+            <ExportMenu type="stock-history" disabled={movements.length === 0} />
+          ) : null
+        }
+      >
         {movements.length === 0 ? (
           <EmptyState title="No movements yet" description="Receive stock or take an order and the ledger begins." />
         ) : (

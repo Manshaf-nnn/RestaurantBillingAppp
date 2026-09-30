@@ -90,20 +90,31 @@ export function assertNoEscalation(admin: TenantUser, permissions: string[]): vo
 export async function resolveRoleBranch(
   admin: TenantUser,
   branchId: string | null | undefined,
-  preset: UserRole,
 ): Promise<string | null> {
   const reach = visibleBranchIds(admin)
 
   if (!branchId) {
-    if (requiresOwnBranch(preset)) {
-      throw new ForbiddenError(
-        `A role based on ${ROLE_LABELS[preset]} must be given a location — without one its members see nothing at all.`,
-      )
-    }
+    /*
+     * A role that pins no location: each person on it works where their own
+     * record says.
+     *
+     * This used to refuse a blank for a preset that `requiresOwnBranch`, on
+     * the grounds that its members would see nothing — and so every
+     * from-scratch POS role was pinned to the first location in the list.
+     * With two branches that meant the "POS" role belonged to Colombo, and
+     * putting an Ampara cashier on it moved them to Colombo (the role's
+     * location wins at assignment). The blindness rule is right; the ROLE is
+     * the wrong place to satisfy it. It is enforced where a person meets the
+     * role — `planAssignment`, `homeBranchFor`, the join-by-link flow — each
+     * of which refuses a member with no home site for such a preset.
+     *
+     * Somebody confined to one site can still only make roles for that site.
+     * Somebody confined to several leaves it blank too: everyone they can put
+     * on the role is already within their reach, so nothing widens.
+     */
     if (reach === null) return null
-    throw new ForbiddenError(
-      'You can only create roles for your own location — leave it blank only if you oversee all of them',
-    )
+    if (reach.length === 1) return reach[0]
+    return null
   }
 
   if (reach !== null && !reach.includes(branchId)) {
@@ -413,7 +424,7 @@ export async function mintRoleLink(
   if (!role.isActive) throw new ForbiddenError('That role is switched off')
   // Handing out a role is granting it.
   assertNoEscalation(admin, role.permissions)
-  const branchId = await resolveRoleBranch(admin, role.branchId, role.preset)
+  const branchId = await resolveRoleBranch(admin, role.branchId)
 
   const link = await prisma.invite.create({
     data: {

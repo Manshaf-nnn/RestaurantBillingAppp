@@ -23,8 +23,24 @@ export interface HistoryRow {
   /** As it was entered, e.g. 500 with unit GRAM. */
   quantityEntered: number | null
   enteredUnit: StockUnit | null
+  /** The restaurant-wide balance stamped when the row was posted. */
   balanceAfter: number | null
+  /**
+   * The running balance of the locations being LOOKED AT, after this row.
+   *
+   * `balanceAfter` is the whole restaurant's figure: the ledger writes it
+   * from the item's cached total, whichever branch moved. Filter the history
+   * to Colombo and that column still counts Ampara's shelves, so a 5 kg
+   * opening balance at Colombo reads "8" the moment Ampara has 3. This is
+   * replayed from the scope's own ledger sum, newest row first, so it is the
+   * number the person asked for and it always agrees with the rows above it.
+   */
+  balance: number
   unitCost: number
+  /** What the movement was worth, exact minor units (FIFO.md). */
+  valueMoved: number
+  branchId: string
+  branchName: string
   reason: string | null
   notes: string | null
   actorName: string | null
@@ -146,6 +162,7 @@ export async function getItemHistory(params: {
     take: params.limit ?? 200,
     include: {
       user: { select: { name: true } },
+      branch: { select: { name: true } },
       order: { select: { id: true, orderNumber: true } },
       purchase: { select: { id: true, number: true } },
       stockCount: { select: { id: true, reference: true } },
@@ -224,6 +241,10 @@ export async function getItemHistory(params: {
     ? Math.round(oldest.remainingValue / oldest.remainingQty)
     : item.costPerUnit
 
+  const ledgerTotal = roundQty(sum._sum?.quantity ?? 0)
+  // Replayed downwards from the scope's own total — see `HistoryRow.balance`.
+  let running = ledgerTotal
+
   return {
     item: {
       id: item.id, name: item.name, sku: item.sku, unit: item.unit,
@@ -247,7 +268,7 @@ export async function getItemHistory(params: {
       updatedAt: item.updatedAt.toISOString(),
       locationName: item.location?.name ?? null,
     },
-    ledgerTotal: roundQty(sum._sum?.quantity ?? 0),
+    ledgerTotal,
     stockByLocation: locationStock
       .map((row) => ({
         branchId: row.branch.id,
@@ -296,6 +317,9 @@ export async function getItemHistory(params: {
         sourceHref = `/dashboard/transfers/${m.referenceId}`
       }
 
+      const balance = running
+      running = roundQty(running - m.quantity)
+
       return {
         id: m.id,
         type: m.type,
@@ -303,7 +327,11 @@ export async function getItemHistory(params: {
         quantityEntered: m.quantityEntered,
         enteredUnit: m.enteredUnit,
         balanceAfter: m.balanceAfter,
+        balance,
         unitCost: m.unitCost,
+        valueMoved: m.valueMoved,
+        branchId: m.branchId,
+        branchName: m.branch.name,
         reason: m.reason,
         notes: m.notes,
         actorName: m.user?.name ?? null,

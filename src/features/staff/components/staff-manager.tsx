@@ -32,7 +32,9 @@ import { Switch } from '@/components/ui/primitives'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -69,24 +71,110 @@ export interface StaffMember {
   branchIds: string[]
 }
 
-/** A custom role that can be given to somebody on this screen. */
-/**
- * The "no custom role" option.
+/*
+ * ── One "Role" picker ───────────────────────────────────────────────────────
  *
- * Radix's Select treats `value=""` as "nothing selected" and refuses to render
- * a placeholder for it, so the empty case needs a real value. Mapped back to
- * null on save. Same reason `ALL_LOCATIONS` exists a few lines below.
+ * A person is either an Administrator — every feature, every location — or
+ * on one of the restaurant's own roles, which are their sidebar tabs. That is
+ * the owner's model and it is the right one. The form used to ask twice: a
+ * "Role" list of every built-in (Manager, Cashier, Waiter, …) and, under it,
+ * a "Custom access" list; picking a custom role then LOCKED the first field
+ * on a built-in nobody had chosen, with a note about what it was "based on".
+ * The built-in a custom role behaves like still exists (`StaffRole.preset`)
+ * and the server still applies it — it decides where the person lands and
+ * whether they are tied to a site — but it is the role's business, not a
+ * thing to show or pick here.
+ *
+ * Choices are encoded as one string, because Radix's Select is single-valued
+ * and treats `""` as "nothing chosen": `ADMIN`, `role:<id>` for a custom
+ * role, or `legacy:<ROLE>` for an account still on an older built-in (kept
+ * so editing their name does not silently re-rank them).
  */
-const NO_CUSTOM_ROLE = '__default__'
-/** The "no built-in role picked" option on the add dialog — a custom role alone is enough. */
 const NO_ROLE = '__none__'
+const ADMIN_CHOICE = 'ADMIN'
+const roleChoice = (id: string) => `role:${id}`
+const legacyChoice = (role: UserRole) => `legacy:${role}`
 
 export interface AssignableRole {
   id: string
   name: string
-  /** The built-in role it is based on. Picking the role picks this too. */
+  /** The built-in role it behaves like. Applied by the server; never shown. */
   preset: UserRole
   presetLabel: string
+}
+
+/** What a choice string means for the payload. */
+function readChoice(
+  choice: string,
+  customRoles: AssignableRole[] | undefined,
+): { role: UserRole | null; staffRoleId: string } {
+  if (choice === ADMIN_CHOICE) return { role: 'ADMIN', staffRoleId: '' }
+  if (choice.startsWith('role:')) {
+    const picked = customRoles?.find((role) => roleChoice(role.id) === choice) ?? null
+    return { role: picked?.preset ?? null, staffRoleId: picked?.id ?? '' }
+  }
+  if (choice.startsWith('legacy:')) return { role: choice.slice('legacy:'.length) as UserRole, staffRoleId: '' }
+  return { role: null, staffRoleId: '' }
+}
+
+/**
+ * The picker itself, shared by the add and edit dialogs so the two can never
+ * offer different lists for the same decision.
+ */
+function RoleChoiceField({
+  value,
+  onChange,
+  canBeAdmin,
+  customRoles,
+  legacy,
+}: {
+  value: string
+  onChange: (choice: string) => void
+  /** Whether this admin may make administrators (`assignableRoles`). */
+  canBeAdmin: boolean
+  customRoles?: AssignableRole[]
+  /** An older built-in the account is still on, offered so it can be kept. */
+  legacy?: UserRole | null
+}) {
+  const roles = customRoles ?? []
+  const nothingToOffer = !canBeAdmin && roles.length === 0 && !legacy
+  const hint =
+    value === ADMIN_CHOICE
+      ? 'Every feature, every location. For owners’ deputies only.'
+      : value.startsWith('role:')
+        ? 'What they can see and do is set by the role. Change it under Roles & access and everyone on it follows.'
+        : nothingToOffer
+          ? 'Create a role under Roles & access first — a role is the tabs its people get.'
+          : 'Administrator has everything. Any other role is the tabs it was given under Roles & access.'
+
+  return (
+    <Field label="Role" required hint={hint}>
+      <Select value={value || NO_ROLE} onValueChange={(next) => onChange(next === NO_ROLE ? '' : next)}>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_ROLE}>Choose a role</SelectItem>
+          {canBeAdmin ? (
+            <SelectItem value={ADMIN_CHOICE}>{ROLE_LABELS.ADMIN} — every feature</SelectItem>
+          ) : null}
+          {legacy ? (
+            <SelectItem value={legacyChoice(legacy)}>{ROLE_LABELS[legacy]} (current)</SelectItem>
+          ) : null}
+          {roles.length > 0 ? (
+            <SelectGroup>
+              <SelectLabel>Your roles</SelectLabel>
+              {roles.map((role) => (
+                <SelectItem key={role.id} value={roleChoice(role.id)}>
+                  {role.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+        </SelectContent>
+      </Select>
+    </Field>
+  )
 }
 
 export interface StaffLocation {
@@ -165,6 +253,7 @@ export function StaffManager({
         member.email,
         member.phone,
         ROLE_LABELS[member.role],
+        member.staffRoleName,
         member.branchName,
       ].some((field) => field?.toLowerCase().includes(term)),
     )
@@ -239,18 +328,19 @@ export function StaffManager({
                     </div>
                   </TableCell>
                   <TableCell>
-                    <RoleBadge role={member.role} />
                     {/*
-                      Both, not one or the other. The custom role is what they
-                      can actually do; the built-in still decides where they
-                      land and whether they are tied to a site, so hiding it
-                      would leave the "Works at" column beside it unexplained.
+                      The role they were given, in the words it was given in.
+                      A person on one of the restaurant's own roles is shown
+                      that role; the built-in it behaves like is the role's
+                      business (see the note above `RoleChoiceField`).
                     */}
                     {member.staffRoleName ? (
-                      <span className="mt-1 block truncate text-xs text-muted-foreground">
+                      <Badge variant="outline" className="max-w-[12rem] truncate">
                         {member.staffRoleName}
-                      </span>
-                    ) : null}
+                      </Badge>
+                    ) : (
+                      <RoleBadge role={member.role} />
+                    )}
                   </TableCell>
                   <TableCell className="text-sm">
                     {member.branchName ?? (
@@ -396,7 +486,7 @@ function WorksAtField({
       label="Works at"
       hint={
         mustHaveOne && role
-          ? `A ${ROLE_LABELS[role].toLowerCase()} works at one place — their screens show that location's orders and nothing else.`
+          ? 'This role works at one place — their screens show that location’s orders and nothing else.'
           : canAssignAllLocations
             ? 'All locations means they see every site. Pick one to confine them to it.'
             : 'They will see this location and no other.'
@@ -502,17 +592,18 @@ function InviteDialog({
   canAssignAllLocations?: boolean
 }) {
   /*
-   * The custom role is chosen here rather than in a second visit to the row.
+   * The role is chosen here rather than in a second visit to the row.
    *
    * It used to be edit-only, so every new hire started on preset defaults and
    * stayed there until somebody remembered to come back — which is the step
    * people forget, and the reason a carefully built role had no members.
    */
-  const [staffRoleId, setStaffRoleId] = React.useState('')
-  const chosenRole = customRoles?.find((role) => role.id === staffRoleId) ?? null
+  const [choice, setChoice] = React.useState('')
+  const canBeAdmin = roles.includes('ADMIN')
   /*
-   * Both the built-in role and the custom role are optional here, but not
-   * both at once: a custom role carries its own base, so it alone is enough.
+   * `form.role` is the built-in the choice resolves to — an administrator,
+   * or whatever the custom role behaves like. It is kept because the
+   * location field needs it to know whether "all locations" makes sense.
    */
   const [form, setForm] = React.useState(() => {
     const role = null as UserRole | null
@@ -548,15 +639,26 @@ function InviteDialog({
         branchId: canAssignAllLocations ? ALL_LOCATIONS : (locations[0]?.id ?? ALL_LOCATIONS),
         branchIds: [],
       })
-      setStaffRoleId('')
+      setChoice('')
       setError(null)
       setCredentials(null)
     }
   }, [open, locations, canAssignAllLocations])
 
+  const pick = (next: string) => {
+    setChoice(next)
+    const { role } = readChoice(next, customRoles)
+    setForm((current) => ({
+      ...current,
+      role,
+      branchId: branchForRole(role, current.branchId, locations),
+    }))
+  }
+
   const invite = async () => {
-    if (!form.role && !staffRoleId) {
-      setError('Choose a role or a custom role.')
+    const { role, staffRoleId } = readChoice(choice, customRoles)
+    if (!role && !staffRoleId) {
+      setError('Choose a role.')
       return
     }
     setSaving(true)
@@ -564,6 +666,7 @@ function InviteDialog({
     const result = await callAction(() =>
       inviteStaff({
         ...form,
+        role,
         branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId,
         staffRoleId: staffRoleId || null,
       }),
@@ -622,83 +725,12 @@ function InviteDialog({
             <Field label="Phone">
               <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </Field>
-            <Field label="Role">
-              <Select
-                value={form.role ?? NO_ROLE}
-                disabled={chosenRole !== null}
-                onValueChange={(value) => {
-                  const role = value === NO_ROLE ? null : (value as UserRole)
-                  setForm({
-                    ...form,
-                    role,
-                    branchId: branchForRole(role, form.branchId, locations),
-                  })
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_ROLE}>None</SelectItem>
-                  {roles.map((role) => (
-                    <SelectItem key={role} value={role}>
-                      {ROLE_LABELS[role]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {chosenRole ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Set by <strong>{chosenRole.name}</strong>, which is based on{' '}
-                  {chosenRole.presetLabel}.
-                </p>
-              ) : null}
-            </Field>
-
-            {/*
-              Below the role, not above it: the built-in role is the thing
-              everybody understands, and the custom one refines it. Choosing one
-              takes the base with it, which is why the field above locks rather
-              than being left to disagree.
-            */}
-            {customRoles && customRoles.length > 0 ? (
-              <Field label="Custom access">
-                <Select
-                  value={staffRoleId || NO_CUSTOM_ROLE}
-                  onValueChange={(value) => {
-                    const next = value === NO_CUSTOM_ROLE ? '' : value
-                    setStaffRoleId(next)
-                    const picked = customRoles.find((role) => role.id === next)
-                    if (picked) {
-                      setForm((current) => ({
-                        ...current,
-                        role: picked.preset,
-                        branchId: branchForRole(picked.preset, current.branchId, locations),
-                      }))
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_CUSTOM_ROLE}>
-                      {form.role ? `Default for ${ROLE_LABELS[form.role]}` : 'None'}
-                    </SelectItem>
-                    {customRoles.map((role) => (
-                      <SelectItem key={role.id} value={role.id}>
-                        {role.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Optional. A custom role replaces the default features for this person, and sets
-                  which built-in role they are — so it can be chosen on its own. Pick a role, a
-                  custom role, or both. Manage them under Roles &amp; access.
-                </p>
-              </Field>
-            ) : null}
+            <RoleChoiceField
+              value={choice}
+              onChange={pick}
+              canBeAdmin={canBeAdmin}
+              customRoles={customRoles}
+            />
             <WorksAtField
               value={form.branchId}
               onChange={(branchId) => setForm({ ...form, branchId })}
@@ -747,15 +779,27 @@ function EditDialog({
     branchIds: [] as string[],
   })
   /*
-   * Kept apart from `form` because it is saved by a different action.
-   * `updateStaff` owns the person's own details; `assignRole` owns which role
-   * they are in, and it runs its own escalation checks. Folding the two into
-   * one payload would mean one of the two sets of checks running on data the
-   * other action validated.
+   * The role choice is kept apart from `form` because it is saved by a
+   * different action. `updateStaff` owns the person's own details;
+   * `assignRole` owns which role they are in, and it runs its own escalation
+   * checks. Folding the two into one payload would mean one of the two sets
+   * of checks running on data the other action validated.
    */
-  const [staffRoleId, setStaffRoleId] = React.useState<string>('')
+  const [choice, setChoice] = React.useState('')
+  const [initialChoice, setInitialChoice] = React.useState('')
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+
+  const canBeAdmin = roles.includes('ADMIN')
+  /*
+   * Whether the account is on a role this picker can show. A switched-off
+   * role is not offered, so somebody still on one opens on their built-in
+   * instead — and is only moved off it if the choice is actually changed.
+   */
+  const onKnownRole = Boolean(
+    member?.staffRoleId && customRoles?.some((role) => role.id === member.staffRoleId),
+  )
+  const legacy = member && !onKnownRole && member.role !== 'ADMIN' ? member.role : null
 
   React.useEffect(() => {
     if (member) {
@@ -770,18 +814,44 @@ function EditDialog({
         branchId: branchForRole(member.role, member.branchId ?? ALL_LOCATIONS, locations),
         branchIds: member.branchIds,
       })
-      setStaffRoleId(member.staffRoleId ?? '')
+      const known = Boolean(
+        member.staffRoleId && customRoles?.some((role) => role.id === member.staffRoleId),
+      )
+      const opening = known
+        ? roleChoice(member.staffRoleId as string)
+        : member.role === 'ADMIN'
+          ? ADMIN_CHOICE
+          : legacyChoice(member.role)
+      setChoice(opening)
+      setInitialChoice(opening)
       setError(null)
     }
-  }, [member, locations])
+  }, [member, locations, customRoles])
+
+  const pick = (next: string) => {
+    setChoice(next)
+    const { role } = readChoice(next, customRoles)
+    if (!role) return
+    setForm((current) => ({
+      ...current,
+      role,
+      branchId: branchForRole(role, current.branchId, locations),
+    }))
+  }
 
   const save = async () => {
     if (!member) return
+    const { role, staffRoleId } = readChoice(choice, customRoles)
+    if (!role) {
+      setError('Choose a role.')
+      return
+    }
     setSaving(true)
     const result = await callAction(() =>
       updateStaff({
         id: member.id,
         ...form,
+        role,
         branchId: form.branchId === ALL_LOCATIONS ? null : form.branchId,
       }),
     )
@@ -793,7 +863,7 @@ function EditDialog({
 
     // Only when it changed: assigning is an audited event, and re-saving the
     // same value would fill the log with entries recording nothing.
-    if ((member.staffRoleId ?? '') !== staffRoleId) {
+    if (choice !== initialChoice) {
       const assigned = await callAction(() =>
         assignRole({ userId: member.id, staffRoleId: staffRoleId || null }),
       )
@@ -825,29 +895,13 @@ function EditDialog({
         <Field label="Phone">
           <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
         </Field>
-        <Field label="Role" required>
-          <Select
-            value={form.role}
-            onValueChange={(value) =>
-              setForm({
-                ...form,
-                role: value as UserRole,
-                branchId: branchForRole(value as UserRole, form.branchId, locations),
-              })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {roles.map((role) => (
-                <SelectItem key={role} value={role}>
-                  {ROLE_LABELS[role]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+        <RoleChoiceField
+          value={choice}
+          onChange={pick}
+          canBeAdmin={canBeAdmin}
+          customRoles={customRoles}
+          legacy={legacy}
+        />
         <WorksAtField
           value={form.branchId}
           onChange={(branchId) => setForm({ ...form, branchId })}
@@ -861,29 +915,6 @@ function EditDialog({
           onChange={(branchIds) => setForm({ ...form, branchIds })}
           locations={locations}
         />
-        {customRoles && customRoles.length > 0 ? (
-          <Field label="Custom access">
-            <Select value={staffRoleId || NO_CUSTOM_ROLE} onValueChange={(v) => setStaffRoleId(v === NO_CUSTOM_ROLE ? '' : v)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_CUSTOM_ROLE}>
-                  Default for {ROLE_LABELS[form.role]}
-                </SelectItem>
-                {customRoles.map((role) => (
-                  <SelectItem key={role.id} value={role.id}>
-                    {role.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="mt-1 text-xs text-muted-foreground">
-              A custom role replaces the default features for this person. Manage them under
-              Roles &amp; access.
-            </p>
-          </Field>
-        ) : null}
         <label className="flex items-center gap-2 text-sm">
           <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />
           Active — can sign in

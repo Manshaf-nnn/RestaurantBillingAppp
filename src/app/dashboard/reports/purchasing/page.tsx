@@ -10,12 +10,14 @@ import { listAwaitingDelivery, listPriceMoves } from '@/features/purchasing/quer
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { getPurchasingReport } from '@/features/purchasing/report'
 import { getPurchasingDrill } from '@/features/purchasing/report-drill'
+import { listPurchasedItems, type PurchasedItemRow } from '@/features/purchasing/purchased-items'
 import { PurchasingReportView } from '@/features/purchasing/components/purchasing-report-view'
+import { ExportMenu } from '@/features/reports/components/export-menu'
 import { listLocations } from '@/features/transfers/queries'
 import { formatMoney, localeForCurrency } from '@/lib/money'
 import { roundQty } from '@/lib/quantity'
 import { formatDate } from '@/lib/datetime'
-import { PERMISSIONS } from '@/lib/rbac'
+import { PERMISSIONS, can } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -50,6 +52,8 @@ const VIEWS = ['overview', 'orders', 'item', 'supplier'] as const
 type View = (typeof VIEWS)[number]
 
 const PER_PAGE = 10
+/** The "Purchased items" section on the overview pages by itself, a longer page. */
+const ITEMS_PER_PAGE = 25
 
 export default async function PurchasingReportPage({
   searchParams,
@@ -105,7 +109,7 @@ export default async function PurchasingReportPage({
   )
 
   /* Only what the view needs: the drill tables never load for the overview. */
-  const [report, drill, awaiting, suggestions, priceMoves] = await Promise.all([
+  const [report, drill, purchased, awaiting, suggestions, priceMoves] = await Promise.all([
     view === 'overview'
       ? getPurchasingReport({
           restaurantId: user.restaurantId,
@@ -114,8 +118,12 @@ export default async function PurchasingReportPage({
           timeZone: restaurant.timezone,
         })
       : Promise.resolve(null),
-    view !== 'overview'
+    view === 'orders' || view === 'supplier'
       ? getPurchasingDrill({ restaurantId: user.restaurantId, range, branchIds })
+      : Promise.resolve(null),
+    // The overview's own section, and the "item" drill is the same list in full.
+    view === 'overview' || view === 'item'
+      ? listPurchasedItems({ restaurantId: user.restaurantId, range, branchIds })
       : Promise.resolve(null),
     view === 'overview'
       ? listAwaitingDelivery({ restaurantId: user.restaurantId, branchId: chosen })
@@ -133,7 +141,43 @@ export default async function PurchasingReportPage({
       : Promise.resolve([]),
   ])
 
+  const canExport = can(user, PERMISSIONS.REPORT_EXPORT)
+  const showLocations = locations.length > 1 && !chosen
+
   /* ── The three drill-downs ───────────────────────────────────────────── */
+
+  if (view === 'item' && purchased) {
+    const parent = { href: hrefFor({ view: 'overview' }), label: 'Purchasing Reports' }
+    const rows = purchased.rows
+    return (
+      <DrillDown
+        title="Purchased items"
+        description="Every item bought in this period, what it cost and who supplied it."
+        parent={parent}
+        filters={filters}
+        actions={canExport ? <ExportMenu type="purchased-items" disabled={rows.length === 0} /> : null}
+        footer={
+          <Pager
+            page={page}
+            pageCount={Math.max(1, Math.ceil(rows.length / PER_PAGE))}
+            hrefFor={(n) => hrefFor({ page: n })}
+            total={rows.length}
+            perPage={PER_PAGE}
+          />
+        }
+      >
+        <PurchasedItemsTable
+          rows={rows}
+          page={page}
+          perPage={PER_PAGE}
+          money={money}
+          locale={locale}
+          timeZone={restaurant.timezone}
+          showLocations={showLocations}
+        />
+      </DrillDown>
+    )
+  }
 
   if (view !== 'overview' && drill) {
     const parent = { href: hrefFor({ view: 'overview' }), label: 'Purchasing Reports' }
@@ -189,60 +233,6 @@ export default async function PurchasingReportPage({
                 <td className="px-4 py-2.5">
                   <StatusDot status={row.status} label={row.statusLabel} />
                 </td>
-              </tr>
-            ))}
-          </DrillTable>
-        </DrillDown>
-      )
-    }
-
-    if (view === 'item') {
-      const rows = drill.byItem
-      const slice = rows.slice((page - 1) * PER_PAGE, page * PER_PAGE)
-      return (
-        <DrillDown
-          title="Item Purchase Report"
-          description="View purchase quantity and cost for each item."
-          parent={parent}
-          filters={filters}
-          footer={
-            <Pager
-              page={page}
-              pageCount={Math.max(1, Math.ceil(rows.length / PER_PAGE))}
-              hrefFor={(n) => hrefFor({ page: n })}
-              total={rows.length}
-              perPage={PER_PAGE}
-            />
-          }
-        >
-          <DrillTable
-            isEmpty={rows.length === 0}
-            empty="Nothing was bought in this period."
-            columns={[
-              { label: '#' },
-              { label: 'Item' },
-              { label: 'Category' },
-              { label: 'Qty Purchased', align: 'right' },
-              { label: 'Purchase Value', align: 'right' },
-              { label: 'Avg. Unit Cost', align: 'right' },
-            ]}
-          >
-            {slice.map((row, i) => (
-              <tr key={row.key} className="hover:bg-muted/40">
-                <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
-                  {(page - 1) * PER_PAGE + i + 1}
-                </td>
-                <td className="px-4 py-2.5 font-medium">
-                  <Link href={`/dashboard/inventory/${row.key}`} className="hover:underline">
-                    {row.label}
-                  </Link>
-                </td>
-                <td className="px-4 py-2.5 text-muted-foreground">{row.category}</td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {qty(row.quantity, row.unit)}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">{money(row.value)}</td>
-                <td className="px-4 py-2.5 text-right tabular-nums">{money(row.averageUnitCost)}</td>
               </tr>
             ))}
           </DrillTable>
@@ -369,6 +359,82 @@ export default async function PurchasingReportPage({
       ) : null}
 
       {/*
+        What actually came in, item by item (the owner's ask, Sep 2026).
+
+        The panels above count ORDERS — committed money, by the day the order
+        was placed. This reads the stock ledger instead: what was booked into
+        stock, in the item's own unit, at the price actually paid, including
+        stock recorded without an order. See `purchased-items.ts` for why the
+        two are kept apart. Same period and location as everything else on
+        the page; the export downloads the whole list with those filters.
+      */}
+      {purchased ? (
+        <section
+          id="purchased-items"
+          className="mt-6 overflow-hidden rounded-xl border bg-card shadow-soft scroll-mt-20"
+        >
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold">Purchased items</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Every item bought in this period — what came in, what it cost and who supplied
+                it. Biggest spend first.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {canExport ? (
+                <ExportMenu type="purchased-items" disabled={purchased.rows.length === 0} />
+              ) : null}
+            </div>
+          </header>
+          {purchased.rows.length > 0 ? (
+            <div className="flex flex-wrap gap-x-6 gap-y-1 border-b bg-muted/30 px-5 py-2.5 text-xs text-muted-foreground">
+              <span>
+                <strong className="font-semibold text-foreground">{purchased.totals.items}</strong>{' '}
+                {purchased.totals.items === 1 ? 'item' : 'items'}
+              </span>
+              <span>
+                <strong className="font-semibold text-foreground">{purchased.totals.deliveries}</strong>{' '}
+                {purchased.totals.deliveries === 1 ? 'delivery' : 'deliveries'}
+              </span>
+              <span>
+                Spent{' '}
+                <strong className="font-semibold text-foreground">{money(purchased.totals.value)}</strong>
+              </span>
+              {purchased.totals.returnedValue > 0 ? (
+                <span>
+                  Returned to suppliers{' '}
+                  <strong className="font-semibold text-foreground">
+                    {money(purchased.totals.returnedValue)}
+                  </strong>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="overflow-x-auto">
+            <PurchasedItemsTable
+              rows={purchased.rows}
+              page={page}
+              perPage={ITEMS_PER_PAGE}
+              money={money}
+              locale={locale}
+              timeZone={restaurant.timezone}
+              showLocations={showLocations}
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
+            <Pager
+              page={page}
+              pageCount={Math.max(1, Math.ceil(purchased.rows.length / ITEMS_PER_PAGE))}
+              hrefFor={(n) => `${hrefFor({ page: n })}#purchased-items`}
+              total={purchased.rows.length}
+              perPage={ITEMS_PER_PAGE}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {/*
         Kept from what this page was, and deliberately below the panels above:
         none of it is in the design this screen was rebuilt to, and all of it is
         something a buyer uses. Removing working tools to match a picture would
@@ -446,6 +512,87 @@ export default async function PurchasingReportPage({
 function qty(value: number, unit?: string) {
   const n = roundQty(value).toLocaleString('en-US', { maximumFractionDigits: 3 })
   return unit ? `${n} ${unit.toLowerCase()}` : n
+}
+
+/**
+ * The purchased-items rows, shared by the overview section and its drill.
+ *
+ * One component so the two can never show different columns for the same
+ * fact. The caller slices — see `Pager`'s contract — and passes the page so
+ * the row numbers carry on across pages.
+ */
+function PurchasedItemsTable({
+  rows,
+  page,
+  perPage,
+  money,
+  locale,
+  timeZone,
+  showLocations,
+}: {
+  rows: PurchasedItemRow[]
+  page: number
+  perPage: number
+  money: (m: number) => string
+  locale: string
+  timeZone: string
+  /** Only when the page is not already narrowed to one location. */
+  showLocations: boolean
+}) {
+  const slice = rows.slice((page - 1) * perPage, page * perPage)
+  return (
+    <DrillTable
+      isEmpty={rows.length === 0}
+      empty="Nothing was booked into stock in this period."
+      columns={[
+        { label: '#' },
+        { label: 'Item' },
+        { label: 'Category' },
+        { label: 'Qty bought', align: 'right' },
+        { label: 'Spend', align: 'right' },
+        { label: 'Avg / unit', align: 'right' },
+        { label: 'Last paid', align: 'right' },
+        { label: 'Last bought' },
+        { label: 'Supplier' },
+        ...(showLocations ? [{ label: 'Location' }] : []),
+        { label: 'Returned', align: 'right' as const },
+      ]}
+    >
+      {slice.map((row, i) => (
+        <tr key={row.key} className="hover:bg-muted/40">
+          <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+            {(page - 1) * perPage + i + 1}
+          </td>
+          <td className="px-4 py-2.5 font-medium">
+            <Link href={`/dashboard/inventory/${row.key}`} className="hover:underline">
+              {row.name}
+            </Link>
+            <span className="block text-xs font-normal text-muted-foreground">
+              {row.deliveries} {row.deliveries === 1 ? 'delivery' : 'deliveries'}
+              {row.sku ? ` · ${row.sku}` : ''}
+            </span>
+          </td>
+          <td className="px-4 py-2.5 text-muted-foreground">{row.category}</td>
+          <td className="px-4 py-2.5 text-right tabular-nums">{qty(row.quantity, row.unit)}</td>
+          <td className="px-4 py-2.5 text-right tabular-nums">{money(row.value)}</td>
+          <td className="px-4 py-2.5 text-right tabular-nums">{money(row.averageUnitCost)}</td>
+          <td className="px-4 py-2.5 text-right tabular-nums">{money(row.lastUnitCost)}</td>
+          <td className="whitespace-nowrap px-4 py-2.5 text-muted-foreground">
+            {row.lastBoughtAt ? formatDate(row.lastBoughtAt, { locale, timeZone }) : '—'}
+          </td>
+          <td className="max-w-[14rem] truncate px-4 py-2.5">{row.suppliers.join(', ') || '—'}</td>
+          {showLocations ? (
+            <td className="max-w-[12rem] truncate px-4 py-2.5 text-muted-foreground">
+              {row.locations.join(', ')}
+            </td>
+          ) : null}
+          <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+            {row.returnedQuantity > 0 ? qty(row.returnedQuantity, row.unit) : '—'}
+          </td>
+        </tr>
+      ))}
+    </DrillTable>
+  )
 }
 
 /** The coloured dot the design puts beside a purchase order's state. */

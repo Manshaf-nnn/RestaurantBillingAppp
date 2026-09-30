@@ -356,6 +356,53 @@ async function main() {
       freed?.permissions.join(', '),
     )
   }
+
+  /*
+   * A role no longer pins a location. The blindness rule — a till role's
+   * people need a home site — is enforced where a person meets the role,
+   * not by forcing every till role onto the first branch in the list.
+   */
+  console.log('\n── 6. A role pins no location; each person keeps their own ──')
+  {
+    const result = await post(ownerCookie, createId, {
+      name: `Any-site till ${stamp}`,
+      description: '',
+      preset: '',
+      branchId: null,
+      permissions: tillWithoutDependency,
+      assignments: [{ userId: ravi.id, branchId: null }],
+    })
+    check('an owner can create a till role with no location', result.ok, result.body.slice(0, 160))
+    const role = await roleNamed(`Any-site till ${stamp}`)
+    check('it is still based on POS underneath', role?.preset === 'POS', String(role?.preset))
+    check('and pins nothing', role !== null && role?.branchId === null, String(role?.branchId))
+    const r = await userRow(ravi.id)
+    check('Ravi is on it at the location he already had', r.staffRoleId === role?.id && r.branchId === main.id, `${r.staffRoleId} @ ${r.branchId}`)
+
+    const uma = await person('Uma', 'WAITER', null)
+    const blind = await post(ownerCookie, createId, {
+      name: `Blind till ${stamp}`,
+      description: '',
+      preset: '',
+      branchId: null,
+      permissions: tillWithoutDependency,
+      assignments: [{ userId: uma.id, branchId: null }],
+    })
+    check('but somebody with no home site is refused by name', !blind.ok && blind.body.includes('Uma'), blind.body.slice(0, 200))
+    check('and nothing was created', (await roleNamed(`Blind till ${stamp}`)) === null)
+
+    const managers = await post(kaviCookie, createId, {
+      name: `Kandy floor ${stamp}`,
+      description: '',
+      preset: '',
+      branchId: null,
+      permissions: tillWithoutDependency,
+      assignments: [],
+    })
+    check('a site manager leaving it blank gets their own site', managers.ok, managers.body.slice(0, 160))
+    const kandyRole = await roleNamed(`Kandy floor ${stamp}`)
+    check('pinned to Kandy, the only place they reach', kandyRole?.branchId === kandy.id, String(kandyRole?.branchId))
+  }
 }
 
 main()

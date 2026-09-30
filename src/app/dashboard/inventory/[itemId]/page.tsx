@@ -5,11 +5,15 @@ import { ArrowLeft } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { LocalDateTime } from '@/components/local-time'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
+import { selectedBranch } from '@/features/dashboard/selected-branch'
+import { HistoryLocationSelect } from '@/features/inventory/components/history-location-select'
 import { getItemHistory } from '@/features/inventory/history'
 import { levelFor } from '@/features/inventory/alerts'
 import { UNIT_LABELS, formatQuantity } from '@/features/inventory/units'
+import { ExportMenu } from '@/features/reports/components/export-menu'
+import { listSwitchableLocations } from '@/features/transfers/queries'
 import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, visibleBranchIds } from '@/lib/rbac'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
 
@@ -25,8 +29,10 @@ function toneFor(quantity: number) {
 
 export default async function ItemHistoryPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ itemId: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { itemId } = await params
   const user = await requirePagePermission(
@@ -39,18 +45,41 @@ export default async function ItemHistoryPage({
    * open to anyone who may see stock. What it HOLDS is per branch, and this
    * page was showing every location's holdings and movements to somebody
    * confined to one of them.
+   *
+   * Within what they may see, the location on the switcher (or `?branch=`)
+   * narrows the history the same way it narrows every other page — so an
+   * owner with two branches can read Colombo's cheese on its own, and the
+   * export beside the table downloads exactly those rows.
    */
+  const reach = visibleBranchIds(user)
+  const selection = await selectedBranch(user, await searchParams)
+  const switchable =
+    reach === null || reach.length > 1
+      ? await listSwitchableLocations(user.restaurantId, reach)
+      : []
+  const locations = switchable.map((l) => ({ id: l.id, name: l.name }))
+  const scopeName = selection.branchId
+    ? locations.find((l) => l.id === selection.branchId)?.name ?? null
+    : null
+
   const { item, rows, ledgerTotal, stockByLocation, purchases } = await getItemHistory({
     restaurantId: user.restaurantId,
     itemId,
-    branchIds: visibleBranchIds(user),
+    branchIds: selection.branchIds,
   })
 
   const money = (minor: number) => formatMoney(minor, restaurant.currency)
   const alert = levelFor(item)
-  // The cached balance and the replayed ledger must agree. If they ever do not,
-  // saying so plainly beats showing a number nobody can account for.
-  const reconciles = Math.abs(item.quantity - ledgerTotal) < 1e-6
+  /*
+   * The cached balance and the replayed ledger must agree. If they ever do
+   * not, saying so plainly beats showing a number nobody can account for.
+   * Only comparable when the ledger being replayed is the whole restaurant's:
+   * narrowed to one location, the two are different questions.
+   */
+  const reconciles = selection.branchIds !== null || Math.abs(item.quantity - ledgerTotal) < 1e-6
+  // What the locations on screen hold, from their own ledger.
+  const inStock = selection.branchIds !== null ? ledgerTotal : item.quantity
+  const showLocation = !selection.branchId && locations.length > 1
 
   return (
     <>
@@ -73,8 +102,8 @@ export default async function ItemHistoryPage({
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Figure
-          label="In stock"
-          value={formatQuantity(item.quantity, item.unit)}
+          label={scopeName ? `In stock at ${scopeName}` : 'In stock'}
+          value={formatQuantity(inStock, item.unit)}
           badge={
             alert ? (
               <Badge variant={alert === 'OVERSTOCK' ? 'secondary' : 'destructive'}>
@@ -267,12 +296,31 @@ export default async function ItemHistoryPage({
       </div>
 
       <SectionCard
+        id="stock-history"
         title="Stock history"
-        description="Newest first. Each row shows the running balance immediately after it."
+        description={
+          scopeName
+            ? `Newest first, at ${scopeName} only. Balance is what ${scopeName} held immediately after each row.`
+            : 'Newest first. Balance is the running total of the locations shown, immediately after each row.'
+        }
+        actions={
+          <>
+            {locations.length > 1 ? (
+              <HistoryLocationSelect locations={locations} value={selection.branchId} />
+            ) : null}
+            {can(user, PERMISSIONS.REPORT_EXPORT) ? (
+              <ExportMenu
+                type="stock-history"
+                extra={{ item: item.id }}
+                disabled={rows.length === 0}
+              />
+            ) : null}
+          </>
+        }
       >
         {rows.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
-            Nothing has moved yet.
+            {scopeName ? `Nothing has moved at ${scopeName} yet.` : 'Nothing has moved yet.'}
           </p>
         ) : (
           <div className="-mx-2 overflow-x-auto px-2">
@@ -280,6 +328,7 @@ export default async function ItemHistoryPage({
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="pb-2 pr-3 font-medium">When</th>
+                  {showLocation ? <th className="pb-2 pr-3 font-medium">Location</th> : null}
                   <th className="pb-2 pr-3 font-medium">Movement</th>
                   <th className="pb-2 pr-3 text-right font-medium">Change</th>
                   <th className="pb-2 pr-3 text-right font-medium">Value</th>
@@ -295,6 +344,9 @@ export default async function ItemHistoryPage({
                     <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       <LocalDateTime value={row.createdAt} />
                     </td>
+                    {showLocation ? (
+                      <td className="max-w-[10rem] truncate py-2.5 pr-3">{row.branchName}</td>
+                    ) : null}
                     <td className="py-2.5 pr-3">
                       <span className="capitalize">{row.type.replace(/_/g, ' ').toLowerCase()}</span>
                     </td>
@@ -305,18 +357,19 @@ export default async function ItemHistoryPage({
                         row.enteredUnit ?? item.unit,
                       )}
                     </td>
-                    {/* What the movement was WORTH, at the cost stamped when
-                        it happened — the ledger answers in money as well as
-                        in quantity (§75). */}
+                    {/* What the movement was WORTH — the exact value the
+                        ledger booked (FIFO.md), falling back to the rounded
+                        rate for rows older than that column — so the ledger
+                        answers in money as well as in quantity (§75). */}
                     <td className={`py-2.5 pr-3 text-right tabular-nums ${toneFor(row.quantity)}`}>
-                      {row.unitCost
-                        ? money(Math.round(Math.abs(row.quantity) * row.unitCost))
-                        : '—'}
+                      {row.valueMoved
+                        ? money(row.valueMoved)
+                        : row.unitCost
+                          ? money(Math.round(Math.abs(row.quantity) * row.unitCost))
+                          : '—'}
                     </td>
                     <td className="py-2.5 pr-3 text-right tabular-nums text-muted-foreground">
-                      {row.balanceAfter === null
-                        ? '—'
-                        : formatQuantity(row.balanceAfter, item.unit)}
+                      {formatQuantity(row.balance, item.unit)}
                     </td>
                     <td className="max-w-[16rem] truncate py-2.5 pr-3 text-muted-foreground">
                       {row.reason ?? row.notes ?? '—'}
