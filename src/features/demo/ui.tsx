@@ -216,10 +216,13 @@ export function AreaChart({
   data,
   height = 180,
   format,
+  color,
 }: {
   data: { label: string; value: number }[]
   height?: number
   format: (value: number) => string
+  /** One flat colour instead of the brand gradient, as the report trend charts use. */
+  color?: string
 }) {
   const id = useId().replace(/:/g, '')
   const [active, setActive] = useState<number | null>(null)
@@ -237,8 +240,8 @@ export function AreaChart({
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-full w-full overflow-visible" aria-hidden>
           <defs>
             <linearGradient id={`area-${id}`} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="var(--brand)" stopOpacity="0.45" />
-              <stop offset="100%" stopColor="var(--brand)" stopOpacity="0" />
+              <stop offset="0%" stopColor={color ?? 'var(--brand)'} stopOpacity={color ? 0.26 : 0.45} />
+              <stop offset="100%" stopColor={color ?? 'var(--brand)'} stopOpacity="0" />
             </linearGradient>
             <linearGradient id={`line-${id}`} x1="0" x2="1" y1="0" y2="0">
               <stop offset="0%" stopColor="#ffab4d" />
@@ -250,7 +253,7 @@ export function AreaChart({
             <line key={g} x1="0" x2={W} y1={H * g} y2={H * g} stroke="var(--track)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           ))}
           <path d={`${line} L ${W} ${H} L 0 ${H} Z`} fill={`url(#area-${id})`} />
-          <path d={line} fill="none" stroke={`url(#line-${id})`} strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <path d={line} fill="none" stroke={color ?? `url(#line-${id})`} strokeWidth={color ? 2.5 : 3} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
         {/* Hover/tap columns and the marker live in HTML so they are not stretched with the SVG. */}
         <div className="absolute inset-0 flex">
@@ -270,7 +273,7 @@ export function AreaChart({
           className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-200"
           style={{ left: `${(points[shown][0] / W) * 100}%`, top: `${(points[shown][1] / H) * 100}%` }}
         >
-          <span className="block h-3 w-3 rounded-full border-2 border-white" style={{ background: 'var(--brand)' }} />
+          <span className="block h-3 w-3 rounded-full border-2 border-white" style={{ background: color ?? 'var(--brand)' }} />
           <span className="tfd-glass-strong absolute bottom-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg px-2 py-1 text-[11px] font-semibold">
             {data[shown].label} · {format(data[shown].value)}
           </span>
@@ -289,15 +292,18 @@ export function Donut({
   segments,
   center,
   caption,
+  stacked,
 }: {
-  segments: { label: string; share: number; color: string }[]
+  segments: { label: string; share: number; color: string; value?: string }[]
   center: string
   caption: string
+  /** Ring on top, legend underneath: how the report pages lay it out. */
+  stacked?: boolean
 }) {
   let offset = 25
   return (
-    <div className="flex items-center gap-4">
-      <div className="relative h-28 w-28 shrink-0">
+    <div className={stacked ? 'flex flex-col items-center gap-4' : 'flex items-center gap-4'}>
+      <div className={stacked ? 'relative h-36 w-36 shrink-0' : 'relative h-28 w-28 shrink-0'}>
         <svg viewBox="0 0 36 36" className="h-full w-full" aria-hidden>
           <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--track)" strokeWidth="4" />
           {segments.map((s) => {
@@ -324,14 +330,17 @@ export function Donut({
           <span className="tfd-muted text-[10px]">{caption}</span>
         </div>
       </div>
-      <ul className="min-w-0 flex-1 space-y-1.5 text-xs">
+      <ul className={stacked ? 'w-full space-y-1.5 text-xs' : 'min-w-0 flex-1 space-y-1.5 text-xs'}>
         {segments.map((s) => (
           <li key={s.label} className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
               <span className="truncate">{s.label}</span>
             </span>
-            <span className="font-semibold tabular-nums">{s.share}%</span>
+            <span className="flex shrink-0 items-baseline gap-2 tabular-nums">
+              <span className={s.value ? 'tfd-muted' : 'font-semibold'}>{s.share}%</span>
+              {s.value ? <span className="font-semibold">{s.value}</span> : null}
+            </span>
           </li>
         ))}
       </ul>

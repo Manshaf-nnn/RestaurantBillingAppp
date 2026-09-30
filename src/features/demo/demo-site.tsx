@@ -30,15 +30,30 @@ import { cn } from '@/lib/utils'
 import { BOOK_LINK, CHAT_LINK, WHATSAPP_DISPLAY, rs } from './data'
 import { GenericScreen } from './more-screens'
 import { ALL_SCREENS, HIGHLIGHTS, NAV, type DemoScreen } from './nav'
-import { Approvals, Customers, Reports, Stock, Transfers } from './screens-backoffice'
+import { Approvals, Customers, Stock, Transfers } from './screens-backoffice'
 import { GuestPreview } from './screens-guest'
 import { Kitchen } from './screens-kitchen'
 import { CommandCenter, LiveFloor } from './screens-operations'
 import { Delivery } from './screens-ordering'
+import {
+  CashDrawerReport,
+  DeliveryReport,
+  InventoryReport,
+  PaymentDetailsReport,
+  PettyCashReport,
+  ProfitReport,
+  PurchasingReport,
+  ReportsHub,
+  ReservationsReport,
+  SalesReport,
+} from './screens-reports'
 import { DeliveryDesk, Drawer, Pos, Shift } from './screens-pos'
 import { CardTitle, Modal, NotifyProvider, Pill, PortalProvider, QrCode, Sparkline, WhatsAppIcon, type QrShape } from './ui'
 
 import './demo.css'
+
+/** Report pages carry their own title, description and export button, as the real ones do. */
+const OWN_HEADING = new Set(['reports', 'sales-report', 'delivery-report', 'gross-profit', 'inventory-report', 'purchasing-report', 'cash-drawer-report', 'petty-cash-report', 'payment-details-report', 'reservations-report'])
 
 type Theme = 'light' | 'dark'
 
@@ -294,7 +309,7 @@ export function DemoSite({ qr, demoUrl }: { qr: QrShape; demoUrl: string }) {
                 </nav>
 
                 <div className="min-w-0 p-3 sm:p-5">
-                  <div className="mb-4 flex items-start gap-3">
+                  <div className={cn('mb-4 flex items-start gap-3', OWN_HEADING.has(screen.id) && 'hidden')}>
                     <span className="tfd-btn-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-xl">
                       <screen.icon className="h-5 w-5" aria-hidden />
                     </span>
@@ -465,7 +480,25 @@ function ScreenBody({ id, qr }: { id: string; qr: QrShape }) {
     case 'stock':
       return <Stock />
     case 'reports':
-      return <Reports />
+      return <ReportsHub />
+    case 'sales-report':
+      return <SalesReport />
+    case 'delivery-report':
+      return <DeliveryReport />
+    case 'gross-profit':
+      return <ProfitReport />
+    case 'inventory-report':
+      return <InventoryReport />
+    case 'purchasing-report':
+      return <PurchasingReport />
+    case 'cash-drawer-report':
+      return <CashDrawerReport />
+    case 'petty-cash-report':
+      return <PettyCashReport />
+    case 'payment-details-report':
+      return <PaymentDetailsReport />
+    case 'reservations-report':
+      return <ReservationsReport />
     case 'customers':
       return <Customers />
     case 'cash-drawer':
