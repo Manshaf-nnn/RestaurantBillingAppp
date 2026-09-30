@@ -250,16 +250,32 @@ export function levelsOf(entry: SidebarModule): Array<{ key: string; label: stri
    * nothing different — a control whose options are indistinguishable teaches
    * people the control is decorative.
    */
+  /*
+   * And a level that would not SHOW this entry is not a level of this entry.
+   *
+   * The POS shell belongs to a feature whose lowest level is "read" —
+   * `payment.view`, the Payment details report's right — which opens nothing
+   * at the till. A fresh tick starts at the weakest level on offer, so
+   * ticking POS from scratch handed out `payment.view`, the sidebar's own
+   * rule then hid the POS tab, and the box quietly unticked itself: the role
+   * saved with Dashboard, Transfers and the till's dependencies, and its
+   * people signed in to find no POS. "Based on POS" used to paper over it by
+   * seeding every tab at full. So only levels whose grants would light the
+   * tab — its `permission` or one of `anyOf` — are offered here.
+   */
+  const shows = new Set([entry.permission, ...entry.anyOf])
   const out: Array<{ key: string; label: string; hint: string }> = []
   const seen = new Set<string>()
   for (const level of levelsFor(feature)) {
     if (level.key === 'off') continue
-    const fingerprint = [...new Set(permissionsForLevel(feature, level.key))].sort().join('|')
+    const granted = permissionsForLevel(feature, level.key)
+    if (!granted.some((permission) => shows.has(permission))) continue
+    const fingerprint = [...new Set(granted)].sort().join('|')
     if (seen.has(fingerprint)) continue
     seen.add(fingerprint)
     out.push(level)
   }
-  return out
+  return out.length > 0 ? out : [{ key: 'full', label: 'Full access', hint: 'Everything this tab can do.' }]
 }
 
 /** Which level a saved role sits at for this entry, or `custom` if between. */

@@ -4,10 +4,11 @@ import type { UserRole } from '@prisma/client'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ensureStaffCodes } from '@/features/staff/codes'
-import { appUrl } from '@/lib/env'
 import { landingFor, PERMISSIONS, ROLE_LABELS, visibleBranchIds, canActOnRole } from '@/lib/rbac'
+import { printableOrigin } from '@/lib/tenant-url'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
+import { requireRestaurant } from '@/server/db/tenant'
 import { CopyLink } from '@/features/staff/components/copy-link'
 import { StaffCodeCell } from '@/features/staff/components/staff-code-cell'
 
@@ -59,7 +60,15 @@ export default async function StaffCodesPage() {
     orderBy: [{ role: 'asc' }, { staffCode: 'asc' }],
   })
 
-  const base = appUrl()
+  /*
+   * The link's host is where the owner is standing — the restaurant's own
+   * domain when they are on it, the platform's otherwise — not the configured
+   * app URL. That value is fixed into the build, and a build made without it
+   * printed `http://localhost:3000/login?…` on every card: a link that opened
+   * nothing, so the email it carried never reached the sign-in box.
+   */
+  const restaurant = await requireRestaurant(user.restaurantId)
+  const base = await printableOrigin(restaurant)
 
   return (
     <>
@@ -99,7 +108,15 @@ export default async function StaffCodesPage() {
                  * endpoint — and since codes run W-0001 upward, anyone could walk
                  * them and harvest every email in the restaurant.
                  */
-                const link = `${base}/login?email=${encodeURIComponent(s.email)}&name=${encodeURIComponent(s.name.split(' ')[0])}&next=${encodeURIComponent(home)}`
+                /*
+                 * `switch=1`: always show the sign-in form, even in a browser
+                 * where somebody is already signed in. Without it the edge
+                 * sends a signed-in visitor straight to the dashboard, so an
+                 * owner checking a card's link on their own machine — or a
+                 * cashier opening it on the shared till — never saw the form
+                 * with the email filled in.
+                 */
+                const link = `${base}/login?email=${encodeURIComponent(s.email)}&name=${encodeURIComponent(s.name.split(' ')[0])}&next=${encodeURIComponent(home)}&switch=1`
                 return (
                   <tr key={s.id}>
                     <td className="py-2.5 pr-3">

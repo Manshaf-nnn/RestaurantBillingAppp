@@ -37,6 +37,7 @@ import {
   SIDEBAR_MODULES,
   accessTwin,
   closeSelection,
+  grantsAtLevel,
   inferPreset,
   modulesShownBy,
   permissionsForSelection,
@@ -357,6 +358,32 @@ console.log('\n4. "Start from scratch" lands somewhere the tabs can open\n')
   )
   // Most tabs have nothing to choose between, and show no picker at all.
   check('a tab with one answer offers no choice', levelsOf(sidebarModule('/dashboard/tasks')!).length === 1)
+
+  /*
+   * A level that would not show the tab is not a level of the tab. The POS
+   * shell's feature has a "read" level — `payment.view`, the report's right —
+   * which opens nothing at the till; offering it meant a fresh tick of POS
+   * (which starts at the weakest level) hid the POS from its own role.
+   */
+  const pos = sidebarModule('/cashier/pos')!
+  const opensPos = new Set([pos.permission, ...pos.anyOf])
+  check(
+    'every level offered for POS actually shows the POS',
+    levelsOf(pos).every((l) => grantsAtLevel(pos, l.key).some((p) => opensPos.has(p))),
+    levelsOf(pos).map((l) => `${l.key}=${grantsAtLevel(pos, l.key).join('+')}`).join(' | '),
+  )
+  const fromScratch = new Set(
+    permissionsForSelection(
+      new Map([['/dashboard', levelsOf(sidebarModule('/dashboard')!)[0].key], ['/cashier/pos', levelsOf(pos)[0].key]]),
+      [],
+      null,
+    ),
+  )
+  check(
+    'ticking Dashboard and POS from scratch produces a role that shows the POS',
+    modulesShownBy(fromScratch, null).some((m) => m.href === '/cashier/pos'),
+    [...fromScratch].join(','),
+  )
 
   const at = (level: string) =>
     new Set(permissionsForSelection(new Map([[TRANSFERS, level]]), [], null))
