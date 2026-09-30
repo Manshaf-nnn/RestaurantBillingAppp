@@ -4,7 +4,8 @@ import type { UserRole } from '@prisma/client'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
 import { ensureStaffCodes } from '@/features/staff/codes'
-import { landingFor, PERMISSIONS, ROLE_LABELS, visibleBranchIds, canActOnRole } from '@/lib/rbac'
+import { homeFor } from '@/features/access/sidebar-access'
+import { PERMISSIONS, ROLE_LABELS, visibleBranchIds, canActOnRole } from '@/lib/rbac'
 import { printableOrigin } from '@/lib/tenant-url'
 import { requirePagePermission } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -52,9 +53,11 @@ export default async function StaffCodesPage() {
     },
     select: {
       id: true, name: true, email: true, role: true, staffCode: true, signInCode: true,
+      permissions: true, deniedPermissions: true,
       // The custom role's name, so a printed card is not labelled with a role
-      // the person no longer effectively has.
-      staffRole: { select: { name: true, isActive: true } },
+      // the person no longer effectively has — and its permissions, so the
+      // link's `next` is the first tab of THEIR sidebar (`homeFor`).
+      staffRole: { select: { name: true, isActive: true, permissions: true } },
       _count: { select: { servedOrders: true } },
     },
     orderBy: [{ role: 'asc' }, { staffCode: 'asc' }],
@@ -101,7 +104,13 @@ export default async function StaffCodesPage() {
                  * /dashboard — wrong for every back-office role, which each have
                  * their own landing screen.
                  */
-                const home = landingFor(s.role)
+                const home = homeFor({
+                  role: s.role,
+                  permissions: s.permissions,
+                  deniedPermissions: s.deniedPermissions,
+                  rolePermissions: s.staffRole?.isActive ? s.staffRole.permissions : null,
+                  availablePermissions: user.availablePermissions,
+                })
                 /*
                  * The link carries their own email, not their staff code. It used
                  * to carry the code and look the email up through a public

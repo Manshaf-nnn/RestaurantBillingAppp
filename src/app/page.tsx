@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 
 import { guestEntryPath } from '@/features/orders/guest-path'
-import { landingFor } from '@/lib/rbac'
+import { homeFor } from '@/features/access/sidebar-access'
 import { getAdminUser, getCurrentUser } from '@/server/auth/session'
 import { getRestaurantByDomain, requestHost } from '@/server/db/tenant'
 
@@ -31,7 +31,7 @@ export default async function Home() {
   if (admin) redirect('/admin')
 
   const user = await getCurrentUser()
-  if (user) redirect(landingFor(user.role))
+  if (user) redirect(homeFor(user))
 
   const host = await requestHost()
   if (host) {

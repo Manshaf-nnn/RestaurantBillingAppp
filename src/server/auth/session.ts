@@ -6,6 +6,7 @@ import type { Prisma, Session, UserRole } from '@prisma/client'
 import { permissionsSoldByFeatures } from '@/features/access/features'
 import { BRANCH_COOKIE } from '@/features/dashboard/selected-branch'
 import { guardLocks, prisma, type TxClient } from '@/server/db/prisma'
+import type { PermissionSubject } from '@/lib/rbac'
 import { closeShiftForUser, openShift } from '@/features/attendance/service'
 import { generateToken, hashToken } from './password'
 import { due } from './presence'
@@ -103,6 +104,39 @@ function activeRolePermissions(
 ): string[] | null {
   if (!staffRole || !staffRole.isActive) return null
   return staffRole.permissions
+}
+
+/**
+ * What one person may do, read fresh from the database — the same subject a
+ * session carries, for the moments before a session exists.
+ *
+ * Signing in, and joining through a link, both have to answer "where does
+ * this person land" (`homeFor` in `features/dashboard/nav`), and that depends
+ * on the sidebar they were given, not only on their built-in role. Built the
+ * same way `toAuthUser` builds it, so the landing page and the sidebar that
+ * greets them there cannot disagree.
+ */
+export async function permissionSubjectFor(
+  userId: string,
+): Promise<(PermissionSubject & { role: UserRole }) | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      role: true,
+      permissions: true,
+      deniedPermissions: true,
+      staffRole: { select: { permissions: true, isActive: true } },
+      restaurant: { select: { enabledFeatures: true } },
+    },
+  })
+  if (!user) return null
+  return {
+    role: user.role,
+    permissions: user.permissions,
+    deniedPermissions: user.deniedPermissions,
+    rolePermissions: activeRolePermissions(user.staffRole),
+    availablePermissions: permissionsSoldByFeatures(user.restaurant?.enabledFeatures ?? []),
+  }
 }
 
 /** Platform admins get an isolated session; everyone else is 'staff'. */

@@ -38,7 +38,8 @@ import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/componen
 import { PeriodPicker } from '@/features/dashboard/components/period-picker'
 import { LiveOrderFeed } from '@/features/dashboard/components/live-order-feed'
 import { formatMoney, localeForCurrency } from '@/lib/money'
-import { can, landingFor, PERMISSIONS } from '@/lib/rbac'
+import { homeFor } from '@/features/access/sidebar-access'
+import { can, PERMISSIONS } from '@/lib/rbac'
 import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission, requirePageUser } from '@/server/auth/guard'
 import { prisma } from '@/server/db/prisma'
@@ -65,7 +66,11 @@ export default async function DashboardPage({
    * asked for — so the door is redirected rather than slammed.
    */
   const signedIn = await requirePageUser('/dashboard')
-  if (!can(signedIn, PERMISSIONS.DASHBOARD_VIEW)) redirect(landingFor(signedIn.role))
+  if (!can(signedIn, PERMISSIONS.DASHBOARD_VIEW)) {
+    // Their own first tab — and never back here, which would loop.
+    const home = homeFor(signedIn)
+    redirect(home.split('?')[0] === '/dashboard' ? '/forbidden' : home)
+  }
   const user = await requirePagePermission(PERMISSIONS.DASHBOARD_VIEW, '/dashboard')
 
   /*

@@ -21,12 +21,14 @@ import {
   hashToken,
   verifyPassword,
 } from '@/server/auth/password'
+import { homeFor } from '@/features/access/sidebar-access'
 import {
   clearSessionCookiesOwnedBy,
   createSession,
   destroySession,
   getAdminUser,
   getCurrentUser,
+  permissionSubjectFor,
   revokeAllSessions,
 } from '@/server/auth/session'
 import { prisma } from '@/server/db/prisma'
@@ -221,31 +223,34 @@ export async function login(input: unknown): Promise<ActionResult<LoginResult>> 
       after: { mfa: gate.outcome === 'ok', persistent: data.remember },
     })
 
-    return { redirectTo: await landingAfterLogin(user.role, user.restaurantId) }
+    return { redirectTo: await landingAfterLogin(user) }
   })
 }
 
 /**
  * Where a user lands, accounting for tenant approval status.
  *
- * The role half is `landingFor` in `lib/rbac.ts` — one table, one reader. This
- * wraps it with the two things that outrank a role: a platform operator, and a
- * restaurant that is not approved yet.
+ * The role half is `homeFor` in `features/dashboard/nav` — the built-in's
+ * home, or for somebody on one of the restaurant's own roles the first tab of
+ * the sidebar they were given. This wraps it with the two things that outrank
+ * either: a platform operator, and a restaurant that is not approved yet.
  */
-async function landingAfterLogin(
-  role: UserRole,
-  restaurantId: string | null,
-): Promise<string> {
-  if (role === 'SUPER_ADMIN') return '/admin'
-  if (!restaurantId) return '/onboarding'
+async function landingAfterLogin(user: {
+  id: string
+  role: UserRole
+  restaurantId: string | null
+}): Promise<string> {
+  if (user.role === 'SUPER_ADMIN') return '/admin'
+  if (!user.restaurantId) return '/onboarding'
 
   const restaurant = await prisma.restaurant.findUnique({
-    where: { id: restaurantId },
+    where: { id: user.restaurantId },
     select: { status: true },
   })
   if (restaurant && restaurant.status !== 'ACTIVE') return '/pending-approval'
 
-  return landingFor(role)
+  const subject = await permissionSubjectFor(user.id)
+  return subject ? homeFor(subject) : landingFor(user.role)
 }
 
 // ── registration (new restaurant + owner) ────────────────────────────────────

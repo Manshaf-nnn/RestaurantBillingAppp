@@ -4,9 +4,11 @@ import { redirect } from 'next/navigation'
 
 import { runAction, type ActionResult } from '@/lib/action'
 import { UnauthorizedError } from '@/lib/errors'
+import type { UserRole } from '@prisma/client'
 import { landingFor, resolveLink, stampUse } from './links'
 import { joinSchema } from './link-schema'
-import { createSession } from '@/server/auth/session'
+import { homeFor } from './sidebar-access'
+import { createSession, permissionSubjectFor } from '@/server/auth/session'
 import { AUDIT_ACTIONS, audit } from '@/server/audit'
 import { enforceRateLimit } from '@/server/security/rate-limit'
 import { nextStaffCode } from '@/features/staff/codes'
@@ -143,8 +145,19 @@ export async function joinWithCode(input: unknown): Promise<ActionResult<never>>
     })
 
     // Where the account can actually go, not where the link was minted for.
-    redirect(landingFor(nextRole ?? person.role))
+    redirect(await homeOf(person.id, nextRole ?? person.role))
   })
+}
+
+/**
+ * Where a person who has just signed in through a link lands: the first tab
+ * of the sidebar they were given (`homeFor`), read after the link has been
+ * applied to their account, so a role's people land on their tabs and not
+ * on the built-in's station screen.
+ */
+async function homeOf(userId: string, fallbackRole: UserRole): Promise<string> {
+  const subject = await permissionSubjectFor(userId)
+  return subject ? homeFor(subject) : landingFor(fallbackRole)
 }
 
 /**
@@ -217,7 +230,7 @@ export async function joinAsDevice(input: unknown): Promise<ActionResult<never>>
     await createSession(user.id)
     await stampUse(link.id)
 
-    redirect(landingFor(deviceRole))
+    redirect(await homeOf(user.id, deviceRole))
   })
 }
 
@@ -317,6 +330,6 @@ export async function joinWithRole(input: unknown): Promise<ActionResult<never>>
     })
 
     // Where THEIR account can go, not where the link was minted for.
-    redirect(landingFor(person.role))
+    redirect(await homeOf(person.id, person.role))
   })
 }

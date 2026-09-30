@@ -38,6 +38,7 @@ import {
   accessTwin,
   closeSelection,
   grantsAtLevel,
+  homeFor,
   inferPreset,
   modulesShownBy,
   permissionsForSelection,
@@ -383,6 +384,30 @@ console.log('\n4. "Start from scratch" lands somewhere the tabs can open\n')
     'ticking Dashboard and POS from scratch produces a role that shows the POS',
     modulesShownBy(fromScratch, null).some((m) => m.href === '/cashier/pos'),
     [...fromScratch].join(','),
+  )
+
+  /*
+   * And where its people LAND. A POS-based custom role used to drop them on
+   * the full-screen till, which has no sidebar, so Dashboard and Transfers
+   * looked ungranted. The POS is a tab like any other: a custom role lands on
+   * its first tab; a till-only role still lands on the till; a built-in POS
+   * account is untouched.
+   */
+  const posWithDashboard = { role: 'POS' as UserRole, rolePermissions: [...fromScratch] }
+  check(
+    'a custom role with Dashboard and POS lands on the dashboard',
+    homeFor(posWithDashboard) === '/dashboard',
+    homeFor(posWithDashboard),
+  )
+  const tillOnly = {
+    role: 'POS' as UserRole,
+    rolePermissions: permissionsForSelection(new Map([['/cashier/pos', levelsOf(pos)[0].key]]), [], 'POS'),
+  }
+  check('a till-only custom role still lands on the till', homeFor(tillOnly).startsWith('/cashier/pos'), homeFor(tillOnly))
+  check('a built-in POS account lands where it always did', homeFor({ role: 'POS' }) === '/cashier/pos?tab=cashier')
+  check(
+    'a role with only a station and Transfers lands on Transfers, its first tab',
+    homeFor({ role: 'POS', rolePermissions: permissionsForSelection(new Map([['/dashboard/transfers', 'read'], ['/cashier/pos', 'full']]), [], 'POS') }) === '/dashboard/transfers',
   )
 
   const at = (level: string) =>

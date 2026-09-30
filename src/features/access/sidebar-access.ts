@@ -1,7 +1,14 @@
 import type { UserRole } from '@prisma/client'
 
-import { NAV_SECTIONS, type NavItem } from '@/features/dashboard/nav'
-import { ROLE_HOME, ROLE_PERMISSIONS, requiresOwnBranch, seesAllLocations } from '@/lib/rbac'
+import { NAV_SECTIONS, reachableNavItems, type NavItem } from '@/features/dashboard/nav'
+import {
+  ROLE_HOME,
+  ROLE_PERMISSIONS,
+  landingFor,
+  requiresOwnBranch,
+  seesAllLocations,
+  type PermissionSubject,
+} from '@/lib/rbac'
 import {
   FEATURES,
   REGISTERED_PERMISSIONS,
@@ -413,6 +420,65 @@ export function permissionsForSelection(
   for (const permission of on) result.add(permission)
 
   return [...result]
+}
+
+/**
+ * Where this person lands after signing in.
+ *
+ * Somebody on their built-in role lands where it always has (`ROLE_HOME`).
+ * Somebody on one of the restaurant's own roles lands on THEIR SIDEBAR:
+ *
+ *   1. the Dashboard tab, when the role has it;
+ *   2. otherwise the first tab that stands on its own — not a station screen,
+ *      and not one the station's own tick brought along (Delivery Desk,
+ *      Invoices and Payment details all arrive with the POS);
+ *   3. otherwise the station: the built-in's own home if it is one of the
+ *      role's tabs, else the first station ticked.
+ *
+ * ── Why the built-in's home is the wrong answer for a custom role ───────────
+ *
+ * A custom role behaves like a built-in underneath, and a role whose tabs
+ * include the POS behaves like POS — so its people were sent to
+ * `/cashier/pos`, the full-screen till, the moment they signed in. The till
+ * has no sidebar. An owner who built "POS tester" with Dashboard, Transfers
+ * and POS ticked watched the person sign in and see nothing but the POS, and
+ * concluded the other two tabs had not been granted. They had; the person
+ * had been dropped into the one tab that hides the rest.
+ *
+ * The owner's model is the right one: the POS is a tab like Transfers or
+ * Live floor, and a role is the tabs it was given. Step 2 is what makes a
+ * till-only role still open on the till — its other tabs are the POS's own
+ * baggage, not somewhere a cashier meant to start the day.
+ */
+export function homeFor(user: PermissionSubject): string {
+  if (user.rolePermissions === null || user.rolePermissions === undefined) {
+    return landingFor(user.role)
+  }
+  const items = reachableNavItems(user)
+  if (items.length === 0) return landingFor(user.role)
+  if (items.some((item) => item.href === '/dashboard')) return '/dashboard'
+
+  const stations = items.filter((item) => item.roles)
+  // Everything a ticked station drags in: its dependencies, and any tab whose
+  // own permission is one the station's feature hands out at full.
+  const carried = new Set<string>()
+  for (const station of stations) {
+    for (const dep of requiredHrefs(station.href)) carried.add(dep)
+    const entry = BY_HREF.get(station.href)
+    const handsOut = new Set(entry ? everythingGrantable(entry) : [])
+    for (const item of items) {
+      if (handsOut.has(item.permission) || (item.anyOf ?? []).some((p) => handsOut.has(p))) {
+        carried.add(item.href)
+      }
+    }
+  }
+  const standalone = items.find((item) => !item.roles && !carried.has(item.href))
+  if (standalone) return standalone.href
+
+  const home = landingFor(user.role)
+  const homePath = home.split('?')[0]
+  if (stations.some((station) => station.href === homePath)) return home
+  return stations[0]?.href ?? items[0].href
 }
 
 /**
