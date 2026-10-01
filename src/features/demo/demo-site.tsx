@@ -47,13 +47,14 @@ import {
   ReservationsReport,
   SalesReport,
 } from './screens-reports'
+import { Tools } from './screens-tools'
 import { DeliveryDesk, Drawer, Pos, Shift } from './screens-pos'
 import { CardTitle, Modal, NotifyProvider, Pill, PortalProvider, QrCode, Sparkline, WhatsAppIcon, type QrShape } from './ui'
 
 import './demo.css'
 
 /** Report pages carry their own title, description and export button, as the real ones do. */
-const OWN_HEADING = new Set(['reports', 'sales-report', 'delivery-report', 'gross-profit', 'inventory-report', 'purchasing-report', 'cash-drawer-report', 'petty-cash-report', 'payment-details-report', 'reservations-report'])
+const OWN_HEADING = new Set(['reports', 'sales-report', 'delivery-report', 'gross-profit', 'inventory-report', 'purchasing-report', 'cash-drawer-report', 'petty-cash-report', 'payment-details-report', 'reservations-report', 'tools'])
 
 type Theme = 'light' | 'dark'
 
@@ -499,6 +500,8 @@ function ScreenBody({ id, qr }: { id: string; qr: QrShape }) {
       return <PaymentDetailsReport />
     case 'reservations-report':
       return <ReservationsReport />
+    case 'tools':
+      return <Tools />
     case 'customers':
       return <Customers />
     case 'cash-drawer':

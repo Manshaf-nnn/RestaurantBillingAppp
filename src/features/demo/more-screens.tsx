@@ -693,20 +693,6 @@ const SCREENS: Record<string, Screen> = {
     action: 'Close September',
     note: 'Once a month is closed its figures are locked. Anything found later is corrected in the next month, in the open.',
   },
-  tools: {
-    stats: [['Bill calculator', 'Ready', 'ok'], ['Price change test', 'Ready', 'ok'], ['Saved', 'Nothing', 'info'], ['Uses your tax rules', 'Yes', 'brand']],
-    table: {
-      title: 'Test a price change: Jaffna Crab Curry',
-      columns: ['', 'Today', 'If you change it'],
-      rows: [
-        ['Price', rs(2900), rs(3200)],
-        ['Food cost', '45%', '41%'],
-        ['Profit per plate', rs(1595), rs(1895)],
-        ['Extra profit a month, at 121 sold', '—', rs(36300)],
-      ],
-    },
-    note: 'Quick sums in the same math the bills use, and a way to test a price change safely. Nothing here is saved.',
-  },
   'qr-menus': {
     stats: [['QR menus', '4', 'brand'], ['Scans today', '326', 'info'], ['Orders from QR', '38', 'ok'], ['Menu-only views', '112', 'violet']],
     table: {

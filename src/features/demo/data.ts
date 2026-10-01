@@ -153,25 +153,40 @@ export interface FloorTable {
   minutes?: number
   lines?: { id: string; qty: number }[]
   reservedFor?: string
+  /** Who is sitting there, as the real live floor shows it. Absent = guest not identified. */
+  guest?: FloorGuest
+}
+
+export interface FloorGuest {
+  name: string
+  tier: 'VIP' | 'Regular' | 'Returning' | 'First visit'
+  /** Completed visits before this one. */
+  visits: number
+  lastVisit?: string
+  /** Days since the last visit; 0 when this is the first. */
+  gapDays?: number
+  spent: number
+  points: number
+  phone: string
 }
 
 export const FLOOR: FloorTable[] = [
-  { id: 'T1', seats: 2, zone: 'Indoor', status: 'Served', guests: 2, waiter: 'Dev', minutes: 34, lines: [{ id: 'm10', qty: 2 }, { id: 'm25', qty: 2 }] },
+  { id: 'T1', seats: 2, zone: 'Indoor', status: 'Served', guests: 2, waiter: 'Dev', minutes: 34, lines: [{ id: 'm10', qty: 2 }, { id: 'm25', qty: 2 }], guest: { name: 'Fathima Rizwan', tier: 'VIP', visits: 41, lastVisit: '27 Sep 2026', gapDays: 3, spent: 241900, points: 2419, phone: '071 234 8830' } },
   { id: 'T2', seats: 2, zone: 'Indoor', status: 'Free' },
-  { id: 'T3', seats: 4, zone: 'Indoor', status: 'Ordered', guests: 3, waiter: 'Sara', minutes: 9, lines: [{ id: 'm17', qty: 1 }, { id: 'm16', qty: 2 }, { id: 'm26', qty: 3 }] },
-  { id: 'T4', seats: 4, zone: 'Indoor', status: 'Bill requested', guests: 4, waiter: 'Dev', minutes: 58, lines: [{ id: 'm20', qty: 1 }, { id: 'm09', qty: 2 }, { id: 'm14', qty: 1 }, { id: 'm21', qty: 4 }, { id: 'm28', qty: 4 }] },
-  { id: 'T5', seats: 6, zone: 'Indoor', status: 'Seated', guests: 5, waiter: 'Nimal', minutes: 3 },
+  { id: 'T3', seats: 4, zone: 'Indoor', status: 'Ordered', guests: 3, waiter: 'Sara', minutes: 9, lines: [{ id: 'm17', qty: 1 }, { id: 'm16', qty: 2 }, { id: 'm26', qty: 3 }], guest: { name: 'Dilani Jayawardena', tier: 'Regular', visits: 14, lastVisit: '26 Sep 2026', gapDays: 4, spent: 52600, points: 526, phone: '072 456 3358' } },
+  { id: 'T4', seats: 4, zone: 'Indoor', status: 'Bill requested', guests: 4, waiter: 'Dev', minutes: 58, lines: [{ id: 'm20', qty: 1 }, { id: 'm09', qty: 2 }, { id: 'm14', qty: 1 }, { id: 'm21', qty: 4 }, { id: 'm28', qty: 4 }], guest: { name: 'Nimal Perera', tier: 'VIP', visits: 48, lastVisit: '29 Sep 2026', gapDays: 1, spent: 286400, points: 2864, phone: '077 123 4521' } },
+  { id: 'T5', seats: 6, zone: 'Indoor', status: 'Seated', guests: 5, waiter: 'Nimal', minutes: 3, guest: { name: 'Shenali de Silva', tier: 'First visit', visits: 0, spent: 0, points: 0, phone: '071 567 2485' } },
   { id: 'T6', seats: 4, zone: 'Indoor', status: 'Free' },
   { id: 'T7', seats: 4, zone: 'Indoor', status: 'Ordered', guests: 2, waiter: 'QR', minutes: 6, lines: [{ id: 'm07', qty: 2 }, { id: 'm25', qty: 2 }] },
   { id: 'T8', seats: 8, zone: 'Indoor', status: 'Reserved', reservedFor: 'Fernando · 8:00 pm · 8 guests' },
-  { id: 'T9', seats: 2, zone: 'Terrace', status: 'Served', guests: 2, waiter: 'Sara', minutes: 41, lines: [{ id: 'm14', qty: 2 }, { id: 'm06', qty: 1 }, { id: 'm30', qty: 2 }] },
+  { id: 'T9', seats: 2, zone: 'Terrace', status: 'Served', guests: 2, waiter: 'Sara', minutes: 41, lines: [{ id: 'm14', qty: 2 }, { id: 'm06', qty: 1 }, { id: 'm30', qty: 2 }], guest: { name: 'Hiruni Wickramasinghe', tier: 'VIP', visits: 33, lastVisit: '29 Sep 2026', gapDays: 1, spent: 176500, points: 1765, phone: '070 456 8891' } },
   { id: 'T10', seats: 2, zone: 'Terrace', status: 'Free' },
-  { id: 'T11', seats: 4, zone: 'Terrace', status: 'Ordered', guests: 4, waiter: 'Nimal', minutes: 14, lines: [{ id: 'm11', qty: 2 }, { id: 'm15', qty: 1 }, { id: 'm12', qty: 1 }, { id: 'm29', qty: 4 }] },
-  { id: 'T12', seats: 4, zone: 'Terrace', status: 'Served', guests: 3, waiter: 'Dev', minutes: 27, lines: [{ id: 'm20', qty: 1 }, { id: 'm09', qty: 1 }, { id: 'm28', qty: 2 }] },
-  { id: 'T13', seats: 6, zone: 'Terrace', status: 'Bill requested', guests: 6, waiter: 'Sara', minutes: 72, lines: [{ id: 'm10', qty: 3 }, { id: 'm07', qty: 2 }, { id: 'm01', qty: 2 }, { id: 'm31', qty: 6 }] },
+  { id: 'T11', seats: 4, zone: 'Terrace', status: 'Ordered', guests: 4, waiter: 'Nimal', minutes: 14, lines: [{ id: 'm11', qty: 2 }, { id: 'm15', qty: 1 }, { id: 'm12', qty: 1 }, { id: 'm29', qty: 4 }], guest: { name: 'Arjun Selvam', tier: 'Returning', visits: 16, lastVisit: '18 Aug 2026', gapDays: 43, spent: 61200, points: 612, phone: '075 567 7719' } },
+  { id: 'T12', seats: 4, zone: 'Terrace', status: 'Served', guests: 3, waiter: 'Dev', minutes: 27, lines: [{ id: 'm20', qty: 1 }, { id: 'm09', qty: 1 }, { id: 'm28', qty: 2 }], guest: { name: 'Ruwan Bandara', tier: 'Regular', visits: 27, lastVisit: '26 Sep 2026', gapDays: 4, spent: 118700, points: 1187, phone: '078 678 5093' } },
+  { id: 'T13', seats: 6, zone: 'Terrace', status: 'Bill requested', guests: 6, waiter: 'Sara', minutes: 72, lines: [{ id: 'm10', qty: 3 }, { id: 'm07', qty: 2 }, { id: 'm01', qty: 2 }, { id: 'm31', qty: 6 }], guest: { name: 'Kavindu Silva', tier: 'Regular', visits: 19, lastVisit: '29 Sep 2026', gapDays: 1, spent: 84300, points: 843, phone: '076 345 1207' } },
   { id: 'T14', seats: 4, zone: 'Terrace', status: 'Free' },
   { id: 'T15', seats: 4, zone: 'Terrace', status: 'Ordered', guests: 3, waiter: 'QR', minutes: 4, lines: [{ id: 'm15', qty: 1 }, { id: 'm12', qty: 1 }, { id: 'm28', qty: 1 }] },
-  { id: 'T16', seats: 2, zone: 'Terrace', status: 'Seated', guests: 2, waiter: 'Nimal', minutes: 1 },
+  { id: 'T16', seats: 2, zone: 'Terrace', status: 'Seated', guests: 2, waiter: 'Nimal', minutes: 1, guest: { name: 'Zainab Hameed', tier: 'Returning', visits: 9, lastVisit: '12 Sep 2026', gapDays: 18, spent: 38200, points: 382, phone: '075 567 1946' } },
 ]
 
 // ── Delivery ────────────────────────────────────────────────────────────────

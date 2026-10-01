@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  BellRing,
+  Star,
   Armchair,
   Clock,
   Receipt,
@@ -27,6 +29,7 @@ import {
   rs,
   type Channel,
   type FeedOrder,
+  type FloorGuest,
   type FloorTable,
     type TableStatus,
 } from './data'
@@ -209,9 +212,9 @@ export function LiveFloor() {
     setTables((current) =>
       current.map((t) => {
         if (t.id !== table.id) return t
-        if (step.to === 'Free') return { id: t.id, seats: t.seats, zone: t.zone, status: 'Free' }
+        if (step.to === 'Free') return { id: t.id, seats: t.seats, zone: t.zone, status: 'Free' as const }
         if (step.to === 'Seated') {
-          return { ...t, status: 'Seated', guests: Math.min(t.seats, 2 + (t.seats > 4 ? 3 : 0)), waiter: 'Dev', minutes: 0, startedAt: tick, reservedFor: undefined }
+          return { ...t, status: 'Seated', guests: Math.min(t.seats, 2 + (t.seats > 4 ? 3 : 0)), waiter: 'Dev', minutes: 0, startedAt: tick, reservedFor: undefined, guest: step.to === 'Seated' && t.reservedFor ? { name: 'Fernando', tier: 'Returning', visits: 6, lastVisit: '2 Aug 2026', gapDays: 59, spent: 48200, points: 482, phone: '077 890 1122' } : undefined }
         }
         if (step.to === 'Ordered') {
           return { ...t, status: 'Ordered', lines: [{ id: 'm07', qty: 2 }, { id: 'm01', qty: 1 }, { id: 'm26', qty: 2 }] }
@@ -273,6 +276,11 @@ export function LiveFloor() {
                         <Pill tone={STATUS_TONE[t.status]} className="mt-1.5">
                           {t.status}
                         </Pill>
+                        {t.status !== 'Free' && t.status !== 'Reserved' ? (
+                          <p className={cn('mt-1.5 truncate text-[10px] font-semibold', t.guest ? tierTone(t.guest.tier) : 'tfd-muted')}>
+                            {t.guest ? tierLabel(t.guest) : 'Guest — not identified'}
+                          </p>
+                        ) : null}
                         <div className="mt-2 flex items-center justify-between text-[11px]">
                           {t.status === 'Free' || t.status === 'Reserved' ? (
                             <span className="tfd-muted">{t.status === 'Reserved' ? '8:00 pm' : 'Ready'}</span>
@@ -305,6 +313,8 @@ export function LiveFloor() {
             </div>
             <Pill tone={STATUS_TONE[selected.status]}>{selected.status}</Pill>
           </div>
+
+          {selected.status !== 'Free' && selected.status !== 'Reserved' ? <GuestBlock guest={selected.guest} /> : null}
 
           {selected.reservedFor ? <p className="mb-3 text-sm">Reserved for {selected.reservedFor}.</p> : null}
 
@@ -343,9 +353,69 @@ export function LiveFloor() {
           <button type="button" className="tfd-btn tfd-btn-primary mt-4 w-full px-4 py-2.5 text-sm" onClick={() => advance(selected)}>
             {NEXT_STEP[selected.status].label}
           </button>
+          {selected.status !== 'Free' ? (
+            <button type="button" className="tfd-btn tfd-btn-glass mt-2 w-full px-4 py-2 text-sm" onClick={() => notify(`A waiter has been called to table ${selected.id.slice(1)}`)}>
+              <BellRing className="h-4 w-4" aria-hidden /> Call a waiter
+            </button>
+          ) : null}
           <p className="tfd-muted mt-2 text-center text-[11px]">Try it. The floor updates for every device at once.</p>
         </Card>
       </div>
+    </div>
+  )
+}
+
+// ── Who is sitting there (mirrors the real live floor's customer block) ─────
+
+function tierLabel(g: FloorGuest) {
+  return g.tier === 'Returning' ? `Returning · ${g.visits}` : g.tier
+}
+
+function tierTone(tier: FloorGuest['tier']) {
+  return tier === 'VIP' ? 'tfd-brand' : tier === 'Regular' ? 'tfd-info' : tier === 'Returning' ? 'tfd-violet' : 'tfd-ok'
+}
+
+function gapBadge(g: FloorGuest) {
+  if (g.tier === 'First visit' || !g.gapDays) return null
+  return g.gapDays >= 30 ? `back after ${g.gapDays}d` : 'welcome back'
+}
+
+function GuestBlock({ guest }: { guest?: FloorGuest }) {
+  const initials = guest ? guest.name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase() : '—'
+  const gap = guest ? gapBadge(guest) : null
+  return (
+    <div className="tfd-line mb-3 border-b pb-3">
+      <div className="flex items-center gap-2.5">
+        <span className="tfd-btn-primary flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold">{initials}</span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold">{guest?.name ?? 'Walk-in'}</p>
+          <p className="flex flex-wrap items-center gap-1">
+            {guest ? (
+              <>
+                <Pill tone={guest.tier === 'VIP' ? 'brand' : guest.tier === 'Regular' ? 'info' : guest.tier === 'Returning' ? 'violet' : 'ok'}>
+                  {guest.tier === 'First visit' ? <Star className="h-3 w-3" aria-hidden /> : null}
+                  {tierLabel(guest)}
+                </Pill>
+                {gap ? <Pill tone="warn">{gap}</Pill> : null}
+              </>
+            ) : (
+              <Pill>Not identified</Pill>
+            )}
+          </p>
+        </div>
+      </div>
+      {guest ? (
+        <dl className="mt-2.5 space-y-1 text-xs">
+          <div className="flex justify-between gap-2"><dt className="tfd-muted">Visits before this</dt><dd className="font-semibold tabular-nums">{guest.visits}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="tfd-muted">Last visit</dt><dd className="font-semibold">{guest.lastVisit ?? '—'}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="tfd-muted">Came back after</dt><dd className="font-semibold">{guest.gapDays ? `${guest.gapDays} days` : '—'}</dd></div>
+          {guest.spent > 0 ? <div className="flex justify-between gap-2"><dt className="tfd-muted">Spent with you</dt><dd className="font-semibold tabular-nums">{rs(guest.spent)}</dd></div> : null}
+          <div className="flex justify-between gap-2"><dt className="tfd-muted">Points</dt><dd className="font-semibold tabular-nums">{guest.points.toLocaleString('en-US')}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="tfd-muted">Phone</dt><dd className="font-semibold tabular-nums">{guest.phone}</dd></div>
+        </dl>
+      ) : (
+        <p className="tfd-muted mt-2 text-xs">No phone number was taken, so there is no history to show. This is not the same person as other walk-ins.</p>
+      )}
     </div>
   )
 }
