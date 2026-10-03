@@ -482,6 +482,32 @@ export function homeFor(user: PermissionSubject): string {
 }
 
 /**
+ * Where the Dashboard button on a station screen leads, or `null` when there
+ * is nowhere else to go.
+ *
+ * The first page of their sidebar: where they land on signing in (`homeFor`)
+ * when that is a page other than the station they are on, otherwise the first
+ * entry in sidebar order.
+ *
+ * It used to ask `firstReachablePath`, and for anybody based on POS that is
+ * the till itself (`/cashier/pos?tab=cashier`) — which is not equal to
+ * `/cashier/pos`, so the Dashboard button on the POS led back to the POS.
+ *
+ * A page with a sidebar is preferred over another station: this is the way
+ * OUT of a full-screen surface, and a role holding Kitchen display and POS
+ * should not be passed from one to the other.
+ */
+export function stationExitFor(user: PermissionSubject, current: string): string | null {
+  const elsewhere = reachableNavItems(user).filter((item) => item.href !== current)
+  if (elsewhere.length === 0) return null
+
+  // `roles` is what marks a station entry — the three the edge gates by role.
+  const pages = elsewhere.filter((item) => !item.roles)
+  const home = homeFor(user).split('?')[0]
+  return (pages.find((item) => item.href === home) ?? pages[0] ?? elsewhere[0]).href
+}
+
+/**
  * Close a permission list over the sidebar's dependencies.
  *
  * The server-side half. Whatever the client sent, if the list shows an entry

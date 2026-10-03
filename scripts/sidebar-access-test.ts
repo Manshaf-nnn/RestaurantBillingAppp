@@ -39,6 +39,7 @@ import {
   closeSelection,
   grantsAtLevel,
   homeFor,
+  stationExitFor,
   inferPreset,
   modulesShownBy,
   permissionsForSelection,
@@ -211,9 +212,20 @@ console.log('\n3. Ticked boxes become a permission list, and back\n')
     fromScratch.join(', '),
   )
   check(
-    'and nothing the owner did not ask for — no refunds, discounts or drawer',
-    ![PERMISSIONS.PAYMENT_REFUND, PERMISSIONS.DISCOUNT_APPLY, PERMISSIONS.CASH_DRAWER_OPERATE].some((p) => fromScratch.includes(p)),
+    'and nothing the owner did not ask for — no refunds or discounts',
+    ![PERMISSIONS.PAYMENT_REFUND, PERMISSIONS.DISCOUNT_APPLY].some((p) => fromScratch.includes(p)),
   )
+  /*
+   * A POS tick is the whole till. The drawer and the shift used to be left
+   * out, so a role with POS ticked opened the POS and found tabs missing.
+   */
+  const tickedTabs = posTabsFor({ role: 'POS', rolePermissions: fromScratch })
+  check(
+    'ticking POS opens all five tabs — Orders, Delivery, Cashier, Drawer, Shift',
+    same(tickedTabs, ['orders', 'delivery', 'cashier', 'drawer', 'handover']),
+    tickedTabs.join(', '),
+  )
+  check('and the drawer can be opened, not just looked at', fromScratch.includes(PERMISSIONS.POS_OPEN_DRAWER))
   check('unticking everything leaves nothing', permissionsForSelection(new Set()).length === 0)
 
   /*
@@ -395,6 +407,11 @@ console.log('\n4. "Start from scratch" lands somewhere the tabs can open\n')
    */
   const posWithDashboard = { role: 'POS' as UserRole, rolePermissions: [...fromScratch] }
   check(
+    'and the dialog’s own tick — a level, not a bare set — opens all five POS tabs too',
+    same(posTabsFor(posWithDashboard), ['orders', 'delivery', 'cashier', 'drawer', 'handover']),
+    posTabsFor(posWithDashboard).join(', '),
+  )
+  check(
     'a custom role with Dashboard and POS lands on the dashboard',
     homeFor(posWithDashboard) === '/dashboard',
     homeFor(posWithDashboard),
@@ -408,6 +425,32 @@ console.log('\n4. "Start from scratch" lands somewhere the tabs can open\n')
   check(
     'a role with only a station and Transfers lands on Transfers, its first tab',
     homeFor({ role: 'POS', rolePermissions: permissionsForSelection(new Map([['/dashboard/transfers', 'read'], ['/cashier/pos', 'full']]), [], 'POS') }) === '/dashboard/transfers',
+  )
+
+  /*
+   * The Dashboard button on the POS. It used to ask for the role's landing
+   * page, which for anybody based on POS is the till — so it led back to the
+   * screen it was on. It goes to the first page of their sidebar.
+   */
+  check(
+    'the Dashboard button on the POS opens the dashboard for a role that has it',
+    stationExitFor(posWithDashboard, POS) === '/dashboard',
+    String(stationExitFor(posWithDashboard, POS)),
+  )
+  check(
+    'for a built-in POS account too — not the till it is standing on',
+    stationExitFor({ role: 'POS' }, POS) === '/dashboard',
+    String(stationExitFor({ role: 'POS' }, POS)),
+  )
+  const tillExit = stationExitFor(tillOnly, POS)
+  check(
+    'a till-only role gets the first page of its sidebar, never the POS again',
+    tillExit !== null && !tillExit.startsWith('/cashier') && visibleSections(tillOnly).flatMap((s) => s.items)[0].href === tillExit,
+    String(tillExit),
+  )
+  check(
+    'and somebody with nothing but the station gets no button at all',
+    stationExitFor({ role: 'KITCHEN', rolePermissions: [PERMISSIONS.KITCHEN_VIEW] }, '/kitchen') === null,
   )
 
   const at = (level: string) =>

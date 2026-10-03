@@ -476,10 +476,16 @@ function CreateRoleDialog({
         next.set(entry.href, levels.length > 1 ? levels[0].key : 'full')
         return next
       }
-      // Tabs on one permission come off together — there is nothing to keep.
-      const shared = new Set(entry.grants)
+      /*
+       * Tabs on one permission come off together — there is nothing to keep.
+       *
+       * Matched on what SHOWS the tab, not on everything it grants: the POS
+       * grants the drawer and the shift along with the till, and matching on
+       * that made unticking POS untick Cash drawer, Shift and Delivery Desk
+       * as well — and unticking any of those untick the POS.
+       */
       for (const other of SIDEBAR_MODULES) {
-        if (other.grants.some((p) => shared.has(p))) next.delete(other.href)
+        if (other.permission === entry.permission) next.delete(other.href)
       }
       return next
     })
@@ -602,10 +608,29 @@ function CreateRoleDialog({
                               (other) => other.href !== entry.href && other.grants.some((p) => entry.anyOf.includes(p)),
                             )
                           : []
+                      /*
+                       * On because another tick switched it on: the POS hands
+                       * out the drawer, the shift and the delivery desk with
+                       * the till, so those boxes light up with it. Unticking
+                       * one would change nothing — the POS still grants it —
+                       * so it is locked and names the tab that brought it.
+                       * Ticked in its own right it stays an ordinary box.
+                       */
+                      const bundlers =
+                        checked && !explicit.has(entry.href)
+                          ? view.shown.filter(
+                              (other) =>
+                                other.href !== entry.href &&
+                                explicit.has(other.href) &&
+                                other.permission !== entry.permission &&
+                                other.grants.includes(entry.permission),
+                            )
+                          : []
                       const canGrant = grantable.has(entry.permission)
                       const reachable = checked || couldOpen(entry)
                       const twin = accessTwin(entry.href)
-                      const disabled = !canGrant || !reachable || holders.length > 0 || carriers.length > 0
+                      const disabled =
+                        !canGrant || !reachable || holders.length > 0 || carriers.length > 0 || bundlers.length > 0
                       const note = !canGrant
                         ? 'You do not have this yourself'
                         : !reachable
@@ -614,9 +639,11 @@ function CreateRoleDialog({
                             ? `Required by ${holders.map((h) => h.label).join(', ')}`
                             : carriers.length > 0
                               ? `Shown with ${carriers.map((c) => c.label).join(', ')}`
-                              : twin
-                                ? `Same access as ${twin.label}`
-                                : null
+                              : bundlers.length > 0
+                                ? `Comes with ${bundlers.map((b) => b.label).join(', ')}`
+                                : twin
+                                  ? `Same access as ${twin.label}`
+                                  : null
                       const id = `tab-${entry.href.replace(/[^a-z0-9]+/gi, '-')}`
                       return (
                         <li key={entry.href} className="flex items-start gap-2.5 py-1">

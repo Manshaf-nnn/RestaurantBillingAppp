@@ -3,7 +3,7 @@ import 'server-only'
 import Link from 'next/link'
 import { LayoutDashboard } from 'lucide-react'
 
-import { firstReachablePath, reachableNavItems } from '../nav'
+import { stationExitFor } from '@/features/access/sidebar-access'
 import type { PermissionSubject } from '@/lib/rbac'
 
 /**
@@ -28,6 +28,11 @@ import type { PermissionSubject } from '@/lib/rbac'
  *
  * The threshold is *more than the station itself*: a waiter whose only reachable
  * item is Waiter station is already looking at it.
+ *
+ * ── Where it goes ───────────────────────────────────────────────────────────
+ *
+ * To the first page of their sidebar — `stationExitFor`, which sits beside
+ * the sign-in landing rule it follows and is pinned by the same tests.
  */
 export function StationExit({
   user,
@@ -39,11 +44,8 @@ export function StationExit({
   current: string
   className?: string
 }) {
-  const elsewhere = reachableNavItems(user).filter((item) => item.href !== current)
-  if (elsewhere.length === 0) return null
-
-  const target = firstReachablePath(user)
-  const href = target && target !== current ? target : elsewhere[0].href
+  const href = stationExitFor(user, current)
+  if (!href) return null
 
   return (
     <Link

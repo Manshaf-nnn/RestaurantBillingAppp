@@ -307,10 +307,20 @@ export const NAV_SECTIONS: NavSection[] = [
          */
         requires: ['/dashboard/payment-details'],
         /*
-         * The till as a working till: orders in, money taken, online orders
-         * answered. Not the drawer — that is its own entry below, because an
-         * owner may want a person who serves without ever holding a float —
-         * and not discounts or refunds, which stay a deliberate grant.
+         * The whole till: every one of the five tabs `posTabsFor` can show —
+         * Orders, Delivery, Cashier, Drawer and Shift.
+         *
+         * The drawer and the shift used to be left out, on the argument that
+         * an owner may want a person who serves without ever holding a float.
+         * What it produced was a role with POS ticked whose people opened the
+         * POS and found part of it missing, with nothing on the Create screen
+         * to say why. A tick means the screen the owner sees themselves; a
+         * till with less than that is built in the detailed editor, where
+         * each of these is its own switch.
+         *
+         * `POS_OPEN_DRAWER` comes with the drawer because a Drawer tab that
+         * cannot start a till is a tab with nothing to do on it. Discounts
+         * and refunds are still not here — they stay a deliberate grant.
          */
         grants: [
           PERMISSIONS.ORDER_CREATE,
@@ -318,6 +328,9 @@ export const NAV_SECTIONS: NavSection[] = [
           PERMISSIONS.PAYMENT_VIEW,
           PERMISSIONS.PAYMENT_COLLECT,
           PERMISSIONS.ORDER_ACCEPT,
+          PERMISSIONS.CASH_DRAWER_OPERATE,
+          PERMISSIONS.POS_OPEN_DRAWER,
+          PERMISSIONS.HANDOVER_VIEW,
         ],
       },
       {
