@@ -9,7 +9,9 @@ const majorAmount = z.coerce.number().positive('The amount must be above zero').
 const base = {
   branchId: z.string().min(1, 'Choose a location'),
   amount: majorAmount,
-  method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'QR', 'ONLINE', 'WALLET']),
+  method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'QR', 'ONLINE', 'WALLET']),
+  /** Which of the restaurant's own accounts the money is paid from. Optional. */
+  payFromAccountId: z.string().cuid().optional().or(z.literal('')),
   reference: z.string().trim().max(120).optional().or(z.literal('')),
   description: z.string().trim().min(3, 'Say what this payment is for').max(300),
   /** YYYY-MM-DD */

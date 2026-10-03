@@ -24,7 +24,7 @@ const paymentSchema = z.object({
   amount: z.coerce.number().positive('Enter an amount above zero').max(1_000_000_000),
   // The existing PaymentMethod enum, reused rather than a parallel list — a
   // second set of payment methods is a second thing to keep in step.
-  method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'QR', 'ONLINE', 'WALLET']),
+  method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'QR', 'ONLINE', 'WALLET']),
   reference: z.string().trim().max(80).optional().or(z.literal('')),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
   paidAt: z.string().optional().or(z.literal('')),

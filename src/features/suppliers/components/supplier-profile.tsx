@@ -31,6 +31,7 @@ import type { SupplierLedger } from '../ledger'
 const METHODS = [
   ['CASH', 'Cash'],
   ['BANK_TRANSFER', 'Bank transfer'],
+  ['CHEQUE', 'Cheque'],
   ['CARD', 'Card'],
   ['QR', 'QR'],
   ['ONLINE', 'Online'],
@@ -379,7 +380,7 @@ function Payments({
             {ledger.payments.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
                 <span className="font-medium tabular-nums">{money(p.amount)}</span>
-                <Badge variant="secondary">{p.method.replace(/_/g, ' ').toLowerCase()}</Badge>
+                <Badge variant="secondary">{(METHODS.find(([key]) => key === p.method)?.[1] ?? p.method.replace(/_/g, ' ')).toLowerCase()}</Badge>
                 {p.reference ? <span className="text-muted-foreground">{p.reference}</span> : null}
                 {p.purchaseId && p.purchaseNumber ? (
                   <Link

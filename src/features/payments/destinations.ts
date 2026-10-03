@@ -178,6 +178,7 @@ export const METHOD_LABELS: Record<string, string> = {
   BANK_TRANSFER: 'Bank transfer',
   OTHER: 'Other',
   COD: 'Cash on delivery',
+  CHEQUE: 'Cheque',
 }
 
 /**

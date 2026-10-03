@@ -19,6 +19,7 @@ import { Field } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { callAction } from '@/lib/use-action'
 import { formatMoney } from '@/lib/money'
+import { METHOD_LABELS } from '@/features/payments/destinations'
 import {
   cancelPaymentAction,
   markPaidAction,
@@ -50,6 +51,8 @@ export function PaymentConsole({
   suppliers,
   categories,
   branches,
+  accounts = [],
+  selfApproves = false,
   defaultBranchId,
   currency,
   locale,
@@ -60,6 +63,10 @@ export function PaymentConsole({
   suppliers: Array<{ id: string; name: string }>
   categories: Array<{ id: string; name: string }>
   branches: Array<{ id: string; name: string }>
+  /** The accounts from Payment details, offered as "Pay from". */
+  accounts?: Array<{ id: string; name: string }>
+  /** The owner: their own payment is approved the moment it is submitted. */
+  selfApproves?: boolean
   defaultBranchId: string | null
   currency: string
   locale: string
@@ -127,7 +134,8 @@ export function PaymentConsole({
                   </Badge>
                 </p>
                 <p className="mt-0.5 max-w-[46ch] truncate text-xs text-muted-foreground">
-                  {row.description} · {row.method}
+                  {row.description} · {METHOD_LABELS[row.method] ?? row.method}
+                  {row.payFromName ? ` from ${row.payFromName}` : ''}
                   {row.reference ? ` · ${row.reference}` : ''} · {row.branchName}
                 </p>
                 {row.decisionNote ? (
@@ -142,7 +150,7 @@ export function PaymentConsole({
                     loading={busyId === row.id}
                     onClick={() => run(row.id, () => callAction(() => submitPaymentAction({ paymentId: row.id })))}
                   >
-                    Submit
+                    {selfApproves ? 'Approve' : 'Submit'}
                   </Button>
                 ) : null}
                 {canPay && row.status === 'APPROVED' ? (
@@ -176,6 +184,8 @@ export function PaymentConsole({
         suppliers={suppliers}
         categories={categories}
         branches={branches}
+        accounts={accounts}
+        selfApproves={selfApproves}
         defaultBranchId={defaultBranchId}
         currency={currency}
       />
@@ -189,6 +199,8 @@ function NewPaymentDialog({
   suppliers,
   categories,
   branches,
+  accounts,
+  selfApproves,
   defaultBranchId,
   currency,
 }: {
@@ -197,6 +209,8 @@ function NewPaymentDialog({
   suppliers: Array<{ id: string; name: string }>
   categories: Array<{ id: string; name: string }>
   branches: Array<{ id: string; name: string }>
+  accounts: Array<{ id: string; name: string }>
+  selfApproves: boolean
   defaultBranchId: string | null
   currency: string
 }) {
@@ -206,13 +220,19 @@ function NewPaymentDialog({
   const [categoryId, setCategoryId] = React.useState('')
   const [branchId, setBranchId] = React.useState(defaultBranchId ?? branches[0]?.id ?? '')
   const [amount, setAmount] = React.useState('')
-  const [method, setMethod] = React.useState<'CASH' | 'CARD' | 'BANK_TRANSFER' | 'QR' | 'ONLINE' | 'WALLET'>('BANK_TRANSFER')
+  const [method, setMethod] = React.useState<'CASH' | 'CARD' | 'BANK_TRANSFER' | 'CHEQUE' | 'QR' | 'ONLINE' | 'WALLET'>('BANK_TRANSFER')
+  const [payFromAccountId, setPayFromAccountId] = React.useState('')
   const [reference, setReference] = React.useState('')
   const [description, setDescription] = React.useState('')
   const [paymentDate, setPaymentDate] = React.useState(() => new Date().toISOString().slice(0, 10))
   const [pending, setPending] = React.useState(false)
 
-  const submitDraft = async () => {
+  /*
+   * `send` saves the draft and submits it in one go — the usual case, and the
+   * whole flow for an owner, whose own submission is approved on the spot.
+   * Saving as a draft stays for a payment somebody is not ready to send.
+   */
+  const submitDraft = async (send = false) => {
     setPending(true)
     const result = await callAction(() =>
       saveDraftAction({
@@ -222,17 +242,34 @@ function NewPaymentDialog({
         branchId,
         amount,
         method,
+        payFromAccountId,
         reference,
         description,
         paymentDate,
       }),
     )
-    setPending(false)
     if (!result.ok) {
+      setPending(false)
       toast.error(result.error)
       return
     }
-    toast.success(`Draft ${result.data.number} saved`)
+    if (send) {
+      const sent = await callAction(() => submitPaymentAction({ paymentId: result.data.id }))
+      setPending(false)
+      if (!sent.ok) {
+        // The draft exists; say so, so nobody raises it a second time.
+        toast.error(`${result.data.number} was saved as a draft, but could not be submitted: ${sent.error}`)
+      } else {
+        toast.success(
+          sent.data.status === 'APPROVED'
+            ? `${result.data.number} approved — ready to pay`
+            : `${result.data.number} sent for approval`,
+        )
+      }
+    } else {
+      setPending(false)
+      toast.success(`Draft ${result.data.number} saved`)
+    }
     onOpenChange(false)
     setAmount('')
     setReference('')
@@ -249,7 +286,9 @@ function NewPaymentDialog({
         <DialogHeader>
           <DialogTitle>New outgoing payment</DialogTitle>
           <DialogDescription>
-            Saved as a draft first — nothing leaves the books until it is submitted, approved and paid.
+            {selfApproves
+              ? 'Nothing leaves the books until it is paid. As the owner, your payment is approved as soon as you submit it.'
+              : 'Nothing leaves the books until it is submitted, approved and paid.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -292,6 +331,7 @@ function NewPaymentDialog({
           <Field label="Paid by" htmlFor="op-method">
             <select id="op-method" className={selectClass} value={method} onChange={(e) => setMethod(e.target.value as never)}>
               <option value="BANK_TRANSFER">Bank transfer</option>
+              <option value="CHEQUE">Cheque</option>
               <option value="CASH">Cash (needs an open drawer)</option>
               <option value="CARD">Card</option>
               <option value="QR">QR</option>
@@ -299,10 +339,26 @@ function NewPaymentDialog({
               <option value="WALLET">Wallet</option>
             </select>
           </Field>
+          <Field
+            label="Pay from"
+            htmlFor="op-payfrom"
+            hint={accounts.length === 0 ? 'No accounts yet — add them under Payment details.' : undefined}
+          >
+            <select id="op-payfrom" className={selectClass} value={payFromAccountId} onChange={(e) => setPayFromAccountId(e.target.value)}>
+              <option value="">Not specified</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
+          </Field>
           <Field label="Payment date" htmlFor="op-date">
             <Input id="op-date" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
           </Field>
-          <Field label="Reference" htmlFor="op-ref" hint="Bill number, transfer id…">
+          <Field
+            label={method === 'CHEQUE' ? 'Cheque number' : 'Reference'}
+            htmlFor="op-ref"
+            hint={method === 'CHEQUE' ? 'The number printed on the cheque' : 'Bill number, transfer id…'}
+          >
             <Input id="op-ref" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Optional" />
           </Field>
         </div>
@@ -312,7 +368,10 @@ function NewPaymentDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Not now</Button>
-          <Button loading={pending} onClick={submitDraft}>Save draft</Button>
+          <Button variant="outline" disabled={pending} onClick={() => submitDraft(false)}>Save draft</Button>
+          <Button loading={pending} onClick={() => submitDraft(true)}>
+            {selfApproves ? 'Save & approve' : 'Submit for approval'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

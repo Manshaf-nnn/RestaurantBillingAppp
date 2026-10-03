@@ -19,6 +19,7 @@ import { Field } from '@/components/ui/label'
 import { SectionCard, StatCard } from '@/features/dashboard/components/page-header'
 import { callAction } from '@/lib/use-action'
 import { formatMoney } from '@/lib/money'
+import { METHOD_LABELS } from '@/features/payments/destinations'
 import { decidePaymentAction, reversePaymentAction, sendBackPaymentAction } from '../actions'
 import type { ApprovalTotals, OutgoingRow } from '../queries'
 
@@ -123,7 +124,8 @@ function RowSummary({ row, currency, locale }: { row: OutgoingRow; currency: str
         <Badge variant="secondary">{row.kind === 'SUPPLIER' ? 'Supplier' : 'Expense'}</Badge>
       </p>
       <p className="mt-0.5 max-w-[52ch] text-xs text-muted-foreground">
-        {row.description} · {row.method}
+        {row.description} · {METHOD_LABELS[row.method] ?? row.method}
+        {row.payFromName ? ` from ${row.payFromName}` : ''}
         {row.reference ? ` · ${row.reference}` : ''} · {row.branchName} · raised by {row.createdByName}
         {row.purchaseNumber ? ` · settles ${row.purchaseNumber}` : ''}
       </p>

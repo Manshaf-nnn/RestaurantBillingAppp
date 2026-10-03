@@ -12,6 +12,8 @@ export interface OutgoingRow {
   status: OutgoingPaymentStatus
   amount: number
   method: string
+  /** The restaurant's own account the money is paid from, when one was named. */
+  payFromName: string | null
   reference: string | null
   description: string
   paymentDate: string
@@ -34,6 +36,7 @@ const ROW_INCLUDE = {
   purchase: { select: { number: true } },
   expenseCategory: { select: { name: true } },
   reversalOf: { select: { number: true } },
+  payFromAccount: { select: { name: true } },
 } as const
 
 function toRow(payment: {
@@ -51,6 +54,7 @@ function toRow(payment: {
   purchase: { number: string } | null
   expenseCategory: { name: string } | null
   reversalOf: { number: string } | null
+  payFromAccount: { name: string } | null
   createdByName: string
   submittedAt: Date | null
   decidedAt: Date | null
@@ -65,6 +69,7 @@ function toRow(payment: {
     status: payment.status,
     amount: payment.amount,
     method: payment.method,
+    payFromName: payment.payFromAccount?.name ?? null,
     reference: payment.reference,
     description: payment.description,
     paymentDate: payment.paymentDate.toISOString(),

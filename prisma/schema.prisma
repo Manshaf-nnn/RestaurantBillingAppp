@@ -237,6 +237,8 @@ enum PaymentMethod {
   /// yet handed in. Handing it in is then an ordinary transfer from that
   /// account to Cash, which is what the accounts feature already does.
   COD
+  /// A cheque written or received. The reference carries the cheque number.
+  CHEQUE
 }
 
 enum CashDrawerStatus {
@@ -2540,6 +2542,10 @@ model OutgoingPayment {
   /// When the money moves. assertPeriodOpen refuses a date inside a sealed
   /// accounting period.
   paymentDate DateTime
+  /// Which of the restaurant's own accounts (Payment details) the money is
+  /// paid FROM. Recorded on the payment; it does not post to that account.
+  payFromAccountId String?
+  payFromAccount   PaymentAccount? @relation("OutgoingPayFrom", fields: [payFromAccountId], references: [id], onDelete: SetNull)
 
   createdById   String?
   createdBy     User?     @relation("OutgoingPaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -5920,6 +5926,8 @@ model PaymentAccount {
   /// Entries on the OTHER side of a transfer, so a card can say where money went.
   facing  PaymentAccountEntry[] @relation("CounterpartyAccount")
   staff   PaymentAccountStaff[]
+  /// Outgoing payments that name this account as where the money came from.
+  outgoingPayments OutgoingPayment[] @relation("OutgoingPayFrom")
 
   @@unique([restaurantId, code])
   @@index([restaurantId, isActive])

@@ -183,7 +183,10 @@ export async function decideRequest(params: {
   const policy = await getApprovalPolicy(params.restaurantId)
   const needsSecondPerson =
     policy.pettyCashApprovalAbove > 0 && request.amount >= policy.pettyCashApprovalAbove
-  if (needsSecondPerson && request.requestedById === params.userId) {
+  // The owner is the exception: there is nobody above them to be the second
+  // person, so the rule would only ever leave their own request unsignable.
+  const isOwner = ['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(params.actor.role)
+  if (needsSecondPerson && request.requestedById === params.userId && !isOwner) {
     throw new AppError(
       'Somebody else has to approve an amount this size',
       403,

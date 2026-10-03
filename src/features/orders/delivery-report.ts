@@ -79,7 +79,7 @@ const mean = (values: Array<number | null>): number | null => {
 }
 
 const METHOD_LABEL: Record<string, string> = {
-  CASH: 'Cash', CARD: 'Card', QR: 'QR', ONLINE: 'Online', WALLET: 'Wallet', BANK_TRANSFER: 'Bank transfer', OTHER: 'Other', COD: 'Cash at the door',
+  CASH: 'Cash', CARD: 'Card', QR: 'QR', ONLINE: 'Online', WALLET: 'Wallet', BANK_TRANSFER: 'Bank transfer', OTHER: 'Other', COD: 'Cash at the door', CHEQUE: 'Cheque',
 }
 
 export async function getDeliveryReport(params: {

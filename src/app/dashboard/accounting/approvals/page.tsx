@@ -16,9 +16,9 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Payment approvals' }
 
 /**
- * The owner's approval center (accountsds.md §7). The submitter can never be
- * the approver — the server refuses it even for accounts holding this page's
- * permission.
+ * The owner's approval center (accountsds.md §7). A submitter cannot be their
+ * own approver — the server refuses it — unless they are the owner, whose own
+ * payment is approved as it is submitted.
  */
 export default async function PaymentApprovalsPage({
   searchParams,

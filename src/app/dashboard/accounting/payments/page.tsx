@@ -29,7 +29,7 @@ export default async function PaymentsOutPage({
 
   await ensureDefaultCategories(user.restaurantId)
 
-  const [rows, suppliers, categories, branches] = await Promise.all([
+  const [rows, suppliers, categories, branches, accounts] = await Promise.all([
     listOutgoingPayments({ restaurantId: user.restaurantId, branchIds: selection.branchIds }),
     prisma.supplier.findMany({
       where: { restaurantId: user.restaurantId },
@@ -47,19 +47,41 @@ export default async function PaymentsOutPage({
       select: { id: true, name: true },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
     }),
+    /*
+     * The accounts from Payment details, for "Pay from". Names and bank
+     * details only — never a balance: naming the account a bill is paid from
+     * is the accountant's job, and seeing what is in it is the owner's to
+     * grant, account by account.
+     */
+    prisma.paymentAccount.findMany({
+      where: { restaurantId: user.restaurantId, isActive: true },
+      select: { id: true, name: true, bankName: true, accountNumber: true },
+      orderBy: { name: 'asc' },
+    }),
   ])
 
   return (
     <>
       <PageHeader
         title="Payments out"
-        description="Draft it, submit it for the owner's sign-off, then pay it. A paid payment is immutable — corrections reverse."
+        description="Draft it, submit it for the owner's sign-off, then pay it. A payment the owner raises is approved as it is submitted. A paid payment is immutable — corrections reverse."
       />
       <PaymentConsole
         rows={rows}
         suppliers={suppliers}
         categories={categories}
         branches={branches}
+        accounts={accounts.map((account) => ({
+          id: account.id,
+          name: [account.name, account.bankName, account.accountNumber ? `A/C ${account.accountNumber}` : null]
+            .filter(Boolean)
+            .join(' · '),
+        }))}
+        // The owner and administrators sign their own payments on submission.
+        selfApproves={
+          ['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
+          can(user, PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE)
+        }
         defaultBranchId={selection.branchId ?? user.branchId ?? null}
         currency={restaurant.currency}
         locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}

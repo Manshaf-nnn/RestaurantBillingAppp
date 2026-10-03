@@ -40,8 +40,20 @@ import {
  * rule; the actions enforce WHO may even ask.
  */
 
+/**
+ * Who may sign a payment they raised themselves: the owner and administrators.
+ * The same three roles that have every payment account without being assigned
+ * (`FULL_ACCOUNT_ACCESS_ROLES`) and may approve their own stock count.
+ */
+const SELF_APPROVER_ROLES = new Set(['OWNER', 'ADMIN', 'SUPER_ADMIN'])
+
 function actorFor(user: TenantUser): OutgoingActor {
-  return { id: user.id, name: user.name ?? user.email, canApprove: can(user, PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE) }
+  return {
+    id: user.id,
+    name: user.name ?? user.email,
+    canApprove: can(user, PERMISSIONS.ACCOUNTING_PAYMENT_APPROVE),
+    canSelfApprove: SELF_APPROVER_ROLES.has(user.role),
+  }
 }
 
 async function paymentBranch(restaurantId: string, paymentId: string) {
@@ -74,6 +86,7 @@ export async function saveDraftAction(input: unknown): Promise<ActionResult<{ id
       expenseCategoryId: data.expenseCategoryId || null,
       amount: Math.round(data.amount * factor),
       method: data.method,
+      payFromAccountId: data.payFromAccountId || null,
       reference: data.reference || null,
       description: data.description,
       paymentDate: new Date(`${data.paymentDate}T12:00:00.000Z`),
@@ -88,7 +101,10 @@ export async function saveDraftAction(input: unknown): Promise<ActionResult<{ id
       action: AUDIT_ACTIONS.OUTGOING_CREATED,
       entity: 'OutgoingPayment',
       entityId: payment.id,
-      after: { number: payment.number, kind: payment.kind, amount: payment.amount, method: payment.method },
+      after: {
+        number: payment.number, kind: payment.kind, amount: payment.amount, method: payment.method,
+        payFromAccountId: payment.payFromAccountId,
+      },
     })
     refresh()
     return { id: payment.id, number: payment.number }
@@ -119,6 +135,10 @@ export async function updateDraftAction(input: unknown): Promise<ActionResult<{ 
         expenseCategoryId: data.patch.expenseCategoryId || null,
         amount: Math.round(data.patch.amount * factor),
         method: data.patch.method,
+        // Left out of the patch means not asked; blank means "no account".
+        ...(data.patch.payFromAccountId !== undefined
+          ? { payFromAccountId: data.patch.payFromAccountId || null }
+          : {}),
         reference: data.patch.reference || null,
         description: data.patch.description,
         paymentDate: new Date(`${data.patch.paymentDate}T12:00:00.000Z`),
@@ -142,7 +162,7 @@ export async function updateDraftAction(input: unknown): Promise<ActionResult<{ 
   }, 'Draft updated.')
 }
 
-export async function submitPaymentAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+export async function submitPaymentAction(input: unknown): Promise<ActionResult<{ id: string; status: string }>> {
   return runAction(paymentIdSchema, input, async (data) => {
     const user = await requirePermission(PERMISSIONS.ACCOUNTING_PAYMENT_CREATE)
     await assertBranchAccess(user, (await paymentBranch(user.restaurantId, data.paymentId)).branchId)
@@ -163,9 +183,23 @@ export async function submitPaymentAction(input: unknown): Promise<ActionResult<
       entityId: payment.id,
       after: { number: payment.number, amount: payment.amount },
     })
+    // The owner's own submission is approved in the same step; that is a
+    // decision, and it goes on the record as one.
+    if (payment.status === 'APPROVED') {
+      await audit({
+        restaurantId: user.restaurantId,
+        branchId: payment.branchId,
+        userId: user.id,
+        actorName: user.name,
+        action: AUDIT_ACTIONS.OUTGOING_APPROVED,
+        entity: 'OutgoingPayment',
+        entityId: payment.id,
+        after: { number: payment.number, amount: payment.amount, note: payment.decisionNote, selfApproved: true },
+      })
+    }
     refresh()
-    return { id: payment.id }
-  }, 'Sent for approval.')
+    return { id: payment.id, status: payment.status }
+  })
 }
 
 export async function cancelPaymentAction(input: unknown): Promise<ActionResult<{ id: string }>> {

@@ -19,6 +19,16 @@ import { prisma } from '@/server/db/prisma'
  * has recorded three times (see PettyCashRequest). What IS borrowed is the
  * one rule worth borrowing: the approver is never the submitter.
  *
+ * ── Except the owner ────────────────────────────────────────────────────────
+ *
+ * The two-person rule protects the owner's money from everybody else. Applied
+ * to the owner it protects nothing: there is nobody above them to ask, so a
+ * payment they raised sat waiting for an approval only they could not give.
+ * An actor with `canSelfApprove` (the owner and administrators) may rule on
+ * any payment including their own, and a payment they SUBMIT is approved in
+ * the same step — `decidedById` names them, so the record still says who
+ * signed.
+ *
  * Every transition is a compare-and-swap (`updateMany` filtered on the
  * status being left) so two owners approving at once, or a double-tapped
  * "mark paid", produce exactly one winner and one clear refusal — the same
@@ -38,7 +48,12 @@ export interface OutgoingActor {
   name: string
   /** Derived in the action via can() — the service never reads permissions. */
   canApprove: boolean
+  /** The owner and administrators: may sign a payment they raised themselves. */
+  canSelfApprove?: boolean
 }
+
+/** The note an owner's own submission is approved with. */
+export const SELF_APPROVED_NOTE = 'Approved on submission — raised by the owner'
 
 export interface DraftInput {
   restaurantId: string
@@ -49,6 +64,8 @@ export interface DraftInput {
   expenseCategoryId?: string | null
   amount: number
   method: PaymentMethod
+  /** The restaurant's own account the money is paid from, when named. */
+  payFromAccountId?: string | null
   reference?: string | null
   description: string
   paymentDate: Date
@@ -86,7 +103,22 @@ async function validateReferences(input: {
   supplierId?: string | null
   purchaseId?: string | null
   expenseCategoryId?: string | null
+  payFromAccountId?: string | null
 }): Promise<void> {
+  /*
+   * "Pay from" names one of this restaurant's accounts (Payment details). A
+   * retired account still resolves on a payment that already names it, but a
+   * NEW choice has to be one that is in use — and always this restaurant's,
+   * so a guessed id from another tenant is simply not found.
+   */
+  if (input.payFromAccountId) {
+    const account = await prisma.paymentAccount.findFirst({
+      where: { id: input.payFromAccountId, restaurantId: input.restaurantId, isActive: true },
+      select: { id: true },
+    })
+    if (!account) throw new NotFoundError('Account to pay from')
+  }
+
   if (input.kind === 'SUPPLIER') {
     if (!input.supplierId) {
       throw new AppError('Choose the supplier being paid', 400, 'OUTGOING_NO_SUPPLIER')
@@ -148,6 +180,7 @@ export async function createDraft(input: DraftInput): Promise<OutgoingPayment> {
         expenseCategoryId: input.kind === 'EXPENSE' ? input.expenseCategoryId : null,
         amount: input.amount,
         method: input.method,
+        payFromAccountId: input.payFromAccountId || null,
         reference: input.reference?.trim() || null,
         description: input.description.trim(),
         paymentDate: input.paymentDate,
@@ -192,6 +225,12 @@ export async function updateDraft(params: {
     supplierId: params.patch.supplierId ?? payment.supplierId,
     purchaseId: params.patch.purchaseId ?? payment.purchaseId,
     expenseCategoryId: params.patch.expenseCategoryId ?? payment.expenseCategoryId,
+    // Only a CHANGED account is vetted — one already on the draft may have
+    // been retired since, and editing the amount must not be refused for it.
+    payFromAccountId:
+      params.patch.payFromAccountId && params.patch.payFromAccountId !== payment.payFromAccountId
+        ? params.patch.payFromAccountId
+        : null,
   })
 
   /*
@@ -209,6 +248,9 @@ export async function updateDraft(params: {
         kind === 'EXPENSE' ? (params.patch.expenseCategoryId ?? payment.expenseCategoryId) : null,
       ...(params.patch.amount !== undefined ? { amount: params.patch.amount } : {}),
       ...(params.patch.method !== undefined ? { method: params.patch.method } : {}),
+      ...(params.patch.payFromAccountId !== undefined
+        ? { payFromAccountId: params.patch.payFromAccountId || null }
+        : {}),
       ...(params.patch.reference !== undefined
         ? { reference: params.patch.reference?.trim() || null }
         : {}),
@@ -239,9 +281,26 @@ export async function submit(params: {
   // Nothing dates itself into a sealed accounting period (§12).
   await assertPeriodOpen(prisma, params.restaurantId, payment.paymentDate)
 
+  /*
+   * The owner's own submission is approved as it is submitted: nobody else
+   * could sign it, and a queue with one possible approver who is forbidden
+   * from approving is a payment that never leaves. Stamped as both the
+   * submission and the decision, so the record says who did each.
+   */
+  const now = new Date()
+  const selfApproved = Boolean(params.actor.canSelfApprove && params.actor.canApprove)
   const touched = await prisma.outgoingPayment.updateMany({
     where: { id: payment.id, restaurantId: params.restaurantId, status: 'DRAFT' },
-    data: { status: 'SUBMITTED', submittedById: params.actor.id, submittedAt: new Date() },
+    data: selfApproved
+      ? {
+          status: 'APPROVED',
+          submittedById: params.actor.id,
+          submittedAt: now,
+          decidedById: params.actor.id,
+          decidedAt: now,
+          decisionNote: SELF_APPROVED_NOTE,
+        }
+      : { status: 'SUBMITTED', submittedById: params.actor.id, submittedAt: now },
   })
   if (touched.count === 0) {
     throw new AppError('Only a draft can be submitted', 409, 'OUTGOING_NOT_DRAFT')
@@ -288,7 +347,10 @@ export async function decide(params: {
    * The two-person control, and the whole reason this workflow exists: the
    * person asking for money to leave is never the person who says yes.
    */
-  if (payment.submittedById === params.actor.id || payment.createdById === params.actor.id) {
+  if (
+    !params.actor.canSelfApprove &&
+    (payment.submittedById === params.actor.id || payment.createdById === params.actor.id)
+  ) {
     throw new AppError('You cannot approve a payment you raised', 403, 'OUTGOING_SELF_APPROVAL')
   }
   if (!params.approve && !params.note?.trim()) {
@@ -318,7 +380,10 @@ export async function sendBack(params: {
   actor: OutgoingActor
 }): Promise<OutgoingPayment> {
   const payment = await load(params.restaurantId, params.paymentId)
-  if (payment.submittedById === params.actor.id || payment.createdById === params.actor.id) {
+  if (
+    !params.actor.canSelfApprove &&
+    (payment.submittedById === params.actor.id || payment.createdById === params.actor.id)
+  ) {
     throw new AppError('You cannot rule on a payment you raised', 403, 'OUTGOING_SELF_APPROVAL')
   }
   if (!params.note.trim()) {
@@ -480,6 +545,7 @@ export async function reverse(params: {
         expenseCategoryId: payment.expenseCategoryId,
         amount: payment.amount,
         method: payment.method,
+        payFromAccountId: payment.payFromAccountId,
         reference: payment.reference,
         description: `Reversal of ${payment.number} — ${params.reason.trim()}`,
         paymentDate: now,

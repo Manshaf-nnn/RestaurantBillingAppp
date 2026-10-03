@@ -51,6 +51,7 @@ const METHOD_LABEL: Record<string, string> = {
   BANK_TRANSFER: 'Bank transfer',
   OTHER: 'Other',
   COD: 'Cash on delivery',
+  CHEQUE: 'Cheque',
 }
 
 export function PaymentReportView({

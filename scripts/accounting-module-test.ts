@@ -148,6 +148,60 @@ async function main() {
     check('rejected with the reason kept', rejected.status === 'REJECTED' && rejected.decisionNote === 'Wrong month')
   }
 
+
+  console.log('\n── 2b. The owner signs their own; pay-from and cheque ──')
+  {
+    // What the action builds for an OWNER: may approve, and may sign their own.
+    const boss: OutgoingActor = { ...owner, canSelfApprove: true }
+
+    const own = await draft({ actor: boss })
+    const sent = await submit({ restaurantId: restaurant.id, paymentId: own.id, actor: boss })
+    check('a payment the owner raises is approved as it is submitted',
+      sent.status === 'APPROVED' && sent.submittedById === boss.id && sent.decidedById === boss.id && sent.decidedAt !== null,
+      sent.status)
+    const paidOwn = await markPaid({ restaurantId: restaurant.id, paymentId: own.id, actor: boss })
+    check('and can be paid straight away', paidOwn.status === 'PAID')
+
+    // One already waiting — raised by the owner before, or under the old rule.
+    const waiting = await draft({ actor: owner })
+    await submit({ restaurantId: restaurant.id, paymentId: waiting.id, actor: owner })
+    const signed = await decide({ restaurantId: restaurant.id, paymentId: waiting.id, approve: true, actor: boss })
+    check('the owner can approve a waiting payment they raised themselves',
+      signed.status === 'APPROVED' && signed.decidedById === boss.id)
+
+    const staffOwn = await draft()
+    const staffSent = await submit({ restaurantId: restaurant.id, paymentId: staffOwn.id, actor: accountant })
+    check('anybody else still waits for approval', staffSent.status === 'SUBMITTED')
+
+    const account = await prisma.paymentAccount.create({
+      data: { restaurantId: restaurant.id, code: `boc-${stamp}`, name: 'BOC Main' },
+    })
+    const retired = await prisma.paymentAccount.create({
+      data: { restaurantId: restaurant.id, code: `old-${stamp}`, name: 'Old account', isActive: false },
+    })
+    const theirs = await prisma.paymentAccount.create({
+      data: { restaurantId: other.id, code: `theirs-${stamp}`, name: 'Theirs' },
+    })
+
+    const cheque = await draft({ method: 'CHEQUE', reference: '000123', payFromAccountId: account.id })
+    check('a cheque payment names the account it is paid from',
+      cheque.method === 'CHEQUE' && cheque.payFromAccountId === account.id && cheque.reference === '000123')
+    await refuses(
+      'another restaurant’s account is refused',
+      () => draft({ payFromAccountId: theirs.id }),
+      /not found/i,
+    )
+    await refuses(
+      'so is a retired one',
+      () => draft({ payFromAccountId: retired.id }),
+      /not found/i,
+    )
+    const moved = await updateDraft({
+      restaurantId: restaurant.id, paymentId: cheque.id, patch: { payFromAccountId: null }, actor: accountant,
+    })
+    check('the account can be cleared again on a draft', moved.payFromAccountId === null)
+    await prisma.paymentAccount.deleteMany({ where: { id: theirs.id } })
+  }
   console.log('\n── 3. Races: exactly one winner ──')
   {
     const payment = await draft()
