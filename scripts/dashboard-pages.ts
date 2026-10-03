@@ -85,6 +85,7 @@ export const PAGES = [
   '/dashboard/accounting/ledger',
   '/dashboard/accounting/payables',
   '/dashboard/accounting/payments',
+  '/dashboard/accounting/payments/report',
   '/dashboard/accounting/reconciliation',
   '/dashboard/accounting/reports',
   '/dashboard/accounting/reports/variance',

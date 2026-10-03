@@ -15,6 +15,7 @@
  * Run: npx tsx --tsconfig tsconfig.test.json scripts/accounting-module-test.ts
  */
 import { prisma } from '../src/server/db/prisma'
+import { getMoneyOutReport } from '../src/features/outgoing-payments/report'
 import { openDrawer } from '../src/features/cashdrawer/service'
 import {
   cancelOwn,
@@ -201,6 +202,41 @@ async function main() {
     })
     check('the account can be cleared again on a draft', moved.payFromAccountId === null)
     await prisma.paymentAccount.deleteMany({ where: { id: theirs.id } })
+
+    // ── the money-out report reads the same book back ──
+    const fromBoc = await draft({ method: 'CHEQUE', reference: '000124', payFromAccountId: account.id, amount: 40_000, actor: boss })
+    await submit({ restaurantId: restaurant.id, paymentId: fromBoc.id, actor: boss })
+    await markPaid({ restaurantId: restaurant.id, paymentId: fromBoc.id, actor: boss })
+    const undone = await draft({ amount: 7_000, actor: boss })
+    await submit({ restaurantId: restaurant.id, paymentId: undone.id, actor: boss })
+    await markPaid({ restaurantId: restaurant.id, paymentId: undone.id, actor: boss })
+    await reverse({ restaurantId: restaurant.id, paymentId: undone.id, reason: 'Paid twice', actor: boss })
+
+    const window = { from: new Date(Date.now() - 86_400_000), to: new Date(Date.now() + 86_400_000) }
+    const everything = await prisma.outgoingPayment.findMany({ where: { restaurantId: restaurant.id } })
+    const expectPaid = everything
+      .filter((row) => row.status === 'PAID' && row.reversalOfId === null)
+      .reduce((sum, row) => sum + row.amount, 0)
+    const report = await getMoneyOutReport({ restaurantId: restaurant.id, ...window })
+    check('the report lists every payment in the period', report.rows.length === everything.length,
+      `${report.rows.length} vs ${everything.length}`)
+    check('paid out is what left and stayed gone — a reversed payment is not in it',
+      report.totals.paidOut === expectPaid && report.totals.reversed === 7_000 && report.totals.reversedCount === 1,
+      `${report.totals.paidOut} vs ${expectPaid}, reversed ${report.totals.reversed}`)
+    check('the reversal is listed as money coming back',
+      report.rows.some((row) => row.isReversal && row.amount === -7_000))
+    check('every breakdown adds up to paid out',
+      [report.byPaidTo, report.byMethod, report.byAccount, report.byBranch].every(
+        (rows) => rows.reduce((sum, row) => sum + row.amount, 0) === expectPaid))
+    check('it says which account a payment came from, and who approved and paid it',
+      report.byAccount.some((row) => row.label === 'BOC Main' && row.amount === 40_000) &&
+        report.rows.some((row) => row.number === fromBoc.number && row.payFromName === 'BOC Main' &&
+          row.approvedByName === 'alex' && row.paidByName === 'alex' && row.reference === '000124'))
+    const onlyCheques = await getMoneyOutReport({ restaurantId: restaurant.id, ...window, method: 'CHEQUE', status: 'PAID' })
+    check('filters narrow it: paid cheques only',
+      onlyCheques.rows.length === 1 && onlyCheques.rows[0]!.number === fromBoc.number, `${onlyCheques.rows.length}`)
+    const elsewhere = await getMoneyOutReport({ restaurantId: other.id, ...window })
+    check('another restaurant sees none of it', elsewhere.rows.length === 0)
   }
   console.log('\n── 3. Races: exactly one winner ──')
   {

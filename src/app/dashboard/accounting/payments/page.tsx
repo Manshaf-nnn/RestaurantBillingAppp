@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 import { PageHeader } from '@/features/dashboard/components/page-header'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
@@ -65,6 +66,14 @@ export default async function PaymentsOutPage({
       <PageHeader
         title="Payments out"
         description="Draft it, submit it for the owner's sign-off, then pay it. A payment the owner raises is approved as it is submitted. A paid payment is immutable — corrections reverse."
+        actions={
+          <Link
+            href="/dashboard/accounting/payments/report"
+            className="inline-flex h-9 items-center rounded-md border bg-background px-3 text-sm font-medium hover:bg-muted"
+          >
+            Money out report
+          </Link>
+        }
       />
       <PaymentConsole
         rows={rows}
