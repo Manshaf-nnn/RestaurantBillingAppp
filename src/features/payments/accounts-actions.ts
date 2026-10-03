@@ -12,6 +12,7 @@ import {
   canAssignAccountStaff,
   createAccount,
   deposit,
+  removeAccount,
   setAccountActive,
   setAccountStaff,
   transfer,
@@ -118,6 +119,33 @@ export async function setAccountActiveAction(
 
     touched()
     return { id: data.accountId }
+  })
+}
+
+/** Delete an unused account, or retire one that has history. */
+export async function removeAccountAction(
+  input: unknown,
+): Promise<ActionResult<{ id: string; outcome: 'deleted' | 'retired' }>> {
+  return runAction(setAccountActiveSchema.pick({ accountId: true }), input, async (data) => {
+    const user = await requirePermission(PERMISSIONS.ACCOUNT_MANAGE)
+    await assertCanUseAccount({ user, accountId: data.accountId, need: 'view' })
+    const removed = await removeAccount({
+      restaurantId: user.restaurantId,
+      accountId: data.accountId,
+    })
+
+    await audit({
+      restaurantId: user.restaurantId,
+      userId: user.id,
+      actorName: user.name,
+      action: AUDIT_ACTIONS.ACCOUNT_UPDATED,
+      entity: 'PaymentAccount',
+      entityId: data.accountId,
+      after: { removed: removed.outcome, name: removed.name },
+    })
+
+    touched()
+    return { id: data.accountId, outcome: removed.outcome }
   })
 }
 

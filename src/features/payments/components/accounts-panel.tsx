@@ -3,12 +3,13 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeftRight, Landmark, Plus, Users } from 'lucide-react'
+import { ArrowLeftRight, Landmark, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/feedback'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Input, Textarea } from '@/components/ui/input'
 import { Field } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/primitives'
@@ -20,6 +21,8 @@ import { cn } from '@/lib/utils'
 import {
   createAccountAction,
   depositAction,
+  removeAccountAction,
+  setAccountActiveAction,
   setAccountStaffAction,
   transferAction,
   updateAccountAction,
@@ -103,8 +106,11 @@ export function AccountsPanel({
     | { kind: 'deposit'; account: AccountCard }
     | { kind: 'transfer' }
     | { kind: 'staff'; account: AccountCard }
+    | { kind: 'remove'; account: AccountCard }
     | null
   >(null)
+  /** Removed accounts stay out of sight until somebody asks for them. */
+  const [showRemoved, setShowRemoved] = React.useState(false)
 
   const done = (message: string) => {
     toast.success(message)
@@ -113,6 +119,30 @@ export function AccountsPanel({
   }
 
   const live = accounts.filter((account) => account.isActive)
+  const removed = accounts.filter((account) => !account.isActive)
+  const shown = showRemoved ? accounts : live
+
+  const remove = async (account: AccountCard) => {
+    setBusy(true)
+    const result = await callAction(() => removeAccountAction({ accountId: account.accountId }))
+    setBusy(false)
+    if (!result.ok) return toast.error(result.error)
+    done(
+      result.data.outcome === 'deleted'
+        ? `${account.name} deleted`
+        : `${account.name} removed — its past transactions are kept for your reports`,
+    )
+  }
+
+  const restore = async (account: AccountCard) => {
+    setBusy(true)
+    const result = await callAction(() =>
+      setAccountActiveAction({ accountId: account.accountId, isActive: true }),
+    )
+    setBusy(false)
+    if (!result.ok) return toast.error(result.error)
+    done(`${account.name} restored`)
+  }
   // A transfer needs one account to take from (yours to transact on) and another to put into.
   const canTransferAny = live.some((account) => account.mayTransact) && live.length >= 2
 
@@ -166,7 +196,7 @@ export function AccountsPanel({
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {accounts.map((account) => (
+          {shown.map((account) => (
             <div
               key={account.accountId}
               className={cn(
@@ -177,7 +207,7 @@ export function AccountsPanel({
               <p className="truncate text-sm font-semibold">{account.name}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {account.detail || account.bankName || '—'}
-                {account.isActive ? '' : ' · retired'}
+                {account.isActive ? '' : ' · removed'}
               </p>
 
               {/*
@@ -212,7 +242,7 @@ export function AccountsPanel({
                 <Button size="sm" variant="ghost" asChild>
                   <Link href={`${basePath}/${account.code}`}>Transactions</Link>
                 </Button>
-                {canManage ? (
+                {canManage && account.isActive ? (
                   <Button size="sm" variant="ghost" onClick={() => setOpen({ kind: 'edit', account })}>
                     Edit
                   </Button>
@@ -222,11 +252,53 @@ export function AccountsPanel({
                     <Users /> Who can transact
                   </Button>
                 ) : null}
+                {canManage && account.isActive ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setOpen({ kind: 'remove', account })}
+                  >
+                    <Trash2 /> Delete
+                  </Button>
+                ) : null}
+                {canManage && !account.isActive ? (
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => restore(account)}>
+                    Restore
+                  </Button>
+                ) : null}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {/*
+        An account money has passed through cannot be erased — its history is
+        stamped with it — so removing one takes it off this screen instead.
+        This is the way back to it.
+      */}
+      {removed.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => setShowRemoved((value) => !value)}
+          className="mt-3 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {showRemoved ? 'Hide removed accounts' : `Show removed accounts (${removed.length})`}
+        </button>
+      ) : null}
+
+      <ConfirmDialog
+        open={open?.kind === 'remove'}
+        onOpenChange={(value) => !value && setOpen(null)}
+        title={open?.kind === 'remove' ? `Delete ${open.account.name}?` : 'Delete this account?'}
+        description="An account that has never been used is deleted for good. One that money has passed through is taken off this screen, and its past transactions stay in your reports."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          if (open?.kind === 'remove') await remove(open.account)
+        }}
+      />
 
       {/* ── Create / edit ─────────────────────────────────────────────── */}
       {open?.kind === 'create' || open?.kind === 'edit' ? (

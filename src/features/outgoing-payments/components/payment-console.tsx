@@ -18,7 +18,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Field } from '@/components/ui/label'
 import { SectionCard } from '@/features/dashboard/components/page-header'
 import { callAction } from '@/lib/use-action'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, minorUnitFactor, type CurrencyCode } from '@/lib/money'
 import { METHOD_LABELS } from '@/features/payments/destinations'
 import {
   cancelPaymentAction,
@@ -63,8 +63,12 @@ export function PaymentConsole({
   suppliers: Array<{ id: string; name: string }>
   categories: Array<{ id: string; name: string }>
   branches: Array<{ id: string; name: string }>
-  /** The accounts from Payment details, offered as "Pay from". */
-  accounts?: Array<{ id: string; name: string }>
+  /**
+   * The accounts from Payment details, offered as "Pay from". `balance` is
+   * what the account holds, minor units — null when this viewer may name the
+   * account but has not been given sight of what is in it.
+   */
+  accounts?: Array<{ id: string; name: string; balance: number | null }>
   /** The owner: their own payment is approved the moment it is submitted. */
   selfApproves?: boolean
   defaultBranchId: string | null
@@ -188,6 +192,7 @@ export function PaymentConsole({
         selfApproves={selfApproves}
         defaultBranchId={defaultBranchId}
         currency={currency}
+        locale={locale}
       />
     </SectionCard>
   )
@@ -203,14 +208,16 @@ function NewPaymentDialog({
   selfApproves,
   defaultBranchId,
   currency,
+  locale,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   suppliers: Array<{ id: string; name: string }>
   categories: Array<{ id: string; name: string }>
   branches: Array<{ id: string; name: string }>
-  accounts: Array<{ id: string; name: string }>
+  accounts: Array<{ id: string; name: string; balance: number | null }>
   selfApproves: boolean
+  locale: string
   defaultBranchId: string | null
   currency: string
 }) {
@@ -279,6 +286,15 @@ function NewPaymentDialog({
 
   const selectClass =
     'h-10 w-full rounded-md border bg-background px-3 text-sm'
+
+  /*
+   * What the chosen account holds, so nobody raises a payment against money
+   * that is not there. A note, never a block: the balance is the app's record
+   * of the account, and a deposit not yet entered must not stop a real bill.
+   */
+  const payFrom = accounts.find((account) => account.id === payFromAccountId) ?? null
+  const typed = Math.round((Number(amount) || 0) * minorUnitFactor(currency as CurrencyCode))
+  const short = payFrom !== null && payFrom.balance !== null && typed > payFrom.balance
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -350,6 +366,14 @@ function NewPaymentDialog({
                 <option key={account.id} value={account.id}>{account.name}</option>
               ))}
             </select>
+            {payFrom && payFrom.balance !== null ? (
+              <p className={short ? 'text-xs font-medium text-destructive' : 'text-xs text-muted-foreground'}>
+                Available: {formatMoney(payFrom.balance, currency, locale)}
+                {short ? ' — less than this payment' : ''}
+              </p>
+            ) : payFrom ? (
+              <p className="text-xs text-muted-foreground">You have not been given sight of this account&rsquo;s balance.</p>
+            ) : null}
           </Field>
           <Field label="Payment date" htmlFor="op-date">
             <Input id="op-date" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />

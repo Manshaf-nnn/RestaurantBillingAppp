@@ -5,6 +5,7 @@ import { PageHeader } from '@/features/dashboard/components/page-header'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
 import { PaymentConsole } from '@/features/outgoing-payments/components/payment-console'
 import { ensureDefaultCategories } from '@/features/outgoing-payments/service'
+import { visibleAccountsFor } from '@/features/payments/accounts'
 import { listExpenseCategories, listOutgoingPayments } from '@/features/outgoing-payments/queries'
 import { can, PERMISSIONS } from '@/lib/rbac'
 import { prisma } from '@/server/db/prisma'
@@ -30,7 +31,7 @@ export default async function PaymentsOutPage({
 
   await ensureDefaultCategories(user.restaurantId)
 
-  const [rows, suppliers, categories, branches, accounts] = await Promise.all([
+  const [rows, suppliers, categories, branches, accounts, balances] = await Promise.all([
     listOutgoingPayments({ restaurantId: user.restaurantId, branchIds: selection.branchIds }),
     prisma.supplier.findMany({
       where: { restaurantId: user.restaurantId },
@@ -49,17 +50,19 @@ export default async function PaymentsOutPage({
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
     }),
     /*
-     * The accounts from Payment details, for "Pay from". Names and bank
-     * details only — never a balance: naming the account a bill is paid from
-     * is the accountant's job, and seeing what is in it is the owner's to
-     * grant, account by account.
+     * The accounts from Payment details, for "Pay from". Every active account
+     * can be NAMED — that is the accountant's job. What is IN it is shown only
+     * for the accounts this person may see (`balances` below): the owner sees
+     * all of them, anybody else the ones the owner assigned.
      */
     prisma.paymentAccount.findMany({
       where: { restaurantId: user.restaurantId, isActive: true },
       select: { id: true, name: true, bankName: true, accountNumber: true },
       orderBy: { name: 'asc' },
     }),
+    visibleAccountsFor(user),
   ])
+  const balanceOf = new Map(balances.map((row) => [row.accountId, row.balance]))
 
   return (
     <>
@@ -85,6 +88,7 @@ export default async function PaymentsOutPage({
           name: [account.name, account.bankName, account.accountNumber ? `A/C ${account.accountNumber}` : null]
             .filter(Boolean)
             .join(' · '),
+          balance: balanceOf.get(account.id) ?? null,
         }))}
         // The owner and administrators sign their own payments on submission.
         selfApproves={

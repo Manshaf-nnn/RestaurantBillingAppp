@@ -13,7 +13,7 @@ import {
   postAccountEntry,
   type AccountBalance,
 } from './accounts-ledger'
-import { slugifyDestinationCode } from './destinations'
+import { METHOD_LABELS, readPaymentConfig, slugifyDestinationCode } from './destinations'
 
 /**
  * Creating accounts, putting money in, and moving it between them (bank.md).
@@ -276,6 +276,76 @@ export async function setAccountActive(params: {
     data: { isActive: params.isActive },
   })
   if (touched.count === 0) throw new NotFoundError('Account')
+}
+
+/**
+ * Remove an account from Payment details.
+ *
+ * ── Deleted when it can be, retired when it cannot ──────────────────────────
+ *
+ * An account nothing has ever touched — created by mistake, a typo'd bank —
+ * is deleted outright: there is no history to protect. One that money has
+ * passed through cannot be: its payments, deposits and transfers are stamped
+ * with it, and deleting the row would leave them pointing at nothing. That one
+ * is retired instead, which takes it off the screen and out of every picker
+ * while its past stays readable — and it can be restored.
+ *
+ * Refused in the two cases where removing it would lose money or stop a till:
+ * it still holds a balance (transfer it first — a movement the ledger records)
+ * or a payment method is pointed at it (re-point the method first, or the next
+ * sale by that method has nowhere to land).
+ */
+export async function removeAccount(params: {
+  restaurantId: string
+  accountId: string
+}): Promise<{ outcome: 'deleted' | 'retired'; name: string }> {
+  const account = await prisma.paymentAccount.findFirst({
+    where: { id: params.accountId, restaurantId: params.restaurantId },
+    select: { id: true, code: true, name: true },
+  })
+  if (!account) throw new NotFoundError('Account')
+
+  const restaurant = await prisma.restaurant.findUniqueOrThrow({
+    where: { id: params.restaurantId },
+    select: { paymentConfig: true },
+  })
+  const pointed = Object.entries(readPaymentConfig(restaurant.paymentConfig).methodDestinations ?? {})
+    .filter(([, code]) => code === account.code)
+    .map(([method]) => METHOD_LABELS[method] ?? method)
+  if (pointed.length > 0) {
+    throw new ConflictError(
+      `${pointed.join(', ')} payments land in this account. Point ${pointed.length === 1 ? 'that method' : 'those methods'} at another account in Settings → Payments first.`,
+    )
+  }
+
+  const balance = await balanceOf(prisma, { restaurantId: params.restaurantId, accountId: account.id })
+  if (balance !== 0) {
+    throw new ConflictError(
+      'That account still holds money. Transfer it to another account before removing this one.',
+    )
+  }
+
+  const [entries, payments, refunds, outgoing] = await Promise.all([
+    prisma.paymentAccountEntry.count({
+      where: { OR: [{ accountId: account.id }, { counterpartyAccountId: account.id }] },
+    }),
+    prisma.payment.count({ where: { restaurantId: params.restaurantId, destination: account.code } }),
+    prisma.refund.count({ where: { restaurantId: params.restaurantId, destination: account.code } }),
+    prisma.outgoingPayment.count({ where: { payFromAccountId: account.id } }),
+  ])
+
+  if (entries + payments + refunds + outgoing === 0) {
+    await prisma.paymentAccount.deleteMany({
+      where: { id: account.id, restaurantId: params.restaurantId },
+    })
+    return { outcome: 'deleted', name: account.name }
+  }
+
+  await prisma.paymentAccount.updateMany({
+    where: { id: account.id, restaurantId: params.restaurantId },
+    data: { isActive: false },
+  })
+  return { outcome: 'retired', name: account.name }
 }
 
 /* ── Money in, and money across ───────────────────────────────────────────── */
