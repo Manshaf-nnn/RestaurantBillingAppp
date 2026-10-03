@@ -107,6 +107,7 @@ export default async function SettingsPage({
           cashVarianceAbove: policy.cashVarianceAbove / factor,
           pettyCashApprovalAbove: policy.pettyCashApprovalAbove / factor,
           requireCashierSession: policy.requireCashierSession,
+          deliveryPayPerOrder: restaurant.deliveryPayPerOrder / factor,
         },
         payment: {
           cash: payment.cash ?? true,

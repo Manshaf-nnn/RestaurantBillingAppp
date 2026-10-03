@@ -803,6 +803,9 @@ model Restaurant {
   /// [ApprovalPolicy] — thresholds above which an action needs a second
   /// pair of eyes. Null means the built-in defaults apply.
   approvalPolicy     Json?
+  /// What a rider earns for each delivery they close, minor units. Set by the
+  /// owner in Settings; 0 means deliveries are not paid per order.
+  deliveryPayPerOrder Int @default(0)
   /// ── How guests are met, on every code (ar.md §13, §19) ────────────────
   ///
   /// [GuestAppearance] — what the welcome screen shows and says, and how the
@@ -1997,6 +2000,10 @@ model Order {
   preparingAt DateTime?
   readyAt     DateTime?
   servedAt    DateTime?
+  /// What the rider earned for this delivery, minor units — the restaurant's
+  /// per-delivery pay as it stood when the delivery was closed. A snapshot,
+  /// so changing the rate later never rewrites what was already earned.
+  deliveryPay Int?
   completedAt DateTime?
   cancelledAt DateTime?
 

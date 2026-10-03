@@ -103,6 +103,8 @@ export interface SettingsData {
     cashVarianceAbove: number
     pettyCashApprovalAbove: number
     requireCashierSession: boolean
+    /** What a rider earns per delivery, in major units. */
+    deliveryPayPerOrder: number
   }
   /** The live floor board's thresholds. Spend is in whole currency here. */
   live: LiveBoardPolicy
@@ -782,6 +784,28 @@ export function SettingsView({
                 </span>
               </span>
             </label>
+          </SectionCard>
+
+          <SectionCard title="Delivery pay">
+            <p className="mb-4 text-sm text-muted-foreground">
+              What a rider earns for each delivery they complete. The Delivery Desk shows
+              every rider their count and what they have earned, worked out from this —
+              nobody at the door can change the figure. A new amount applies to deliveries
+              closed from now on; what was already earned stays as it was.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Pay per delivery" hint="0 means deliveries are not paid per order.">
+                <Input
+                  inputMode="decimal"
+                  aria-label="Pay per delivery"
+                  value={String(cash.deliveryPayPerOrder)}
+                  disabled={!canManage}
+                  onChange={(e) =>
+                    setCash((c) => ({ ...c, deliveryPayPerOrder: Number(e.target.value) || 0 }))
+                  }
+                />
+              </Field>
+            </div>
           </SectionCard>
 
           {canManage ? (

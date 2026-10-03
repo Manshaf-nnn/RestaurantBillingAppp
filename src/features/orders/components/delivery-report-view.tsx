@@ -205,7 +205,8 @@ export function DeliveryReportView({
                   <th className="pb-2 pr-2 font-medium">Staff</th>
                   <th className="pb-2 pr-2 text-right font-medium">Orders</th>
                   <th className="pb-2 pr-2 text-right font-medium">Ride</th>
-                  <th className="pb-2 text-right font-medium">Cash</th>
+                  <th className="pb-2 pr-2 text-right font-medium">Cash</th>
+                  <th className="pb-2 text-right font-medium">Earned</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -214,7 +215,8 @@ export function DeliveryReportView({
                     <td className="py-2 pr-2 font-medium">{row.name}</td>
                     <td className="py-2 pr-2 text-right tabular-nums">{row.delivered}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">{mins(row.averageRideMinutes)}</td>
-                    <td className="py-2 text-right font-medium tabular-nums">{row.cash ? compact(row.cash) : '—'}</td>
+                    <td className="py-2 pr-2 text-right font-medium tabular-nums">{row.cash ? compact(row.cash) : '—'}</td>
+                    <td className="py-2 text-right font-medium tabular-nums">{row.earned ? compact(row.earned) : '—'}</td>
                   </tr>
                 ))}
               </tbody>

@@ -4,12 +4,14 @@ import { BarChart3 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 
-import { PageHeader } from '@/features/dashboard/components/page-header'
+import { PageHeader, SectionCard, StatCard } from '@/features/dashboard/components/page-header'
+import { getRiderPay } from '@/features/orders/rider-pay'
+import { resolveRange } from '@/features/reports/range'
 import { AutoRefresh } from '@/components/auto-refresh'
 import { DeliveryDesk } from '@/features/orders/components/delivery-desk'
 import { getDeliveryQueue, readOptions } from '@/features/orders/queries'
 import { selectedBranch } from '@/features/dashboard/selected-branch'
-import { localeForCurrency } from '@/lib/money'
+import { formatMoney, localeForCurrency } from '@/lib/money'
 import { PERMISSIONS, can } from '@/lib/rbac'
 import { requirePagePermission } from '@/server/auth/guard'
 import { requireRestaurant } from '@/server/db/tenant'
@@ -50,7 +52,24 @@ export default async function DeliveryDeskPage({
    * again against the order it locked.
    */
   const selection = await selectedBranch(user, params)
-  const queue = await getDeliveryQueue(user.restaurantId, selection.branchIds)
+  const today = resolveRange({ preset: 'TODAY', timeZone: restaurant.timezone })
+  const month = resolveRange({ preset: 'THIS_MONTH', timeZone: restaurant.timezone })
+  const seesEveryone = can(user, PERMISSIONS.REPORT_SALES)
+  const [queue, pay] = await Promise.all([
+    getDeliveryQueue(user.restaurantId, selection.branchIds),
+    getRiderPay({
+      restaurantId: user.restaurantId,
+      branchIds: selection.branchIds,
+      riderId: user.id,
+      today,
+      month,
+      // Everybody's figures are the owner's to see; a rider sees their own.
+      everyone: seesEveryone,
+    }),
+  ])
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
+  const money = (minor: number) => formatMoney(minor, restaurant.currency, locale)
+  const rate = pay.rate
 
   const rows = queue
     .filter((order) => order.status === 'READY')
@@ -100,10 +119,62 @@ export default async function DeliveryDeskPage({
           ) : null
         }
       />
+      {/*
+        What delivering earns, worked out and read-only. The rate is the
+        owner's (Settings → Cash controls → Delivery pay); each closed delivery
+        carries what it earned, and these are sums of that. There is nothing on
+        this screen to type a figure into.
+      */}
+      {rate > 0 || pay.mine.month.earned > 0 ? (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Pay per delivery" value={money(rate)} hint="Set by the owner" />
+          <StatCard
+            label="Your deliveries today"
+            value={pay.mine.today.delivered}
+            hint={`${pay.mine.month.delivered} this month`}
+          />
+          <StatCard label="You earned today" value={money(pay.mine.today.earned)} />
+          <StatCard label="You earned this month" value={money(pay.mine.month.earned)} />
+        </div>
+      ) : null}
+
+      {seesEveryone && pay.riders.length > 0 ? (
+        <SectionCard
+          title="Rider pay"
+          description="What each rider has earned from the deliveries they closed. Pay them from these figures."
+          className="mb-4"
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[32rem] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="pb-2 pr-3 font-medium">Rider</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Today</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Earned today</th>
+                  <th className="pb-2 pr-3 text-right font-medium">This month</th>
+                  <th className="pb-2 text-right font-medium">Earned this month</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {pay.riders.map((rider) => (
+                  <tr key={rider.id}>
+                    <td className="py-2 pr-3 font-medium">{rider.name}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{rider.today.delivered}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{money(rider.today.earned)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{rider.month.delivered}</td>
+                    <td className="py-2 text-right font-semibold tabular-nums">{money(rider.month.earned)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      ) : null}
+
       <DeliveryDesk
         rows={rows}
         currency={restaurant.currency}
-        locale={restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale}
+        locale={locale}
         timeZone={restaurant.timezone}
       />
     </>

@@ -36,7 +36,16 @@ export interface DeliveryReportData {
   outNow: number
   trend: Array<{ date: string; delivered: number; sales: number }>
   byPlace: Array<{ place: string; delivered: number; sales: number; share: number; averageMinutes: number | null }>
-  byRider: Array<{ name: string; delivered: number; cash: number; averageRideMinutes: number | null }>
+  byRider: Array<{
+    name: string
+    delivered: number
+    cash: number
+    /** Per-delivery pay earned in the period — the snapshots, summed. */
+    earned: number
+    averageRideMinutes: number | null
+  }>
+  /** Everything riders earned in the period. */
+  riderPay: number
   recent: Array<{
     id: string
     orderNumber: string
@@ -100,7 +109,7 @@ export async function getDeliveryReport(params: {
       orderBy: { servedAt: 'desc' },
       select: {
         id: true, orderNumber: true, status: true, customerName: true, grandTotal: true,
-        placedAt: true, readyAt: true, servedAt: true, deliveryLocationName: true,
+        placedAt: true, readyAt: true, servedAt: true, deliveryLocationName: true, deliveryPay: true,
         servedBy: { select: { name: true } },
         payments: { where: { status: { in: ['PAID', 'REFUNDED'] } }, select: { method: true, amount: true } },
       },
@@ -122,7 +131,7 @@ export async function getDeliveryReport(params: {
   const perDay = new Map<string, { delivered: number; sales: number }>()
   for (const day of daysBetween(from, to, timeZone)) perDay.set(day, { delivered: 0, sales: 0 })
   const perPlace = new Map<string, { delivered: number; sales: number; minutes: Array<number | null> }>()
-  const perRider = new Map<string, { delivered: number; cash: number; ride: Array<number | null> }>()
+  const perRider = new Map<string, { delivered: number; cash: number; earned: number; ride: Array<number | null> }>()
 
   for (const o of delivered) {
     const key = dayKey(o.servedAt ?? o.placedAt, timeZone)
@@ -139,9 +148,10 @@ export async function getDeliveryReport(params: {
     perPlace.set(place, p)
 
     const rider = o.servedBy?.name ?? 'Not recorded'
-    const r = perRider.get(rider) ?? { delivered: 0, cash: 0, ride: [] }
+    const r = perRider.get(rider) ?? { delivered: 0, cash: 0, earned: 0, ride: [] }
     r.delivered += 1
     r.cash += codOf(o)
+    r.earned += o.deliveryPay ?? 0
     r.ride.push(minutesBetween(o.readyAt, o.servedAt))
     perRider.set(rider, r)
   }
@@ -162,8 +172,9 @@ export async function getDeliveryReport(params: {
       .map(([place, v]) => ({ place, delivered: v.delivered, sales: v.sales, share: delivered.length ? v.delivered / delivered.length : 0, averageMinutes: mean(v.minutes) }))
       .sort((a, b) => b.delivered - a.delivered || b.sales - a.sales),
     byRider: [...perRider.entries()]
-      .map(([name, v]) => ({ name, delivered: v.delivered, cash: v.cash, averageRideMinutes: mean(v.ride) }))
+      .map(([name, v]) => ({ name, delivered: v.delivered, cash: v.cash, earned: v.earned, averageRideMinutes: mean(v.ride) }))
       .sort((a, b) => b.delivered - a.delivered),
+    riderPay: delivered.reduce((sum, o) => sum + (o.deliveryPay ?? 0), 0),
     recent: delivered.slice(0, 8).map((o) => ({
       id: o.id,
       orderNumber: o.orderNumber,

@@ -240,6 +240,18 @@ export async function completeDeliveryWithPin(params: {
      * to say the same thing twice. `servedAt` and `servedById` are the
      * completion time and the person, which is what they have always meant.
      */
+    /*
+     * What this delivery earns its rider: the owner's per-delivery pay as it
+     * stands right now, written onto the order. A snapshot rather than a
+     * multiplication at report time, so raising or lowering the rate next
+     * month changes what future deliveries earn and nothing already earned —
+     * and nobody at the door has any way to type a different figure.
+     */
+    const { deliveryPayPerOrder } = await tx.restaurant.findUniqueOrThrow({
+      where: { id: params.restaurantId },
+      select: { deliveryPayPerOrder: true },
+    })
+
     const now = new Date()
     const done = await tx.order.update({
       where: { id: order.id },
@@ -247,6 +259,7 @@ export async function completeDeliveryWithPin(params: {
         status: 'SERVED',
         servedAt: now,
         servedById: params.actorId,
+        deliveryPay: deliveryPayPerOrder,
       },
       select: { id: true, orderNumber: true },
     })

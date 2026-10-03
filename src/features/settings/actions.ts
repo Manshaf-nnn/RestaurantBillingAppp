@@ -402,9 +402,15 @@ export async function updateCashControls(input: unknown): Promise<ActionResult<{
         requireCashierSession: data.requireCashierSession,
       }
 
+      const deliveryPayPerOrder =
+        data.deliveryPayPerOrder === undefined ? undefined : Math.round(data.deliveryPayPerOrder * factor)
+
       await prisma.restaurant.update({
         where: { id: user.restaurantId },
-        data: { approvalPolicy: next as unknown as Prisma.InputJsonValue },
+        data: {
+          approvalPolicy: next as unknown as Prisma.InputJsonValue,
+          ...(deliveryPayPerOrder === undefined ? {} : { deliveryPayPerOrder }),
+        },
       })
 
       await audit({
@@ -418,10 +424,12 @@ export async function updateCashControls(input: unknown): Promise<ActionResult<{
           cashVarianceAbove: next.cashVarianceAbove,
           pettyCashApprovalAbove: next.pettyCashApprovalAbove,
           requireCashierSession: next.requireCashierSession,
+          ...(deliveryPayPerOrder === undefined ? {} : { deliveryPayPerOrder }),
         },
       })
 
       revalidatePath('/dashboard/settings')
+      revalidatePath('/dashboard/delivery')
       revalidatePath('/dashboard/cash-drawer')
       revalidatePath('/dashboard/petty-cash')
       return { id: user.restaurantId }

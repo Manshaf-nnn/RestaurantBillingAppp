@@ -133,6 +133,11 @@ export const cashControlsSchema = z.object({
   cashVarianceAbove: z.coerce.number().min(0).max(9_999_999),
   pettyCashApprovalAbove: z.coerce.number().min(0).max(9_999_999),
   requireCashierSession: z.coerce.boolean().default(true),
+  /**
+   * What a rider earns per delivery, in major units. Optional so a caller
+   * that does not know about it leaves the stored rate alone.
+   */
+  deliveryPayPerOrder: z.coerce.number().min(0).max(9_999_999).optional(),
 })
 export type CashControlsInput = z.infer<typeof cashControlsSchema>
 

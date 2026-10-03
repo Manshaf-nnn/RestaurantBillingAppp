@@ -12,6 +12,7 @@
  *     moved from the number to the session.
  */
 import { prisma } from '../src/server/db/prisma'
+import { getRiderPay } from '../src/features/orders/rider-pay'
 import { purgeFixture } from './purge-fixture'
 import { getDeliveryQueue } from '../src/features/orders/queries'
 import { placeOrder } from '../src/features/orders/service'
@@ -237,6 +238,8 @@ async function main() {
     String(stillReady.deliveryPinAttempts))
 
   console.log('\n── The right PIN closes it, once ───────────────────────')
+  // The owner pays 150.00 a delivery.
+  await prisma.restaurant.update({ where: { id: shop.id }, data: { deliveryPayPerOrder: 15_000 } })
   const done = await completeDeliveryWithPin({
     restaurantId: shop.id, orderId: pinOrder.id, pin: withPin.deliveryPin!,
     actorId: staff.id, actorName: staff.name, branchIds: null,
@@ -247,6 +250,22 @@ async function main() {
     closed.status === 'SERVED', closed.status)
   check('the completion time is recorded', closed.servedAt !== null)
   check('and who completed it', closed.servedById === staff.id, String(closed.servedById))
+
+  console.log('\n── What the delivery earned its rider ───────────────────')
+  check('the delivery carries the owner’s per-delivery pay', closed.deliveryPay === 15_000, String(closed.deliveryPay))
+  // The owner raises the rate afterwards. What was earned is not rewritten.
+  await prisma.restaurant.update({ where: { id: shop.id }, data: { deliveryPayPerOrder: 20_000 } })
+  const day = { from: new Date(Date.now() - 3_600_000), to: new Date(Date.now() + 3_600_000) }
+  const pay = await getRiderPay({ restaurantId: shop.id, branchIds: null, riderId: staff.id, today: day, month: day })
+  check('the desk shows the rider one delivery and what it earned',
+    pay.mine.today.delivered === 1 && pay.mine.today.earned === 15_000 && pay.mine.month.earned === 15_000,
+    JSON.stringify(pay.mine))
+  check('at the rate it was closed at, with the new rate shown for the next one', pay.rate === 20_000)
+  check('a rider is not handed everybody else’s figures', pay.riders.length === 0)
+  const forOwner = await getRiderPay({ restaurantId: shop.id, branchIds: null, riderId: 'nobody', today: day, month: day, everyone: true })
+  check('whoever pays them sees every rider',
+    forOwner.riders.length === 1 && forOwner.riders[0]!.id === staff.id && forOwner.riders[0]!.month.earned === 15_000 &&
+      forOwner.mine.today.delivered === 0, JSON.stringify(forOwner.riders))
   check('the order history says the PIN was confirmed',
     (await prisma.orderEvent.findMany({ where: { orderId: pinOrder.id } }))
       .some((e) => /PIN confirmed/.test(e.note ?? '')))
