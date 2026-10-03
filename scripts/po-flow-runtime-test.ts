@@ -198,6 +198,12 @@ async function main() {
   check('a storekeeper cannot raise a request', !refusedCreate.ok, refusedCreate.body.slice(0, 160))
   check('and nothing was written', (await prisma.purchase.count({ where: { restaurantId: restaurant.id } })) === 0)
 
+  const noSupplier = await post(rifnasCookie, '/dashboard/purchases/new', createId, { ...request, supplierId: '', submit: true })
+  check('a request with no supplier is refused', !noSupplier.ok && /supplier/i.test(noSupplier.body), noSupplier.body.slice(0, 160))
+  const noSupplierDraft = await post(rifnasCookie, '/dashboard/purchases/new', createId, { ...request, supplierId: '', submit: false })
+  check('even as a draft', !noSupplierDraft.ok)
+  check('and neither was written', (await prisma.purchase.count({ where: { restaurantId: restaurant.id } })) === 0)
+
   const created = await post(rifnasCookie, '/dashboard/purchases/new', createId, { ...request, submit: true })
   check('the buyer raises and submits in one go', created.ok, created.body.slice(0, 200))
   const po = await prisma.purchase.findFirstOrThrow({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: 'desc' } })
@@ -253,6 +259,18 @@ async function main() {
   check('the accountant cannot post a delivery either', !byAccountant.ok)
 
   console.log('\n── 4. Receiving: partial, at the invoice price ──')
+  // The invoice number and its date are what tie a delivery to the bill.
+  const noInvoice = await post(noorCookie, '/dashboard/purchases/receive', receiveId, {
+    purchaseId: po.id, invoiceDate: '2026-09-28',
+    lines: [{ purchaseItemId: chickenLine.id, acceptedQty: 30 }], clientRequestId: `grn-${stamp}-0000000a`,
+  })
+  check('a delivery with no invoice number is refused', !noInvoice.ok && /invoice number/i.test(noInvoice.body), noInvoice.body.slice(0, 200))
+  const noDate = await post(noorCookie, '/dashboard/purchases/receive', receiveId, {
+    purchaseId: po.id, supplierRef: 'INV-45821',
+    lines: [{ purchaseItemId: chickenLine.id, acceptedQty: 30 }], clientRequestId: `grn-${stamp}-0000000b`,
+  })
+  check('and so is one with no invoice date', !noDate.ok && /invoice date/i.test(noDate.body), noDate.body.slice(0, 200))
+  check('neither posted anything', (await prisma.goodsReceipt.count({ where: { purchaseId: po.id } })) === 0)
   const grn = await post(noorCookie, '/dashboard/purchases/receive', receiveId, {
     purchaseId: po.id,
     supplierRef: 'INV-45821',
@@ -276,7 +294,8 @@ async function main() {
   check('the delivery is on the record, naming the price variance', receivedAudit.length === 1 && variances.length === 1 && variances[0].item === 'Chicken Breast' && variances[0].percent === 3.1, JSON.stringify(variances))
 
   const over = await post(noorCookie, '/dashboard/purchases/receive', receiveId, {
-    purchaseId: po.id, lines: [{ purchaseItemId: cheeseLine.id, acceptedQty: 25 }], clientRequestId: `grn-${stamp}-00000002`,
+    purchaseId: po.id, supplierRef: 'INV-45822', invoiceDate: '2026-09-29',
+    lines: [{ purchaseItemId: cheeseLine.id, acceptedQty: 25 }], clientRequestId: `grn-${stamp}-00000002`,
   })
   check('25 more slices against 20 outstanding is refused', !over.ok && /more than the/.test(over.body), over.body.slice(0, 200))
   check('and nothing was posted', (await prisma.goodsReceipt.count({ where: { purchaseId: po.id } })) === 1)
@@ -284,6 +303,7 @@ async function main() {
   const replay = await post(noorCookie, '/dashboard/purchases/receive', receiveId, {
     purchaseId: po.id,
     supplierRef: 'INV-45821',
+    invoiceDate: '2026-09-28',
     lines: [{ purchaseItemId: chickenLine.id, acceptedQty: 30, unitCost: 1320 }, { purchaseItemId: cheeseLine.id, acceptedQty: 80 }],
     clientRequestId: `grn-${stamp}-00000001`,
   })

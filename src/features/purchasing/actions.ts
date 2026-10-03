@@ -40,7 +40,12 @@ async function factor(restaurantId: string) {
 }
 
 const createSchema = z.object({
-  supplierId: z.string().min(1).optional().or(z.literal('')),
+  /*
+   * Required. A request with no supplier could be approved and then could not
+   * be received sensibly: there is nobody to raise the invoice against, no
+   * price list to check it by, and nothing for the supplier ledger to post to.
+   */
+  supplierId: z.string({ required_error: 'Choose a supplier' }).min(1, 'Choose a supplier'),
   branchId: z.string().min(1).optional().or(z.literal('')),
   /** The shelf within that location. The column existed and nothing ever set it. */
   locationId: z.string().min(1).optional().or(z.literal('')),
@@ -506,10 +511,21 @@ export async function setPurchaseStatusAction(
 
 const receiveSchema = z.object({
   purchaseId: z.string().min(1),
-  /** The supplier's invoice or delivery-note number. */
-  supplierRef: z.string().trim().max(80).optional().or(z.literal('')),
-  /** The date on that invoice. */
-  invoiceDate: z.string().trim().max(30).optional().or(z.literal('')),
+  /*
+   * The supplier's invoice number and its date — both required. They are what
+   * ties this delivery to the bill that will be paid for it; a receipt without
+   * them cannot be matched to an invoice afterwards.
+   */
+  supplierRef: z
+    .string({ required_error: 'Enter the invoice number' })
+    .trim()
+    .min(1, 'Enter the invoice number')
+    .max(80),
+  invoiceDate: z
+    .string({ required_error: 'Enter the invoice date' })
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}/, 'Enter the invoice date')
+    .max(30),
   notes: z.string().trim().max(300).optional().or(z.literal('')),
   /** Where the van actually unloaded. Blank means "where the order said". */
   branchId: z.string().min(1).optional().or(z.literal('')),

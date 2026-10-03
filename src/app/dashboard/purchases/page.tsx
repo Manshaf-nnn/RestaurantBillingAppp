@@ -1,33 +1,40 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { PackageCheck, Plus, TrendingDown } from 'lucide-react'
+import { FileText, PackageCheck, Plus, ShoppingCart, TrendingDown } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { EmptyState } from '@/components/ui/feedback'
-import { LocalDateTime } from '@/components/local-time'
 import { Button } from '@/components/ui/button'
 import { PageHeader, SectionCard } from '@/features/dashboard/components/page-header'
-import { listPurchaseOrders } from '@/features/purchasing/queries'
+import { PurchasesBoard } from '@/features/purchasing/components/purchases-board'
+import { getPurchaseBoard } from '@/features/purchasing/queries'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
-import { ORDER_VIEWS, PO_PRIORITY, PO_STATUS, REQUEST_VIEWS, viewByKey } from '@/features/purchasing/status'
-import { formatMoney } from '@/lib/money'
-import { PERMISSIONS, can } from '@/lib/rbac'
-import { cn } from '@/lib/utils'
-import { scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
-import { SearchBox } from '@/components/search-box'
+import { viewByKey } from '@/features/purchasing/status'
+import { formatMoney, localeForCurrency } from '@/lib/money'
+import { PERMISSIONS, can, visibleBranchIds } from '@/lib/rbac'
+import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { requirePagePermission } from '@/server/auth/guard'
+import { prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Purchasing' }
 
 /**
- * Purchase requests and purchase orders — one list, two lenses.
+ * Purchase requests and purchase orders — one list.
  *
  * A request becomes the order when it is approved, so they are one row with
- * one number from start to finish. The rail across the top files them the way
- * a buyer thinks about them: what is still being decided, and what is on its
- * way in.
+ * one number from start to finish.
+ *
+ * ── Laid out as Transfers is ────────────────────────────────────────────────
+ *
+ * This was two rails of status pills over a flat list capped at fifty rows.
+ * It is now what the Transfers screen is: five figures, one filter bar, one
+ * paged table — the same screen about a different movement, so somebody who
+ * can read one can read the other. What did not change is everything
+ * underneath: statuses, transitions and permissions still belong to the
+ * purchasing service, reached through the order's own page.
+ *
+ * An old `?view=` link (the rails) still resolves to the same set of statuses.
  */
 export default async function PurchasesPage({
   searchParams,
@@ -36,29 +43,89 @@ export default async function PurchasesPage({
 }) {
   const user = await requirePagePermission(PERMISSIONS.PURCHASE_VIEW, '/dashboard/purchases')
   const restaurant = await requireRestaurant(user.restaurantId)
+  const locale = restaurant.locale === 'en' ? localeForCurrency(restaurant.currency) : restaurant.locale
 
-  // With a location chosen: orders being delivered there, and what that
-  // location — not the group — is running short of.
   const params = await searchParams
-  const search = typeof params.search === 'string' ? params.search : ''
-  const viewKey = typeof params.view === 'string' ? params.view : 'all'
-  const view = viewByKey(viewKey)
-  const branchId = scopeToOne(await selectedBranch(user, params))
+  const one = (key: string) => {
+    const value = params[key]
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+  }
 
-  const [orders, suggestions] = await Promise.all([
-    listPurchaseOrders({ restaurantId: user.restaurantId, branchId, search, statuses: view?.statuses }),
+  /*
+   * `visibleBranchIds` decides what exists for this person at all, and the
+   * switcher narrows within it — the same two steps the Transfers page takes.
+   */
+  const selection = await selectedBranch(user, params)
+  const reach = visibleBranchIds(user)
+  const branchIds = selection.branchId ? [selection.branchId] : reach
+  // With a location chosen: what that location — not the group — is short of.
+  const branchId = scopeToOne(selection)
+  const view = viewByKey(one('view') ?? undefined)
+
+  const filtered = ['search', 'supplier', 'status', 'location', 'item', 'priority', 'from', 'to', 'view'].some(
+    (key) => one(key) !== null,
+  )
+
+  const [board, suggestions, branchName, suppliers, branches, items] = await Promise.all([
+    getPurchaseBoard({
+      restaurantId: user.restaurantId,
+      branchIds,
+      filter: {
+        search: one('search') ?? undefined,
+        supplierId: one('supplier'),
+        status: one('status'),
+        statuses: one('status') ? null : view?.statuses ?? null,
+        branchId: one('location'),
+        itemId: one('item'),
+        priority: one('priority'),
+        from: one('from'),
+        to: one('to'),
+        page: Number(one('page') ?? '1') || 1,
+        perPage: 10,
+      },
+    }),
     getReorderSuggestions({ restaurantId: user.restaurantId, branchId }),
+    branchNameFor(user.restaurantId, selection.branchId),
+    prisma.supplier.findMany({
+      where: { restaurantId: user.restaurantId },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.branch.findMany({
+      where: {
+        restaurantId: user.restaurantId,
+        deletedAt: null,
+        isActive: true,
+        ...(reach === null ? {} : { id: { in: reach } }),
+      },
+      select: { id: true, name: true },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    }),
+    prisma.inventoryItem.findMany({
+      where: { restaurantId: user.restaurantId },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+      take: 500,
+    }),
   ])
-  const money = (m: number) => formatMoney(m, restaurant.currency)
-  const href = (key: string) => `/dashboard/purchases?view=${key}${search ? `&search=${encodeURIComponent(search)}` : ''}`
+  const money = (m: number) => formatMoney(m, restaurant.currency, locale)
 
   return (
     <>
       <PageHeader
         title="Purchasing"
+        branch={branchName}
+        icon={<ShoppingCart className="size-6" />}
         description="Request and get approval before purchasing. Stock only moves when goods arrive."
         actions={
           <>
+            {can(user, PERMISSIONS.REPORT_PURCHASING) ? (
+              <Button asChild variant="outline" size="sm">
+                <Link href="/dashboard/reports/purchasing">
+                  <FileText /> Report
+                </Link>
+              </Button>
+            ) : null}
             {can(user, PERMISSIONS.PURCHASE_RECEIVE) ? (
               <Button variant="outline" asChild>
                 <Link href="/dashboard/purchases/receive">
@@ -77,21 +144,26 @@ export default async function PurchasesPage({
         }
       />
 
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="space-y-2">
-          <Rail title="Purchase requests" views={REQUEST_VIEWS} active={viewKey} href={href} allHref={href('all')} />
-          <Rail title="Purchase orders" views={ORDER_VIEWS} active={viewKey} href={href} />
-        </div>
-        <div className="w-full max-w-sm">
-          <SearchBox placeholder="Order number, supplier, item, GRN or invoice…" defaultValue={search} />
-        </div>
-      </div>
+      <PurchasesBoard
+        rows={board.rows}
+        total={board.total}
+        page={board.page}
+        perPage={board.perPage}
+        pages={board.pages}
+        stats={board.stats}
+        suppliers={suppliers}
+        branches={branches}
+        items={items}
+        currency={restaurant.currency}
+        locale={locale}
+        can={{ receive: can(user, PERMISSIONS.PURCHASE_RECEIVE) }}
+      />
 
-      {suggestions.length > 0 && !view && (
+      {suggestions.length > 0 && !filtered && (
         <SectionCard
           title="Needs ordering"
           description="Items at or below their reorder level, with a suggested quantity to bring them back to par."
-          className="mb-4"
+          className="mt-4"
           actions={
             <div className="flex items-center gap-2">
               <Badge variant="warning">{suggestions.length}</Badge>
@@ -150,111 +222,6 @@ export default async function PurchasesPage({
           </div>
         </SectionCard>
       )}
-
-      <SectionCard title={view?.label ?? 'All purchase requests and orders'} bodyClassName="p-0">
-        {orders.length === 0 ? (
-          <div className="p-5">
-            <EmptyState
-              title={search ? `Nothing matches “${search}”` : view ? `Nothing ${view.label.toLowerCase()}` : 'No purchase requests yet'}
-              description={
-                search
-                  ? 'Try the order number, the supplier, an item on the order, or a GRN or invoice number.'
-                  : 'Raise a request, get it approved, and receive the goods against it. Each step appears here.'
-              }
-            />
-          </div>
-        ) : (
-          <ul className="divide-y divide-border">
-            {orders.map((po) => {
-              const status = PO_STATUS[po.status]
-              return (
-                <li key={po.id}>
-                  <Link
-                    href={`/dashboard/purchases/${po.id}`}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 hover:bg-muted/60"
-                  >
-                    <span className="font-medium tabular-nums">{po.number}</span>
-                    <Badge variant={status.variant}>{status.label}</Badge>
-                    {po.priority === 'URGENT' ? (
-                      <Badge variant={PO_PRIORITY.URGENT.variant}>{PO_PRIORITY.URGENT.label}</Badge>
-                    ) : null}
-                    {po.supplierName && <span className="text-sm">{po.supplierName}</span>}
-                    {po.branchName && !branchId ? <Badge variant="secondary">{po.branchName}</Badge> : null}
-                    <span className="text-sm text-muted-foreground">
-                      {po.lineCount} item{po.lineCount === 1 ? '' : 's'}
-                      {po.createdByName ? ` · ${po.createdByName}` : ''}
-                      {po.receivedPercent > 0 && po.receivedPercent < 100 ? ` · ${po.receivedPercent}% in` : ''}
-                    </span>
-                    <span className="ml-auto flex items-center gap-3">
-                      <span className="text-sm text-muted-foreground">
-                        {po.expectedAt ? (
-                          <>
-                            needed <LocalDateTime value={po.expectedAt} />
-                          </>
-                        ) : (
-                          <LocalDateTime value={po.createdAt} />
-                        )}
-                      </span>
-                      <span className="font-semibold tabular-nums">{money(po.total)}</span>
-                    </span>
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </SectionCard>
     </>
-  )
-}
-
-function Rail({
-  title,
-  views,
-  active,
-  href,
-  allHref,
-}: {
-  title: string
-  views: Array<{ key: string; label: string }>
-  active: string
-  href: (key: string) => string
-  /** The "everything" pill, shown on the first rail only. */
-  allHref?: string
-}) {
-  const pill = (key: string, label: string) => (
-    <Link
-      key={key}
-      href={href(key)}
-      aria-current={active === key ? 'page' : undefined}
-      className={cn(
-        'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-        active === key
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-card text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {label}
-    </Link>
-  )
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
-      {allHref ? (
-        <Link
-          href={allHref}
-          aria-current={active === 'all' ? 'page' : undefined}
-          className={cn(
-            'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-            active === 'all'
-              ? 'border-primary bg-primary text-primary-foreground'
-              : 'border-border bg-card text-muted-foreground hover:text-foreground',
-          )}
-        >
-          Everything
-        </Link>
-      ) : null}
-      {views.map((view) => pill(view.key, view.label))}
-    </div>
   )
 }

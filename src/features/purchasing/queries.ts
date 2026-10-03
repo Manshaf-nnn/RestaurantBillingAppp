@@ -96,6 +96,175 @@ export async function listPurchaseOrders(params: {
   })
 }
 
+/** The five figures across the top of the Purchasing screen. */
+export interface PurchaseStats {
+  total: number
+  /** Submitted, waiting for a decision. */
+  pending: number
+  /** Approved or ordered, with goods still to come. */
+  toReceive: number
+  /** Fully received or closed. */
+  received: number
+  /** Returned for edit or rejected. */
+  issues: number
+}
+
+/**
+ * What a status filter means. The four group keys are the figures at the top
+ * of the screen; anything else is a single status. An unknown value matches
+ * nothing rather than everything — a typo'd link must not look like "all".
+ */
+export const PURCHASE_STATUS_GROUPS: Record<string, PurchaseStatus[]> = {
+  PENDING_GROUP: ['PENDING_APPROVAL'],
+  OPEN_GROUP: ['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED'],
+  DONE_GROUP: ['RECEIVED', 'CLOSED'],
+  ISSUE_GROUP: ['RETURNED', 'REJECTED'],
+}
+
+const ALL_STATUSES: PurchaseStatus[] = [
+  'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'RETURNED', 'REJECTED',
+  'ORDERED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED', 'CANCELLED',
+]
+
+function statusesFor(status: string | null | undefined): PurchaseStatus[] | null {
+  if (!status) return null
+  if (PURCHASE_STATUS_GROUPS[status]) return PURCHASE_STATUS_GROUPS[status]
+  return ALL_STATUSES.includes(status as PurchaseStatus) ? [status as PurchaseStatus] : []
+}
+
+/**
+ * The Purchasing screen: figures, filters, one page of rows.
+ *
+ * The same shape as `getTransferBoard`, because the two screens are the same
+ * screen about different things. `listPurchaseOrders` above stays for its
+ * other callers; this is the paged, filtered read.
+ *
+ * The figures are over everything this viewer may see (the location scope),
+ * NOT over the filtered set — they are the map of the whole book, and they
+ * double as filters. Dates filter on when the request was raised.
+ */
+export async function getPurchaseBoard(params: {
+  restaurantId: string
+  /** Null is every location. */
+  branchIds: string[] | null
+  filter?: {
+    search?: string
+    supplierId?: string | null
+    status?: string | null
+    /** An explicit status set — the legacy `?view=` links. Wins over `status`. */
+    statuses?: PurchaseStatus[] | null
+    branchId?: string | null
+    itemId?: string | null
+    priority?: string | null
+    /** YYYY-MM-DD, inclusive, in the server's day. */
+    from?: string | null
+    to?: string | null
+    page?: number
+    perPage?: number
+  }
+}): Promise<{
+  rows: PurchaseSummary[]
+  total: number
+  page: number
+  perPage: number
+  pages: number
+  stats: PurchaseStats
+}> {
+  const filter = params.filter ?? {}
+  const perPage = Math.min(50, Math.max(1, filter.perPage ?? 10))
+  const term = filter.search?.trim()
+
+  const scope = {
+    restaurantId: params.restaurantId,
+    ...(params.branchIds ? { branchId: { in: params.branchIds } } : {}),
+  }
+  const statuses = filter.statuses ?? statusesFor(filter.status)
+  const from = filter.from && /^\d{4}-\d{2}-\d{2}$/.test(filter.from) ? new Date(`${filter.from}T00:00:00`) : null
+  const to = filter.to && /^\d{4}-\d{2}-\d{2}$/.test(filter.to) ? new Date(`${filter.to}T23:59:59.999`) : null
+
+  const where = {
+    ...scope,
+    ...(statuses ? { status: { in: statuses } } : {}),
+    ...(filter.supplierId ? { supplierId: filter.supplierId } : {}),
+    // Narrowing within the scope: `AND` so it can never widen it.
+    ...(filter.branchId ? { AND: [{ branchId: filter.branchId }] } : {}),
+    ...(filter.itemId ? { items: { some: { itemId: filter.itemId } } } : {}),
+    ...(filter.priority === 'URGENT' || filter.priority === 'NORMAL' || filter.priority === 'LOW'
+      ? { priority: filter.priority as PurchasePriority }
+      : {}),
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    ...(term
+      ? {
+          OR: [
+            { number: { contains: term, mode: 'insensitive' as const } },
+            { notes: { contains: term, mode: 'insensitive' as const } },
+            { supplier: { name: { contains: term, mode: 'insensitive' as const } } },
+            { items: { some: { item: { name: { contains: term, mode: 'insensitive' as const } } } } },
+            { items: { some: { item: { sku: { contains: term, mode: 'insensitive' as const } } } } },
+            { receipts: { some: { number: { contains: term, mode: 'insensitive' as const } } } },
+            { receipts: { some: { supplierRef: { contains: term, mode: 'insensitive' as const } } } },
+          ],
+        }
+      : {}),
+  }
+
+  const [total, byStatus] = await Promise.all([
+    prisma.purchase.count({ where }),
+    prisma.purchase.groupBy({ by: ['status'], where: scope, _count: true }),
+  ])
+  const pages = Math.max(1, Math.ceil(total / perPage))
+  const page = Math.min(pages, Math.max(1, filter.page ?? 1))
+
+  const orders = await prisma.purchase.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    skip: (page - 1) * perPage,
+    take: perPage,
+    include: {
+      supplier: { select: { name: true } },
+      branch: { select: { name: true } },
+      createdBy: { select: { name: true } },
+      items: { select: { quantity: true, receivedQty: true, rejectedQty: true } },
+    },
+  })
+
+  const count = (list: PurchaseStatus[]) =>
+    byStatus.filter((row) => list.includes(row.status)).reduce((sum, row) => sum + row._count, 0)
+
+  return {
+    rows: orders.map((po) => {
+      const ordered = po.items.reduce((sum, l) => sum + l.quantity, 0)
+      const handled = po.items.reduce((sum, l) => sum + l.receivedQty + l.rejectedQty, 0)
+      return {
+        id: po.id,
+        number: po.number,
+        status: po.status,
+        priority: po.priority,
+        supplierName: po.supplier?.name ?? null,
+        branchName: po.branch?.name ?? null,
+        createdByName: po.createdBy?.name ?? null,
+        total: po.total,
+        expectedAt: po.expectedAt?.toISOString() ?? null,
+        submittedAt: po.submittedAt?.toISOString() ?? null,
+        createdAt: po.createdAt.toISOString(),
+        lineCount: po.items.length,
+        receivedPercent: ordered > 0 ? Math.min(100, Math.round((handled / ordered) * 100)) : 0,
+      }
+    }),
+    total,
+    page,
+    perPage,
+    pages,
+    stats: {
+      total: byStatus.reduce((sum, row) => sum + row._count, 0),
+      pending: count(PURCHASE_STATUS_GROUPS.PENDING_GROUP),
+      toReceive: count(PURCHASE_STATUS_GROUPS.OPEN_GROUP),
+      received: count(PURCHASE_STATUS_GROUPS.DONE_GROUP),
+      issues: count(PURCHASE_STATUS_GROUPS.ISSUE_GROUP),
+    },
+  }
+}
+
 /**
  * The desk request still open for an order, if any.
  *

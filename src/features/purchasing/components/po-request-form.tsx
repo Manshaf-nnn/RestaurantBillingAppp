@@ -258,6 +258,11 @@ export function PoRequestForm({
       toast.error('Choose the location this is for')
       return
     }
+    if (!supplierId) {
+      toast.error('Choose a supplier')
+      document.getElementById('po-supplier')?.focus()
+      return
+    }
 
     setBusy(submit ? 'submit' : 'draft')
     const body = {
@@ -328,7 +333,7 @@ export function PoRequestForm({
               ))}
             </select>
           </Field>
-          <Field icon={<Truck />} label="Supplier" htmlFor="po-supplier">
+          <Field icon={<Truck />} label="Supplier *" htmlFor="po-supplier">
             <select
               id="po-supplier"
               value={supplierId}
@@ -336,7 +341,7 @@ export function PoRequestForm({
               className={SELECT}
               disabled={!canSubmit}
             >
-              <option value="">Optional</option>
+              <option value="">Choose a supplier…</option>
               {data.suppliers.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}

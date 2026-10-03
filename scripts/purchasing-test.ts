@@ -34,7 +34,7 @@ import {
   getPurchaseDetail,
   getReceiptDetail,
   listAwaitingDelivery,
-  listPurchaseOrders,
+  getPurchaseBoard, listPurchaseOrders,
 } from '../src/features/purchasing/queries'
 
 let passed = 0
@@ -355,6 +355,52 @@ async function main() {
 
   const nonsense = await listPurchaseOrders({ restaurantId: restaurant.id, search: 'zzzzzz' })
   check('and a term that matches nothing returns nothing', nonsense.length === 0, `${nonsense.length}`)
+
+  console.log('\n── the Purchasing board: figures, filters, pages ──')
+  {
+    const everything = await prisma.purchase.findMany({
+      where: { restaurantId: restaurant.id },
+      select: { id: true, status: true, supplierId: true, branchId: true },
+    })
+    const board = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null })
+    check('the total is every purchase', board.total === everything.length && board.stats.total === everything.length,
+      `${board.total}/${board.stats.total} vs ${everything.length}`)
+    const s = board.stats
+    const inGroups = everything.filter((row) => !['DRAFT', 'CANCELLED'].includes(row.status)).length
+    check('the figures account for every purchase that is not a draft or cancelled',
+      s.pending + s.toReceive + s.received + s.issues === inGroups,
+      `${s.pending}+${s.toReceive}+${s.received}+${s.issues} vs ${inGroups}`)
+
+    const two = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { perPage: 2, page: 2 } })
+    const firstTwo = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { perPage: 2 } })
+    check('pages do not overlap',
+      two.page === 2 && two.pages === Math.ceil(everything.length / 2) &&
+        !two.rows.some((row) => firstTwo.rows.some((other) => other.id === row.id)))
+
+    const bySupplier = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { supplierId: supplier.id } })
+    check('the supplier filter keeps only that supplier',
+      bySupplier.total === everything.filter((row) => row.supplierId === supplier.id).length && bySupplier.total > 0)
+    check('and the figures stay the whole book', bySupplier.stats.total === everything.length)
+
+    const group = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { status: 'OPEN_GROUP' } })
+    check('a status group filters to its statuses',
+      group.total === everything.filter((row) => ['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED'].includes(row.status)).length)
+    const bogus = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { status: 'NOT_A_STATUS' } })
+    check('an unknown status matches nothing, not everything', bogus.total === 0)
+
+    const today = new Date()
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const inRange = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { from: iso(today), to: iso(today) } })
+    const longAgo = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { from: '2000-01-01', to: '2000-01-02' } })
+    check('the date range filters on when it was raised', inRange.total === everything.length && longAgo.total === 0,
+      `${inRange.total} / ${longAgo.total}`)
+
+    const atKandy = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: [kandy.id] })
+    check('a location scope hides the others, in the rows and the figures',
+      atKandy.total === everything.filter((row) => row.branchId === kandy.id).length && atKandy.stats.total === atKandy.total)
+    const found = await getPurchaseBoard({ restaurantId: restaurant.id, branchIds: null, filter: { search: 'INV-9001' } })
+    check('search still finds an order by its invoice number', found.rows.some((row) => row.id === po.id))
+  }
 
   const blank = await listPurchaseOrders({ restaurantId: restaurant.id, search: '   ' })
   check(

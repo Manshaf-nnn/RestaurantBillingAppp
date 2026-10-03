@@ -122,6 +122,16 @@ export function GrnForm({
       toast.error('Enter what arrived')
       return
     }
+    if (!supplierRef.trim()) {
+      toast.error('Enter the invoice number')
+      document.getElementById('grn-inv')?.focus()
+      return
+    }
+    if (!invoiceDate) {
+      toast.error('Enter the invoice date')
+      document.getElementById('grn-date')?.focus()
+      return
+    }
     if (over.length > 0) {
       toast.error(`${over[0].name}: more than the ${over[0].outstanding} still outstanding`)
       return
@@ -222,10 +232,12 @@ export function GrnForm({
               <FactIcon icon={<FileText />} />
               <div className="min-w-0 flex-1">
                 <label htmlFor="grn-inv" className="text-[11px] text-muted-foreground">
-                  Invoice no.
+                  Invoice no. <span className="text-destructive">*</span>
                 </label>
                 <Input
                   id="grn-inv"
+                  required
+                  aria-required="true"
                   value={supplierRef}
                   onChange={(e) => setSupplierRef(e.target.value)}
                   placeholder="e.g. INV-45821"
@@ -237,10 +249,12 @@ export function GrnForm({
               <FactIcon icon={<CalendarDays />} />
               <div className="min-w-0 flex-1">
                 <label htmlFor="grn-date" className="text-[11px] text-muted-foreground">
-                  Invoice date
+                  Invoice date <span className="text-destructive">*</span>
                 </label>
                 <Input
                   id="grn-date"
+                  required
+                  aria-required="true"
                   type="date"
                   value={invoiceDate}
                   onChange={(e) => setInvoiceDate(e.target.value)}
