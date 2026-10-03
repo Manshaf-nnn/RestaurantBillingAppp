@@ -112,7 +112,10 @@ export default async function ItemHistoryPage({
             ) : null
           }
         />
-        <Figure label="Reorder at" value={formatQuantity(item.reorderLevel, item.unit)} />
+        <Figure
+          label={item.alertBranchName ? `Reorder at · ${item.alertBranchName}` : 'Reorder at'}
+          value={formatQuantity(item.reorderLevel, item.unit)}
+        />
         {/*
           What the NEXT unit costs, not an average of every delivery ever made.
           This said "Average cost" and showed the restaurant-wide blend, which

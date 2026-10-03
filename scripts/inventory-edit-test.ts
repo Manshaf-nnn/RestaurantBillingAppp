@@ -254,6 +254,56 @@ async function main() {
     await prisma.user.deleteMany({ where: { restaurantId: other.id } })
     await prisma.restaurant.deleteMany({ where: { id: other.id } })
   }
+
+  console.log('\n── 7. "Alert me below" watches the overall stock, or one location ──')
+  {
+    const kandy = await prisma.branch.create({
+      data: { restaurantId: restaurant.id, name: 'Kandy', code: 'KDY' },
+    })
+    const current = { ...base, id: item.id, name: `Basmati ${stamp}` }
+    const read = () => prisma.inventoryItem.findUniqueOrThrow({ where: { id: item.id } })
+
+    check('an item starts on the overall stock', (await read()).alertBranchId === null)
+
+    const pinned = await save({ ...current, alertBranchId: kandy.id })
+    check('choosing one location is accepted', pinned.ok, pinned.body.slice(0, 160))
+    check('and reaches the database', (await read()).alertBranchId === kandy.id, String((await read()).alertBranchId))
+
+    // Every caller written before the choice existed sends no such field.
+    const silent = await save({ ...current, alertBelow: 7 })
+    const afterSilent = await read()
+    check('an edit that does not mention it is accepted', silent.ok, silent.body.slice(0, 160))
+    check(
+      'and leaves the choice alone',
+      afterSilent.alertBranchId === kandy.id && afterSilent.reorderLevel === 7,
+      `${afterSilent.alertBranchId} / ${afterSilent.reorderLevel}`,
+    )
+
+    const overall = await save({ ...current, alertBranchId: '' })
+    check('blank puts it back on the overall stock', overall.ok && (await read()).alertBranchId === null)
+
+    const elsewhere = await prisma.restaurant.create({
+      data: {
+        name: `Elsewhere ${stamp}`, slug: `elsewhere-${stamp}`, email: `elsewhere-${stamp}@test.local`,
+        status: 'ACTIVE', isActive: true, currency: 'LKR', timezone: 'Asia/Colombo',
+      },
+    })
+    const theirs = await prisma.branch.create({
+      data: { restaurantId: elsewhere.id, name: 'Theirs', code: 'THR', isDefault: true },
+    })
+    const foreign = await save({ ...current, alertBranchId: theirs.id })
+    check('another restaurant’s location is refused', !foreign.ok, foreign.body.slice(0, 160))
+    check('and nothing is written', (await read()).alertBranchId === null)
+    await prisma.branch.deleteMany({ where: { restaurantId: elsewhere.id } })
+    await prisma.restaurant.deleteMany({ where: { id: elsewhere.id } })
+
+    const fresh = await save({ ...base, name: `Oil ${stamp}`, costPerUnit: 0, alertBranchId: kandy.id })
+    const oil = await prisma.inventoryItem.findFirst({
+      where: { restaurantId: restaurant.id, name: `Oil ${stamp}` },
+    })
+    check('a new item can be created already watching a location', fresh.ok && oil?.alertBranchId === kandy.id,
+      fresh.body.slice(0, 160))
+  }
 }
 
 main()

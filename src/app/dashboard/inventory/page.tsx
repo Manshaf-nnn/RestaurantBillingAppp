@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Prisma } from '@prisma/client'
 
+import { alertQuantity, stockAtAlertBranch } from '@/features/inventory/alerts'
 import { InventoryManager } from '@/features/inventory/components/inventory-manager'
 import { branchNameFor, scopeToOne, selectedBranch } from '@/features/dashboard/selected-branch'
 import { activeUnits, listStockCategories } from '@/features/catalog/service'
@@ -32,13 +33,20 @@ export default async function InventoryPage({
   const selection = await selectedBranch(user, await searchParams)
   const branchId = scopeToOne(selection)
 
-  const [restaurant, items, suppliers, branch, units, categories, locations] = await Promise.all([
+  const [restaurant, everyItem, suppliers, branch, units, categories, locations, watched] = await Promise.all([
     requireRestaurant(user.restaurantId),
+    /*
+     * Deactivated items come along too, for the Inactive tab. An item is never
+     * erased — it keeps its name and code — so it has to stay findable, or the
+     * next person to add "Rice" is told it exists and cannot see where.
+     */
     prisma.inventoryItem.findMany({
-      where: { restaurantId: user.restaurantId, isActive: true },
+      where: { restaurantId: user.restaurantId },
       orderBy: { name: 'asc' },
       include: {
         supplier: { select: { name: true } },
+        // Named on the row when "Alert me below" watches one location only.
+        alertBranch: { select: { name: true } },
         /*
          * The soonest date any stock of this item goes off.
          *
@@ -91,7 +99,12 @@ export default async function InventoryPage({
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
       select: { id: true, name: true },
     }),
+    // What each location-watched item holds where it watches. Only needed with
+    // no location chosen — with one, the shelf on screen is the answer.
+    branchId ? null : stockAtAlertBranch(user.restaurantId),
   ])
+
+  const items = everyItem.filter((item) => item.isActive)
 
   /** This location's shelf, or the group total when no location is chosen. */
   const quantityAt = (item: (typeof items)[number]) =>
@@ -161,6 +174,37 @@ export default async function InventoryPage({
     }
   }
 
+  const toRow = (item: (typeof items)[number]) => ({
+    id: item.id,
+    name: item.name,
+    sku: item.sku,
+    category: item.category,
+    unit: item.unit,
+    purchaseUnit: item.purchaseUnit,
+    unitsPerPurchaseUnit: item.unitsPerPurchaseUnit,
+    quantity: quantityAt(item),
+    reorderLevel: item.reorderLevel,
+    minStock: item.minStock,
+    maxStock: item.maxStock,
+    alertBranchId: item.alertBranchId,
+    alertBranchName: item.alertBranchId ? item.alertBranch?.name ?? null : null,
+    alertQuantity: alertQuantity({
+      alertBranchId: item.alertBranchId,
+      viewBranchId: branchId,
+      quantity: quantityAt(item),
+      atAlertBranch: watched?.get(item.id) ?? 0,
+    }),
+    costPerUnit: item.costPerUnit,
+    supplierId: item.supplierId,
+    supplierName: item.supplier?.name ?? null,
+    storageArea: item.storageArea,
+    // Batch first, the item's own legacy date only as a fallback for rows
+    // created before expiry moved onto deliveries.
+    expiryDate:
+      item.batches[0]?.expiryDate?.toISOString() ?? item.expiryDate?.toISOString() ?? null,
+    trackExpiry: item.trackExpiry,
+  })
+
   return (
     <>
       <AutoRefresh scope="catalog" intervalMs={10000} />
@@ -183,28 +227,8 @@ export default async function InventoryPage({
       suppliers={suppliers}
       units={units.map((u) => ({ code: u.code, name: u.name, symbol: u.symbol }))}
       categories={categories.map((c) => ({ id: c.id, name: c.name }))}
-      items={items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        sku: item.sku,
-        category: item.category,
-        unit: item.unit,
-        purchaseUnit: item.purchaseUnit,
-        unitsPerPurchaseUnit: item.unitsPerPurchaseUnit,
-        quantity: quantityAt(item),
-        reorderLevel: item.reorderLevel,
-        minStock: item.minStock,
-        maxStock: item.maxStock,
-        costPerUnit: item.costPerUnit,
-        supplierId: item.supplierId,
-        supplierName: item.supplier?.name ?? null,
-        storageArea: item.storageArea,
-        // Batch first, the item's own legacy date only as a fallback for rows
-        // created before expiry moved onto deliveries.
-        expiryDate:
-          item.batches[0]?.expiryDate?.toISOString() ?? item.expiryDate?.toISOString() ?? null,
-        trackExpiry: item.trackExpiry,
-      }))}
+      inactiveItems={everyItem.filter((item) => !item.isActive).map(toRow)}
+      items={items.map(toRow)}
       locations={locations}
       selectedBranchId={selection.branchId}
     />

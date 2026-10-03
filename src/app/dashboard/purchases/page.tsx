@@ -129,7 +129,10 @@ export default async function PurchasesPage({
                         {s.currentQty} {s.unit.toLowerCase()}
                       </span>
                     </td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums text-muted-foreground">{s.reorderLevel}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums text-muted-foreground">
+                      {s.reorderLevel}
+                      {s.alertBranchName ? <span className="block text-xs">at {s.alertBranchName}</span> : null}
+                    </td>
                     <td className="py-2.5 pr-3 text-right font-semibold tabular-nums">
                       {s.suggestedQty} {s.unit.toLowerCase()}
                     </td>

@@ -3,6 +3,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 import type { StockMovementType } from '@prisma/client'
 
+import { alertQuantity, stockAtAlertBranch } from '@/features/inventory/alerts'
 import { prisma } from '@/server/db/prisma'
 import { roundQty } from '@/lib/quantity'
 
@@ -78,6 +79,8 @@ export interface LowStockRow {
   quantity: number
   unit: string
   reorderLevel: number
+  /** The one location the threshold watches; null when it is the overall one. */
+  alertBranchName: string | null
   outOfStock: boolean
 }
 
@@ -156,6 +159,8 @@ export async function getInventoryReport(params: InventoryReportParams): Promise
       select: {
         id: true, name: true, unit: true, category: true, quantity: true,
         reorderLevel: true, minStock: true,
+        alertBranchId: true,
+        alertBranch: { select: { name: true } },
         ...(params.branchId
           ? { locationStock: { where: { branchId: params.branchId }, select: { available: true } } }
           : {}),
@@ -221,6 +226,8 @@ export async function getInventoryReport(params: InventoryReportParams): Promise
       ? ('locationStock' in item ? item.locationStock : []).reduce((sum, row) => sum + row.available, 0)
       : item.quantity
 
+  const watchedAt = params.branchId ? null : await stockAtAlertBranch(params.restaurantId)
+
   let lowStock = 0
   let outOfStock = 0
   const byCategoryMap = new Map<string, { items: number; quantity: number; value: number }>()
@@ -229,8 +236,16 @@ export async function getInventoryReport(params: InventoryReportParams): Promise
   for (const item of items) {
     const held = heldBy(item)
     const floor = item.reorderLevel > 0 ? item.reorderLevel : item.minStock
+    // The shelf the threshold watches: the one in view, unless the item's
+    // alert is pinned to a single location (`alertQuantity`).
+    const watched = alertQuantity({
+      alertBranchId: item.alertBranchId,
+      viewBranchId: params.branchId ?? null,
+      quantity: held,
+      atAlertBranch: watchedAt?.get(item.id) ?? 0,
+    })
     const isOut = held <= 0
-    const isLow = !isOut && floor > 0 && held <= floor
+    const isLow = !isOut && floor > 0 && watched !== null && watched <= floor
     if (isOut) outOfStock += 1
     if (isLow) lowStock += 1
     if (isOut || isLow) {
@@ -238,9 +253,11 @@ export async function getInventoryReport(params: InventoryReportParams): Promise
         itemId: item.id,
         name: item.name,
         category: item.category ?? UNCATEGORISED,
-        quantity: roundQty(held),
+        // A low row quotes the shelf that made it low.
+        quantity: roundQty(isLow && watched !== null ? watched : held),
         unit: item.unit as string,
         reorderLevel: floor,
+        alertBranchName: item.alertBranchId ? item.alertBranch?.name ?? null : null,
         outOfStock: isOut,
       })
     }

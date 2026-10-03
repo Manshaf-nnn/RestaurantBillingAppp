@@ -163,6 +163,14 @@ export default async function HelpPage() {
             warning — an item sitting at zero shows as <strong>Out</strong>, which is a fact, not an
             alert you configured.
           </Note>
+          <Note>
+            <strong>Overall or one location.</strong> With more than one site, the tick box under “Alert
+            me below” says which stock the number is held against. <strong>Overall</strong> — the
+            default — is every location together: the total with all locations on screen, or one
+            location&rsquo;s own shelf when you have picked it at the top. Choose a location instead
+            and only that shelf is watched: the kitchen is flagged the moment it runs short, however
+            much the warehouse holds, and no other location is called low for it.
+          </Note>
         </SectionCard>
 
         <SectionCard

@@ -338,6 +338,13 @@ export async function removeBranch(params: {
       where: { branchId: params.branchId, deletedAt: null },
       data: { deletedAt: new Date(), isActive: false },
     })
+    // An "Alert me below" that watched this location goes back to the overall
+    // figure. Left pinned to a shelf that is gone it would read zero for ever
+    // and flag the item low with nothing anybody could restock.
+    await tx.inventoryItem.updateMany({
+      where: { restaurantId: params.restaurantId, alertBranchId: params.branchId },
+      data: { alertBranchId: null },
+    })
     await tx.branch.update({
       where: { id: params.branchId },
       data: { deletedAt: new Date(), isActive: false },

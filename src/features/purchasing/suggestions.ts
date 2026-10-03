@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { alertQuantity, stockAtAlertBranch } from '@/features/inventory/alerts'
 import { prisma } from '@/server/db/prisma'
 import { roundQty } from '@/lib/quantity'
 
@@ -19,6 +20,8 @@ export interface ReorderSuggestion {
   unit: string
   currentQty: number
   reorderLevel: number
+  /** The one location the threshold watches; null when it is the overall one. */
+  alertBranchName: string | null
   maxStock: number | null
   /** In base units. */
   suggestedQty: number
@@ -49,6 +52,8 @@ export async function getReorderSuggestions(params: {
     select: {
       id: true, name: true, unit: true, quantity: true, reorderLevel: true,
       minStock: true, maxStock: true, costPerUnit: true,
+      alertBranchId: true,
+      alertBranch: { select: { name: true } },
       ...(params.branchId
         ? {
             locationStock: {
@@ -69,15 +74,29 @@ export async function getReorderSuggestions(params: {
     },
   })
 
+  const watched = params.branchId ? null : await stockAtAlertBranch(params.restaurantId)
   const suggestions: ReorderSuggestion[] = []
 
   for (const item of items) {
-    const quantity = params.branchId
+    const inView = params.branchId
       ? ('locationStock' in item ? item.locationStock : []).reduce(
           (sum, row) => sum + row.available,
           0,
         )
       : item.quantity
+
+    /*
+     * The shelf the threshold watches. An item whose alert is pinned to one
+     * location is short when THAT shelf is, and the top-up is worked out for
+     * it; looking at any other location it has nothing to say.
+     */
+    const quantity = alertQuantity({
+      alertBranchId: item.alertBranchId,
+      viewBranchId: params.branchId ?? null,
+      quantity: inView,
+      atAlertBranch: watched?.get(item.id) ?? 0,
+    })
+    if (quantity === null) continue
 
     const floor = Math.max(item.reorderLevel, item.minStock)
     if (floor <= 0 || quantity > floor) continue
@@ -96,6 +115,7 @@ export async function getReorderSuggestions(params: {
       unit: item.unit,
       currentQty: quantity,
       reorderLevel: item.reorderLevel,
+      alertBranchName: item.alertBranchId ? item.alertBranch?.name ?? null : null,
       maxStock: item.maxStock,
       suggestedQty: suggested,
       estimatedCost: Math.round(suggested * (source?.price || item.costPerUnit)),

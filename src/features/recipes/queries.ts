@@ -2,7 +2,7 @@ import 'server-only'
 
 import { prisma } from '@/server/db/prisma'
 import { getFoodCost, type FoodCostBreakdown } from '@/features/inventory/food-cost'
-import { levelFor } from '@/features/inventory/alerts'
+import { alertQuantity, levelFor, stockAtAlertBranch } from '@/features/inventory/alerts'
 import { resolveRecipe, activeRecipeForFood } from '@/features/inventory/recipe-resolver'
 
 export interface RecipeRow {
@@ -37,6 +37,7 @@ export async function listRecipeRows(restaurantId: string): Promise<RecipeRow[]>
     orderBy: { name: 'asc' },
   })
 
+  const watched = await stockAtAlertBranch(restaurantId)
   const rows: RecipeRow[] = []
 
   for (const food of foods) {
@@ -55,14 +56,25 @@ export async function listRecipeRows(restaurantId: string): Promise<RecipeRow[]>
     const items = itemIds.length
       ? await prisma.inventoryItem.findMany({
           where: { id: { in: itemIds }, restaurantId },
-          select: { id: true, name: true, quantity: true, reorderLevel: true, minStock: true, maxStock: true },
+          select: {
+            id: true, name: true, quantity: true, reorderLevel: true, minStock: true, maxStock: true,
+            alertBranchId: true,
+          },
         })
       : []
 
     let warning: RecipeRow['stockWarning'] = null
     const short: string[] = []
     for (const item of items) {
-      const level = levelFor(item)
+      const level = levelFor({
+        ...item,
+        alertQuantity: alertQuantity({
+          alertBranchId: item.alertBranchId,
+          viewBranchId: null,
+          quantity: item.quantity,
+          atAlertBranch: watched.get(item.id) ?? 0,
+        }),
+      })
       if (level === 'OUT_OF_STOCK') { warning = 'OUT_OF_STOCK'; short.push(item.name) }
       else if (level === 'LOW_STOCK') { if (warning !== 'OUT_OF_STOCK') warning = 'LOW_STOCK'; short.push(item.name) }
     }

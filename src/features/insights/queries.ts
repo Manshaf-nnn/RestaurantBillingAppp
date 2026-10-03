@@ -14,9 +14,9 @@ import { getFinancialReconciliation } from '@/features/accounting/financial-reco
 import { getAccountingHub, type AccountingHub } from '@/features/accounting/hub'
 import type { IntegrityStatus } from '@/features/accounting/integrity'
 import { issueAdvice, issueExampleHref } from '@/features/accounting/issue-links'
-import { getInventorySummary, type InventorySummary } from '@/features/inventory/alerts'
+import { getInventorySummary, stockAtAlertBranch, type InventorySummary } from '@/features/inventory/alerts'
 import { costRecipesDetailed } from '@/features/inventory/recipe-resolver'
-import { levelFor } from '@/features/inventory/stock-level'
+import { alertQuantity, levelFor } from '@/features/inventory/stock-level'
 import { getWastageReport, type WastageReport } from '@/features/inventory/wastage'
 import { getReorderSuggestions } from '@/features/purchasing/suggestions'
 import { getProfitReport, type ProfitReport } from '@/features/reports/profit'
@@ -383,13 +383,13 @@ export async function getSmartInventory(params: {
   const now = params.now ?? new Date()
   const windowStart = usageWindowStart(now, timeZone)
 
-  const [items, suggestions, usage] = await Promise.all([
+  const [items, suggestions, usage, watched] = await Promise.all([
     // `branchId` scopes the QUANTITY, never the item list (no-item-branch-filter).
     prisma.inventoryItem.findMany({
       where: { restaurantId, isActive: true },
       select: {
         id: true, name: true, unit: true, quantity: true, reorderLevel: true, minStock: true,
-        maxStock: true, costPerUnit: true, unitsPerPurchaseUnit: true,
+        maxStock: true, costPerUnit: true, unitsPerPurchaseUnit: true, alertBranchId: true,
         ...(branchId
           ? { locationStock: { where: { branchId }, select: { available: true } } }
           : {}),
@@ -398,6 +398,7 @@ export async function getSmartInventory(params: {
     }),
     getReorderSuggestions({ restaurantId, branchId }),
     getUsageStats({ restaurantId, branchId, windowStart, now }),
+    branchId ? null : stockAtAlertBranch(restaurantId),
   ])
   const suggestionByItem = new Map(suggestions.map((row) => [row.itemId, row]))
 
@@ -441,7 +442,15 @@ export async function getSmartInventory(params: {
       supplierName: suggestion?.supplierName ?? null,
       estimatedCost: Math.round(recommendation.recommendedQty * unitPrice),
       outlook: outlookFor(stats, suggestion?.leadTimeDays ?? null),
-      level: levelFor({ quantity: available, reorderLevel: item.reorderLevel, minStock: item.minStock, maxStock: item.maxStock }),
+      level: levelFor({
+        quantity: available, reorderLevel: item.reorderLevel, minStock: item.minStock, maxStock: item.maxStock,
+        alertQuantity: alertQuantity({
+          alertBranchId: item.alertBranchId,
+          viewBranchId: branchId,
+          quantity: available,
+          atAlertBranch: watched?.get(item.id) ?? 0,
+        }),
+      }),
       sentence: outlookSentence(item.name, item.unit, stats, recommendation),
     }
   })

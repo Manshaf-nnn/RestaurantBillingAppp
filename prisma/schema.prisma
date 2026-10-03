@@ -2844,6 +2844,11 @@ model InventoryItem {
   minStock     Float  @default(0)
   /// Par level. Above this the item is flagged as overstocked.
   maxStock     Float?
+  /// The one location the low-stock threshold watches. Null — the default —
+  /// is the overall figure: the threshold is held against the stock in view,
+  /// which with no location chosen is the total across all of them.
+  alertBranchId String?
+  alertBranch   Branch? @relation("ItemAlertBranch", fields: [alertBranchId], references: [id], onDelete: SetNull)
 
   /// Weighted average cost per base unit, minor units. Recomputed on receipt.
   /// A CACHE of stockValue / quantity, rounded — display and fallback only.
@@ -3703,6 +3708,7 @@ model Branch {
   tables            RestaurantTable[]
   orders            Order[]
   inventoryItems    InventoryItem[]
+  alertItems        InventoryItem[]     @relation("ItemAlertBranch")
   cashDrawers       CashDrawerSession[]
   shifts            StaffShift[]
   auditLogs         AuditLog[]

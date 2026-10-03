@@ -28,10 +28,17 @@ export function levelFor(item: {
   reorderLevel: number
   minStock: number
   maxStock: number | null
+  /**
+   * The balance the threshold is held against, when that is not `quantity` —
+   * see `alertQuantity` below. Left out, the threshold reads `quantity`, which
+   * is every item whose alert is the overall one.
+   */
+  alertQuantity?: number | null
 }): StockAlertLevel | null {
   if (item.quantity <= 0) return 'OUT_OF_STOCK'
   const floor = alertThreshold(item)
-  if (floor > 0 && item.quantity <= floor) return 'LOW_STOCK'
+  const watched = item.alertQuantity === undefined ? item.quantity : item.alertQuantity
+  if (floor > 0 && watched !== null && watched <= floor) return 'LOW_STOCK'
   if (item.maxStock && item.maxStock > 0 && item.quantity > item.maxStock) return 'OVERSTOCK'
   return null
 }
@@ -47,4 +54,36 @@ export function levelFor(item: {
  */
 export function alertThreshold(item: { reorderLevel: number; minStock: number }): number {
   return Math.max(item.reorderLevel, item.minStock)
+}
+
+/**
+ * Which balance "Alert me below" is held against.
+ *
+ * The threshold is one number, and with more than one location it never said
+ * ten of WHAT. By default it is the overall figure: the stock in view, which
+ * with no location chosen is the total across all of them. An item can instead
+ * watch ONE location (`alertBranchId`) — the kitchen that must never run short
+ * while the warehouse holds plenty — and then only that shelf counts, whichever
+ * screen is asking.
+ *
+ * `null` means the threshold belongs to a different location than the one in
+ * view and says nothing here: the warehouse's rice is not "low" because the
+ * kitchen's is. Out of stock is still out of stock — `levelFor` checks the
+ * shelf in view for that before it reads this.
+ */
+export function alertQuantity(params: {
+  /** The one location the threshold watches; null when it is the overall one. */
+  alertBranchId: string | null
+  /** The location in view, or null for all of them. */
+  viewBranchId: string | null
+  /** What is in view: that location's shelf, or the total. */
+  quantity: number
+  /** What the watched location holds. Only read with no location in view. */
+  atAlertBranch: number
+}): number | null {
+  if (!params.alertBranchId) return params.quantity
+  if (params.viewBranchId) {
+    return params.viewBranchId === params.alertBranchId ? params.quantity : null
+  }
+  return params.atAlertBranch
 }

@@ -13,7 +13,7 @@ import { resolveCategory } from '@/features/catalog/service'
 import { actingBranchId } from '@/features/dashboard/selected-branch'
 import { postMovement } from './ledger'
 import { nextPurchaseNumber } from '@/features/purchasing/service'
-import { notifyLowStock } from './alerts'
+import { itemsAtReorderLevel, notifyLowStock } from './alerts'
 import { isUniqueViolation, prisma } from '@/server/db/prisma'
 import { requireRestaurant } from '@/server/db/tenant'
 import { realtime } from '@/server/realtime/emitter'
@@ -35,6 +35,7 @@ export interface SavedInventoryItem {
   reorderLevel: number
   minStock: number
   maxStock: number | null
+  alertBranchId: string | null
   costPerUnit: number
   supplierId: string | null
   storageArea: string | null
@@ -45,13 +46,15 @@ export interface SavedInventoryItem {
 
 function toSavedItem(row: {
   id: string; name: string; sku: string | null; category: string | null; unit: string
-  reorderLevel: number; minStock: number; maxStock: number | null; costPerUnit: number
+  reorderLevel: number; minStock: number; maxStock: number | null; alertBranchId: string | null
+  costPerUnit: number
   supplierId: string | null; storageArea: string | null; purchaseUnit: string | null
   unitsPerPurchaseUnit: number | null; trackExpiry: boolean
 }): SavedInventoryItem {
   return {
     id: row.id, name: row.name, sku: row.sku, category: row.category, unit: row.unit,
     reorderLevel: row.reorderLevel, minStock: row.minStock, maxStock: row.maxStock,
+    alertBranchId: row.alertBranchId,
     costPerUnit: row.costPerUnit, supplierId: row.supplierId, storageArea: row.storageArea,
     purchaseUnit: row.purchaseUnit, unitsPerPurchaseUnit: row.unitsPerPurchaseUnit,
     trackExpiry: row.trackExpiry,
@@ -95,6 +98,30 @@ async function resolveOpeningStock(
   })
   if (known.length !== ids.length) throw new NotFoundError('Location')
   return rows
+}
+
+/**
+ * The one location "Alert me below" watches, or null for the overall figure.
+ *
+ * A location the item already watches is kept as it is — somebody confined to
+ * one site, correcting a name, must not be refused over a choice they did not
+ * make. A NEW choice is vetted like any other location this person names: one
+ * they may reach, and this restaurant's (see `resolveOpeningStock`).
+ */
+async function resolveAlertBranch(
+  user: Awaited<ReturnType<typeof requirePermission>>,
+  wanted: string | null,
+  current: string | null,
+): Promise<string | null> {
+  if (!wanted) return null
+  if (wanted === current) return current
+  await assertBranchAccess(user, wanted)
+  const known = await prisma.branch.findFirst({
+    where: { id: wanted, restaurantId: user.restaurantId, deletedAt: null },
+    select: { id: true },
+  })
+  if (!known) throw new NotFoundError('Location')
+  return known.id
 }
 
 export async function saveInventoryItem(
@@ -143,7 +170,7 @@ export async function saveInventoryItem(
       const existing = data.id
         ? await prisma.inventoryItem.findFirst({
             where: { id: data.id, restaurantId: user.restaurantId },
-            select: { trackBatches: true, unit: true, costPerUnit: true },
+            select: { trackBatches: true, unit: true, costPerUnit: true, alertBranchId: true },
           })
         : null
 
@@ -187,6 +214,18 @@ export async function saveInventoryItem(
         )
       }
 
+      // Not sent on an edit means not asked: the item keeps what it has.
+      const alertBranch =
+        data.alertBranchId === undefined && data.id
+          ? {}
+          : {
+              alertBranchId: await resolveAlertBranch(
+                user,
+                data.alertBranchId || null,
+                existing?.alertBranchId ?? null,
+              ),
+            }
+
       const payload = {
         name: data.name,
         sku: data.sku || null,
@@ -196,6 +235,7 @@ export async function saveInventoryItem(
         // The same number in both columns — see `alertBelow` in the schema.
         reorderLevel: data.alertBelow,
         minStock: data.alertBelow,
+        ...alertBranch,
         maxStock: data.maxStock && data.maxStock > 0 ? data.maxStock : null,
         /*
          * Create-only. After creation the weighted average belongs to the
@@ -243,7 +283,7 @@ export async function saveInventoryItem(
 
           const snapshot = (row: typeof after) => ({
             name: row.name, sku: row.sku, category: row.category, unit: row.unit,
-            reorderLevel: row.reorderLevel, maxStock: row.maxStock,
+            reorderLevel: row.reorderLevel, alertBranchId: row.alertBranchId, maxStock: row.maxStock,
             supplierId: row.supplierId, storageArea: row.storageArea,
             purchaseUnit: row.purchaseUnit, unitsPerPurchaseUnit: row.unitsPerPurchaseUnit,
             trackExpiry: row.trackExpiry,
@@ -313,6 +353,29 @@ export async function saveInventoryItem(
         return { id: record.id }
       } catch (error) {
         if (isUniqueViolation(error)) {
+          /*
+           * A deactivated item still owns its name and its code. It is off
+           * every list but the Inactive tab, so "already exists" on its own
+           * reads as the app refusing a name nobody can find — say where it
+           * is and how to get it back.
+           */
+          const dormant = await prisma.inventoryItem.findFirst({
+            where: {
+              restaurantId: user.restaurantId,
+              isActive: false,
+              ...(data.id ? { id: { not: data.id } } : {}),
+              OR: [
+                { name: data.name },
+                ...(data.sku ? [{ sku: data.sku }] : []),
+              ],
+            },
+            select: { name: true, sku: true },
+          })
+          if (dormant) {
+            throw new ConflictError(
+              `"${dormant.name}"${dormant.sku ? ` (${dormant.sku})` : ''} already exists but is deactivated. Open the Inactive tab on the Inventory page and reactivate it — its details and history are still there.`,
+            )
+          }
           /*
            * The commonest reason somebody reaches here is not a genuine
            * duplicate: it is wanting the same item at a NEW price, and
@@ -435,20 +498,22 @@ export async function recordStockMovement(input: unknown): Promise<ActionResult<
         },
       })
 
-      if (nextQuantity <= item.reorderLevel) {
+      // On the balance the threshold watches — the total, or one location's.
+      const [low] = await itemsAtReorderLevel(user.restaurantId, [item.id])
+      if (low) {
         realtime.lowStock(user.restaurantId, {
-          itemId: item.id,
-          name: item.name,
-          quantity: nextQuantity,
-          reorderLevel: item.reorderLevel,
-          unit: item.unit,
+          itemId: low.id,
+          name: low.name,
+          quantity: low.quantity,
+          reorderLevel: low.reorderLevel,
+          unit: low.unit,
         })
         // The one that is actually seen: the socket event above reaches nobody
         // in production. Persisted, deduplicated to once a day per item.
         await notifyLowStock({
           restaurantId: user.restaurantId,
-          branchId: data.branchId ?? null,
-          item: { id: item.id, name: item.name, quantity: nextQuantity, reorderLevel: item.reorderLevel, unit: item.unit },
+          branchId: low.alertBranchId ?? data.branchId ?? null,
+          item: low,
         })
       }
 
@@ -469,7 +534,26 @@ export async function deleteInventoryItem(id: string): Promise<ActionResult<{ id
     if (result.count === 0) throw new NotFoundError('Inventory item')
     revalidatePath('/dashboard/inventory')
     return { id }
-  }, 'Item removed.')
+  }, 'Item deactivated.')
+}
+
+/**
+ * Bring a deactivated item back, exactly as it was.
+ *
+ * An item is never erased: its name, code and history stay, so deactivating
+ * is the only way one leaves the list and this is the way back.
+ */
+export async function reactivateInventoryItem(id: string): Promise<ActionResult<{ id: string }>> {
+  return runSafe(async () => {
+    const user = await requirePermission(PERMISSIONS.INVENTORY_MANAGE)
+    const result = await prisma.inventoryItem.updateMany({
+      where: { id, restaurantId: user.restaurantId },
+      data: { isActive: true },
+    })
+    if (result.count === 0) throw new NotFoundError('Inventory item')
+    revalidatePath('/dashboard/inventory')
+    return { id }
+  }, 'Item reactivated.')
 }
 
 // ── suppliers ────────────────────────────────────────────────────────────────

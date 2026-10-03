@@ -167,11 +167,21 @@ export async function getDashboardStats(params: {
       (SELECT COUNT(*) FROM inventory_items i
         WHERE i."restaurantId" = ${restaurantId} AND i."isActive" = true
           AND ${noBranch} = false
-          AND CASE WHEN ${oneBranch}::text IS NULL
-                   THEN i.quantity
-                   ELSE COALESCE((SELECT SUM(s.available) FROM inventory_stock s
-                                   WHERE s."itemId" = i.id AND s."branchId" = ${oneBranch}), 0)
-              END <= i."reorderLevel")::bigint                                         AS low_stock
+          -- The shelf the threshold watches: the one in view, unless the item's
+          -- "Alert me below" is pinned to a single location. Pinned somewhere
+          -- else than the location in view, only an empty shelf counts.
+          AND CASE
+                WHEN i."alertBranchId" IS NOT NULL AND ${oneBranch}::text IS NOT NULL
+                     AND i."alertBranchId" <> ${oneBranch}
+                  THEN COALESCE((SELECT SUM(s.available) FROM inventory_stock s
+                                  WHERE s."itemId" = i.id AND s."branchId" = ${oneBranch}), 0) <= 0
+                WHEN COALESCE(i."alertBranchId", ${oneBranch}::text) IS NULL
+                  THEN i.quantity <= i."reorderLevel"
+                ELSE COALESCE((SELECT SUM(s.available) FROM inventory_stock s
+                                WHERE s."itemId" = i.id
+                                  AND s."branchId" = COALESCE(i."alertBranchId", ${oneBranch}::text)), 0)
+                     <= i."reorderLevel"
+              END)::bigint                                                             AS low_stock
   `
 
   const revenue = Number(row?.revenue ?? 0)

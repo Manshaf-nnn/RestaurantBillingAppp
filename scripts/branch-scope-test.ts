@@ -29,6 +29,14 @@ import { getBranchStaffPerformance } from '../src/features/staff/performance'
 import { customRange, resolveRange } from '../src/features/reports/range'
 import { listOrders } from '../src/features/orders/queries'
 import { getReorderSuggestions } from '../src/features/purchasing/suggestions'
+import {
+  alertQuantity,
+  getInventorySummary,
+  itemsAtReorderLevel,
+  levelFor,
+  listStockAlerts,
+} from '../src/features/inventory/alerts'
+import { getInventoryReport } from '../src/features/reports/inventory-report'
 import { scopeToOne } from '../src/features/dashboard/selected-branch'
 import { visibleBranchIds } from '../src/lib/rbac'
 
@@ -215,6 +223,119 @@ async function main() {
     !colomboNeeds.some((s) => s.itemId === rice.id),
     'told a location with 55kg to order more',
   )
+
+  console.log('\n── "Alert me below" on the overall stock, or on one location ──')
+
+  /*
+   * One threshold against several shelves never said ten of WHAT. The default
+   * — overall — is everything above: the total with no location in view, the
+   * location's own shelf with one. An item can instead watch ONE location, and
+   * then only that shelf counts, whichever screen is asking.
+   */
+  const low = (rows: Array<{ itemId: string; level: string }>) =>
+    rows.find((row) => row.itemId === rice.id)?.level ?? null
+  const tile = async (branchIds?: string[]) =>
+    (await getDashboardStats({ restaurantId: restaurant.id, range: statsRange, branchIds })).lowStockCount
+  const reportRange = { from: new Date(Date.now() - 86_400_000), to: new Date() }
+
+  check(
+    'overall: the group is fine and raises no alert',
+    low(await listStockAlerts({ restaurantId: restaurant.id })) === null,
+  )
+  check(
+    'overall: Kandy on its own is low, as before',
+    low(await listStockAlerts({ restaurantId: restaurant.id, branchId: kandy.id })) === 'LOW_STOCK',
+  )
+  check('overall: nothing is at its reorder level', (await itemsAtReorderLevel(restaurant.id, [rice.id])).length === 0)
+  const tileBefore = await tile()
+
+  // The owner says the 20kg is about Kandy alone.
+  await prisma.inventoryItem.update({ where: { id: rice.id }, data: { alertBranchId: kandy.id } })
+
+  const pinnedGroup = (await getReorderSuggestions({ restaurantId: restaurant.id })).find(
+    (s) => s.itemId === rice.id,
+  )
+  check(
+    'watching Kandy: the group view now says reorder, on Kandy’s 5kg',
+    pinnedGroup?.currentQty === 5 && pinnedGroup.alertBranchName === 'Kandy',
+    `${pinnedGroup?.currentQty} / ${pinnedGroup?.alertBranchName}`,
+  )
+  check(
+    'and tops Kandy up from 5, not the group from 60',
+    pinnedGroup?.suggestedQty === 35,
+    `${pinnedGroup?.suggestedQty}`,
+  )
+  check(
+    'the alert list agrees',
+    low(await listStockAlerts({ restaurantId: restaurant.id })) === 'LOW_STOCK',
+  )
+  check(
+    'so does the summary',
+    (await getInventorySummary({ restaurantId: restaurant.id })).lowStock === 1,
+  )
+  check('and the dashboard tile', (await tile()) === tileBefore + 1, `${await tile()} vs ${tileBefore}`)
+  const report = await getInventoryReport({ restaurantId: restaurant.id, ...reportRange })
+  const reportRow = report.lowStockItemsAll.find((row) => row.itemId === rice.id)
+  check(
+    'the low-stock report quotes the shelf that made it low',
+    reportRow?.quantity === 5 && reportRow.alertBranchName === 'Kandy' && !reportRow.outOfStock,
+    JSON.stringify(reportRow),
+  )
+  const atLevel = await itemsAtReorderLevel(restaurant.id, [rice.id])
+  check(
+    'a movement would notify, quoting Kandy’s balance',
+    atLevel.length === 1 && atLevel[0]!.quantity === 5 && atLevel[0]!.alertBranchName === 'Kandy',
+    JSON.stringify(atLevel),
+  )
+  check(
+    'Kandy’s own view is still low',
+    low(await listStockAlerts({ restaurantId: restaurant.id, branchId: kandy.id })) === 'LOW_STOCK',
+  )
+  check(
+    'Colombo’s is not',
+    low(await listStockAlerts({ restaurantId: restaurant.id, branchId: colombo.id })) === null,
+  )
+
+  // Now the other way: the threshold is about Colombo, which holds 55kg.
+  await prisma.inventoryItem.update({ where: { id: rice.id }, data: { alertBranchId: colombo.id } })
+
+  check(
+    'watching Colombo: nothing to reorder for the group',
+    !(await getReorderSuggestions({ restaurantId: restaurant.id })).some((s) => s.itemId === rice.id),
+  )
+  check(
+    'and Kandy’s 5kg is no longer called low — the threshold is not about Kandy',
+    low(await listStockAlerts({ restaurantId: restaurant.id, branchId: kandy.id })) === null &&
+      !(await getReorderSuggestions({ restaurantId: restaurant.id, branchId: kandy.id })).some(
+        (s) => s.itemId === rice.id,
+      ),
+  )
+  check('the Kandy tile agrees', (await tile([kandy.id])) === 0, `${await tile([kandy.id])}`)
+  check(
+    'the Kandy report agrees',
+    !(await getInventoryReport({ restaurantId: restaurant.id, branchId: kandy.id, ...reportRange }))
+      .lowStockItemsAll.some((row) => row.itemId === rice.id),
+  )
+  check('no movement would notify', (await itemsAtReorderLevel(restaurant.id, [rice.id])).length === 0)
+
+  // An empty shelf is still an empty shelf, whoever the threshold is about.
+  check(
+    'out of stock in view wins over a threshold kept elsewhere',
+    levelFor({ quantity: 0, reorderLevel: 20, minStock: 0, maxStock: null, alertQuantity: null }) === 'OUT_OF_STOCK',
+  )
+  check(
+    'the rule itself: overall reads the stock in view',
+    alertQuantity({ alertBranchId: null, viewBranchId: null, quantity: 60, atAlertBranch: 0 }) === 60 &&
+      alertQuantity({ alertBranchId: null, viewBranchId: kandy.id, quantity: 5, atAlertBranch: 0 }) === 5,
+  )
+  check(
+    'a watched location reads its own shelf, and says nothing elsewhere',
+    alertQuantity({ alertBranchId: kandy.id, viewBranchId: null, quantity: 60, atAlertBranch: 5 }) === 5 &&
+      alertQuantity({ alertBranchId: kandy.id, viewBranchId: kandy.id, quantity: 5, atAlertBranch: 0 }) === 5 &&
+      alertQuantity({ alertBranchId: kandy.id, viewBranchId: colombo.id, quantity: 55, atAlertBranch: 0 }) === null,
+  )
+
+  await prisma.inventoryItem.update({ where: { id: rice.id }, data: { alertBranchId: null } })
 
   console.log('\n── and it fails closed ──')
 

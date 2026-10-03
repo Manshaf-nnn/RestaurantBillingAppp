@@ -59,6 +59,11 @@ export interface ItemHistory {
     reorderLevel: number
     minStock: number
     maxStock: number | null
+    /** The one location the threshold watches; null when it is the overall one. */
+    alertBranchId: string | null
+    alertBranchName: string | null
+    /** The balance the threshold is held against — see `alertQuantity`. */
+    alertQuantity: number
     costPerUnit: number
     /**
      * What the next unit off this shelf costs — the first open layer's rate.
@@ -141,6 +146,8 @@ export async function getItemHistory(params: {
     select: {
       id: true, name: true, sku: true, barcode: true, category: true, unit: true,
       quantity: true, reorderLevel: true, minStock: true, maxStock: true,
+      alertBranchId: true,
+      alertBranch: { select: { name: true } },
       costPerUnit: true, lastPurchaseCost: true,
       purchaseUnit: true, unitsPerPurchaseUnit: true,
       storageArea: true, expiryDate: true,
@@ -169,7 +176,7 @@ export async function getItemHistory(params: {
     },
   })
 
-  const [sum, locationStock, receiptLines, layers] = await Promise.all([
+  const [sum, locationStock, receiptLines, layers, atAlertBranch] = await Promise.all([
     prisma.stockMovement.aggregate({
       where: { itemId: item.id, restaurantId: params.restaurantId, ...branchWhere },
       _sum: { quantity: true },
@@ -227,6 +234,18 @@ export async function getItemHistory(params: {
       orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
       select: { remainingQty: true, remainingValue: true, unitCost: true },
     }),
+    /*
+     * What the watched location holds, when "Alert me below" is pinned to one.
+     * Deliberately not narrowed by `branchWhere`: whether the item is low is a
+     * fact about the item, and a viewer who cannot see that location's shelf
+     * would otherwise read it as empty and be told the item is low.
+     */
+    item.alertBranchId
+      ? prisma.inventoryStock.aggregate({
+          where: { itemId: item.id, restaurantId: params.restaurantId, branchId: item.alertBranchId },
+          _sum: { available: true },
+        })
+      : null,
   ])
 
   const stockValue = layers.reduce((total, layer) => total + layer.remainingValue, 0)
@@ -250,6 +269,9 @@ export async function getItemHistory(params: {
       id: item.id, name: item.name, sku: item.sku, unit: item.unit,
       quantity: item.quantity, reorderLevel: item.reorderLevel,
       minStock: item.minStock, maxStock: item.maxStock,
+      alertBranchId: item.alertBranchId,
+      alertBranchName: item.alertBranchId ? item.alertBranch?.name ?? null : null,
+      alertQuantity: atAlertBranch ? atAlertBranch._sum.available ?? 0 : item.quantity,
       costPerUnit: item.costPerUnit, nextUnitCost, stockValue,
       lastPurchaseCost: item.lastPurchaseCost,
       branchName: item.branch?.name ?? null,

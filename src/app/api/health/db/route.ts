@@ -30,6 +30,7 @@ const EXPECTED_COLUMNS: Array<{ table: string; column: string; since: string }> 
   { table: 'customers', column: 'group', since: 'customers_and_discounts' },
   { table: 'inventory_items', column: 'minStock', since: 'inventory_ledger' },
   { table: 'inventory_items', column: 'useFefo', since: 'wastage_batches_expiry' },
+  { table: 'inventory_items', column: 'alertBranchId', since: 'alert_branch' },
   { table: 'coupons', column: 'scope', since: 'customers_and_discounts' },
   { table: 'suppliers', column: 'paymentTerms', since: 'purchasing' },
   { table: 'purchases', column: 'subtotal', since: 'purchasing' },

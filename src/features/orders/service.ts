@@ -11,7 +11,7 @@ import { assertPeriodOpen } from '@/features/accounting/service'
 import { pinRecipeVersions, reconcileOrderDepletion, snapshotLineCosts } from '@/features/inventory/depletion'
 import { orderIsRouted, planRouting, routeOrderItems } from '@/features/kitchen/routing'
 import { evaluate, bestTargetedOffer } from '@/features/customers/discounts'
-import { notifyLowStock } from '@/features/inventory/alerts'
+import { itemsAtReorderLevel, notifyLowStock } from '@/features/inventory/alerts'
 import {
   prisma,
   guardLocks,
@@ -1562,28 +1562,24 @@ async function commitToKitchen(
 async function announceLowStock(restaurantId: string, branchId: string, itemIds: string[]) {
   if (itemIds.length === 0) return
   try {
-    const low = await prisma.inventoryItem.findMany({
-      where: { id: { in: itemIds }, restaurantId },
-      select: { id: true, name: true, quantity: true, reorderLevel: true, unit: true },
-    })
+    // On the balance each threshold watches — the total, or one location's.
+    const low = await itemsAtReorderLevel(restaurantId, itemIds)
     for (const item of low) {
-      if (item.quantity <= item.reorderLevel) {
-        realtime.lowStock(restaurantId, {
-          itemId: item.id,
-          name: item.name,
-          quantity: item.quantity,
-          reorderLevel: item.reorderLevel,
-          unit: item.unit,
-        })
-        /*
-         * The half that is actually seen. The socket event above reaches
-         * nobody in production — realtime is off on Netlify and no client
-         * subscribes to it anywhere. Persisted to the bell, once a day per
-         * item, and deliberately not awaited: a stalled notification must
-         * never slow accepting an order.
-         */
-        void notifyLowStock({ restaurantId, branchId, item })
-      }
+      realtime.lowStock(restaurantId, {
+        itemId: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        reorderLevel: item.reorderLevel,
+        unit: item.unit,
+      })
+      /*
+       * The half that is actually seen. The socket event above reaches
+       * nobody in production — realtime is off on Netlify and no client
+       * subscribes to it anywhere. Persisted to the bell, once a day per
+       * item, and deliberately not awaited: a stalled notification must
+       * never slow accepting an order.
+       */
+      void notifyLowStock({ restaurantId, branchId: item.alertBranchId ?? branchId, item })
     }
   } catch {
     // An alert must never fail the acceptance it rides on.

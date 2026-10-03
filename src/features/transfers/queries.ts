@@ -5,7 +5,7 @@ import type { LocationType, Prisma } from '@prisma/client'
 import { NotFoundError } from '@/lib/errors'
 import { parseOpeningHours } from '@/lib/opening-hours'
 import { prisma } from '@/server/db/prisma'
-import { levelFor } from '@/features/inventory/alerts'
+import { alertQuantity, levelFor } from '@/features/inventory/alerts'
 import { roundQty } from '@/lib/quantity'
 
 export interface LocationSummary {
@@ -69,6 +69,7 @@ export async function listLocations(
           item: {
             select: {
               costPerUnit: true, reorderLevel: true, minStock: true, maxStock: true,
+              alertBranchId: true,
             },
           },
         },
@@ -105,6 +106,13 @@ export async function listLocations(
         reorderLevel: row.item.reorderLevel,
         minStock: row.item.minStock,
         maxStock: row.item.maxStock,
+        // A threshold pinned to another location says nothing about this one.
+        alertQuantity: alertQuantity({
+          alertBranchId: row.item.alertBranchId,
+          viewBranchId: b.id,
+          quantity: row.available,
+          atAlertBranch: 0,
+        }),
       })
       if (level === 'OUT_OF_STOCK') outOfStock += 1
       else if (level === 'LOW_STOCK') lowStock += 1
@@ -725,6 +733,7 @@ export async function getLocationDetail(params: {
         select: {
           id: true, name: true, unit: true, costPerUnit: true,
           reorderLevel: true, minStock: true, maxStock: true,
+          alertBranchId: true,
         },
       },
       storageLocation: { select: { id: true, name: true } },
@@ -828,6 +837,13 @@ export async function getLocationDetail(params: {
         reorderLevel: s.item.reorderLevel,
         minStock: s.item.minStock,
         maxStock: s.item.maxStock,
+        // A threshold pinned to another location says nothing about this one.
+        alertQuantity: alertQuantity({
+          alertBranchId: s.item.alertBranchId,
+          viewBranchId: branch.id,
+          quantity: s.available,
+          atAlertBranch: 0,
+        }),
       }),
       // Only worth showing when it is actually split across more than one.
       shelves: s.shelves.length > 1 ? s.shelves : [],

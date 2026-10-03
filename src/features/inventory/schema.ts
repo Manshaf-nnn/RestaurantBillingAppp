@@ -22,6 +22,16 @@ export const inventoryItemSchema = z.object({
    */
   alertBelow: z.coerce.number().min(0).default(0),
   /*
+   * Which stock that threshold is held against.
+   *
+   * Blank is the overall figure — every location together — and is the default.
+   * A location id pins the alert to that one shelf: the kitchen that must not
+   * run short while the warehouse holds plenty. Left out altogether, an edit
+   * leaves whatever the item already has, so a caller that does not know about
+   * the choice cannot reset it.
+   */
+  alertBranchId: z.string().min(1).optional().or(z.literal('')),
+  /*
    * The par level. Read by live logic since the beginning with nothing writing
    * it: `alerts.ts` flags OVERSTOCK above `maxStock`, so that alert could never
    * fire, and `suggestions.ts` fell back to `floor * 2` because the par-level

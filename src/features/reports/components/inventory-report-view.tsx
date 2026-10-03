@@ -379,6 +379,7 @@ export function InventoryReportView({
                     </td>
                     <td className="py-2 text-right tabular-nums text-muted-foreground">
                       {row.reorderLevel} {row.unit.toLowerCase()}
+                      {row.alertBranchName ? <span className="block text-xs">at {row.alertBranchName}</span> : null}
                     </td>
                   </tr>
                 ))}

@@ -147,6 +147,7 @@ export default async function LowStockReportPage({
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
               {row.reorderLevel} {row.unit.toLowerCase()}
+              {row.alertBranchName ? <span className="block text-xs">at {row.alertBranchName}</span> : null}
             </td>
             <td className="px-4 py-3">
               {/* Never colour alone: the badge carries the word too. */}

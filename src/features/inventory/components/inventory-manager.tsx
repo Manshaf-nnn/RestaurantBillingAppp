@@ -4,7 +4,7 @@ import * as React from 'react'
 import type { StockUnit } from '@prisma/client'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, Eye, MoreVertical, Package, Pencil, Plus, Search, Settings2, Trash2, TrendingDown, TrendingUp } from 'lucide-react'
+import { AlertTriangle, Eye, MoreVertical, Package, Pencil, Plus, PowerOff, RotateCcw, Search, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -39,7 +39,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader, StatCard } from '@/features/dashboard/components/page-header'
 import { formatMoney, parseMoney, toMajor } from '@/lib/money'
 import { cn } from '@/lib/utils'
-import { deleteInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
+import { deleteInventoryItem, reactivateInventoryItem, recordStockMovement, saveInventoryItem } from '../actions'
 import { levelFor } from '../stock-level'
 import { callAction } from '@/lib/use-action'
 
@@ -73,6 +73,15 @@ export interface InventoryRow {
   reorderLevel: number
   minStock: number
   maxStock: number | null
+  /**
+   * The one location "Alert me below" watches; null when it is the overall
+   * figure. `alertQuantity` is the balance the threshold is held against on
+   * this screen — worked out by the page, which knows the location in view —
+   * and null when the threshold belongs to a different location than that.
+   */
+  alertBranchId: string | null
+  alertBranchName: string | null
+  alertQuantity: number | null
   costPerUnit: number
   supplierId: string | null
   supplierName: string | null
@@ -94,6 +103,7 @@ export interface InventoryRow {
 
 export function InventoryManager({
   items: initial,
+  inactiveItems = [],
   suppliers,
   units,
   categories,
@@ -107,6 +117,11 @@ export function InventoryManager({
   nextUnitCosts = {},
 }: {
   items: InventoryRow[]
+  /**
+   * Deactivated items. An item is never erased — its name and code stay taken
+   * — so these stay findable on their own tab, with a way back.
+   */
+  inactiveItems?: InventoryRow[]
   /** The sum of this location's layers, minor units (FIFO.md). */
   stockValue?: number
   /**
@@ -135,9 +150,10 @@ export function InventoryManager({
   /** The location on screen, so a new item's opening stock defaults to it. */
   selectedBranchId?: string | null
 }) {
+  const router = useRouter()
   const [items, setItems] = React.useState(initial)
   const [search, setSearch] = React.useState('')
-  const [view, setView] = React.useState<'ALL' | 'LOW' | 'EXPIRING'>('ALL')
+  const [view, setView] = React.useState<'ALL' | 'LOW' | 'EXPIRING' | 'INACTIVE'>('ALL')
   const [editing, setEditing] = React.useState<InventoryRow | null>(null)
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [movementFor, setMovementFor] = React.useState<InventoryRow | null>(null)
@@ -203,7 +219,7 @@ export function InventoryManager({
 
   const filtered = React.useMemo(() => {
     const query = search.trim().toLowerCase()
-    return items.filter((item) => {
+    return (view === 'INACTIVE' ? inactiveItems : items).filter((item) => {
       if (view === 'LOW' && !isLow(item)) return false
       if (view === 'EXPIRING') {
         const days = daysToExpiry(item)
@@ -227,7 +243,7 @@ export function InventoryManager({
         Boolean(item.category?.toLowerCase().includes(query))
       )
     })
-  }, [items, search, view, isLow, daysToExpiry])
+  }, [items, inactiveItems, search, view, isLow, daysToExpiry])
 
   const remove = async () => {
     if (!deleteId) return
@@ -236,7 +252,18 @@ export function InventoryManager({
     const result = await callAction(() => deleteInventoryItem(id))
     if (result.ok) {
       setItems((current) => current.filter((item) => item.id !== id))
-      toast.success('Item removed')
+      toast.success('Item deactivated — find it under Inactive')
+      router.refresh()
+    } else {
+      toast.error(result.error)
+    }
+  }
+
+  const reactivate = async (id: string) => {
+    const result = await callAction(() => reactivateInventoryItem(id))
+    if (result.ok) {
+      toast.success('Item reactivated')
+      router.refresh()
     } else {
       toast.error(result.error)
     }
@@ -305,6 +332,10 @@ export function InventoryManager({
                 key: 'EXPIRING',
                 label: `Expiring${expiringSoon.length ? ` · ${expiringSoon.length}` : ''}`,
               },
+              // Only once there is something in it — an empty tab is a question.
+              ...(inactiveItems.length
+                ? [{ key: 'INACTIVE', label: `Inactive · ${inactiveItems.length}` } as const]
+                : []),
             ] as const
           ).map((tab) => (
             <button
@@ -330,6 +361,8 @@ export function InventoryManager({
               ? 'Nothing to reorder'
               : view === 'EXPIRING'
                 ? 'Nothing expiring soon'
+                : view === 'INACTIVE'
+                  ? 'No deactivated items'
                 : search
                   ? 'No matching items'
                   : 'No inventory items'
@@ -415,7 +448,12 @@ export function InventoryManager({
                           Out
                         </Badge>
                       ) : low ? (
-                        <Badge variant="warning" size="sm" className="ml-2">
+                        <Badge
+                          variant="warning"
+                          size="sm"
+                          className="ml-2"
+                          title={item.alertBranchName ? `Low at ${item.alertBranchName}` : undefined}
+                        >
                           Low
                         </Badge>
                       ) : null}
@@ -424,6 +462,9 @@ export function InventoryManager({
                       {alertLevelOf(item) > 0
                         ? `${alertLevelOf(item)} ${item.unit.toLowerCase()}`
                         : '—'}
+                      {alertLevelOf(item) > 0 && item.alertBranchName ? (
+                        <span className="block text-xs">at {item.alertBranchName}</span>
+                      ) : null}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {/*
@@ -471,21 +512,36 @@ export function InventoryManager({
                                 <Eye /> View details
                               </Link>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setMovementFor(item)}>
-                              <TrendingUp /> Stock in/out
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setEditing(item)
-                                setDialogOpen(true)
-                              }}
-                            >
-                              <Pencil /> Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem destructive onClick={() => setDeleteId(item.id)}>
-                              <Trash2 /> Remove
-                            </DropdownMenuItem>
+                            {view === 'INACTIVE' ? (
+                              <DropdownMenuItem onClick={() => reactivate(item.id)}>
+                                <RotateCcw /> Reactivate
+                              </DropdownMenuItem>
+                            ) : (
+                              <>
+                                <DropdownMenuItem onClick={() => setMovementFor(item)}>
+                                  <TrendingUp /> Stock in/out
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setEditing(item)
+                                    setDialogOpen(true)
+                                  }}
+                                >
+                                  <Pencil /> Edit
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                {/*
+                                  Deactivate, never delete. The item keeps its
+                                  name, code and history; "Remove" promised
+                                  something else, and the next attempt to add
+                                  the same name was refused over an item nobody
+                                  could find.
+                                */}
+                                <DropdownMenuItem destructive onClick={() => setDeleteId(item.id)}>
+                                  <PowerOff /> Deactivate
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -514,8 +570,9 @@ export function InventoryManager({
       <ConfirmDialog
         open={Boolean(deleteId)}
         onOpenChange={(open) => !open && setDeleteId(null)}
-        title="Remove this item?"
-        confirmLabel="Remove"
+        title="Deactivate this item?"
+        description="It leaves the stock list but keeps its name, code and history. Reactivate it any time from the Inactive tab."
+        confirmLabel="Deactivate"
         destructive
         onConfirm={remove}
       />
@@ -560,6 +617,8 @@ function ItemDialog({
     /** Opening quantity per location id, as typed. Only used when creating. */
     openingStock: {} as Record<string, string>,
     alertBelow: '0',
+    /** The one location the alert watches; blank is the overall figure. */
+    alertBranchId: '',
     maxStock: '',
     costPerUnit: '',
     supplierId: '',
@@ -613,6 +672,8 @@ function ItemDialog({
        * threshold that was actually in force rather than silently lowering it.
        */
       alertBelow: String(Math.max(item?.reorderLevel ?? 0, item?.minStock ?? 0)),
+      // Overall unless somebody chose otherwise — a new item starts overall.
+      alertBranchId: item?.alertBranchId ?? '',
       maxStock: item?.maxStock ? String(item.maxStock) : '',
       costPerUnit: item ? String(toMajor(item.costPerUnit, currency)) : '',
       // Was hard-coded to '' regardless of the item — the supplier-wiping bug.
@@ -636,6 +697,21 @@ function ItemDialog({
     : null
   const openingTotal = openingRows?.reduce((sum, row) => sum + row.quantity, 0) ?? 0
 
+  /*
+   * Where the alert level can be measured: the locations this person may
+   * reach, plus the one the item already watches even when it is not among
+   * them — otherwise opening Edit would quietly show "Overall" for an item
+   * pinned somewhere else, and saving would make that true.
+   */
+  const alertPlaces = React.useMemo(() => {
+    const list = [...locations]
+    if (item?.alertBranchId && !list.some((l) => l.id === item.alertBranchId)) {
+      list.push({ id: item.alertBranchId, name: item.alertBranchName ?? 'Another location' })
+    }
+    return list
+  }, [locations, item])
+  const alertPlaceName = alertPlaces.find((l) => l.id === form.alertBranchId)?.name ?? null
+
   const save = async () => {
     setSaving(true)
     const result = await callAction(() => saveInventoryItem({
@@ -648,6 +724,7 @@ function ItemDialog({
       branchId: perLocation ? '' : form.branchId,
       ...(openingRows ? { openingStock: openingRows } : {}),
       alertBelow: Number(form.alertBelow) || 0,
+      alertBranchId: form.alertBranchId,
       maxStock: form.maxStock ? Number(form.maxStock) : null,
       costPerUnit: form.costPerUnit ? parseMoney(form.costPerUnit, currency) : 0,
       supplierId: form.supplierId,
@@ -813,9 +890,58 @@ function ItemDialog({
           )}
           <Field label="Alert me below">
             <Input type="number" step="any" value={form.alertBelow} onChange={(e) => setForm({ ...form, alertBelow: e.target.value })} />
+            {/*
+              Ten of WHAT. One number against several shelves never said, so
+              with more than one location the form asks: the overall stock —
+              the default, and what the number has always meant — or one
+              location's own shelf. With a single location there is nothing to
+              choose and the question is not asked.
+            */}
+            {alertPlaces.length > 1 || form.alertBranchId ? (
+              <>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={!form.alertBranchId}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        // Unticked, it watches one location: the one on screen,
+                        // failing that the first on the list.
+                        alertBranchId: e.target.checked
+                          ? ''
+                          : alertPlaces.find((l) => l.id === selectedBranchId)?.id ??
+                            alertPlaces[0]?.id ??
+                            '',
+                      })
+                    }
+                  />
+                  All locations
+                </label>
+                {form.alertBranchId ? (
+                  <Select
+                    value={form.alertBranchId}
+                    onValueChange={(value) => setForm({ ...form, alertBranchId: value })}
+                  >
+                    <SelectTrigger aria-label="The one location the alert level watches">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {alertPlaces.map((l) => (
+                        <SelectItem key={l.id} value={l.id}>
+                          Only {l.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
+              </>
+            ) : null}
             <p className="mt-1 text-xs text-muted-foreground">
-              At or below this, the item is flagged low and appears in reorder
-              suggestions. Leave 0 for no alert.
+              {alertPlaceName
+                ? `At or below this at ${alertPlaceName}, the item is flagged low and appears in reorder suggestions — whatever the other locations hold. Leave 0 for no alert.`
+                : 'At or below this, the item is flagged low and appears in reorder suggestions. Leave 0 for no alert.'}
             </p>
           </Field>
           <Field label="Maximum stock (par level)">

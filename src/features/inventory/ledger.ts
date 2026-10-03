@@ -635,6 +635,20 @@ export async function postMovement(
   })
 
   /*
+   * The balance the item's threshold watches: the total, unless "Alert me
+   * below" is pinned to one location — then that location's shelf, read after
+   * the delta above so it already includes this movement.
+   */
+  const watchedBalance = item.alertBranchId
+    ? (
+        await tx.inventoryStock.aggregate({
+          where: { itemId: item.id, branchId: item.alertBranchId },
+          _sum: { available: true },
+        })
+      )._sum.available ?? 0
+    : balanceAfter
+
+  /*
    * The movement and the news of it commit together (production.md §5).
    *
    * Emitted here rather than at the six calling features for the same reason
@@ -657,7 +671,7 @@ export async function postMovement(
       type: params.type,
       quantity: signed,
       balanceAfter,
-      belowReorder: item.reorderLevel != null && balanceAfter <= item.reorderLevel,
+      belowReorder: item.reorderLevel != null && watchedBalance <= item.reorderLevel,
     },
   })
 
